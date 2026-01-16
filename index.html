@@ -20,37 +20,29 @@
     </script>
     <script type="module" src="https://esm.sh/run"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap');
-        body { font-family: 'Nunito', sans-serif; }
-    </style>
+    <style>@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap'); body { font-family: 'Nunito', sans-serif; }</style>
 </head>
 <body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect } from 'react';
+        import React, { useState, useEffect, useMemo } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { 
-            getAuth, 
-            signInAnonymously, 
-            signInWithPopup, 
-            GoogleAuthProvider, 
-            onAuthStateChanged, 
-            signOut 
+            getAuth, signInAnonymously, signInWithPopup, GoogleAuthProvider, 
+            onAuthStateChanged, signOut 
         } from 'firebase/auth';
         import { 
             getFirestore, collection, doc, setDoc, onSnapshot, serverTimestamp, 
-            addDoc, query 
+            addDoc, query, getDoc
         } from 'firebase/firestore';
         import { 
-            Share2, UserCircle, Users, ArrowLeft, LogOut, Loader2, Play, Flame, Folder, Edit, Plus
+            Share2, UserCircle, Users, ArrowLeft, LogOut, Loader2, Play, Flame, 
+            Folder, Edit, Plus, BookOpen, Lightbulb, Music, Home, Grid, FileText, CheckCircle
         } from 'lucide-react';
 
-        // --- 1. CONFIGURACIÓN ---
-        // TUS LLAVES REALES (No las borres)
+        // --- CONFIGURACIÓN ---
         const firebaseConfig = {
             apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
             authDomain: "proyecto-periplo.firebaseapp.com",
@@ -60,126 +52,287 @@
             appId: "1:236795998392:web:0da24b4f018611b55c844d"
         };
 
-        // Inicialización segura
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
         const appId = 'periplo-app-v1';
 
+        // --- CONSTANTES ---
+        const FOLDER_STRUCTURE = {
+            root: ["INGLÉS", "ESPAÑOL"],
+            "INGLÉS": ["GRAMMAR", "VOCABULARY", "LISTENING"],
+            "INGLÉS/VOCABULARY": ["VERBOS", "NOUNS"],
+        };
+
         // --- COMPONENTE PRINCIPAL ---
         function PeriploApp() {
             const [user, setUser] = useState(null);
+            const [profile, setProfile] = useState(null);
             const [loading, setLoading] = useState(true);
             const [view, setView] = useState('LANDING'); 
-            const [error, setError] = useState('');
+            const [activeQuiz, setActiveQuiz] = useState(null);
+            const [gameCode, setGameCode] = useState('');
 
+            // Auth Listener
             useEffect(() => {
-                // Escuchar cambios de sesión
-                const unsubscribe = onAuthStateChanged(auth, (u) => {
+                const unsub = onAuthStateChanged(auth, async (u) => {
                     setUser(u);
-                    setLoading(false);
                     if (u) {
-                        // Si ya entró, mandarlo al dashboard directo (lógica simple por ahora)
-                        setView('DASHBOARD');
+                        // Buscar perfil en BD
+                        const docRef = doc(db, 'artifacts', appId, 'users', u.uid, 'profile', 'main');
+                        const snap = await getDoc(docRef);
+                        if (snap.exists()) {
+                            const data = snap.data();
+                            setProfile(data);
+                            setView(data.role === 'TEACHER' ? 'TEACHER' : 'STUDENT');
+                        } else {
+                            // Usuario nuevo: Mandar a crear perfil
+                            setView('ONBOARDING');
+                        }
+                    } else {
+                        setView('LANDING');
                     }
+                    setLoading(false);
                 });
-                return unsubscribe;
+                return unsub;
             }, []);
 
-            // Funciones de Login
             const loginGoogle = async () => {
-                try {
-                    const provider = new GoogleAuthProvider();
-                    await signInWithPopup(auth, provider);
-                } catch (e) {
-                    console.error(e);
-                    setError("Error al entrar con Google: " + e.message);
-                }
+                try { await signInWithPopup(auth, new GoogleAuthProvider()); } 
+                catch (e) { alert("Error Google: " + e.message); }
             };
 
             const loginGuest = async () => {
-                try {
-                    await signInAnonymously(auth);
-                } catch (e) {
-                    console.error(e);
-                    setError("Error anónimo (revisa Firebase): " + e.message);
-                }
+                try { await signInAnonymously(auth); } 
+                catch (e) { alert("Error Anónimo: " + e.message); }
+            };
+
+            const createProfile = async (role, name) => {
+                if (!user) return;
+                const newProfile = { name, role, email: user.email, createdAt: serverTimestamp() };
+                await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'main'), newProfile);
+                setProfile(newProfile);
+                setView(role === 'TEACHER' ? 'TEACHER' : 'STUDENT');
             };
 
             const logout = async () => {
                 await signOut(auth);
-                setView('LANDING');
+                window.location.reload();
             };
 
-            if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin mr-2"/> Cargando Periplo...</div>;
+            if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin mr-2"/> Iniciando motores...</div>;
 
-            // Renderizado de Vistas
-            return (
-                <div className="min-h-screen">
-                    {error && (
-                        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative text-center">
-                            <strong className="font-bold">¡Ups! </strong>
-                            <span className="block sm:inline">{error}</span>
-                            <button onClick={() => setError('')} className="absolute top-0 bottom-0 right-0 px-4 py-3">X</button>
-                        </div>
-                    )}
+            if (view === 'LANDING') return <LandingScreen onGoogle={loginGoogle} onGuest={loginGuest} />;
+            if (view === 'ONBOARDING') return <OnboardingScreen user={user} onCreate={createProfile} />;
+            
+            if (view === 'TEACHER') return <TeacherDashboard user={user} profile={profile} onLogout={logout} onLaunch={(q, c) => { setActiveQuiz(q); setGameCode(c); setView('GAME_HOST'); }} onEdit={(q) => { setActiveQuiz(q); setView('EDITOR'); }} />;
+            
+            if (view === 'STUDENT') return <StudentDashboard user={user} profile={profile} onLogout={logout} onJoin={(c) => { setGameCode(c); setView('GAME_PLAY'); }} />;
+            
+            if (view === 'GAME_HOST') return <VolcanoHost gameCode={gameCode} onExit={() => setView('TEACHER')} />;
+            if (view === 'GAME_PLAY') return <VolcanoPlayer gameCode={gameCode} playerName={profile?.name} onExit={() => setView('STUDENT')} />;
+            if (view === 'EDITOR') return <Editor initialData={activeQuiz} onBack={() => setView('TEACHER')} onSave={() => setView('TEACHER')} />;
 
-                    {view === 'LANDING' && !user && (
-                        <LandingScreen onGoogle={loginGoogle} onGuest={loginGuest} />
-                    )}
-
-                    {view === 'DASHBOARD' && user && (
-                        <Dashboard user={user} onLogout={logout} />
-                    )}
-                </div>
-            );
+            return <div>Estado desconocido</div>;
         }
 
-        // --- PANTALLA DE BIENVENIDA ---
+        // --- PANTALLAS ---
+
         function LandingScreen({ onGoogle, onGuest }) {
             return (
                 <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 p-4">
-                    <h1 className="text-5xl font-black text-indigo-900 mb-2 flex items-center gap-2">
-                        <Share2 className="text-indigo-600"/> PERIPLO
-                    </h1>
+                    <h1 className="text-5xl font-black text-indigo-900 mb-2 flex items-center gap-2"><Share2/> PERIPLO</h1>
                     <p className="text-slate-500 mb-8">Tu Nido de Aprendizaje</p>
-                    
                     <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md space-y-4">
-                        <button onClick={onGoogle} className="w-full p-4 border rounded-xl flex items-center justify-center gap-3 hover:bg-slate-50 transition-all font-bold text-slate-700">
-                            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6"/>
-                            Entrar con Google
+                        <button onClick={onGoogle} className="w-full p-4 border rounded-xl flex items-center justify-center gap-3 hover:bg-slate-50 font-bold text-slate-700">
+                            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6"/> Entrar con Google
                         </button>
-                        
-                        <div className="relative flex py-2 items-center">
-                            <div className="flex-grow border-t border-slate-200"></div>
-                            <span className="flex-shrink mx-4 text-slate-400 text-sm">O continuar como</span>
-                            <div className="flex-grow border-t border-slate-200"></div>
-                        </div>
-
-                        <button onClick={onGuest} className="w-full p-4 bg-indigo-50 text-indigo-600 rounded-xl font-bold hover:bg-indigo-100 transition-all">
-                            Invitado (Anónimo)
-                        </button>
+                        <div className="text-center text-xs text-slate-400">- O -</div>
+                        <button onClick={onGuest} className="w-full p-4 bg-indigo-50 text-indigo-600 rounded-xl font-bold hover:bg-indigo-100">Invitado</button>
                     </div>
                 </div>
             );
         }
 
-        // --- DASHBOARD SIMPLE (Prueba de conexión) ---
-        function Dashboard({ user, onLogout }) {
+        function OnboardingScreen({ user, onCreate }) {
+            const [step, setStep] = useState(0);
+            const [name, setName] = useState(user.displayName || '');
+
             return (
-                <div className="p-8">
-                    <div className="flex justify-between items-center mb-8">
-                        <h1 className="text-2xl font-bold">Bienvenido al Nido</h1>
-                        <button onClick={onLogout} className="text-red-500 font-bold border border-red-200 px-4 py-2 rounded hover:bg-red-50">Cerrar Sesión</button>
-                    </div>
-                    
-                    <div className="bg-green-100 text-green-800 p-6 rounded-xl border border-green-200 text-center">
-                        <p className="font-bold text-xl mb-2">¡CONEXIÓN EXITOSA! 🚀</p>
-                        <p>Estás conectado como: <span className="font-mono">{user.email || 'Anónimo'}</span></p>
-                        <p className="text-sm mt-4 text-green-700">Si ves esto, Firebase, React y Vercel están funcionando al 100%.</p>
+                <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+                    <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
+                        <h2 className="text-2xl font-bold mb-6 text-center">¡Bienvenido! Configuremos tu perfil.</h2>
+                        {step === 0 ? (
+                            <div className="space-y-4">
+                                <p className="text-center text-slate-500 mb-4">¿Cuál es tu rol?</p>
+                                <button onClick={() => setStep(1)} className="w-full p-4 border-2 border-indigo-100 hover:border-indigo-500 rounded-xl flex items-center gap-4 transition-all">
+                                    <UserCircle size={32} className="text-indigo-600"/>
+                                    <div className="text-left"><div className="font-bold">Soy Maestro</div><div className="text-xs text-slate-400">Crear actividades</div></div>
+                                </button>
+                                <button onClick={() => setStep(2)} className="w-full p-4 border-2 border-emerald-100 hover:border-emerald-500 rounded-xl flex items-center gap-4 transition-all">
+                                    <Users size={32} className="text-emerald-600"/>
+                                    <div className="text-left"><div className="font-bold">Soy Alumno</div><div className="text-xs text-slate-400">Entrar a jugar</div></div>
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="animate-in fade-in">
+                                <p className="mb-2 font-bold">¿Cómo te llamas?</p>
+                                <input value={name} onChange={e => setName(e.target.value)} className="w-full p-3 border rounded-lg mb-4" placeholder="Ej. Profe Israel"/>
+                                <button onClick={() => onCreate(step === 1 ? 'TEACHER' : 'STUDENT', name)} disabled={!name} className="w-full py-3 bg-indigo-600 text-white font-bold rounded-lg disabled:opacity-50">Finalizar</button>
+                            </div>
+                        )}
                     </div>
                 </div>
             );
+        }
+
+        function TeacherDashboard({ user, profile, onLogout, onLaunch, onEdit }) {
+            const [path, setPath] = useState([]);
+            const [quizzes, setQuizzes] = useState([]);
+
+            // Cargar actividades (Simulado por path)
+            useEffect(() => {
+                const q = query(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'));
+                const unsub = onSnapshot(q, (snap) => {
+                    const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    setQuizzes(all.filter(quiz => quiz.path === path.join('/')));
+                });
+                return unsub;
+            }, [user, path]);
+
+            const currentSubfolders = useMemo(() => {
+                const p = path.join('/');
+                return FOLDER_STRUCTURE[p] || (path.length === 0 ? FOLDER_STRUCTURE.root : []);
+            }, [path]);
+
+            const handleCreate = async () => {
+                const title = prompt("Nombre de la actividad:");
+                if(!title) return;
+                const newQuiz = { title, path: path.join('/'), type: 'VOLCANO', questions: [], createdAt: serverTimestamp(), authorId: user.uid };
+                const ref = await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'), newQuiz);
+                onEdit({ ...newQuiz, id: ref.id });
+            };
+
+            const launchGame = async (quiz) => {
+                const code = Math.random().toString(36).substring(2, 6).toUpperCase();
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'games', `game_${code}`), {
+                    hostId: user.uid, status: 'LOBBY', quizData: quiz, createdAt: serverTimestamp()
+                });
+                onLaunch(quiz, code);
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-100 p-6">
+                    <header className="flex justify-between items-center mb-6">
+                        <h1 className="text-2xl font-bold text-slate-800 flex gap-2"><Share2/> Nido de {profile?.name}</h1>
+                        <button onClick={onLogout} className="text-red-500 font-bold text-sm border border-red-200 px-3 py-1 rounded">Salir</button>
+                    </header>
+
+                    <div className="flex gap-2 mb-6 text-sm text-slate-500">
+                        <button onClick={() => setPath([])} className={path.length===0 ? "font-bold text-indigo-600":""}><Home size={16}/></button>
+                        {path.map((f, i) => <React.Fragment key={i}><span>/</span><button onClick={() => setPath(path.slice(0, i+1))}>{f}</button></React.Fragment>)}
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <button onClick={handleCreate} className="p-6 border-2 border-dashed border-indigo-300 rounded-xl text-indigo-500 flex flex-col items-center justify-center hover:bg-indigo-50 font-bold">
+                            <Plus size={32}/> Crear
+                        </button>
+                        {currentSubfolders.map(f => (
+                            <button key={f} onClick={() => setPath([...path, f])} className="p-6 bg-white rounded-xl shadow border hover:shadow-lg flex flex-col items-center gap-2">
+                                <Folder size={40} className="text-amber-400 fill-amber-400"/> <span className="font-bold">{f}</span>
+                            </button>
+                        ))}
+                        {quizzes.map(q => (
+                            <div key={q.id} className="p-4 bg-white rounded-xl shadow border flex flex-col gap-2">
+                                <div className="font-bold flex items-center gap-2"><Flame className="text-orange-500"/> {q.title}</div>
+                                <div className="mt-auto flex gap-2">
+                                    <button onClick={() => launchGame(q)} className="flex-1 bg-green-600 text-white text-xs font-bold py-2 rounded">Jugar</button>
+                                    <button onClick={() => onEdit(q)} className="p-2 text-slate-400 hover:text-indigo-600"><Edit size={16}/></button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        function StudentDashboard({ user, profile, onLogout, onJoin }) {
+            const [code, setCode] = useState('');
+            return (
+                <div className="min-h-screen bg-slate-50 p-6 flex flex-col items-center">
+                    <header className="w-full max-w-md flex justify-between items-center mb-8">
+                        <div className="font-bold text-xl">Hola, {profile?.name} 👋</div>
+                        <button onClick={onLogout} className="text-red-500"><LogOut/></button>
+                    </header>
+                    
+                    <div className="bg-gradient-to-r from-indigo-600 to-purple-600 w-full max-w-md p-8 rounded-2xl text-white shadow-xl text-center">
+                        <h2 className="text-2xl font-bold mb-4">Unirse a Clase</h2>
+                        <div className="flex bg-white/20 p-2 rounded-xl backdrop-blur">
+                            <input value={code} onChange={e => setCode(e.target.value.toUpperCase())} placeholder="CÓDIGO" className="bg-transparent text-white font-mono font-bold text-2xl w-full text-center outline-none placeholder-indigo-300"/>
+                        </div>
+                        <button onClick={() => onJoin(code)} disabled={code.length < 4} className="mt-4 w-full bg-white text-indigo-600 py-3 rounded-xl font-bold hover:bg-indigo-50 disabled:opacity-50">ENTRAR AL VOLCÁN</button>
+                    </div>
+
+                    <div className="mt-8 grid grid-cols-2 gap-4 w-full max-w-md">
+                        <div className="bg-white p-4 rounded-xl shadow text-center">
+                            <Lightbulb className="mx-auto text-amber-500 mb-2"/>
+                            <div className="text-xs font-bold text-slate-400">DAILY PHRASE</div>
+                            <div className="font-serif italic mt-1">"Keep going."</div>
+                        </div>
+                        <div className="bg-white p-4 rounded-xl shadow text-center">
+                            <Music className="mx-auto text-pink-500 mb-2"/>
+                            <div className="text-xs font-bold text-slate-400">MUSIC</div>
+                            <div className="font-bold mt-1">Coldplay</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- MOTORES DE JUEGO (Simulados visualmente) ---
+        function Editor({ onBack, onSave }) {
+            return (
+                <div className="h-screen flex flex-col items-center justify-center bg-slate-100 p-4 text-center">
+                    <h1 className="text-2xl font-bold mb-4">Editor de Actividad</h1>
+                    <p className="text-slate-500 mb-6">Aquí podrás añadir preguntas manuales o con IA.</p>
+                    <div className="flex gap-4">
+                        <button onClick={onSave} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold">Guardar</button>
+                        <button onClick={onBack} className="text-slate-500 px-6 py-2">Cancelar</button>
+                    </div>
+                </div>
+            )
+        }
+
+        function VolcanoHost({ gameCode, onExit }) {
+            return (
+                <div className="h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4 text-center">
+                    <h1 className="text-4xl font-black text-orange-500 mb-2 animate-pulse">LOBBY VOLCÁN</h1>
+                    <p className="text-slate-400 mb-8">Comparte este código con tus alumnos</p>
+                    <div className="bg-slate-800 p-8 rounded-2xl border border-slate-700 w-full max-w-md">
+                        <div className="text-8xl font-mono font-black tracking-widest text-white mb-8">{gameCode}</div>
+                        <div className="flex justify-center gap-4 text-slate-400 text-sm font-bold mb-8">
+                            <span className="flex items-center gap-2"><Users size={16}/> 0 Alumnos</span>
+                            <span className="flex items-center gap-2"><CheckCircle size={16}/> Esperando...</span>
+                        </div>
+                        <button className="w-full py-4 bg-orange-600 rounded-xl font-bold text-xl shadow-lg hover:scale-105 transition-transform">¡INICIAR!</button>
+                    </div>
+                    <button onClick={onExit} className="mt-8 text-slate-500 hover:text-white">Cancelar</button>
+                </div>
+            )
+        }
+
+        function VolcanoPlayer({ gameCode, playerName, onExit }) {
+            return (
+                <div className="h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 text-center">
+                    <Flame size={80} className="text-orange-500 mb-6 animate-bounce"/>
+                    <h1 className="text-3xl font-bold mb-2">¡Listo, {playerName}!</h1>
+                    <p className="text-slate-400">Estás conectado a la sala <span className="text-orange-400 font-mono font-bold">{gameCode}</span></p>
+                    <div className="mt-12 p-6 bg-slate-800 rounded-xl border border-slate-700 animate-pulse">
+                        <p className="font-bold">👀 Mira la pantalla del profesor</p>
+                    </div>
+                    <button onClick={onExit} className="mt-12 text-red-500 text-sm border border-red-900/50 px-4 py-2 rounded hover:bg-red-900/20">Salir</button>
+                </div>
+            )
         }
 
         const root = createRoot(document.getElementById('root'));
