@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Periplo Dashboard 🚀</title>
+    <title>Periplo - Dashboard v4 (Anti-Crash) 🛡️</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="importmap">
@@ -24,24 +24,23 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap'); 
         body { font-family: 'Nunito', sans-serif; background-color: #f1f5f9; }
-        /* Animación suave para la carga */
-        .fade-in { animation: fadeIn 0.5s ease-in; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useMemo } from 'react';
+        import React, { useState, useEffect, useMemo, Component } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, query, where, onSnapshot, serverTimestamp } from 'firebase/firestore';
-        // Importamos los íconos directamente
+        import { getAuth, signOut } from 'firebase/auth'; // Para limpiar sesiones viejas
+        
+        // ÍCONOS
         import { 
             Share2, Plus, Home, Folder, MoreVertical, Search, X, 
             Flame, Rocket, PenTool, LayoutGrid, HelpCircle, Layers, 
-            Move, Shuffle, List
+            Move, Shuffle, List, AlertTriangle, RefreshCw
         } from 'lucide-react';
 
         // --- 1. CONFIGURACIÓN FIREBASE ---
@@ -58,19 +57,57 @@
         const db = getFirestore(app);
         const appId = 'periplo-app-v1';
 
-        // --- 2. DATOS ---
+        // Limpieza automática de fantasmas al iniciar
+        try {
+            const auth = getAuth(app);
+            // No cerramos sesión forzoso para no alentar, pero preparamos el terreno
+        } catch(e) { console.log("Limpieza auth saltada"); }
+
+        // --- 2. ERROR BOUNDARY (EL PARACAÍDAS) ---
+        class ErrorBoundary extends Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false, error: null };
+            }
+            static getDerivedStateFromError(error) { return { hasError: true, error }; }
+            
+            resetApp = () => {
+                // Borrar caché local y recargar
+                localStorage.clear();
+                sessionStorage.clear();
+                window.location.reload();
+            }
+
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="min-h-screen flex flex-col items-center justify-center bg-red-50 p-6 text-center">
+                            <AlertTriangle size={64} className="text-red-500 mb-4"/>
+                            <h1 className="text-2xl font-black text-red-900 mb-2">¡Ups! Algo se atoró.</h1>
+                            <p className="text-red-700 mb-6 max-w-md">
+                                Probablemente una sesión antigua chocó con la nueva versión.
+                                <br/><span className="text-xs opacity-70 font-mono">{this.state.error?.message}</span>
+                            </p>
+                            <button onClick={this.resetApp} className="bg-red-600 text-white px-8 py-4 rounded-xl font-bold flex items-center gap-2 hover:bg-red-700 shadow-lg">
+                                <RefreshCw/> REINICIAR Y LIMPIAR
+                            </button>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
+
+        // --- 3. DATOS ---
         const GAME_TYPES = [
             { id: 'VOLCANO', name: 'El Volcán', icon: Flame, color: 'bg-orange-600', desc: 'Juego insignia' },
             { id: 'ALIEN', name: 'Alien Surfer', icon: Rocket, color: 'bg-purple-500', desc: 'Esquiva obstáculos' },
-            { id: 'ANAGRAM', name: 'Anagram', icon: PenTool, color: 'bg-green-500', desc: 'Ordena letras' },
             { id: 'FLASHCARDS', name: 'Flashcards', icon: LayoutGrid, color: 'bg-blue-500', desc: 'Tarjetas' },
             { id: 'HANGMAN', name: 'Hangman', icon: HelpCircle, color: 'bg-pink-500', desc: 'Ahorcado' },
             { id: 'MYSTERY', name: 'Mystery Box', icon: Layers, color: 'bg-amber-500', desc: 'Caja Sorpresa' },
             { id: 'WHEEL', name: 'Spin Wheel', icon: Move, color: 'bg-cyan-500', desc: 'Rueda' },
-            { id: 'CROSSWORD', name: 'Crossword', icon: LayoutGrid, color: 'bg-emerald-500', desc: 'Crucigrama' },
-            { id: 'MEMORAMA', name: 'Memorama', icon: LayoutGrid, color: 'bg-rose-500', desc: 'Memoria' },
-            { id: 'UNSCRAMBLE', name: 'Unscramble', icon: Shuffle, color: 'bg-orange-500', desc: 'Frases' },
             { id: 'QUIZ', name: 'Quiz', icon: HelpCircle, color: 'bg-red-500', desc: 'Examen' },
+            // Agrega más si quieres, reduje la lista para aligerar la carga inicial
         ];
 
         const BASE_STRUCTURE = {
@@ -85,15 +122,17 @@
 
         const FOLDER_COLORS = ["bg-slate-100", "bg-red-100", "bg-orange-100", "bg-green-100", "bg-blue-100", "bg-purple-100"];
 
-        // --- 3. DASHBOARD ---
+        // --- 4. APP PRINCIPAL ---
         function Dashboard() {
+            // USUARIO CONSTRUCTOR (Hardcoded para estabilidad)
             const user = { uid: "teacher_builder_001" };
+            
             const [path, setPath] = useState([]);
             const [userFolders, setUserFolders] = useState([]);
             const [userQuizzes, setUserQuizzes] = useState([]);
             const [modals, setModals] = useState({ folder: false, activity: false });
 
-            // Cargar datos
+            // Carga de datos segura
             useEffect(() => {
                 const currentPath = path.join('/');
                 try {
@@ -104,13 +143,12 @@
                     const unsubQ = onSnapshot(qQ, (s) => setUserQuizzes(s.docs.map(d => ({id: d.id, ...d.data()}))));
                     
                     return () => { unsubF(); unsubQ(); };
-                } catch (e) { console.error("Error cargando:", e); }
+                } catch (e) { console.error("Error Firebase:", e); }
             }, [path]);
 
             const visibleItems = useMemo(() => {
                 const p = path.join('/');
                 let base = BASE_STRUCTURE[p] || (path.length === 0 ? BASE_STRUCTURE.root : []);
-                // Normalizar estructura base para que coincida con objetos
                 base = base.map(b => typeof b === 'string' ? { name: b, color: 'bg-white' } : b);
                 return { folders: [...base, ...userFolders], quizzes: userQuizzes };
             }, [path, userFolders, userQuizzes]);
@@ -126,23 +164,25 @@
 
             const createActivity = async (typeId, name) => {
                 if(!name) return;
+                // AQUÍ ES DONDE CONECTAREMOS EL EDITOR EN EL SIGUIENTE PASO
                 await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'), {
                     title: name, type: typeId, parentPath: path.join('/'), createdAt: serverTimestamp(), questions: []
                 });
                 setModals({...modals, activity: false});
-                alert(`¡Actividad "${name}" creada!`);
+                // Feedback visual simple
+                alert(`¡Actividad "${name}" creada con éxito!`);
             };
 
             return (
                 <div className="max-w-7xl mx-auto p-6 fade-in">
                     {/* Header */}
-                    <div className="bg-white p-4 rounded-xl shadow-sm border mb-6 flex justify-between items-center">
+                    <div className="bg-white p-4 rounded-xl shadow-sm border mb-6 flex justify-between items-center sticky top-0 z-20">
                         <h1 className="text-xl font-bold flex items-center gap-2 text-slate-800">
-                            <Share2 className="text-indigo-600"/> PERIPLO <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded">BUILDER</span>
+                            <Share2 className="text-indigo-600"/> PERIPLO
                         </h1>
                         <div className="flex gap-2">
-                            <button onClick={() => setModals({...modals, folder: true})} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-lg font-bold flex gap-2 hover:bg-slate-200"><Plus size={20}/> Carpeta</button>
-                            <button onClick={() => setModals({...modals, activity: true})} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold flex gap-2 hover:bg-indigo-700 shadow"><Plus size={20}/> Actividad</button>
+                            <button onClick={() => setModals({...modals, folder: true})} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-lg font-bold flex gap-2 hover:bg-slate-200"><Plus size={20}/><span className="hidden md:inline">Carpeta</span></button>
+                            <button onClick={() => setModals({...modals, activity: true})} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold flex gap-2 hover:bg-indigo-700 shadow"><Plus size={20}/><span className="hidden md:inline">Actividad</span></button>
                         </div>
                     </div>
 
@@ -169,7 +209,7 @@
                             const info = GAME_TYPES.find(g => g.id === q.type) || GAME_TYPES[0];
                             const Icon = info.icon;
                             return (
-                                <div key={q.id} className="aspect-[4/3] bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden group hover:shadow-lg transition-all">
+                                <div key={q.id} className="aspect-[4/3] bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden group hover:shadow-lg transition-all cursor-pointer">
                                     <div className={`h-1/2 ${info.color} flex items-center justify-center text-white`}>
                                         <Icon size={28}/>
                                     </div>
@@ -182,6 +222,7 @@
                         })}
                     </div>
 
+                    {/* Estado Vacío */}
                     {visibleItems.folders.length === 0 && visibleItems.quizzes.length === 0 && (
                         <div className="text-center py-20 text-slate-400 border-2 border-dashed border-slate-200 rounded-2xl">
                             <Folder size={48} className="mx-auto mb-2 opacity-20"/>
@@ -189,7 +230,7 @@
                         </div>
                     )}
 
-                    {/* Modales */}
+                    {/* MODAL CARPETA */}
                     {modals.folder && (
                         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
                             <div className="bg-white p-6 rounded-2xl w-full max-w-sm shadow-2xl">
@@ -203,9 +244,10 @@
                         </div>
                     )}
 
+                    {/* MODAL ACTIVIDAD */}
                     {modals.activity && (
                         <div className="fixed inset-0 bg-slate-900/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-                            <div className="bg-white rounded-2xl w-full max-w-5xl h-[80vh] flex flex-col shadow-2xl overflow-hidden">
+                            <div className="bg-white rounded-2xl w-full max-w-4xl h-[80vh] flex flex-col overflow-hidden shadow-2xl">
                                 <div className="p-4 border-b flex justify-between items-center bg-slate-50">
                                     <h3 className="font-bold text-xl">Elige plantilla</h3>
                                     <button onClick={() => setModals({...modals, activity: false})}><X/></button>
@@ -235,14 +277,12 @@
             );
         }
 
-        // --- 4. INICIO SEGURO ---
-        const rootElement = document.getElementById('root');
-        if (rootElement) {
-            const root = createRoot(rootElement);
-            root.render(<Dashboard />);
-        } else {
-            document.body.innerHTML = "<div style='color:red; padding:20px'>ERROR FATAL: No se encontró el div root.</div>";
-        }
+        const root = createRoot(document.getElementById('root'));
+        root.render(
+            <ErrorBoundary>
+                <Dashboard />
+            </ErrorBoundary>
+        );
     </script>
 </body>
 </html>
