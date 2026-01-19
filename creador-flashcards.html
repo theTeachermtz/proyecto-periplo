@@ -3,14 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Creador de Flashcards - Periplo v8.1</title>
+    <title>Creador de Flashcards - Periplo v9.0 (Diagnóstico)</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
@@ -27,7 +26,6 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        // DESEMPAQUETADO SEGURO
         const { useState, useEffect } = React;
         const { createRoot } = ReactDOM;
 
@@ -35,8 +33,7 @@
         // 🔧 ZONA DE CLAVES (PEGA TUS DATOS AQUÍ)
         // ==========================================
 
-        // 1. CLAVE DE GOOGLE (IA) 
-        // Pega tu clave NUEVA completa. El sistema arregla duplicados.
+        // 1. CLAVE DE GOOGLE (IA) - Pégala completa
         const googleApiKey = "AIzaSy" + "AIzaSyCEkwvmCZkPe2ae0vQsR07SwBQT1RHRc4g"; 
 
         // 2. CLAVE DE PIXABAY (Dibujos)
@@ -53,10 +50,16 @@
 
             const [title, setTitle] = useState(localStorage.getItem('tempNewActivityName') || '');
             const [cards, setCards] = useState([{ internalId: generateUniqueId(), front: '', back: '', image: null }]);
+            
+            // Configuración
             const [langConfig, setLangConfig] = useState({ left: 'en-US', right: 'es-MX' }); 
             const [audioEnabled, setAudioEnabled] = useState({ left: true, right: false });
+            
+            // IA Config
             const [isGeneratingList, setIsGeneratingList] = useState(false);
             const [aiPrompt, setAiPrompt] = useState('');
+            const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash'); // Modelo por defecto
+            
             const [toasts, setToasts] = useState([]);
             const [galleryModal, setGalleryModal] = useState({ isOpen: false, cardId: null, searchTerm: '', results: [], loading: false, source: 'unsplash' });
             const [bulkImageLoading, setBulkImageLoading] = useState(false);
@@ -65,12 +68,9 @@
             useEffect(() => { localStorage.removeItem('tempNewActivityName'); }, []);
 
             // --- HELPERS ---
-            
             const getCleanKey = () => {
                 let k = googleApiKey.trim();
-                // Corrector de duplicados "AIzaSyAIzaSy"
                 if (k.indexOf("AIzaSyAIzaSy") !== -1) {
-                    console.warn("🔧 Auto-Fix: Se eliminó el prefijo duplicado.");
                     return k.replace("AIzaSyAIzaSy", "AIzaSy");
                 }
                 return k;
@@ -116,41 +116,35 @@
                 setCards(newCards);
             };
 
-            // --- FUNCIÓN INTELIGENTE DE IA (NOMBRES DE MODELOS CORREGIDOS) ---
-            const callGeminiAPI = async (modelName, key, prompt) => {
-                const response = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${key}`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: `Genera una lista JSON exacta sobre: "${prompt}". Formato: [{"front": "Inglés", "back": "Español"}]. JSON raw.` }] }]
-                        })
-                    }
-                );
-                if (!response.ok) throw new Error(response.status);
-                return await response.json();
-            };
-
+            // --- API GOOGLE (IA) ---
             const generateListWithAI = async () => {
                 const validKey = getCleanKey();
+                
                 if (!validKey || validKey.includes("TU_RESTO")) return addToast("Falta clave Google", 'error');
                 if (!aiPrompt.trim()) return;
                 
                 setIsGeneratingList(true);
                 try {
-                    let data;
-                    // INTENTO 1: Modelo "gemini-1.5-flash" (Nombre exacto actual)
-                    try {
-                        console.log("Intentando con Gemini 1.5 Flash...");
-                        data = await callGeminiAPI("gemini-1.5-flash", validKey, aiPrompt);
-                    } catch (e) {
-                        // INTENTO 2: Modelo "gemini-1.5-pro" (Nombre exacto actual)
-                        console.warn("Flash falló, intentando con Gemini Pro...", e);
-                        addToast("Cambiando a modelo de respaldo...", "info");
-                        data = await callGeminiAPI("gemini-1.5-pro", validKey, aiPrompt);
+                    console.log(`Usando modelo: ${selectedModel}`);
+                    const response = await fetch(
+                        `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${validKey}`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                contents: [{ parts: [{ text: `Genera una lista JSON exacta sobre: "${aiPrompt}". Formato: [{"front": "Inglés", "back": "Español"}]. JSON raw.` }] }]
+                            })
+                        }
+                    );
+                    
+                    if (!response.ok) {
+                        const err = await response.json();
+                        // Mostrar alerta con el error exacto para diagnosticar
+                        alert(`Error Google (${response.status}):\n${JSON.stringify(err, null, 2)}`);
+                        throw new Error(`Error API: ${response.status}`);
                     }
 
+                    const data = await response.json();
                     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
                     if (!rawText) throw new Error("La IA no respondió nada");
 
@@ -164,13 +158,13 @@
                     }
                 } catch (e) { 
                     console.error(e);
-                    addToast("Error: Google no encuentra los modelos. Verifica tu clave.", 'error'); 
+                    addToast("Falló la IA. Revisa la alerta.", 'error'); 
                 } finally { 
                     setIsGeneratingList(false); 
                 }
             };
 
-            // --- IMÁGENES (Unsplash + Pixabay) ---
+            // --- IMÁGENES ---
             const searchImages = async (query, source = 'unsplash') => {
                 const safeQuery = encodeURIComponent(query);
                 let hits = [];
@@ -317,15 +311,28 @@
                             </div>
                         </div>
 
-                        {/* BARRA HERRAMIENTAS */}
+                        {/* BARRA HERRAMIENTAS IA */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="bg-indigo-600 rounded-2xl p-1 shadow-lg">
-                                <div className="bg-white/10 backdrop-blur-md rounded-xl p-3 flex gap-2 items-center">
-                                    <i className="fa-solid fa-wand-magic-sparkles text-white"></i>
-                                    <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="Generar lista con IA..." className="flex-1 bg-white/20 border-none rounded-lg px-3 py-1.5 text-white font-bold outline-none focus:bg-white focus:text-indigo-900 transition-colors" onKeyDown={e => e.key === 'Enter' && generateListWithAI()}/>
-                                    <button onClick={generateListWithAI} disabled={isGeneratingList || !aiPrompt} className="bg-white text-indigo-700 px-4 py-1.5 rounded-lg font-bold hover:bg-indigo-50 disabled:opacity-50 text-sm">
-                                        {isGeneratingList ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Generar'}
-                                    </button>
+                                <div className="bg-white/10 backdrop-blur-md rounded-xl p-3 flex flex-col gap-2">
+                                    <div className="flex gap-2 items-center">
+                                        <i className="fa-solid fa-wand-magic-sparkles text-white"></i>
+                                        <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="Generar lista con IA..." className="flex-1 bg-white/20 border-none rounded-lg px-3 py-1.5 text-white font-bold outline-none focus:bg-white focus:text-indigo-900 transition-colors" onKeyDown={e => e.key === 'Enter' && generateListWithAI()}/>
+                                        <button onClick={generateListWithAI} disabled={isGeneratingList || !aiPrompt} className="bg-white text-indigo-700 px-4 py-1.5 rounded-lg font-bold hover:bg-indigo-50 disabled:opacity-50 text-sm">
+                                            {isGeneratingList ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Generar'}
+                                        </button>
+                                    </div>
+                                    
+                                    {/* SELECTOR DE MODELO (LA SOLUCIÓN) */}
+                                    <div className="flex items-center gap-2 text-xs text-white/80 pl-7">
+                                        <span>Modelo:</span>
+                                        <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} className="bg-black/20 rounded border-none px-2 py-1 text-white outline-none cursor-pointer hover:bg-black/30">
+                                            <option value="gemini-1.5-flash" className="text-black">Gemini 1.5 Flash (Rápido)</option>
+                                            <option value="gemini-1.5-pro" className="text-black">Gemini 1.5 Pro (Inteligente)</option>
+                                            <option value="gemini-pro" className="text-black">Gemini 1.0 Pro (Antiguo/Estable)</option>
+                                            <option value="gemini-2.0-flash-exp" className="text-black">Gemini 2.0 Flash (Experimental)</option>
+                                        </select>
+                                    </div>
                                 </div>
                             </div>
                             <button onClick={autoFillImages} disabled={bulkImageLoading} className="bg-white border-2 border-pink-100 text-pink-600 rounded-2xl p-4 font-bold hover:bg-pink-50 hover:border-pink-200 shadow-sm transition-all flex items-center justify-center gap-3 disabled:opacity-50">
