@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Periplo Pro Dashboard v37.0</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎓</text></svg>">
+    <title>Periplo Ultimate v38.1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -12,10 +11,9 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap'); 
-        body { font-family: 'Nunito', sans-serif; background-color: #f8fafc; }
-        .modal-blur { backdrop-filter: blur(8px); animation: fadeIn 0.2s ease-out; }
+        body { font-family: 'Nunito', sans-serif; background-color: #f1f5f9; }
+        .modal-blur { backdrop-filter: blur(12px); animation: fadeIn 0.2s ease-out; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .card-row:hover .actions { opacity: 1; }
         .scroller::-webkit-scrollbar { width: 6px; }
         .scroller::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
     </style>
@@ -30,25 +28,20 @@
         const App = () => {
             const genId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
 
-            // --- ESTADOS ---
             const [cards, setCards] = useState([{ internalId: genId(), front: '', back: '', image: null }]);
             const [aiPrompt, setAiPrompt] = useState('');
             const [isGenerating, setIsGenerating] = useState(false);
             const [toasts, setToasts] = useState([]);
             const [showConfig, setShowConfig] = useState(false);
-            const [apiKeys, setApiKeys] = useState({ google: '', unsplash: '' });
-            
-            // CONFIGURACIÓN AUDIO
+            const [apiKeys, setApiKeys] = useState({ google: '', unsplash: '', pexels: '' });
             const [audioPrefs, setAudioPrefs] = useState({ en: true, es: false });
-            const [colsOrder, setColsOrder] = useState({ left: 'en', right: 'es' });
-
-            // MODAL IMÁGENES
-            const [gallery, setGallery] = useState({ isOpen: false, cardId: null, term: '', context: '', results: [], loading: false, manualUrl: '' });
+            const [gallery, setGallery] = useState({ isOpen: false, cardId: null, term: '', context: '', results: [], loading: false, source: 'pexels' });
 
             useEffect(() => {
                 const g = localStorage.getItem('periplo_google_key') || '';
                 const u = localStorage.getItem('periplo_unsplash_key') || '';
-                setApiKeys({ google: g, unsplash: u });
+                const p = localStorage.getItem('periplo_pexels_key') || '';
+                setApiKeys({ google: g, unsplash: u, pexels: p });
                 if (!g) setShowConfig(true);
             }, []);
 
@@ -59,6 +52,7 @@
             };
 
             const speak = (text, lang) => {
+                if (!text) return;
                 window.speechSynthesis.cancel();
                 const ut = new SpeechSynthesisUtterance(text);
                 ut.lang = lang === 'en' ? 'en-US' : 'es-MX';
@@ -66,9 +60,8 @@
                 window.speechSynthesis.speak(ut);
             };
 
-            // --- ACCIONES LISTA ---
             const generate = async () => {
-                if (!apiKeys.google || !aiPrompt.trim()) return addToast("Configura tu clave o escribe un tema", "info");
+                if (!apiKeys.google || !aiPrompt.trim()) return addToast("Configura tu clave de Google", "info");
                 setIsGenerating(true);
                 try {
                     const prompt = `Generate 30 vocabulary items for "${aiPrompt}". Output ONLY JSON array: [{"front": "English", "back": "Spanish"}]`;
@@ -78,124 +71,107 @@
                         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
                     });
                     const data = await res.json();
-                    if (!res.ok) throw new Error(data.error?.message || "Error");
                     const raw = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
                     const items = JSON.parse(raw);
                     setCards(p => [...p, ...items.map(i => ({ ...i, internalId: genId(), image: null }))]);
                     setAiPrompt('');
-                } catch (e) { addToast(e.message); }
+                } catch (e) { addToast("Error en Gemini (revisa tu clave)"); }
                 finally { setIsGenerating(false); }
             };
 
-            const move = (idx, dir) => {
-                if ((dir === -1 && idx === 0) || (dir === 1 && idx === cards.length - 1)) return;
-                const newCards = [...cards];
-                [newCards[idx], newCards[idx + dir]] = [newCards[idx + dir], newCards[idx]];
-                setCards(newCards);
-            };
-
-            const duplicate = (card) => {
-                const idx = cards.findIndex(c => c.internalId === card.internalId);
-                const newCards = [...cards];
-                newCards.splice(idx + 1, 0, { ...card, internalId: genId() });
-                setCards(newCards);
-            };
-
-            const switchCols = () => {
-                setCards(cards.map(c => ({ ...c, front: c.back, back: c.front })));
-                setColsOrder({ left: colsOrder.right, right: colsOrder.left });
-                setAudioPrefs({ en: audioPrefs.es, es: audioPrefs.en });
-            };
-
-            // --- IMÁGENES ---
-            const searchUnsplash = async () => {
-                const key = apiKeys.unsplash || "SQZCJjY0Bcp4ugL9zcOOjHWHOo0hV2zwM3Ixu0oa_fU";
-                setGallery(p => ({ ...p, loading: true }));
+            const fetchImages = async (term, context, source) => {
+                const query = `${term} ${context}`.trim();
                 try {
-                    const fullTerm = `${gallery.term} ${gallery.context}`.trim();
-                    const res = await fetch(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(fullTerm)}&per_page=16&client_id=${key}`);
-                    const data = await res.json();
-                    setGallery(p => ({ ...p, results: data.results || [], loading: false }));
-                } catch (e) { addToast("Error Unsplash"); setGallery(p => ({ ...p, loading: false })); }
+                    if (source === 'unsplash') {
+                        const key = apiKeys.unsplash || "SQZCJjY0Bcp4ugL9zcOOjHWHOo0hV2zwM3Ixu0oa_fU";
+                        const res = await fetch(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=15&client_id=${key}`);
+                        const data = await res.json();
+                        return data.results.map(img => ({ id: img.id, url: img.urls.regular, thumb: img.urls.small }));
+                    } else {
+                        // Pexels (Si no hay key, usa una demo)
+                        const key = apiKeys.pexels || "cje5MQ7iwmXLzYbTk8x7aHrlU0BF0RPgQHK2iGNibnVgAuGYIWvX0zOo";
+                        const res = await fetch(`https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=15`, {
+                            headers: { Authorization: key }
+                        });
+                        const data = await res.json();
+                        return data.photos.map(img => ({ id: img.id, url: img.src.large2x, thumb: img.src.medium }));
+                    }
+                } catch (e) { return []; }
+            };
+
+            const handleGallerySearch = async () => {
+                setGallery(p => ({ ...p, loading: true }));
+                const res = await fetchImages(gallery.term, gallery.context, gallery.source);
+                setGallery(p => ({ ...p, results: res, loading: false }));
+            };
+
+            const autoMagic = async () => {
+                const pending = cards.filter(c => c.front && !c.image);
+                if (pending.length === 0) return addToast("No hay filas vacías", "info");
+                addToast("✨ Buscando imágenes automáticamente...", "success");
+                for (let card of pending) {
+                    const results = await fetchImages(card.front, "photography", "pexels");
+                    if (results.length > 0) {
+                        setCards(prev => prev.map(c => c.internalId === card.internalId ? { ...c, image: results[0].url } : c));
+                    }
+                    await new Promise(r => setTimeout(r, 600));
+                }
+                addToast("¡Listo!", "success");
             };
 
             return (
-                <div className="min-h-screen pb-20">
-                    {/* NAV */}
+                <div className="min-h-screen">
                     <nav className="bg-white border-b p-4 flex justify-between items-center sticky top-0 z-40 shadow-sm">
                         <div className="flex items-center gap-6">
-                            <h1 className="font-black text-indigo-600 text-xl italic">PERIPLO PRO</h1>
+                            <h1 className="font-black text-indigo-700 text-xl tracking-tighter italic">PERIPLO DASH</h1>
                             <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
-                                <button onClick={() => setAudioPrefs({...audioPrefs, en: !audioPrefs.en})} className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${audioPrefs.en ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}>Audio EN</button>
-                                <button onClick={() => setAudioPrefs({...audioPrefs, es: !audioPrefs.es})} className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${audioPrefs.es ? 'bg-pink-600 text-white shadow-md' : 'text-slate-400'}`}>Audio ES</button>
+                                <button onClick={() => setAudioPrefs({...audioPrefs, en: !audioPrefs.en})} className={`px-3 py-1 rounded-lg text-xs font-black ${audioPrefs.en ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400'}`}>EN {audioPrefs.en ? 'ON' : 'OFF'}</button>
+                                <button onClick={() => setAudioPrefs({...audioPrefs, es: !audioPrefs.es})} className={`px-3 py-1 rounded-lg text-xs font-black ${audioPrefs.es ? 'bg-pink-600 text-white shadow-md' : 'text-slate-400'}`}>ES {audioPrefs.es ? 'ON' : 'OFF'}</button>
                             </div>
                         </div>
-                        <div className="flex gap-3">
-                            <button onClick={() => setShowConfig(true)} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl font-bold hover:bg-slate-200"><i className="fa-solid fa-gear mr-2"></i>API</button>
-                            <button onClick={switchCols} className="bg-amber-50 text-amber-600 px-4 py-2 rounded-xl font-bold hover:bg-amber-100 border border-amber-200"><i className="fa-solid fa-right-left mr-2"></i>Intercambiar Columnas</button>
-                            <button onClick={() => confirm("¿Borrar todo?") && setCards([{ internalId: genId(), front: '', back: '', image: null }])} className="bg-red-50 text-red-500 px-4 py-2 rounded-xl font-bold hover:bg-red-100"><i className="fa-solid fa-trash-can"></i></button>
+                        <div className="flex gap-2">
+                            <button onClick={() => setShowConfig(true)} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl font-bold hover:bg-slate-200"><i className="fa-solid fa-key"></i></button>
+                            <button onClick={() => setCards(cards.map(c => ({...c, front: c.back, back: c.front})))} className="bg-amber-100 text-amber-600 px-4 py-2 rounded-xl font-bold border border-amber-200"><i className="fa-solid fa-shuffle"></i></button>
+                            <button onClick={() => confirm("¿Borrar todo?") && setCards([{ internalId: genId(), front: '', back: '', image: null }])} className="bg-rose-50 text-rose-500 px-4 py-2 rounded-xl font-bold"><i className="fa-solid fa-trash-can"></i></button>
                         </div>
                     </nav>
 
-                    {/* MODAL CONFIG */}
                     {showConfig && (
                         <div className="fixed inset-0 z-50 bg-slate-900/80 flex items-center justify-center p-4 modal-blur">
                             <div className="bg-white p-8 rounded-[2rem] w-full max-w-md shadow-2xl">
                                 <h2 className="text-2xl font-black mb-6">Configuración</h2>
-                                <label className="text-xs font-bold text-slate-400">GEMINI API KEY</label>
-                                <input type="password" value={apiKeys.google} onChange={e => setApiKeys({...apiKeys, google: e.target.value})} className="w-full border-2 p-3 rounded-2xl mb-4 outline-none focus:border-indigo-500" placeholder="AIzaSy..."/>
-                                <label className="text-xs font-bold text-slate-400">UNSPLASH ACCESS KEY</label>
-                                <input type="password" value={apiKeys.unsplash} onChange={e => setApiKeys({...apiKeys, unsplash: e.target.value})} className="w-full border-2 p-3 rounded-2xl mb-6 outline-none focus:border-indigo-500" placeholder="Opcional..."/>
-                                <button onClick={() => { localStorage.setItem('periplo_google_key', apiKeys.google); localStorage.setItem('periplo_unsplash_key', apiKeys.unsplash); setShowConfig(false); }} className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold">Guardar y Cerrar</button>
+                                <input type="password" value={apiKeys.google} onChange={e => setApiKeys({...apiKeys, google: e.target.value})} className="w-full border-2 p-3 rounded-2xl mb-4 outline-none font-mono text-sm" placeholder="Google Gemini Key..."/>
+                                <input type="password" value={apiKeys.pexels} onChange={e => setApiKeys({...apiKeys, pexels: e.target.value})} className="w-full border-2 p-3 rounded-2xl mb-6 outline-none font-mono text-sm" placeholder="Pexels Key (Opcional)..."/>
+                                <button onClick={() => { localStorage.setItem('periplo_google_key', apiKeys.google); localStorage.setItem('periplo_pexels_key', apiKeys.pexels); setShowConfig(false); }} className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all">Guardar</button>
                             </div>
                         </div>
                     )}
 
-                    {/* MODAL GALERÍA / EDITOR IMAGEN */}
                     {gallery.isOpen && (
                         <div className="fixed inset-0 z-50 bg-slate-900/90 flex items-center justify-center p-4 modal-blur">
-                            <div className="bg-white w-full max-w-5xl h-[85vh] rounded-[2.5rem] overflow-hidden flex flex-col shadow-2xl">
+                            <div className="bg-white w-full max-w-5xl h-[85vh] rounded-[2.5rem] overflow-hidden flex flex-col">
                                 <div className="p-6 border-b flex justify-between items-center bg-slate-50">
-                                    <h3 className="font-black text-xl italic text-indigo-900">Editor de Imagen</h3>
+                                    <h3 className="font-black text-xl italic">Buscador de Imágenes</h3>
+                                    <div className="flex bg-slate-200 p-1 rounded-xl gap-1">
+                                        <button onClick={() => setGallery({...gallery, source: 'pexels'})} className={`px-4 py-1 rounded-lg text-xs font-black ${gallery.source === 'pexels' ? 'bg-white text-emerald-600' : 'text-slate-500'}`}>Pexels</button>
+                                        <button onClick={() => setGallery({...gallery, source: 'unsplash'})} className={`px-4 py-1 rounded-lg text-xs font-black ${gallery.source === 'unsplash' ? 'bg-white text-indigo-600' : 'text-slate-500'}`}>Unsplash</button>
+                                    </div>
                                     <button onClick={() => setGallery({...gallery, isOpen: false})} className="w-10 h-10 rounded-full hover:bg-slate-200"><i className="fa-solid fa-times"></i></button>
                                 </div>
                                 <div className="flex-1 flex overflow-hidden">
-                                    {/* Sidebar: Herramientas */}
-                                    <div className="w-80 border-r p-6 bg-white space-y-6">
-                                        <div>
-                                            <label className="text-[10px] font-black text-slate-400 uppercase">Término Principal</label>
-                                            <input value={gallery.term} onChange={e => setGallery({...gallery, term: e.target.value})} className="w-full border-2 p-2 rounded-xl mt-1 outline-none focus:border-indigo-500 font-bold"/>
-                                        </div>
-                                        <div>
-                                            <label className="text-[10px] font-black text-slate-400 uppercase text-pink-500">Añadir Contexto (IA Sugerencia)</label>
-                                            <textarea value={gallery.context} onChange={e => setGallery({...gallery, context: e.target.value})} className="w-full border-2 p-2 rounded-xl mt-1 outline-none focus:border-pink-500 h-20 text-sm" placeholder="Ej: cute cartoon, photorealistic, minimal white background..."/>
-                                        </div>
-                                        <button onClick={searchUnsplash} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all">Buscar en Unsplash</button>
-                                        <div className="h-px bg-slate-100"></div>
-                                        <div>
-                                            <label className="text-[10px] font-black text-slate-400 uppercase">Enlace Directo / URL</label>
-                                            <input value={gallery.manualUrl} onChange={e => setGallery({...gallery, manualUrl: e.target.value})} className="w-full border-2 p-2 rounded-xl mt-1 text-xs outline-none focus:border-indigo-500" placeholder="Pega un enlace aquí..."/>
-                                            <button onClick={() => {
-                                                setCards(cards.map(c => c.internalId === gallery.cardId ? {...c, image: gallery.manualUrl} : c));
-                                                setGallery({...gallery, isOpen: false});
-                                            }} className="w-full mt-2 bg-slate-800 text-white py-2 rounded-xl text-xs font-bold">Usar Enlace</button>
-                                        </div>
-                                        <button onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(gallery.term)}&tbm=isch`, '_blank')} className="w-full border-2 border-slate-200 text-slate-500 py-2 rounded-xl text-xs font-bold hover:bg-slate-50"><i className="fa-brands fa-google mr-2"></i>Buscar en Google</button>
+                                    <div className="w-80 border-r p-6 bg-slate-50 space-y-4">
+                                        <input value={gallery.term} onChange={e => setGallery({...gallery, term: e.target.value})} className="w-full border-2 p-3 rounded-xl font-bold outline-none focus:border-indigo-500" placeholder="Término..."/>
+                                        <textarea value={gallery.context} onChange={e => setGallery({...gallery, context: e.target.value})} className="w-full border-2 p-3 rounded-xl h-24 text-sm font-semibold outline-none focus:border-pink-500" placeholder="Añadir contexto (ej: cartoon, real, action...)"/>
+                                        <button onClick={handleGallerySearch} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-black shadow-lg hover:bg-indigo-700 transition-all">BUSCAR</button>
                                     </div>
-                                    {/* Resultados */}
-                                    <div className="flex-1 bg-slate-50 p-6 overflow-y-auto scroller">
+                                    <div className="flex-1 p-6 overflow-y-auto bg-white scroller">
                                         {gallery.loading ? <div className="h-full flex items-center justify-center"><i className="fa-solid fa-spinner fa-spin fa-3x text-indigo-500"></i></div> : 
                                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                             {gallery.results.map(img => (
-                                                <div key={img.id} className="relative group">
-                                                    <img src={img.urls.small} className="w-full aspect-square object-cover rounded-2xl cursor-pointer hover:ring-4 ring-indigo-500 transition-all" onClick={() => {
-                                                        setCards(cards.map(c => c.internalId === gallery.cardId ? {...c, image: img.urls.regular} : c));
-                                                        setGallery({...gallery, isOpen: false});
-                                                    }}/>
-                                                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 pointer-events-none">
-                                                        <div className="bg-white/90 p-2 rounded-lg text-[10px] font-bold">Seleccionar</div>
-                                                    </div>
-                                                </div>
+                                                <img key={img.id} src={img.thumb} className="w-full aspect-square object-cover rounded-2xl cursor-pointer hover:scale-105 transition-all shadow-md" onClick={() => {
+                                                    setCards(cards.map(c => c.internalId === gallery.cardId ? {...c, image: img.url} : c));
+                                                    setGallery({...gallery, isOpen: false});
+                                                }}/>
                                             ))}
                                         </div>}
                                     </div>
@@ -204,67 +180,76 @@
                         </div>
                     )}
 
-                    {/* MAIN */}
-                    <main className="max-w-5xl mx-auto mt-8 p-4">
-                        <div className="bg-indigo-600 p-2 rounded-[2.5rem] shadow-2xl mb-12 flex items-center gap-2 border-4 border-white/20">
-                            <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && generate()} placeholder="Tema: Partes de una computadora..." className="flex-1 bg-white p-5 rounded-[2.2rem] outline-none font-bold text-indigo-900 placeholder:text-slate-300 text-lg shadow-inner"/>
-                            <button onClick={generate} disabled={isGenerating} className="bg-indigo-950 text-white px-10 h-16 rounded-[2rem] font-black hover:scale-[1.02] active:scale-95 transition-all shadow-xl">
+                    <main className="max-w-5xl mx-auto mt-10 p-4">
+                        <div className="bg-indigo-700 p-2 rounded-[2.5rem] shadow-2xl mb-8 flex items-center gap-2">
+                            <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && generate()} placeholder="Tema: Verbos, Aeropuerto, Frutas..." className="flex-1 bg-white p-5 rounded-[2rem] outline-none font-black text-indigo-900 placeholder:text-slate-300 text-xl"/>
+                            <button onClick={generate} disabled={isGenerating} className="bg-indigo-950 text-white px-10 h-16 rounded-[2rem] font-black hover:bg-black transition-all">
                                 {isGenerating ? <i className="fa-solid fa-circle-notch fa-spin"></i> : "GENERAR CON IA"}
                             </button>
                         </div>
 
-                        <div className="bg-white rounded-[3rem] shadow-xl border border-slate-100 overflow-hidden">
+                        <div className="flex justify-end mb-4">
+                            <button onClick={autoMagic} className="bg-white text-indigo-600 border-2 border-indigo-100 px-6 py-3 rounded-2xl font-black hover:bg-indigo-600 hover:text-white transition-all shadow-md flex items-center gap-2">
+                                <i className="fa-solid fa-wand-magic-sparkles"></i> ✨ AUTO-IMAGEN
+                            </button>
+                        </div>
+
+                        <div className="bg-white rounded-[2.5rem] shadow-xl border border-slate-100 overflow-hidden">
                             <div className="divide-y divide-slate-100">
                                 {cards.map((c, idx) => (
-                                    <div key={c.internalId} className="p-4 md:p-6 grid grid-cols-12 gap-4 items-center group hover:bg-slate-50 transition-all card-row card-enter">
-                                        {/* ORDENAR */}
+                                    <div key={c.internalId} className="p-4 md:p-6 grid grid-cols-12 gap-4 items-center group hover:bg-slate-50 transition-all card-row">
                                         <div className="col-span-1 flex flex-col items-center gap-1">
-                                            <button onClick={() => move(idx, -1)} className="text-slate-300 hover:text-indigo-600 transition-colors"><i className="fa-solid fa-chevron-up"></i></button>
+                                            <button onClick={() => {
+                                                const n = [...cards];
+                                                if(idx > 0) { [n[idx], n[idx-1]] = [n[idx-1], n[idx]]; setCards(n); }
+                                            }} className="text-slate-200 hover:text-indigo-500"><i className="fa-solid fa-chevron-up"></i></button>
                                             <span className="text-slate-400 font-black text-xs">{idx + 1}</span>
-                                            <button onClick={() => move(idx, 1)} className="text-slate-300 hover:text-indigo-600 transition-colors"><i className="fa-solid fa-chevron-down"></i></button>
+                                            <button onClick={() => {
+                                                const n = [...cards];
+                                                if(idx < cards.length-1) { [n[idx], n[idx+1]] = [n[idx+1], n[idx]]; setCards(n); }
+                                            }} className="text-slate-200 hover:text-indigo-500"><i className="fa-solid fa-chevron-down"></i></button>
                                         </div>
                                         
-                                        {/* COLUMNA IZQUIERDA */}
                                         <div className="col-span-4 relative group/input">
-                                            <input value={c.front} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, front: e.target.value} : x))} className="w-full p-3 rounded-2xl border-2 border-transparent bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none font-bold text-slate-800 transition-all shadow-sm" placeholder="Front"/>
-                                            <button onClick={() => speak(c.front, colsOrder.left)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-indigo-500"><i className="fa-solid fa-volume-high"></i></button>
+                                            <input value={c.front} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, front: e.target.value} : x))} className="w-full p-3 rounded-2xl bg-slate-50 focus:bg-white focus:ring-4 ring-indigo-50 border-none outline-none font-black text-slate-800 transition-all" placeholder="Term 1"/>
+                                            {audioPrefs.en && <button onClick={() => speak(c.front, 'en')} className="absolute right-3 top-1/2 -translate-y-1/2 text-indigo-300 hover:text-indigo-600 transition-colors"><i className="fa-solid fa-volume-high"></i></button>}
                                         </div>
 
-                                        {/* IMAGEN CENTRAL */}
-                                        <div className="col-span-2 flex justify-center relative">
+                                        <div className="col-span-2 flex justify-center">
                                             {c.image ? (
-                                                <div className="relative group/img shadow-lg rounded-2xl overflow-hidden ring-2 ring-white">
-                                                    <img src={c.image} className="w-16 h-16 object-cover cursor-pointer hover:scale-110 transition-transform" onClick={() => setGallery({ isOpen: true, cardId: c.internalId, term: c.front, results: [], loading: false, context: '', manualUrl: '' })}/>
-                                                    <button onClick={() => setCards(cards.map(x => x.internalId === c.internalId ? {...x, image: null} : x))} className="absolute -top-1 -right-1 bg-red-500 text-white w-6 h-6 rounded-full text-[10px] shadow-lg opacity-0 group-hover/img:opacity-100 transition-all flex items-center justify-center"><i className="fa-solid fa-times"></i></button>
+                                                <div className="relative group/img">
+                                                    <img src={c.image} className="w-16 h-16 object-cover rounded-2xl shadow-md cursor-pointer hover:scale-110 transition-transform" onClick={() => setGallery({ isOpen: true, cardId: c.internalId, term: c.front, results: [], loading: false, context: '' })}/>
+                                                    <button onClick={() => setCards(cards.map(x => x.internalId === c.internalId ? {...x, image: null} : x))} className="absolute -top-1 -right-1 bg-red-500 text-white w-6 h-6 rounded-full text-[10px] opacity-0 group-hover/img:opacity-100 transition-all"><i className="fa-solid fa-times"></i></button>
                                                 </div>
                                             ) : (
-                                                <button onClick={() => setGallery({ isOpen: true, cardId: c.internalId, term: c.front, results: [], loading: false, context: '', manualUrl: '' })} className="w-16 h-16 rounded-2xl bg-slate-100 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 border-2 border-dashed border-slate-200 transition-all flex items-center justify-center"><i className="fa-solid fa-image text-lg"></i></button>
+                                                <button onClick={() => setGallery({ isOpen: true, cardId: c.internalId, term: c.front, results: [], loading: false, context: '' })} className="w-16 h-16 rounded-2xl bg-slate-50 text-slate-300 hover:text-indigo-500 hover:bg-white border-2 border-dashed border-slate-200 transition-all flex items-center justify-center"><i className="fa-solid fa-image text-lg"></i></button>
                                             )}
                                         </div>
 
-                                        {/* COLUMNA DERECHA */}
                                         <div className="col-span-4 relative">
-                                            <input value={c.back} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, back: e.target.value} : x))} className="w-full p-3 rounded-2xl border-2 border-transparent bg-slate-50 focus:bg-white focus:border-pink-500 outline-none font-bold text-slate-800 transition-all shadow-sm" placeholder="Back"/>
-                                            <button onClick={() => speak(c.back, colsOrder.right)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-pink-500"><i className="fa-solid fa-volume-high"></i></button>
+                                            <input value={c.back} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, back: e.target.value} : x))} className="w-full p-3 rounded-2xl bg-slate-50 focus:bg-white focus:ring-4 ring-pink-50 border-none outline-none font-black text-slate-800 transition-all" placeholder="Term 2"/>
+                                            {audioPrefs.es && <button onClick={() => speak(c.back, 'es')} className="absolute right-3 top-1/2 -translate-y-1/2 text-pink-300 hover:text-pink-600 transition-colors"><i className="fa-solid fa-volume-high"></i></button>}
                                         </div>
 
-                                        {/* ACCIONES FILA */}
-                                        <div className="col-span-1 flex justify-end gap-1 actions opacity-0 transition-opacity">
-                                            <button onClick={() => duplicate(c)} className="p-2 text-slate-300 hover:text-emerald-500" title="Duplicar"><i className="fa-solid fa-clone"></i></button>
-                                            <button onClick={() => setCards(cards.filter(x => x.internalId !== c.internalId))} className="p-2 text-slate-300 hover:text-red-500" title="Eliminar"><i className="fa-solid fa-trash"></i></button>
+                                        <div className="col-span-1 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button onClick={() => {
+                                                const n = [...cards];
+                                                n.splice(idx + 1, 0, { ...c, internalId: genId() });
+                                                setCards(n);
+                                            }} className="p-2 text-slate-300 hover:text-indigo-500"><i className="fa-solid fa-copy"></i></button>
+                                            <button onClick={() => setCards(cards.filter(x => x.internalId !== c.internalId))} className="p-2 text-slate-300 hover:text-red-500"><i className="fa-solid fa-trash"></i></button>
                                         </div>
                                     </div>
                                 ))}
                             </div>
                             <div className="p-8 bg-slate-50/50 border-t flex justify-center">
-                                <button onClick={() => setCards([...cards, { internalId: genId(), front: '', back: '', image: null }])} className="px-10 py-4 border-2 border-dashed border-slate-300 rounded-3xl text-slate-400 font-black hover:border-indigo-500 hover:text-indigo-500 hover:bg-white transition-all transform active:scale-95">+ AÑADIR FILA MANUAL</button>
+                                <button onClick={() => setCards([...cards, { internalId: genId(), front: '', back: '', image: null }])} className="px-10 py-4 border-2 border-dashed border-slate-300 rounded-[2rem] text-slate-400 font-black hover:border-indigo-500 transition-all">+ AÑADIR FILA MANUAL</button>
                             </div>
                         </div>
                     </main>
 
-                    {/* TOASTS */}
-                    <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-[60]">
-                        {toasts.map(t => <div key={t.id} className={`p-4 rounded-2xl shadow-2xl font-black text-white ${t.type==='success'?'bg-emerald-500':'bg-rose-500'} animate-bounce`}>{t.msg}</div>)}
+                    <div className="fixed bottom-6 right-6 flex flex-col gap-2">
+                        {toasts.map(t => <div key={t.id} className={`p-4 rounded-2xl shadow-xl font-black text-white ${t.type==='success'?'bg-emerald-500':'bg-rose-500'}`}>{t.msg}</div>)}
                     </div>
                 </div>
             );
