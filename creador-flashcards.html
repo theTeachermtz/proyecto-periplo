@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Creador de Flashcards - Periplo v20.1 (Seguro)</title>
+    <title>Creador de Flashcards - Periplo v21.0 (Auto-Detect 2.5)</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -15,8 +15,9 @@
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap'); 
         body { font-family: 'Nunito', sans-serif; }
         .btn-icon { @apply p-2 rounded-lg transition-colors duration-200; }
-        .card-enter { animation: slideIn 0.3s ease-out; }
-        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* Animación Modal */
+        @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+        .modal-box { animation: fadeIn 0.2s ease-out; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900">
@@ -34,41 +35,37 @@
             const [cards, setCards] = useState([{ internalId: generateUniqueId(), front: '', back: '', image: null }]);
             const [aiPrompt, setAiPrompt] = useState('');
             const [isGenerating, setIsGenerating] = useState(false);
+            const [statusText, setStatusText] = useState(''); // Para mostrar qué modelo encontró
+            
+            // UI
             const [galleryModal, setGalleryModal] = useState({ isOpen: false, cardId: null, searchTerm: '', results: [], loading: false });
             const [toasts, setToasts] = useState([]);
             const [manualLinkMode, setManualLinkMode] = useState(null);
-            
-            // CONFIGURACIÓN
             const [langConfig, setLangConfig] = useState({ left: 'en-US', right: 'es-MX' }); 
             const [audioEnabled, setAudioEnabled] = useState({ left: true, right: false });
-            
-            // SEGURIDAD: Las claves viven aquí, NO en el código fuente
-            const [apiKeys, setApiKeys] = useState({ google: '' });
+
+            // CLAVES
             const [showConfig, setShowConfig] = useState(false);
+            const [apiKeys, setApiKeys] = useState({ google: '' });
 
             useEffect(() => { 
                 const savedGoogle = localStorage.getItem('periplo_google_key');
-                if (savedGoogle) {
-                    setApiKeys({ google: savedGoogle });
-                } else {
-                    // Si no hay clave guardada, mostramos la configuración al iniciar
-                    setShowConfig(true);
-                }
-                localStorage.removeItem('tempNewActivityName'); 
+                if (savedGoogle) setApiKeys({ google: savedGoogle });
+                else setShowConfig(true);
             }, []);
 
             const saveApiKeys = () => {
-                if (!apiKeys.google.trim()) return addToast("La clave de Google es obligatoria", 'error');
-                localStorage.setItem('periplo_google_key', apiKeys.google.trim());
+                if (!apiKeys.google) return addToast("La clave es obligatoria", 'error');
+                localStorage.setItem('periplo_google_key', apiKeys.google);
                 setShowConfig(false);
-                addToast("Clave guardada de forma segura", 'success');
+                addToast("Clave guardada", 'success');
             };
 
             // --- HELPERS ---
             const addToast = (message, type = 'error') => {
                 const id = Date.now();
                 setToasts(prev => [...prev, { id, message, type }]);
-                setTimeout(() => removeToast(id), 4000);
+                setTimeout(() => removeToast(id), 5000);
             };
             const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
             const cleanJsonText = (text) => text.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -81,31 +78,73 @@
                 window.speechSynthesis.speak(u);
             };
 
-            // --- IA TEXTO (Google Gemini) ---
+            // --- 1. DETECTOR DE MODELO (LA LÓGICA QUE PEDISTE) ---
+            const findBestModel = async (key) => {
+                setStatusText("🔍 Buscando modelo 2.5...");
+                try {
+                    // 1. Pedir lista a Google
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
+                    if (!response.ok) throw new Error("Error al consultar modelos");
+                    
+                    const data = await response.json();
+                    
+                    // 2. Filtrar solo los que generan texto
+                    const availableModels = (data.models || [])
+                        .filter(m => m.supportedGenerationMethods.includes("generateContent"))
+                        .map(m => m.name.replace("models/", ""));
+
+                    console.log("Modelos disponibles:", availableModels);
+
+                    // 3. SELECCIÓN INTELIGENTE
+                    // Prioridad 1: Algo que tenga "2.5" (Lo que tú quieres)
+                    let chosen = availableModels.find(m => m.includes("2.5"));
+                    
+                    // Prioridad 2: Si no hay 2.5, busca "flash"
+                    if (!chosen) chosen = availableModels.find(m => m.includes("flash"));
+                    
+                    // Prioridad 3: Cualquiera
+                    if (!chosen) chosen = availableModels[0];
+
+                    if (!chosen) throw new Error("No hay modelos disponibles en tu cuenta.");
+                    
+                    return chosen;
+
+                } catch (e) {
+                    console.error("Fallo detección:", e);
+                    // Si falla la detección (ej: red), intentamos el fallback que sabemos que a veces va
+                    return "gemini-1.5-flash"; 
+                }
+            };
+
+            // --- 2. GENERAR LISTA ---
             const generateList = async () => {
-                if (!apiKeys.google) { setShowConfig(true); return addToast("Configura tu API Key primero", "info"); }
+                if (!apiKeys.google) { setShowConfig(true); return; }
                 if (!aiPrompt.trim()) return;
                 
                 setIsGenerating(true);
                 try {
-                    // Limpieza de seguridad por si pegaste la clave duplicada
                     let key = apiKeys.google.trim();
                     if (key.indexOf("AIzaSyAIzaSy") !== -1) key = key.replace("AIzaSyAIzaSy", "AIzaSy");
 
+                    // PASO A: Encontrar el modelo correcto
+                    const modelName = await findBestModel(key);
+                    setStatusText(`🚀 Conectando con ${modelName}...`);
+
+                    // PASO B: Preparar el Prompt
                     const finalPrompt = `
-                        Eres un experto creando material educativo.
-                        Analiza la entrada: "${aiPrompt}".
+                        Eres un asistente educativo. Analiza: "${aiPrompt}".
                         
-                        CASO 1: Si es un TEMA (ej: "aeropuerto", "cocina"): Genera 30 palabras/frases útiles sobre eso.
-                        CASO 2: Si es una LISTA: Traduce y ordena todos los elementos.
+                        TAREA:
+                        1. Si es un TEMA (ej: "aeropuerto"): Crea una lista de 30 palabras útiles.
+                        2. Si es una LISTA pegada: Tradúcela y ordénala.
                         
                         SALIDA OBLIGATORIA: Un único Array JSON.
-                        Estructura: [{"front": "Inglés", "back": "Español"}]
+                        FORMATO: [{"front": "Inglés", "back": "Español"}]
                     `;
 
-                    // Usamos el modelo estándar gratuito
+                    // PASO C: Llamar a la API con el modelo detectado
                     const response = await fetch(
-                        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
+                        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${key}`,
                         {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -114,9 +153,9 @@
                     );
 
                     if (!response.ok) {
-                        if(response.status === 403) throw new Error("Clave bloqueada (403). Genera una nueva en Google.");
-                        if(response.status === 429) throw new Error("Demasiado rápido (429). Espera 1 minuto.");
-                        throw new Error(`Error API (${response.status})`);
+                        const err = await response.json();
+                        if (response.status === 404) throw new Error(`El modelo ${modelName} no respondió (404).`);
+                        throw new Error(`Error ${response.status}: ${err.error?.message || 'Desconocido'}`);
                     }
 
                     const data = await response.json();
@@ -127,44 +166,39 @@
                         const formatted = newItems.map(item => ({ internalId: generateUniqueId(), front: item.front || '', back: item.back || '', image: null }));
                         setCards(prev => [...prev, ...formatted]);
                         setAiPrompt('');
-                        addToast(`¡+${formatted.length} tarjetas creadas!`, 'success');
+                        addToast(`¡Éxito con ${modelName}! +${formatted.length} tarjetas.`, 'success');
                     }
                 } catch (e) {
                     addToast(e.message, 'error');
-                    if(e.message.includes("403")) setShowConfig(true); // Abrir config si la clave falla
                 } finally {
                     setIsGenerating(false);
+                    setStatusText('');
                 }
             };
 
-            // --- IA IMÁGENES (Pollinations - GRATIS) ---
+            // --- IA IMÁGENES (Pollinations) ---
             const generateAIImage = (text, id) => {
-                if (!text) return addToast("Escribe texto en la tarjeta", 'warning');
-                
-                // Semilla aleatoria para que la imagen sea distinta cada vez
+                if (!text) return addToast("Escribe texto primero", 'warning');
                 const seed = Math.floor(Math.random() * 10000);
-                const safePrompt = encodeURIComponent(`cute illustration of ${text}, minimalist, flat vector art, white background`); 
+                const safePrompt = encodeURIComponent(`cute illustration of ${text}, minimalist vector art, white background`); 
                 const imageUrl = `https://image.pollinations.ai/prompt/${safePrompt}?width=400&height=400&seed=${seed}&nologo=true`;
-
                 setCards(prev => prev.map(c => c.internalId === id ? { ...c, image: imageUrl } : c));
             };
 
             const autoFillAIImages = async () => {
                 const pending = cards.filter(c => c.front && !c.image);
-                if (pending.length === 0) return addToast("Todas las tarjetas ya tienen imagen", 'info');
+                if (pending.length === 0) return addToast("Nada que rellenar", 'info');
                 
-                addToast("🎨 Pintando imágenes...", "info");
-                
-                // Bucle con pequeña pausa para no saturar
+                addToast("🎨 Generando imágenes...", "info");
                 for (let i = 0; i < pending.length; i++) {
                     const card = pending[i];
                     generateAIImage(card.front, card.internalId);
-                    await new Promise(r => setTimeout(r, 800)); // 0.8s de pausa entre fotos
+                    await new Promise(r => setTimeout(r, 800));
                 }
-                addToast("¡Terminado!", 'success');
+                addToast("¡Listo!", 'success');
             };
 
-            // --- GESTIÓN TARJETAS ---
+            // --- UI HELPERS ---
             const handleMoveCard = (index, direction) => {
                 if ((direction === -1 && index === 0) || (direction === 1 && index === cards.length - 1)) return;
                 const newCards = [...cards];
@@ -175,9 +209,8 @@
             };
 
             const handleClearAll = () => {
-                if (confirm("¿Borrar toda la lista y empezar de cero?")) {
+                if (confirm("¿Borrar todo?")) {
                     setCards([{ internalId: generateUniqueId(), front: '', back: '', image: null }]);
-                    addToast("Lista borrada", 'success');
                 }
             };
 
@@ -187,14 +220,14 @@
             };
 
             const handleSave = () => {
-                if (!title.trim()) return addToast("Ponle un título antes de guardar", 'warning');
+                if (!title.trim()) return addToast("Ponle título", 'warning');
                 console.log({ title, cards });
-                addToast("¡Actividad guardada!", 'success');
-                if(confirm("Guardado con éxito. ¿Salir al menú?")) window.location.href = "/";
+                addToast("¡Guardado!", 'success');
+                if(confirm("Guardado. ¿Salir?")) window.location.href = "/";
             };
 
             const swapColumns = () => {
-                if(confirm("¿Intercambiar Inglés y Español en todas las tarjetas?")) {
+                if(confirm("¿Intercambiar idiomas?")) {
                     setCards(prev => prev.map(c => ({ ...c, front: c.back, back: c.front })));
                     setLangConfig(prev => ({ left: prev.right, right: prev.left }));
                     setAudioEnabled(prev => ({ left: prev.right, right: prev.left }));
@@ -205,7 +238,7 @@
             return (
                 <div className="min-h-screen bg-slate-100 py-8 px-4 font-sans text-slate-900 pb-32">
                     
-                    {/* MODAL CONFIGURACIÓN (CLAVES) */}
+                    {/* MODAL CONFIGURACIÓN */}
                     {showConfig && (
                         <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
                             <div className="bg-white w-full max-w-md rounded-2xl p-6 shadow-2xl modal-box relative">
@@ -213,14 +246,8 @@
                                     <button onClick={() => setShowConfig(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><i className="fa-solid fa-times"></i></button>
                                 )}
                                 <h2 className="text-xl font-black mb-3 flex items-center gap-2">
-                                    <i className="fa-solid fa-shield-halved text-green-500"></i> Configuración Segura
+                                    <i className="fa-solid fa-key text-yellow-500"></i> Configuración API
                                 </h2>
-                                <p className="text-sm text-slate-500 mb-4">
-                                    Pega tu clave aquí. Se guardará en tu navegador, <strong>nunca en el código</strong>.
-                                    <br/>
-                                    <span className="text-xs text-slate-400">(Si te da error 403, genera una clave nueva en Google).</span>
-                                </p>
-                                
                                 <div className="space-y-4">
                                     <div>
                                         <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Google Gemini API Key</label>
@@ -228,13 +255,11 @@
                                             value={apiKeys.google}
                                             onChange={e => setApiKeys({...apiKeys, google: e.target.value})}
                                             type="password"
-                                            placeholder="Pega aquí tu clave AIzaSy..."
+                                            placeholder="AIzaSy..."
                                             className="w-full border-2 border-slate-200 rounded-xl px-3 py-2 font-mono text-sm focus:border-indigo-500 outline-none"
                                         />
                                     </div>
-                                    <button onClick={saveApiKeys} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-black transition-all">
-                                        Guardar Clave
-                                    </button>
+                                    <button onClick={saveApiKeys} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-black transition-all">Guardar</button>
                                 </div>
                             </div>
                         </div>
@@ -256,17 +281,11 @@
                             </div>
                             
                             <div className="flex gap-2 items-center">
-                                {/* Botón Borrar Todo */}
-                                <button onClick={handleClearAll} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-lg font-bold text-xs flex items-center gap-1 transition-colors" title="Borrar toda la lista">
+                                <button onClick={handleClearAll} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-lg font-bold text-xs flex items-center gap-1 transition-colors" title="Borrar Todo">
                                     <i className="fa-solid fa-trash-can"></i>
                                 </button>
-
-                                {/* Botón Configuración */}
-                                <button onClick={() => setShowConfig(true)} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-lg font-bold text-xs" title="Configurar Claves">
-                                    <i className="fa-solid fa-gear"></i>
-                                </button>
-
-                                {/* Audio Toggles */}
+                                <button onClick={() => setShowConfig(true)} className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-lg font-bold text-xs" title="Configurar"><i className="fa-solid fa-gear"></i></button>
+                                
                                 <div className="flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200">
                                     <button onClick={() => setAudioEnabled({...audioEnabled, left: !audioEnabled.left})} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${audioEnabled.left ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
                                         {audioEnabled.left ? <i className="fa-solid fa-volume-high"></i> : <i className="fa-solid fa-volume-xmark"></i>} {langConfig.left === 'en-US' ? 'EN' : 'ES'}
@@ -284,8 +303,8 @@
                             <div className="bg-white/10 backdrop-blur-md rounded-xl p-3 flex flex-col md:flex-row gap-2 items-center">
                                 <i className="fa-solid fa-wand-magic-sparkles text-white text-xl mx-2"></i>
                                 <div className="flex-1 w-full">
-                                    <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="Ej: 'Acciones en el aeropuerto' (Crea 30) o pega tu lista..." className="w-full bg-transparent border-none text-white font-bold outline-none placeholder:text-indigo-200 text-lg" onKeyDown={e => e.key === 'Enter' && generateList()}/>
-                                    <div className="text-indigo-200 text-xs font-mono mt-1">Escribe un tema para inventar o pega una lista para traducir.</div>
+                                    <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="Ej: 'Acciones en el aeropuerto' o pega tu lista..." className="w-full bg-transparent border-none text-white font-bold outline-none placeholder:text-indigo-200 text-lg" onKeyDown={e => e.key === 'Enter' && generateList()}/>
+                                    {statusText && <div className="text-indigo-200 text-xs font-mono mt-1">{statusText}</div>}
                                 </div>
                                 <button onClick={generateList} disabled={isGenerating || !aiPrompt} className="bg-white text-indigo-700 px-6 py-3 rounded-xl font-bold hover:bg-indigo-50 disabled:opacity-50 text-sm flex items-center gap-2 shadow-lg transition-all active:scale-95 whitespace-nowrap">
                                     {isGenerating ? <span><i className="fa-solid fa-spinner fa-spin"></i> Trabajando...</span> : <span><i className="fa-solid fa-bolt"></i> Generar con IA</span>}
@@ -305,9 +324,9 @@
                             <div className="grid grid-cols-12 gap-4 p-4 bg-slate-50 border-b text-xs font-black text-slate-400 uppercase items-center">
                                 <div className="col-span-1 text-center">#</div>
                                 <div className="col-span-4 pl-2">{langConfig.left === 'en-US' ? 'Inglés' : 'Español'}</div>
-                                <div className="col-span-1 text-center"><button onClick={swapColumns} className="hover:bg-slate-100 p-1 rounded text-slate-500 transition-colors" title="Intercambiar Todo"><i className="fa-solid fa-right-left"></i></button></div>
+                                <div className="col-span-1 text-center"><button onClick={swapColumns} className="hover:bg-slate-100 p-1 rounded text-slate-500"><i className="fa-solid fa-right-left"></i></button></div>
                                 <div className="col-span-4 pl-2">{langConfig.right === 'es-MX' ? 'Español' : 'Inglés'}</div>
-                                <div className="col-span-2 text-right pr-2">Acciones</div>
+                                <div className="col-span-2 text-right pr-2">Mover / Borrar</div>
                             </div>
 
                             <div className="divide-y divide-slate-100">
@@ -338,11 +357,9 @@
                                                     onBlur={(e) => handleManualLink(card.internalId, e.target.value)} 
                                                     onKeyDown={(e) => e.key==='Enter' && handleManualLink(card.internalId, e.currentTarget.value)}/>
                                             ) : (
-                                                <div className="flex gap-1">
-                                                    <button onClick={() => generateAIImage(card.front, card.internalId)} className="w-14 h-14 rounded-lg border-2 border-dashed border-slate-300 text-slate-300 hover:border-pink-500 hover:text-pink-500 hover:bg-pink-50 transition-all flex flex-col items-center justify-center" title="Pintar con IA">
-                                                        <i className="fa-solid fa-wand-magic-sparkles"></i>
-                                                    </button>
-                                                </div>
+                                                <button onClick={() => generateAIImage(card.front, card.internalId)} className="w-14 h-14 rounded-lg border-2 border-dashed border-slate-300 text-slate-300 hover:border-pink-500 hover:text-pink-500 hover:bg-pink-50 transition-all flex flex-col items-center justify-center" title="Pintar con IA">
+                                                    <i className="fa-solid fa-wand-magic-sparkles"></i>
+                                                </button>
                                             )}
                                         </div>
 
