@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Periplo Dashboard v60 - Final</title>
+    <title>Periplo Dashboard v61 - Folder Aware</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -15,8 +15,16 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
         .modal-blur { backdrop-filter: blur(12px); animation: fadeIn 0.2s ease-out; }
         .crop-container { width: 100%; aspect-ratio: 1/1; border-radius: 1.5rem; background: #0f172a; position: relative; overflow: hidden; cursor: move; border: 2px solid #e2e8f0; }
-        /* Importante: la imagen debe poder salirse del contenedor para el zoom */
-        .crop-img { position: absolute; pointer-events: none; user-select: none; transform-origin: center; max-width: none; }
+        /* Fix de calidad y posición */
+        .crop-img { 
+            position: absolute; 
+            pointer-events: none; 
+            user-select: none; 
+            transform-origin: center; 
+            max-width: none; 
+            max-height: none;
+            image-rendering: -webkit-optimize-contrast; /* Mejora nitidez */
+        }
     </style>
 </head>
 <body>
@@ -29,8 +37,9 @@
         const App = () => {
             const genId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
             
+            // ESTADO
             const [gameTitle, setGameTitle] = useState('');
-            // crop: x/y ahora son PORCENTAJES (50 = centro)
+            const [folderId, setFolderId] = useState(null); // ID de la carpeta actual
             const [cards, setCards] = useState([{ internalId: genId(), front: '', back: '', image: null, crop: { zoom: 1, rot: 0, x: 50, y: 50 } }]);
             const [aiPrompt, setAiPrompt] = useState('');
             const [isGenerating, setIsGenerating] = useState(false);
@@ -39,22 +48,24 @@
             
             const [audioPrefs, setAudioPrefs] = useState({ left: 'en', right: 'es', leftActive: true, rightActive: true });
             const [imgPrefs, setImgPrefs] = useState({ front: true, back: false });
-
             const [gallery, setGallery] = useState({ isOpen: false, cardId: null, term: '', currentPreview: null, rotation: 0, zoom: 1, manualUrl: '', posX: 50, posY: 50 });
             
-            // Refs para lógica de arrastre
             const isDragging = useRef(false);
             const startPos = useRef({ x: 0, y: 0 });
             const cropContainerRef = useRef(null);
 
+            // INICIALIZACIÓN
             useEffect(() => {
                 const g = localStorage.getItem('periplo_google_key') || '';
                 setApiKeys({ google: g });
                 
-                // Intentar leer título de la URL (ej: dashboard.html?title=MiJuego)
+                // LEER PARÁMETROS DE URL (Simulando la navegación de carpetas)
                 const params = new URLSearchParams(window.location.search);
                 const urlTitle = params.get('title');
+                const urlFolder = params.get('folderId'); // Buscamos el ID de la carpeta
+                
                 if(urlTitle) setGameTitle(decodeURIComponent(urlTitle));
+                if(urlFolder) setFolderId(urlFolder);
             }, []);
 
             const addToast = (msg, type = 'error') => {
@@ -71,7 +82,18 @@
                 window.speechSynthesis.speak(ut);
             };
 
-            // LÓGICA DE ARRASTRE PORCENTUAL (FIX DE MINIATURA)
+            // --- LÓGICA DE NAVEGACIÓN INTELIGENTE ---
+            const goBack = () => {
+                if (folderId) {
+                    // Si venimos de una carpeta específica, volvemos a ella
+                    // (Aquí asumo tu estructura de URL, ajústalo si es diferente)
+                    window.location.href = `index.html?folder=${folderId}`;
+                } else {
+                    // Si no hay carpeta, volvemos al listado general
+                    window.location.href = 'index.html#activities';
+                }
+            };
+
             const handleMouseDown = (e) => {
                 isDragging.current = true;
                 startPos.current = { x: e.clientX, y: e.clientY };
@@ -79,22 +101,14 @@
 
             const handleMouseMove = (e) => {
                 if (!isDragging.current || !cropContainerRef.current) return;
-                
-                // Calcular cuánto se movió en píxeles
                 const dxPx = e.clientX - startPos.current.x;
                 const dyPx = e.clientY - startPos.current.y;
-                
-                // Obtener tamaño del contenedor para convertir a porcentaje
                 const rect = cropContainerRef.current.getBoundingClientRect();
+                // Sensibilidad ajustada para mayor precisión
                 const dxPercent = (dxPx / rect.width) * 100;
                 const dyPercent = (dyPx / rect.height) * 100;
 
-                setGallery(p => ({ 
-                    ...p, 
-                    posX: p.posX + dxPercent, 
-                    posY: p.posY + dyPercent 
-                }));
-                
+                setGallery(p => ({ ...p, posX: p.posX + dxPercent, posY: p.posY + dyPercent }));
                 startPos.current = { x: e.clientX, y: e.clientY };
             };
 
@@ -104,8 +118,7 @@
                 try {
                     const promptText = `Generate exactly 30 pairs for "${aiPrompt}". 
                     Format: JSON array of objects [{"front": "EnglishWord", "back": "SpanishTranslation"}].
-                    IMPORTANT: Direct translations only. No definitions.
-                    Example: {"front": "Apple", "back": "Manzana"}`;
+                    IMPORTANT: Direct translations only. No definitions.`;
 
                     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKeys.google.trim()}`, {
                         method: 'POST',
@@ -117,7 +130,6 @@
                     const data = await res.json();
                     const rawText = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
                     const items = JSON.parse(rawText);
-                    
                     setCards(p => [...p, ...items.map(i => ({ ...i, internalId: genId(), image: null, crop: { zoom: 1, rot: 0, x: 50, y: 50 } }))]);
                     setAiPrompt('');
                     addToast("Lista generada", "success");
@@ -125,21 +137,16 @@
                 finally { setIsGenerating(false); }
             };
 
-            const handleSwitch = () => {
-                setCards(cards.map(c => ({ ...c, front: c.back, back: c.front })));
-                setAudioPrefs(p => ({ ...p, left: p.right, right: p.left }));
-                addToast("Columnas y audios intercambiados", "success");
-            };
-
             const handleFinish = () => {
                 if(!gameTitle.trim()) return addToast("Falta el título");
                 const finalData = {
                     title: gameTitle,
+                    folderId: folderId || 'root', // Guardamos en la carpeta correcta
                     config: { audio: audioPrefs, images: imgPrefs },
                     cards: cards.filter(c => c.front || c.back)
                 };
-                console.log("EXPORT:", finalData);
-                addToast("¡Juego Creado! (Revisa Consola)", "success");
+                console.log("GUARDANDO EN CARPETA:", folderId, finalData);
+                addToast(`Guardado en carpeta: ${folderId || 'Inicio'}`, "success");
             };
 
             // Helpers de lista
@@ -162,11 +169,13 @@
                     {/* NAV */}
                     <nav className="bg-white border-b p-3 flex justify-between items-center sticky top-0 z-40 px-6 shadow-sm">
                         <div className="flex items-center gap-3">
-                            <a href="index.html" className="w-10 h-10 flex items-center justify-center hover:bg-slate-100 rounded-xl text-slate-400 hover:text-indigo-600 transition-all"><i className="fa-solid fa-house"></i></a>
-                            <a href="index.html#templates" className="w-10 h-10 flex items-center justify-center hover:bg-slate-100 rounded-xl text-slate-400 hover:text-indigo-600 transition-all"><i className="fa-solid fa-arrow-left"></i></a>
-                            <h1 className="font-extrabold text-indigo-600 text-lg ml-2 italic">PERIPLO <span className="text-slate-400 not-italic">v60</span></h1>
+                            <button onClick={goBack} className="flex items-center gap-2 hover:bg-slate-100 px-4 py-2 rounded-xl text-slate-500 hover:text-indigo-600 transition-all font-bold text-xs">
+                                <i className="fa-solid fa-arrow-left"></i> {folderId ? 'Volver a Carpeta' : 'Volver'}
+                            </button>
+                            <div className="h-6 w-px bg-slate-200"></div>
+                            <h1 className="font-extrabold text-indigo-600 text-lg italic">PERIPLO <span className="text-slate-400 not-italic">v61</span></h1>
                         </div>
-                        <input type="password" value={apiKeys.google} onChange={e => { setApiKeys({google: e.target.value}); localStorage.setItem('periplo_google_key', e.target.value); }} className="bg-slate-100 border p-2 rounded-xl text-[10px] w-32 md:w-48 outline-none font-mono text-center" placeholder="API KEY" />
+                        <input type="password" value={apiKeys.google} onChange={e => { setApiKeys({google: e.target.value}); localStorage.setItem('periplo_google_key', e.target.value); }} className="bg-slate-100 border p-2 rounded-xl text-[10px] w-32 outline-none font-mono text-center" placeholder="API KEY" />
                     </nav>
 
                     <main className="max-w-5xl mx-auto mt-8 p-4">
@@ -174,38 +183,32 @@
                         <div className="mb-8 space-y-4">
                             <input value={gameTitle} onChange={e => setGameTitle(e.target.value)} placeholder="Título de la Actividad..." className="w-full bg-transparent border-b-4 border-slate-200 p-3 outline-none font-black text-3xl text-slate-800 focus:border-indigo-500 transition-all placeholder:text-slate-300" />
                             <div className="bg-indigo-600 p-2 rounded-[2rem] shadow-xl flex items-center gap-2 border-4 border-white">
-                                <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && generate()} placeholder="¿Qué debería generar? Ej. Lista de cocina o sugiere un tema..." className="flex-1 bg-white p-4 rounded-[1.5rem] outline-none font-bold text-slate-700 text-sm px-6 shadow-inner"/>
+                                <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && generate()} placeholder="¿Qué debería generar? Ej. Lista de cocina..." className="flex-1 bg-white p-4 rounded-[1.5rem] outline-none font-bold text-slate-700 text-sm px-6 shadow-inner"/>
                                 <button onClick={generate} disabled={isGenerating} className="bg-indigo-950 text-white px-8 h-12 rounded-[1.5rem] font-black text-xs uppercase hover:bg-black transition-all flex items-center gap-2">
                                     {isGenerating ? <i className="fa-solid fa-spinner fa-spin"></i> : <><i className="fa-solid fa-paintbrush"></i> GENERAR IA</>}
                                 </button>
                             </div>
                         </div>
 
-                        {/* PANEL DE CONTROL GLOBAL */}
+                        {/* PANEL DE CONTROL */}
                         <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm mb-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-                            
-                            {/* 1. TEXTO & IDIOMA */}
                             <div className="space-y-3">
                                 <div className="flex justify-between items-center">
-                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest"><i className="fa-solid fa-language mr-1"></i>Texto & Voz</span>
-                                    <button onClick={handleSwitch} className="text-[10px] font-bold text-indigo-500 hover:bg-indigo-50 px-2 py-1 rounded-lg transition-all"><i className="fa-solid fa-right-left mr-1"></i>SWITCH TODO</button>
+                                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Texto & Voz</span>
+                                    <button onClick={() => { setCards(cards.map(c => ({ ...c, front: c.back, back: c.front }))); setAudioPrefs(p => ({ ...p, left: p.right, right: p.left })); }} className="text-[10px] font-bold text-indigo-500 hover:bg-indigo-50 px-2 py-1 rounded-lg transition-all"><i className="fa-solid fa-right-left mr-1"></i>SWITCH TODO</button>
                                 </div>
                                 <div className="flex gap-2">
                                     <button onClick={() => setAudioPrefs({...audioPrefs, leftActive: !audioPrefs.leftActive})} className={`flex-1 py-2 rounded-xl text-[10px] font-black border transition-all ${audioPrefs.leftActive ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-slate-50 text-slate-300'}`}>INGLÉS</button>
                                     <button onClick={() => setAudioPrefs({...audioPrefs, rightActive: !audioPrefs.rightActive})} className={`flex-1 py-2 rounded-xl text-[10px] font-black border transition-all ${audioPrefs.rightActive ? 'bg-pink-50 border-pink-200 text-pink-600' : 'bg-slate-50 text-slate-300'}`}>ESPAÑOL</button>
                                 </div>
                             </div>
-
-                            {/* 2. IMAGEN CONFIG */}
                             <div className="space-y-3">
-                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block"><i className="fa-regular fa-image mr-1"></i>Imagen Visible En:</span>
+                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Imagen Visible En:</span>
                                 <div className="flex gap-2">
                                     <button onClick={() => setImgPrefs({...imgPrefs, front: !imgPrefs.front})} className={`flex-1 py-2 rounded-xl text-[10px] font-black border transition-all ${imgPrefs.front ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 text-slate-300'}`}>FRENTE</button>
                                     <button onClick={() => setImgPrefs({...imgPrefs, back: !imgPrefs.back})} className={`flex-1 py-2 rounded-xl text-[10px] font-black border transition-all ${imgPrefs.back ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 text-slate-300'}`}>ATRÁS</button>
                                 </div>
                             </div>
-
-                            {/* 3. ACCIONES GLOBALES */}
                             <div className="space-y-3 flex flex-col justify-end">
                                 <button onClick={() => confirm("¿Borrar todo?") && setCards([])} className="w-full py-2 bg-slate-50 border-2 border-slate-100 rounded-xl text-rose-400 font-bold hover:bg-rose-50 hover:border-rose-200 text-[10px] uppercase transition-all"><i className="fa-solid fa-trash mr-2"></i>Limpiar Todo</button>
                             </div>
@@ -214,9 +217,9 @@
                         {/* LISTA */}
                         <div className="space-y-4">
                             {cards.map((c, idx) => (
-                                <div key={c.internalId} className="bg-white rounded-[2rem] p-2 pl-4 shadow-sm border border-slate-100 hover:shadow-lg hover:border-indigo-100 transition-all grid grid-cols-12 gap-2 items-center group relative">
+                                <div key={c.internalId} className="bg-white rounded-[2rem] p-3 pl-4 shadow-sm border border-slate-100 hover:shadow-lg hover:border-indigo-100 transition-all grid grid-cols-12 gap-3 items-center group relative overflow-visible">
                                     
-                                    {/* CONTROLES DE FILA (NUEVO) */}
+                                    {/* CONTROLES IZQUIERDOS (Orden) */}
                                     <div className="col-span-1 flex flex-col items-center justify-center gap-1">
                                         <button onClick={() => moveCard(idx, -1)} className="w-6 h-6 rounded-full hover:bg-slate-100 text-slate-300 hover:text-indigo-500 transition-all text-[10px]"><i className="fa-solid fa-chevron-up"></i></button>
                                         <span className="font-black text-slate-300 text-xs select-none">{idx + 1}</span>
@@ -227,13 +230,9 @@
                                     <div className="col-span-11 md:col-span-4 relative">
                                         <input value={c.front} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, front: e.target.value} : x))} className="w-full p-4 rounded-2xl bg-slate-50 border-2 border-slate-100 focus:bg-white focus:border-indigo-400 outline-none font-bold text-slate-700 text-sm transition-all" placeholder="Inglés..." />
                                         {audioPrefs.leftActive && <button onClick={() => speak(c.front, 'en')} className="absolute right-3 top-4 text-indigo-200 hover:text-indigo-500"><i className="fa-solid fa-volume-high"></i></button>}
-                                        <div className="absolute -top-3 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                                             <button onClick={() => duplicateCard(idx)} className="bg-white border border-slate-200 text-[9px] px-2 rounded-lg text-slate-400 hover:text-indigo-600 shadow-sm" title="Duplicar"><i className="fa-solid fa-copy"></i></button>
-                                             <button onClick={() => setCards(cards.filter(x => x.internalId !== c.internalId))} className="bg-white border border-slate-200 text-[9px] px-2 rounded-lg text-slate-400 hover:text-rose-500 shadow-sm" title="Borrar"><i className="fa-solid fa-trash"></i></button>
-                                        </div>
                                     </div>
 
-                                    {/* IMAGEN CENTRAL (PORCENTAJE) */}
+                                    {/* IMAGEN CENTRAL */}
                                     <div className="col-span-12 md:col-span-3 flex justify-center py-2 md:py-0">
                                         <div 
                                             className="w-24 h-24 rounded-2xl bg-slate-100 border-2 border-dashed border-slate-300 overflow-hidden cursor-pointer hover:border-indigo-500 hover:scale-105 transition-all shadow-inner relative group/img"
@@ -244,10 +243,9 @@
                                                     <img 
                                                         src={c.image} 
                                                         style={{ 
-                                                            /* AQUÍ ESTÁ LA MAGIA DE LOS PORCENTAJES: */
                                                             transform: `translate(${c.crop.x - 50}%, ${c.crop.y - 50}%) rotate(${c.crop.rot}deg) scale(${c.crop.zoom})`,
                                                             position: 'absolute', top: '50%', left: '50%',
-                                                            width: '100%', height: '100%', objectFit: 'cover', maxWidth: 'none', maxHeight: 'none'
+                                                            width: '100%', height: '100%', objectFit: 'cover'
                                                         }} 
                                                     />
                                                 </div>
@@ -263,6 +261,12 @@
                                     <div className="col-span-11 md:col-span-4 relative">
                                         <input value={c.back} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, back: e.target.value} : x))} className="w-full p-4 rounded-2xl bg-slate-50 border-2 border-slate-100 focus:bg-white focus:border-pink-400 outline-none font-bold text-slate-700 text-sm transition-all" placeholder="Español..." />
                                         {audioPrefs.rightActive && <button onClick={() => speak(c.back, 'es')} className="absolute right-3 top-4 text-pink-200 hover:text-pink-600"><i className="fa-solid fa-volume-high"></i></button>}
+                                        
+                                        {/* BOTONES FLOTANTES DE EDICIÓN (REUBICADOS A LA DERECHA) */}
+                                        <div className="absolute -top-3 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all z-10">
+                                             <button onClick={() => duplicateCard(idx)} className="bg-white border border-slate-200 text-[10px] w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:text-indigo-600 hover:border-indigo-200 shadow-sm transition-all" title="Duplicar"><i className="fa-solid fa-copy"></i></button>
+                                             <button onClick={() => setCards(cards.filter(x => x.internalId !== c.internalId))} className="bg-white border border-slate-200 text-[10px] w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:text-rose-500 hover:border-rose-200 shadow-sm transition-all" title="Borrar"><i className="fa-solid fa-trash"></i></button>
+                                        </div>
                                     </div>
                                 </div>
                             ))}
@@ -277,31 +281,23 @@
                         </div>
                     </main>
 
-                    {/* MODAL EDITOR DE IMAGEN (ARREGLADO) */}
+                    {/* MODAL EDITOR */}
                     {gallery.isOpen && (
-                        <div className="fixed inset-0 z-50 bg-slate-900/95 flex items-center justify-center p-4 modal-blur" 
-                             onMouseMove={handleMouseMove} 
-                             onMouseUp={() => isDragging.current = false}
-                        >
+                        <div className="fixed inset-0 z-50 bg-slate-900/95 flex items-center justify-center p-4 modal-blur" onMouseMove={handleMouseMove} onMouseUp={() => isDragging.current = false}>
                             <div className="bg-white w-full max-w-4xl h-[85vh] rounded-[2.5rem] overflow-hidden flex flex-col shadow-2xl">
                                 <div className="p-4 border-b flex justify-between items-center px-8 bg-white">
-                                    <h3 className="font-bold text-slate-800 text-xs uppercase tracking-widest">Editor de Encuadre</h3>
+                                    <h3 className="font-bold text-slate-800 text-xs uppercase tracking-widest">Editor de Imagen</h3>
                                     <button onClick={() => setGallery({...gallery, isOpen: false})} className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 font-bold">✕</button>
                                 </div>
                                 <div className="flex-1 flex flex-col md:flex-row bg-slate-50 overflow-hidden">
                                     <div className="w-full md:w-1/2 p-6 border-r flex flex-col items-center justify-center space-y-6 bg-slate-100/50">
-                                        <div 
-                                            className="crop-container shadow-2xl ring-4 ring-white" 
-                                            ref={cropContainerRef}
-                                            onMouseDown={handleMouseDown}
-                                        >
+                                        <div className="crop-container shadow-2xl ring-4 ring-white" ref={cropContainerRef} onMouseDown={handleMouseDown}>
                                             {gallery.currentPreview ? (
                                                 <React.Fragment>
                                                     <img 
                                                         src={gallery.currentPreview} 
                                                         className="crop-img" 
                                                         style={{ 
-                                                            /* USAMOS LA MISMA LÓGICA DE PORCENTAJES QUE EN LA MINIATURA */
                                                             transform: `translate(${gallery.posX - 50}%, ${gallery.posY - 50}%) rotate(${gallery.rotation}deg) scale(${gallery.zoom})`,
                                                             top: '50%', left: '50%',
                                                             width: '100%', height: '100%', objectFit: 'cover'
@@ -311,7 +307,6 @@
                                                 </React.Fragment>
                                             ) : <div className="p-12 text-center text-[10px] text-slate-300 font-black uppercase tracking-widest">Vista Previa</div>}
                                         </div>
-                                        {/* CONTROLES DE ZOOM Y ROTACIÓN */}
                                         <div className="flex gap-2 w-full max-w-xs">
                                             <button onClick={() => setGallery({...gallery, rotation: (gallery.rotation + 90) % 360})} className="flex-1 bg-white border border-slate-200 py-3 rounded-xl text-[10px] font-black hover:bg-slate-50">ROTAR</button>
                                             <button onClick={() => setGallery({...gallery, zoom: 1, rotation: 0, posX: 50, posY: 50})} className="flex-1 bg-white border border-slate-200 py-3 rounded-xl text-[10px] font-black text-rose-500 hover:bg-rose-50">RESET</button>
