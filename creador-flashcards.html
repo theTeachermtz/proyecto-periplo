@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Periplo Dashboard v34.0 - Especialista 2.5</title>
+    <title>Periplo Dashboard v35.0 - Final Fix</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
     
     <script src="https://cdn.tailwindcss.com"></script>
@@ -19,7 +19,6 @@
         @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
         .scroller::-webkit-scrollbar { width: 6px; }
         .scroller::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-        .btn-action { @apply p-2 rounded-lg transition-all duration-200 active:scale-90; }
     </style>
 </head>
 <body>
@@ -40,26 +39,42 @@
             const [apiKeys, setApiKeys] = useState({ google: '', unsplash: '' });
             const [gallery, setGallery] = useState({ isOpen: false, cardId: null, searchTerm: '', results: [], loading: false });
 
+            // Cargar claves al iniciar
             useEffect(() => {
                 const g = localStorage.getItem('periplo_google_key');
                 const u = localStorage.getItem('periplo_unsplash_key');
-                if (g) setApiKeys({ google: g, unsplash: u || '' });
-                else setShowConfig(true);
+                if (g) {
+                    setApiKeys({ google: g, unsplash: u || '' });
+                } else {
+                    setShowConfig(true);
+                }
             }, []);
 
             const addToast = (msg, type = 'error') => {
                 const id = Date.now();
                 setToasts(p => [...p, { id, msg, type }]);
-                setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
+                setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 5000);
             };
 
-            // --- IA GENERAR (FIJO 2.5 FLASH) ---
+            const saveConfig = () => {
+                if (!apiKeys.google.trim()) return addToast("La clave de Google es necesaria");
+                localStorage.setItem('periplo_google_key', apiKeys.google.trim());
+                localStorage.setItem('periplo_unsplash_key', apiKeys.unsplash.trim());
+                setShowConfig(false);
+                addToast("Configuración guardada", "success");
+            };
+
+            // --- IA GENERAR (DIRECTO 2.5 FLASH) ---
             const generate = async () => {
-                if (!apiKeys.google || !aiPrompt.trim()) return;
+                if (!apiKeys.google || !aiPrompt.trim()) {
+                    if (!apiKeys.google) setShowConfig(true);
+                    return;
+                }
+                
                 setIsGenerating(true);
                 try {
                     const key = apiKeys.google.trim().replace("AIzaSyAIzaSy", "AIzaSy");
-                    const promptText = `Return a JSON array of 30 vocabulary items about "${aiPrompt}". Format: [{"front": "English word", "back": "Spanish translation"}]. No markdown, just raw JSON.`;
+                    const promptText = `Return a JSON array of 30 vocabulary items for the topic "${aiPrompt}". Format: [{"front": "English word", "back": "Spanish translation"}]. No markdown, just raw JSON.`;
                     
                     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`, {
                         method: 'POST',
@@ -69,18 +84,20 @@
 
                     const data = await res.json();
                     if (!res.ok) {
-                        if (res.status === 429) throw new Error("Google ocupado (429). Espera 1 minuto.");
-                        if (res.status === 404) throw new Error("El modelo 2.5 no está disponible en esta clave.");
-                        throw new Error(data.error?.message || "Error");
+                        if (res.status === 429) throw new Error("Cuota excedida. Espera 1 minuto.");
+                        throw new Error(data.error?.message || "Error en la conexión");
                     }
 
                     const raw = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
                     const items = JSON.parse(raw);
                     setCards(p => [...p, ...items.map(i => ({ ...i, internalId: genId(), image: null }))]);
                     setAiPrompt('');
-                    addToast("¡Lista 2.5 generada!", "success");
-                } catch (e) { addToast(e.message); }
-                finally { setIsGenerating(false); }
+                    addToast("¡Lista generada con 2.5 Flash!", "success");
+                } catch (e) { 
+                    addToast(e.message); 
+                } finally { 
+                    setIsGenerating(false); 
+                }
             };
 
             // --- IMÁGENES (UNSPLASH) ---
@@ -97,7 +114,10 @@
                 try {
                     const res = await searchImg(term);
                     setGallery(p => ({ ...p, results: res, loading: false }));
-                } catch (e) { setGallery(p => ({ ...p, loading: false })); addToast("Error imágenes"); }
+                } catch (e) { 
+                    setGallery(p => ({ ...p, loading: false })); 
+                    addToast("Error al buscar imágenes"); 
+                }
             };
 
             // --- UI HELPERS ---
@@ -109,19 +129,29 @@
             };
 
             const clearAll = () => {
-                if(confirm("¿Borrar todo?")) setCards([{ internalId: genId(), front: '', back: '', image: null }]);
+                if(confirm("¿Quieres borrar toda la lista actual?")) {
+                    setCards([{ internalId: genId(), front: '', back: '', image: null }]);
+                }
             };
 
             return (
-                <div className="min-h-screen p-4 md:p-8 pb-20">
-                    {/* MODAL CONFIG */}
+                <div className="min-h-screen p-4 md:p-8 pb-24">
+                    {/* MODAL CONFIGURACIÓN */}
                     {showConfig && (
                         <div className="fixed inset-0 z-50 bg-slate-900/80 flex items-center justify-center p-4 backdrop-blur-sm">
                             <div className="bg-white p-8 rounded-3xl w-full max-w-md modal-anim shadow-2xl">
-                                <h2 className="text-2xl font-black mb-4 flex items-center gap-2"><i className="fa-solid fa-bolt text-indigo-500"></i> Configuración</h2>
-                                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Google API Key (2.5 Flash)</label>
-                                <input type="password" value={apiKeys.google} onChange={e => setApiKeys({...apiKeys, google: e.target.value})} className="w-full border-2 border-slate-100 p-4 rounded-2xl mb-4 outline-none focus:border-indigo-500 transition-all font-mono" placeholder="AIzaSy..."/>
-                                <button onClick={() => { localStorage.setItem('periplo_google_key', apiKeys.google); setShowConfig(false); }} className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700">Guardar</button>
+                                <h2 className="text-2xl font-black mb-4 flex items-center gap-2"><i className="fa-solid fa-gear text-indigo-500"></i> Configuración</h2>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Google Gemini API Key (Obligatoria)</label>
+                                        <input type="password" value={apiKeys.google} onChange={e => setApiKeys({...apiKeys, google: e.target.value})} className="w-full border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-500 transition-all font-mono" placeholder="AIzaSy..."/>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Unsplash Access Key (Opcional)</label>
+                                        <input type="password" value={apiKeys.unsplash} onChange={e => setApiKeys({...apiKeys, unsplash: e.target.value})} className="w-full border-2 border-slate-100 p-4 rounded-2xl outline-none focus:border-indigo-500 transition-all font-mono" placeholder="Dejar vacío para usar defecto"/>
+                                    </div>
+                                    <button onClick={saveConfig} className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200">Guardar Cambios</button>
+                                </div>
                             </div>
                         </div>
                     )}
@@ -131,78 +161,90 @@
                         <div className="fixed inset-0 z-50 bg-slate-900/90 flex items-center justify-center p-4 backdrop-blur-md">
                             <div className="bg-white w-full max-w-4xl h-[80vh] rounded-3xl overflow-hidden flex flex-col modal-anim">
                                 <div className="p-6 border-b flex justify-between items-center bg-slate-50">
-                                    <h3 className="font-black text-xl">Fotos Unsplash para "{gallery.searchTerm}"</h3>
-                                    <button onClick={() => setGallery({...gallery, isOpen: false})} className="w-10 h-10 rounded-full hover:bg-slate-200"><i className="fa-solid fa-times"></i></button>
+                                    <h3 className="font-black text-xl">Fotos para "{gallery.searchTerm}"</h3>
+                                    <button onClick={() => setGallery({...gallery, isOpen: false})} className="w-10 h-10 rounded-full hover:bg-slate-200 transition-all"><i className="fa-solid fa-times"></i></button>
                                 </div>
-                                <div className="flex-1 overflow-y-auto p-6 scroller bg-slate-100">
-                                    {gallery.loading ? <div className="text-center py-20"><i className="fa-solid fa-circle-notch fa-spin fa-3x text-indigo-500"></i></div> : 
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                        {gallery.results.map(img => (
-                                            <img key={img.id} src={img.thumb} className="w-full aspect-square object-cover rounded-2xl cursor-pointer hover:scale-105 transition-all shadow-md" onClick={() => {
-                                                setCards(cards.map(c => c.internalId === gallery.cardId ? {...c, image: img.url} : c));
-                                                setGallery({...gallery, isOpen: false});
-                                            }}/>
-                                        ))}
-                                    </div>}
+                                <div className="flex-1 overflow-y-auto p-6 scroller bg-slate-50">
+                                    {gallery.loading ? (
+                                        <div className="text-center py-20"><i className="fa-solid fa-spinner fa-spin fa-3x text-indigo-500"></i></div>
+                                    ) : (
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                            {gallery.results.map(img => (
+                                                <img key={img.id} src={img.thumb} className="w-full aspect-square object-cover rounded-2xl cursor-pointer hover:scale-105 transition-all shadow-md" onClick={() => {
+                                                    setCards(cards.map(c => c.internalId === gallery.cardId ? {...c, image: img.url} : c));
+                                                    setGallery({...gallery, isOpen: false});
+                                                }}/>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>
                     )}
 
                     <div className="max-w-4xl mx-auto">
-                        <div className="flex justify-between items-center mb-6">
-                            <h1 className="text-2xl font-black text-indigo-900">Periplo Dash <span className="text-xs bg-indigo-100 text-indigo-500 px-2 py-1 rounded-lg">v34.0 (2.5)</span></h1>
-                            <button onClick={clearAll} className="text-rose-500 font-bold text-sm hover:bg-rose-50 px-4 py-2 rounded-xl transition-all"><i className="fa-solid fa-trash-can mr-2"></i> Limpiar Todo</button>
-                        </div>
-
-                        <div className="bg-indigo-600 p-2 rounded-[2.5rem] shadow-2xl mb-8 flex items-center gap-2">
-                            <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && generate()} placeholder="Tema: Acciones en el aeropuerto..." className="flex-1 bg-white p-4 md:p-5 rounded-[2rem] outline-none font-bold text-indigo-900 placeholder:text-slate-300"/>
-                            <button onClick={generate} disabled={isGenerating} className="bg-indigo-950 text-white h-14 md:h-16 px-8 rounded-[2rem] font-black hover:bg-black transition-all disabled:opacity-50">
-                                {isGenerating ? <i className="fa-solid fa-spinner fa-spin"></i> : "GENERAR"}
+                        <div className="flex justify-between items-center mb-8">
+                            <h1 className="text-2xl font-black text-indigo-950 flex items-center gap-2">
+                                Periplo Dash <span className="text-[10px] bg-indigo-100 text-indigo-600 px-2 py-1 rounded-full uppercase tracking-widest">v35.0</span>
+                            </h1>
+                            <button onClick={clearAll} className="text-rose-500 font-bold text-sm hover:bg-rose-50 px-4 py-2 rounded-xl transition-all flex items-center gap-2">
+                                <i className="fa-solid fa-trash-can"></i> Limpiar Todo
                             </button>
                         </div>
 
+                        {/* BARRA GENERADORA */}
+                        <div className="bg-indigo-600 p-2 rounded-[2.5rem] shadow-2xl mb-10 flex items-center gap-2">
+                            <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && generate()} placeholder="Tema: Objetos de oficina..." className="flex-1 bg-white p-4 md:p-5 rounded-[2rem] outline-none font-bold text-indigo-950 placeholder:text-slate-300"/>
+                            <button onClick={generate} disabled={isGenerating} className="bg-indigo-950 text-white h-14 md:h-16 px-8 rounded-[2rem] font-black hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50">
+                                {isGenerating ? <i className="fa-solid fa-circle-notch fa-spin"></i> : "GENERAR"}
+                            </button>
+                        </div>
+
+                        {/* LISTA DE TARJETAS */}
                         <div className="bg-white rounded-[2.5rem] shadow-xl border border-slate-100 overflow-hidden">
                             <div className="divide-y divide-slate-100">
                                 {cards.map((c, idx) => (
                                     <div key={c.internalId} className="p-4 md:p-6 grid grid-cols-12 gap-3 items-center group hover:bg-slate-50 transition-all">
                                         <div className="col-span-1 flex flex-col items-center gap-1">
-                                            <button onClick={() => moveCard(idx, -1)} className="text-slate-300 hover:text-indigo-500"><i className="fa-solid fa-chevron-up text-xs"></i></button>
+                                            <button onClick={() => moveCard(idx, -1)} className="text-slate-300 hover:text-indigo-500 transition-colors"><i className="fa-solid fa-chevron-up text-[10px]"></i></button>
                                             <span className="text-slate-300 font-black text-xs">{idx + 1}</span>
-                                            <button onClick={() => moveCard(idx, 1)} className="text-slate-300 hover:text-indigo-500"><i className="fa-solid fa-chevron-down text-xs"></i></button>
+                                            <button onClick={() => moveCard(idx, 1)} className="text-slate-300 hover:text-indigo-500 transition-colors"><i className="fa-solid fa-chevron-down text-[10px]"></i></button>
                                         </div>
                                         <div className="col-span-4">
-                                            <input value={c.front} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, front: e.target.value} : x))} className="w-full p-3 rounded-2xl border-2 border-transparent bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none font-bold transition-all" placeholder="English"/>
+                                            <input value={c.front} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, front: e.target.value} : x))} className="w-full p-3 rounded-2xl border-2 border-transparent bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none font-bold text-indigo-900 transition-all" placeholder="Inglés"/>
                                         </div>
                                         <div className="col-span-2 flex justify-center">
                                             {c.image ? (
                                                 <div className="relative group/img">
-                                                    <img src={c.image} className="w-14 h-14 object-cover rounded-2xl shadow-md cursor-pointer" onClick={() => openGallery(c.internalId, c.front)}/>
-                                                    <button onClick={() => setCards(cards.map(x => x.internalId === c.internalId ? {...x, image: null} : x))} className="absolute -top-2 -right-2 bg-rose-500 text-white w-6 h-6 rounded-full text-[10px] opacity-0 group-hover/img:opacity-100 transition-all"><i className="fa-solid fa-times"></i></button>
+                                                    <img src={c.image} className="w-14 h-14 object-cover rounded-2xl shadow-md cursor-pointer hover:ring-4 ring-indigo-100 transition-all" onClick={() => openGallery(c.internalId, c.front)}/>
+                                                    <button onClick={() => setCards(cards.map(x => x.internalId === c.internalId ? {...x, image: null} : x))} className="absolute -top-2 -right-2 bg-rose-500 text-white w-6 h-6 rounded-full text-[10px] flex items-center justify-center shadow-lg"><i className="fa-solid fa-times"></i></button>
                                                 </div>
                                             ) : (
                                                 <button onClick={() => openGallery(c.internalId, c.front)} className="w-14 h-14 rounded-2xl bg-slate-100 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 transition-all border-2 border-dashed border-slate-200"><i className="fa-solid fa-image"></i></button>
                                             )}
                                         </div>
                                         <div className="col-span-4">
-                                            <input value={c.back} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, back: e.target.value} : x))} className="w-full p-3 rounded-2xl border-2 border-transparent bg-slate-50 focus:bg-white focus:border-pink-500 outline-none font-bold transition-all" placeholder="Español"/>
+                                            <input value={c.back} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, back: e.target.value} : x))} className="w-full p-3 rounded-2xl border-2 border-transparent bg-slate-50 focus:bg-white focus:border-pink-500 outline-none font-bold text-pink-900 transition-all" placeholder="Español"/>
                                         </div>
                                         <div className="col-span-1 flex justify-end">
-                                            <button onClick={() => setCards(cards.filter(x => x.internalId !== c.internalId))} className="btn-action text-slate-300 hover:text-rose-500"><i className="fa-solid fa-trash"></i></button>
+                                            <button onClick={() => setCards(cards.filter(x => x.internalId !== c.internalId))} className="text-slate-200 hover:text-rose-500 transition-colors p-2"><i className="fa-solid fa-trash-can"></i></button>
                                         </div>
                                     </div>
                                 ))}
                             </div>
-                            <div className="p-6 bg-slate-50 border-t">
-                                <button onClick={() => setCards([...cards, { internalId: genId(), front: '', back: '', image: null }])} className="w-full py-4 border-2 border-dashed border-slate-300 rounded-3xl text-slate-400 font-black hover:border-indigo-500 hover:text-indigo-500 transition-all">+ AÑADIR FILA MANUALMENTE</button>
+                            <div className="p-6 bg-slate-50 border-t flex justify-center">
+                                <button onClick={() => setCards([...cards, { internalId: genId(), front: '', back: '', image: null }])} className="px-8 py-3 border-2 border-dashed border-slate-300 rounded-2xl text-slate-400 font-black hover:border-indigo-500 hover:text-indigo-500 transition-all">+ AÑADIR FILA MANUAL</button>
                             </div>
                         </div>
                     </div>
 
+                    {/* TOAST NOTIFICATIONS */}
                     <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-50">
                         {toasts.map(t => <div key={t.id} className={`p-4 rounded-2xl shadow-xl font-bold text-white modal-anim ${t.type==='success'?'bg-emerald-500':'bg-rose-500'}`}>{t.msg}</div>)}
                     </div>
-                    <button onClick={() => setShowConfig(true)} className="fixed bottom-6 left-6 w-12 h-12 bg-white rounded-full shadow-lg border flex items-center justify-center text-slate-400 hover:text-indigo-600 transition-all"><i className="fa-solid fa-gear"></i></button>
+
+                    {/* BOTÓN CONFIGURACIÓN FLOTANTE */}
+                    <button onClick={() => setShowConfig(true)} className="fixed bottom-6 left-6 w-12 h-12 bg-white rounded-full shadow-lg border border-slate-100 flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:rotate-90 transition-all duration-300"><i className="fa-solid fa-gear"></i></button>
                 </div>
             );
         };
