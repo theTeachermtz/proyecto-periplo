@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Periplo Dashboard v58.0</title>
+    <title>Periplo Dashboard v59</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -15,11 +15,13 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
         .modal-blur { backdrop-filter: blur(12px); animation: fadeIn 0.2s ease-out; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .scroller::-webkit-scrollbar { width: 4px; }
-        .scroller::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-        .crop-container { width: 100%; aspect-ratio: 1/1; border-radius: 1.2rem; background: #0f172a; position: relative; overflow: hidden; cursor: move; border: 2px solid #e2e8f0; }
+        .crop-container { width: 100%; aspect-ratio: 1/1; border-radius: 1.5rem; background: #0f172a; position: relative; overflow: hidden; cursor: move; border: 2px solid #e2e8f0; }
         .crop-img { position: absolute; pointer-events: none; user-select: none; transform-origin: center; }
         .crop-overlay { position: absolute; inset: 0; border: 2px dashed rgba(255,255,255,0.4); pointer-events: none; z-index: 10; box-shadow: 0 0 0 9999px rgba(0,0,0,0.5); }
+        
+        /* Switch Toggle Styles */
+        .toggle-checkbox:checked { right: 0; border-color: #4f46e5; }
+        .toggle-checkbox:checked + .toggle-label { background-color: #4f46e5; }
     </style>
 </head>
 <body>
@@ -38,9 +40,12 @@
             const [isGenerating, setIsGenerating] = useState(false);
             const [toasts, setToasts] = useState([]);
             const [apiKeys, setApiKeys] = useState({ google: '' });
-            const [audioPrefs, setAudioPrefs] = useState({ left: 'en', right: 'es', leftActive: true, rightActive: false });
-            const [gallery, setGallery] = useState({ isOpen: false, cardId: null, term: '', currentPreview: null, rotation: 0, zoom: 1, manualUrl: '', posX: 50, posY: 50 });
+            
+            // Preferencias Globales
+            const [audioPrefs, setAudioPrefs] = useState({ left: 'en', right: 'es', leftActive: true, rightActive: true });
+            const [imgPrefs, setImgPrefs] = useState({ front: true, back: false }); // Switches de imagen
 
+            const [gallery, setGallery] = useState({ isOpen: false, cardId: null, term: '', currentPreview: null, rotation: 0, zoom: 1, manualUrl: '', posX: 50, posY: 50 });
             const isDragging = useRef(false);
             const startPos = useRef({ x: 0, y: 0 });
 
@@ -55,11 +60,12 @@
                 setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3000);
             };
 
-            const speak = (text, lang) => {
+            const speak = (text, langCode) => {
                 if (!text) return;
                 window.speechSynthesis.cancel();
                 const ut = new SpeechSynthesisUtterance(text);
-                ut.lang = lang === 'en' ? 'en-US' : 'es-MX';
+                // Usamos códigos genéricos para buscar la voz más natural del sistema
+                ut.lang = langCode === 'en' ? 'en-US' : 'es'; 
                 window.speechSynthesis.speak(ut);
             };
 
@@ -67,129 +73,195 @@
                 if (!apiKeys.google.trim()) return addToast("Ingresa tu API Key arriba");
                 setIsGenerating(true);
                 try {
+                    // Prompt ajustado para evitar definiciones
+                    const promptText = `Generate exactly 30 pairs for "${aiPrompt}". 
+                    Format: JSON array of objects [{"front": "EnglishWord", "back": "SpanishTranslation"}].
+                    IMPORTANT: Provide DIRECT TRANSLATIONS only. Do NOT provide definitions or descriptions.
+                    Example: {"front": "Apple", "back": "Manzana"}`;
+
                     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKeys.google.trim()}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ contents: [{ parts: [{ text: `Generate 30 vocabulary items for "${aiPrompt}". Format: [{"front": "word", "back": "translation"}]. JSON only.` }] }] })
+                        body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }] })
                     });
+                    
+                    if (!res.ok) throw new Error("Error en Google API");
+
                     const data = await res.json();
                     const rawText = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
                     const items = JSON.parse(rawText);
+                    
                     setCards(p => [...p, ...items.map(i => ({ ...i, internalId: genId(), image: null, crop: { zoom: 1, rot: 0, x: 50, y: 50 } }))]);
                     setAiPrompt('');
-                    addToast("Lista generada", "success");
-                } catch (e) { addToast("Error de cuota o conexión"); }
-                finally { setIsGenerating(false); }
+                    addToast("Lista generada correctamente", "success");
+                } catch (e) { 
+                    addToast("Error: " + e.message);
+                } finally { 
+                    setIsGenerating(false); 
+                }
             };
 
-            const handleSwitch = () => {
-                setCards(cards.map(c => ({ ...c, front: c.back, back: c.front })));
-                setAudioPrefs(p => ({ ...p, left: p.right, right: p.left, leftActive: p.rightActive, rightActive: p.leftActive }));
+            const handleFinish = () => {
+                if(!gameTitle.trim()) return addToast("Ponle nombre al juego");
+                const finalData = {
+                    title: gameTitle,
+                    config: { audio: audioPrefs, images: imgPrefs },
+                    cards: cards.filter(c => c.front || c.back)
+                };
+                console.log("JUEGO EXPORTADO:", finalData);
+                addToast("Juego creado (Ver consola)", "success");
             };
 
             return (
-                <div className="min-h-screen pb-24" onMouseUp={() => isDragging.current = false}>
-                    {/* NAV SUPERIOR */}
+                <div className="min-h-screen pb-32" onMouseUp={() => isDragging.current = false}>
+                    {/* NAV DE NAVEGACIÓN REAL */}
                     <nav className="bg-white border-b p-3 flex justify-between items-center sticky top-0 z-40 px-6 shadow-sm">
                         <div className="flex items-center gap-2">
-                            <button className="w-10 h-10 flex items-center justify-center hover:bg-slate-100 rounded-xl text-slate-400" title="Home"><i className="fa-solid fa-house"></i></button>
-                            <button className="w-10 h-10 flex items-center justify-center hover:bg-slate-100 rounded-xl text-slate-400" title="Atrás"><i className="fa-solid fa-arrow-left"></i></button>
-                            <h1 className="font-extrabold text-indigo-600 text-lg ml-2 italic">PERIPLO DASH v58</h1>
+                            <a href="index.html" className="w-10 h-10 flex items-center justify-center hover:bg-slate-100 rounded-xl text-slate-400 hover:text-indigo-600 transition-all" title="Ir a Inicio"><i className="fa-solid fa-house"></i></a>
+                            <a href="index.html#activities" className="w-10 h-10 flex items-center justify-center hover:bg-slate-100 rounded-xl text-slate-400 hover:text-indigo-600 transition-all" title="Volver al Menú"><i className="fa-solid fa-chevron-left"></i></a>
+                            <h1 className="font-extrabold text-indigo-600 text-lg ml-2 italic">PERIPLO <span className="text-slate-400 font-normal">v59</span></h1>
                         </div>
-                        <div className="flex items-center gap-3">
-                            <input type="password" value={apiKeys.google} onChange={e => { setApiKeys({google: e.target.value}); localStorage.setItem('periplo_google_key', e.target.value); }} className="bg-slate-100 border p-2 rounded-xl text-[10px] w-48 outline-none font-mono" placeholder="API Key..." />
-                        </div>
+                        <input type="password" value={apiKeys.google} onChange={e => { setApiKeys({google: e.target.value}); localStorage.setItem('periplo_google_key', e.target.value); }} className="bg-slate-100 border p-2 rounded-xl text-[10px] w-48 outline-none font-mono text-center" placeholder="API KEY" />
                     </nav>
 
-                    <main className="max-w-4xl mx-auto mt-8 p-4">
-                        <div className="mb-10 space-y-4">
-                            <input value={gameTitle} onChange={e => setGameTitle(e.target.value)} placeholder="Título del juego..." className="w-full bg-transparent border-b-4 border-slate-200 p-2 outline-none font-black text-3xl text-slate-800 focus:border-indigo-500 transition-all" />
-                            <div className="bg-indigo-600 p-1.5 rounded-[2.5rem] shadow-xl flex items-center gap-2 border-4 border-white">
-                                <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && generate()} placeholder="Tema de la lista..." className="flex-1 bg-white p-4 rounded-[2rem] outline-none font-bold text-slate-700 text-sm px-8 shadow-inner"/>
-                                <button onClick={generate} disabled={isGenerating} className="bg-indigo-950 text-white px-10 h-14 rounded-[2rem] font-bold text-xs uppercase">{isGenerating ? "..." : "Generar 30"}</button>
+                    <main className="max-w-5xl mx-auto mt-8 p-4">
+                        {/* TÍTULO Y GENERADOR */}
+                        <div className="mb-8 space-y-4">
+                            <input value={gameTitle} onChange={e => setGameTitle(e.target.value)} placeholder="Título de la Actividad..." className="w-full bg-transparent border-b-4 border-slate-200 p-3 outline-none font-black text-3xl text-slate-800 focus:border-indigo-500 transition-all placeholder:text-slate-300" />
+                            <div className="bg-indigo-600 p-2 rounded-[2rem] shadow-xl flex items-center gap-2 border-4 border-white">
+                                <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && generate()} placeholder="Tema para generar..." className="flex-1 bg-white p-4 rounded-[1.5rem] outline-none font-bold text-slate-700 text-sm px-6 shadow-inner"/>
+                                <button onClick={generate} disabled={isGenerating} className="bg-indigo-950 text-white px-8 h-12 rounded-[1.5rem] font-black text-xs uppercase hover:bg-black transition-all">
+                                    {isGenerating ? <i className="fa-solid fa-spinner fa-spin"></i> : "Generar IA"}
+                                </button>
                             </div>
                         </div>
 
-                        {/* CONTROLES */}
-                        <div className="flex items-center justify-between mb-8 px-2 bg-white/50 p-2.5 rounded-[2rem] border border-white/50 backdrop-blur-sm shadow-sm">
-                            <div className="flex gap-2">
-                                <button onClick={handleSwitch} className="bg-white border-2 border-slate-100 text-slate-600 px-5 py-2.5 rounded-xl text-[11px] font-extrabold hover:bg-indigo-50 hover:text-indigo-600 transition-all flex items-center gap-2"><i className="fa-solid fa-shuffle"></i> SWITCH</button>
-                                <button onClick={() => confirm("¿Borrar todo?") && setCards([{ internalId: genId(), front: '', back: '', image: null, crop: { zoom: 1, rot: 0, x: 50, y: 50 } }])} className="bg-white border-2 border-rose-50 text-rose-500 px-5 py-2.5 rounded-xl text-[11px] font-extrabold hover:bg-rose-50 shadow-sm">LIMPIAR</button>
+                        {/* BARRA DE CONTROL GLOBAL (Audio & Imagen) */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                            {/* AUDIO CONTROLS */}
+                            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest"><i className="fa-solid fa-volume-high mr-2"></i>Audio en:</span>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setAudioPrefs({...audioPrefs, leftActive: !audioPrefs.leftActive})} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-all border ${audioPrefs.leftActive ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-slate-50 border-slate-100 text-slate-300'}`}>INGLÉS</button>
+                                    <button onClick={() => setAudioPrefs({...audioPrefs, rightActive: !audioPrefs.rightActive})} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-all border ${audioPrefs.rightActive ? 'bg-pink-50 border-pink-200 text-pink-600' : 'bg-slate-50 border-slate-100 text-slate-300'}`}>ESPAÑOL</button>
+                                </div>
                             </div>
-                            <div className="flex gap-1 bg-slate-200/50 p-1 rounded-xl">
-                                <button onClick={() => setAudioPrefs({...audioPrefs, leftActive: !audioPrefs.leftActive})} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-all ${audioPrefs.leftActive ? 'bg-white shadow-sm ' + (audioPrefs.left === 'en' ? 'text-indigo-600' : 'text-pink-600') : 'text-slate-400'}`}>{audioPrefs.left.toUpperCase()}</button>
-                                <button onClick={() => setAudioPrefs({...audioPrefs, rightActive: !audioPrefs.rightActive})} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-all ${audioPrefs.rightActive ? 'bg-white shadow-sm ' + (audioPrefs.right === 'en' ? 'text-indigo-600' : 'text-pink-600') : 'text-slate-400'}`}>{audioPrefs.right.toUpperCase()}</button>
+                            
+                            {/* IMAGEN CONTROLS (NUEVO) */}
+                            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest"><i className="fa-regular fa-image mr-2"></i>Imagen en:</span>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setImgPrefs({...imgPrefs, front: !imgPrefs.front})} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-all border ${imgPrefs.front ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 border-slate-100 text-slate-300'}`}>FRENTE</button>
+                                    <button onClick={() => setImgPrefs({...imgPrefs, back: !imgPrefs.back})} className={`px-4 py-2 rounded-lg text-[10px] font-black transition-all border ${imgPrefs.back ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 border-slate-100 text-slate-300'}`}>ATRÁS</button>
+                                </div>
                             </div>
                         </div>
 
-                        {/* LISTA */}
-                        <div className="bg-white rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden ring-1 ring-slate-200/50 mb-10">
-                            <div className="divide-y divide-slate-100">
-                                {cards.map((c, idx) => (
-                                    <div key={c.internalId} className="p-4 grid grid-cols-12 gap-5 items-center group hover:bg-indigo-50/10 transition-all">
-                                        <div className="col-span-1 text-center font-bold text-slate-300">{idx + 1}</div>
-                                        <div className="col-span-4 relative">
-                                            <input value={c.front} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, front: e.target.value} : x))} className="w-full p-3.5 rounded-xl border border-slate-100 bg-slate-50 focus:bg-white outline-none font-bold text-slate-800 text-sm" />
-                                            {audioPrefs.leftActive && <button onClick={() => speak(c.front, audioPrefs.left)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-indigo-500"><i className="fa-solid fa-volume-high"></i></button>}
-                                        </div>
-                                        <div className="col-span-2 flex justify-center relative">
-                                            <div className="w-14 h-14 rounded-2xl bg-slate-50 border-2 border-dashed border-slate-200 overflow-hidden cursor-pointer hover:border-indigo-400 transition-all flex items-center justify-center" onClick={() => setGallery({ isOpen: true, cardId: c.internalId, term: c.front, currentPreview: c.image, rotation: c.crop.rot, zoom: c.crop.zoom, posX: c.crop.x, posY: c.crop.y, manualUrl: c.image || '' })}>
-                                                {c.image ? <img src={c.image} style={{ transform: `translate(calc(-50% + ${c.crop.x - 50}px), calc(-50% + ${c.crop.y - 50}px)) rotate(${c.crop.rot}deg) scale(${c.crop.zoom})`, position: 'absolute', top: '50%', left: '50%' }} className="max-w-none w-full h-full object-cover"/> : <i className="fa-solid fa-camera text-slate-300"></i>}
-                                            </div>
-                                        </div>
-                                        <div className="col-span-4 relative">
-                                            <input value={c.back} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, back: e.target.value} : x))} className="w-full p-3.5 rounded-xl border border-slate-100 bg-slate-50 focus:bg-white outline-none font-bold text-slate-800 text-sm" />
-                                            {audioPrefs.rightActive && <button onClick={() => speak(c.back, audioPrefs.right)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-pink-500"><i className="fa-solid fa-volume-high"></i></button>}
-                                        </div>
-                                        <div className="col-span-1 flex justify-end">
-                                            <button onClick={() => setCards(cards.filter(x => x.internalId !== c.internalId))} className="text-slate-300 hover:text-rose-500"><i className="fa-solid fa-trash-can"></i></button>
+                        {/* LISTA DE TARJETAS */}
+                        <div className="space-y-4">
+                            {cards.map((c, idx) => (
+                                <div key={c.internalId} className="bg-white rounded-[2rem] p-4 shadow-sm border border-slate-100 hover:shadow-lg hover:border-indigo-100 transition-all grid grid-cols-12 gap-4 items-center group relative">
+                                    
+                                    {/* NUMERACIÓN & ACCIONES RÁPIDAS */}
+                                    <div className="col-span-1 flex flex-col items-center justify-center gap-2">
+                                        <span className="font-black text-slate-200 text-xl">{idx + 1}</span>
+                                        <button onClick={() => setCards(cards.filter(x => x.internalId !== c.internalId))} className="text-slate-200 hover:text-rose-500 transition-colors"><i className="fa-solid fa-trash-can"></i></button>
+                                    </div>
+
+                                    {/* INPUT FRONT (INGLÉS) */}
+                                    <div className="col-span-11 md:col-span-4 relative">
+                                        <label className="text-[9px] font-bold text-slate-300 uppercase ml-2 mb-1 block">Inglés (Front)</label>
+                                        <input value={c.front} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, front: e.target.value} : x))} className="w-full p-4 rounded-2xl bg-slate-50 border-2 border-slate-100 focus:bg-white focus:border-indigo-400 outline-none font-bold text-slate-700 transition-all" />
+                                        {audioPrefs.leftActive && <button onClick={() => speak(c.front, 'en')} className="absolute right-3 top-9 text-indigo-300 hover:text-indigo-600"><i className="fa-solid fa-volume-high"></i></button>}
+                                    </div>
+
+                                    {/* ÁREA DE IMAGEN CENTRAL (GRANDE Y CONTROLADA) */}
+                                    <div className="col-span-12 md:col-span-3 flex flex-col items-center justify-center py-2">
+                                        <div 
+                                            className="w-32 h-32 rounded-2xl bg-slate-100 border-2 border-dashed border-slate-300 overflow-hidden cursor-pointer hover:border-indigo-500 hover:scale-105 transition-all shadow-inner relative group/img"
+                                            onClick={() => setGallery({ isOpen: true, cardId: c.internalId, term: c.front, currentPreview: c.image, rotation: c.crop.rot, zoom: c.crop.zoom, posX: c.crop.x, posY: c.crop.y, manualUrl: c.image || '' })}
+                                        >
+                                            {c.image ? (
+                                                <div className="w-full h-full relative overflow-hidden bg-white">
+                                                     {/* EL CSS AQUI ASEGURA QUE LA IMAGEN NO SE SALGA */}
+                                                    <img 
+                                                        src={c.image} 
+                                                        style={{ 
+                                                            transform: `translate(calc(-50% + ${c.crop.x - 50}px), calc(-50% + ${c.crop.y - 50}px)) rotate(${c.crop.rot}deg) scale(${c.crop.zoom})`,
+                                                            position: 'absolute', top: '50%', left: '50%',
+                                                            maxWidth: 'none' /* Importante para el zoom */
+                                                        }} 
+                                                        className="h-full w-full object-cover" // Base object cover
+                                                    />
+                                                </div>
+                                            ) : (
+                                                <div className="w-full h-full flex flex-col items-center justify-center text-slate-300 group-hover/img:text-indigo-400">
+                                                    <i className="fa-regular fa-image text-2xl mb-1"></i>
+                                                    <span className="text-[9px] font-black uppercase">Añadir</span>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
-                                ))}
-                            </div>
-                            <button onClick={() => setCards([...cards, { internalId: genId(), front: '', back: '', image: null, crop: { zoom: 1, rot: 0, x: 50, y: 50 } }])} className="w-full p-8 text-slate-400 font-bold border-t border-dashed hover:text-indigo-600 transition-all">+ AÑADIR FILA</button>
+
+                                    {/* INPUT BACK (ESPAÑOL) */}
+                                    <div className="col-span-11 md:col-span-4 relative">
+                                        <label className="text-[9px] font-bold text-slate-300 uppercase ml-2 mb-1 block">Español (Back)</label>
+                                        <input value={c.back} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, back: e.target.value} : x))} className="w-full p-4 rounded-2xl bg-slate-50 border-2 border-slate-100 focus:bg-white focus:border-pink-400 outline-none font-bold text-slate-700 transition-all" />
+                                        {audioPrefs.rightActive && <button onClick={() => speak(c.back, 'es')} className="absolute right-3 top-9 text-pink-300 hover:text-pink-600"><i className="fa-solid fa-volume-high"></i></button>}
+                                    </div>
+                                </div>
+                            ))}
                         </div>
 
-                        <div className="flex justify-end pt-6 border-t">
-                            <button onClick={() => console.log("Juego listo:", { title: gameTitle, cards })} className="bg-slate-900 text-white px-12 py-5 rounded-[2rem] font-black text-lg shadow-2xl hover:bg-indigo-600 transition-all transform active:scale-95 flex items-center gap-4">
-                                LISTO: CREAR JUEGO <i className="fa-solid fa-rocket"></i>
+                        {/* ACCIONES FINALES */}
+                        <div className="mt-8 flex flex-col md:flex-row justify-between items-center gap-4">
+                            <button onClick={() => setCards([...cards, { internalId: genId(), front: '', back: '', image: null, crop: { zoom: 1, rot: 0, x: 50, y: 50 } }])} className="px-8 py-4 bg-slate-100 rounded-2xl text-slate-500 font-bold hover:bg-slate-200 transition-all text-xs uppercase tracking-widest">+ Fila Manual</button>
+                            
+                            <div className="flex gap-2">
+                                <button onClick={() => { setCards(cards.map(c => ({ ...c, front: c.back, back: c.front }))); setAudioPrefs(p => ({...p, left: p.right, right: p.left })); }} className="px-6 py-4 bg-white border-2 border-slate-100 rounded-2xl text-slate-500 font-bold hover:text-indigo-600 text-xs uppercase"><i className="fa-solid fa-arrow-right-arrow-left mr-2"></i>Switch Txt</button>
+                                <button onClick={() => confirm("¿Limpiar todo?") && setCards([])} className="px-6 py-4 bg-white border-2 border-rose-100 rounded-2xl text-rose-500 font-bold hover:bg-rose-50 text-xs uppercase"><i className="fa-solid fa-trash mr-2"></i>Borrar</button>
+                            </div>
+
+                            <button onClick={handleFinish} className="bg-slate-900 text-white px-10 py-5 rounded-[2rem] font-black text-sm shadow-2xl hover:bg-indigo-600 hover:scale-105 transition-all flex items-center gap-3 uppercase tracking-widest">
+                                Listo: Crear Juego <i className="fa-solid fa-check-circle"></i>
                             </button>
                         </div>
                     </main>
 
-                    {/* MODAL EDITOR */}
+                    {/* MODAL EDITOR (Mantenido igual de funcional) */}
                     {gallery.isOpen && (
-                        <div className="fixed inset-0 z-50 bg-slate-900/90 flex items-center justify-center p-4 modal-blur" onMouseMove={(e) => { if (!isDragging.current) return; const dx = (e.clientX - startPos.current.x); const dy = (e.clientY - startPos.current.y); setGallery(p => ({ ...p, posX: p.posX + dx, posY: p.posY + dy })); startPos.current = { x: e.clientX, y: e.clientY }; }} onMouseUp={() => isDragging.current = false}>
-                            <div className="bg-white w-full max-w-4xl h-[75vh] rounded-[3rem] overflow-hidden flex flex-col shadow-2xl">
-                                <div className="p-4 border-b flex justify-between items-center px-10 bg-white">
-                                    <h3 className="font-bold text-slate-800 text-sm uppercase">Encuadre Sniper</h3>
-                                    <button onClick={() => setGallery({...gallery, isOpen: false})} className="w-10 h-10 rounded-full hover:bg-slate-100 text-slate-400 font-bold">✕</button>
+                        <div className="fixed inset-0 z-50 bg-slate-900/95 flex items-center justify-center p-4 modal-blur" onMouseMove={(e) => { if (!isDragging.current) return; const dx = (e.clientX - startPos.current.x); const dy = (e.clientY - startPos.current.y); setGallery(p => ({ ...p, posX: p.posX + dx, posY: p.posY + dy })); startPos.current = { x: e.clientX, y: e.clientY }; }} onMouseUp={() => isDragging.current = false}>
+                            <div className="bg-white w-full max-w-4xl h-[80vh] rounded-[2.5rem] overflow-hidden flex flex-col shadow-2xl">
+                                <div className="p-4 border-b flex justify-between items-center px-8 bg-white">
+                                    <h3 className="font-bold text-slate-800 text-xs uppercase tracking-widest">Editor de Imagen</h3>
+                                    <button onClick={() => setGallery({...gallery, isOpen: false})} className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 font-bold">✕</button>
                                 </div>
-                                <div className="flex-1 flex bg-slate-50 overflow-hidden">
-                                    <div className="w-1/2 p-10 border-r flex flex-col items-center justify-center space-y-6">
-                                        <div className="crop-container" onMouseDown={(e) => { isDragging.current = true; startPos.current = { x: e.clientX, y: e.clientY }; }}>
+                                <div className="flex-1 flex flex-col md:flex-row bg-slate-50 overflow-hidden">
+                                    <div className="w-full md:w-1/2 p-6 border-r flex flex-col items-center justify-center space-y-6 bg-slate-100/50">
+                                        <div className="crop-container shadow-2xl ring-4 ring-white" onMouseDown={(e) => { isDragging.current = true; startPos.current = { x: e.clientX, y: e.clientY }; }}>
                                             {gallery.currentPreview ? (
                                                 <React.Fragment>
                                                     <img src={gallery.currentPreview} className="crop-img" style={{ transform: `translate(calc(-50% + ${gallery.posX - 50}px), calc(-50% + ${gallery.posY - 50}px)) rotate(${gallery.rotation}deg) scale(${gallery.zoom})`, top: '50%', left: '50%' }} />
                                                     <div className="crop-overlay"></div>
                                                 </React.Fragment>
-                                            ) : <div className="p-12 text-center text-xs text-slate-300 font-black">Pega URL a la derecha</div>}
+                                            ) : <div className="p-12 text-center text-[10px] text-slate-300 font-black uppercase tracking-widest">Vista Previa</div>}
                                         </div>
-                                        <div className="w-full max-w-xs space-y-4">
-                                            <div className="flex gap-2">
-                                                <button onClick={() => setGallery({...gallery, rotation: (gallery.rotation + 90) % 360})} className="flex-1 bg-white border-2 border-slate-200 py-3 rounded-2xl text-[10px] font-black">GIRAR</button>
-                                                <button onClick={() => setGallery({...gallery, zoom: 1, rotation: 0, posX: 50, posY: 50})} className="flex-1 bg-white border-2 border-slate-200 py-3 rounded-2xl text-[10px] font-black text-rose-500">RESET</button>
-                                            </div>
-                                            <input type="range" min="1" max="5" step="0.1" value={gallery.zoom} onChange={e => setGallery({...gallery, zoom: parseFloat(e.target.value)})} className="w-full h-1.5 accent-indigo-600"/>
+                                        <div className="flex gap-2 w-full max-w-xs">
+                                            <button onClick={() => setGallery({...gallery, rotation: (gallery.rotation + 90) % 360})} className="flex-1 bg-white border border-slate-200 py-3 rounded-xl text-[10px] font-black hover:bg-slate-50">ROTAR</button>
+                                            <button onClick={() => setGallery({...gallery, zoom: 1, rotation: 0, posX: 50, posY: 50})} className="flex-1 bg-white border border-slate-200 py-3 rounded-xl text-[10px] font-black text-rose-500 hover:bg-rose-50">RESET</button>
                                         </div>
+                                        <input type="range" min="1" max="4" step="0.1" value={gallery.zoom} onChange={e => setGallery({...gallery, zoom: parseFloat(e.target.value)})} className="w-full max-w-xs h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"/>
                                     </div>
-                                    <div className="w-1/2 p-12 flex flex-col space-y-8 justify-center bg-white shadow-xl">
-                                        <button onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(gallery.term)}&tbm=isch`, '_blank')} className="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-sm shadow-xl flex items-center justify-center gap-3"><i className="fa-brands fa-google text-xl"></i> BUSCAR IMÁGENES</button>
-                                        <div className="space-y-4 border-t pt-8">
-                                            <label className="text-xs font-black text-indigo-600 uppercase">Pegar Link</label>
-                                            <input value={gallery.manualUrl} onChange={e => setGallery({...gallery, manualUrl: e.target.value, currentPreview: e.target.value})} className="w-full border-2 border-slate-100 p-4 rounded-2xl text-[11px] font-mono bg-slate-50 focus:bg-white" placeholder="Pega aquí (Ctrl + V)..."/>
+                                    <div className="w-full md:w-1/2 p-10 flex flex-col justify-center space-y-6 bg-white">
+                                        <div className="space-y-2">
+                                            <label className="text-[10px] font-black text-indigo-500 uppercase tracking-widest">1. Buscar</label>
+                                            <button onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(gallery.term)}&tbm=isch`, '_blank')} className="w-full bg-blue-50 text-blue-600 py-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 hover:bg-blue-100 border border-blue-100 transition-all"><i className="fa-brands fa-google"></i> Google Images</button>
                                         </div>
-                                        <button onClick={() => { setCards(cards.map(c => c.internalId === gallery.cardId ? { ...c, image: gallery.currentPreview, crop: { zoom: gallery.zoom, rot: gallery.rotation, x: gallery.posX, y: gallery.posY } } : c)); setGallery({...gallery, isOpen: false}); }} disabled={!gallery.currentPreview} className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black text-lg shadow-2xl">GUARDAR ✨</button>
+                                        <div className="space-y-2 pt-4 border-t border-slate-100">
+                                            <label className="text-[10px] font-black text-indigo-500 uppercase tracking-widest">2. Pegar URL</label>
+                                            <input value={gallery.manualUrl} onChange={e => setGallery({...gallery, manualUrl: e.target.value, currentPreview: e.target.value})} className="w-full border-2 border-slate-100 p-4 rounded-2xl text-xs font-mono focus:border-indigo-500 outline-none transition-all" placeholder="Ctrl + V aquí..." />
+                                        </div>
+                                        <button onClick={() => { setCards(cards.map(c => c.internalId === gallery.cardId ? { ...c, image: gallery.currentPreview, crop: { zoom: gallery.zoom, rot: gallery.rotation, x: gallery.posX, y: gallery.posY } } : c)); setGallery({...gallery, isOpen: false}); }} disabled={!gallery.currentPreview} className="w-full bg-slate-900 text-white py-5 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-indigo-600 shadow-xl disabled:opacity-50 disabled:shadow-none transition-all">Guardar Cambios</button>
                                     </div>
                                 </div>
                             </div>
@@ -197,7 +269,7 @@
                     )}
 
                     <div className="fixed bottom-6 right-6 flex flex-col gap-2 z-[60]">
-                        {toasts.map(t => <div key={t.id} className={`p-4 rounded-2xl shadow-2xl font-black text-white text-[11px] ${t.type==='success'?'bg-indigo-600':'bg-rose-600'} animate-bounce shadow-indigo-200`}>{t.msg}</div>)}
+                        {toasts.map(t => <div key={t.id} className={`p-4 rounded-2xl shadow-2xl font-black text-white text-[11px] ${t.type==='success'?'bg-indigo-600':'bg-rose-600'} animate-bounce`}>{t.msg}</div>)}
                     </div>
                 </div>
             );
