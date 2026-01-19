@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Periplo - Play Flashcards 🎓</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap'); 
+        body { font-family: 'Nunito', sans-serif; }
+        .perspective-1000 { perspective: 1000px; }
+        @keyframes confetti { 0% { transform: translate(-50%, -50%) rotate(0deg); opacity: 1; } 100% { transform: translate(var(--tx), var(--ty)) rotate(720deg); opacity: 0; } }
+        .animate-confetti { animation: confetti 1s ease-out forwards; }
+        @keyframes bounceIn { 0% { transform: scale(0); opacity: 0; } 50% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+        .animate-bounce-in { animation: bounceIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes zoomIn { 0% { opacity: 0; transform: scale(0.5); } 100% { opacity: 1; transform: scale(1); } }
+        .animate-zoom-in { animation: zoomIn 0.5s ease-out forwards; }
+    </style>
+</head>
+<body class="bg-[#f3e5ab]">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+        import { 
+            Play, RotateCcw, Check, X, ArrowLeft, ArrowRight, Pause, 
+            Settings, Volume2, VolumeX, List, GraduationCap, RotateCw, 
+            Zap, Music, Star, LogOut 
+        } from 'lucide-react';
+
+        // --- FIREBASE CONFIG ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+            authDomain: "proyecto-periplo.firebaseapp.com",
+            projectId: "proyecto-periplo",
+            storageBucket: "proyecto-periplo.firebasestorage.app",
+            messagingSenderId: "236795998392",
+            appId: "1:236795998392:web:0da24b4f018611b55c844d"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // --- COMPONENTE CONFETTI ---
+        const Confetti = () => {
+            const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff'];
+            return (
+                <div className="absolute inset-0 pointer-events-none z-50 overflow-hidden flex justify-center">
+                    {[...Array(40)].map((_, i) => (
+                        <div key={i} className="absolute w-3 h-3 rounded-full animate-confetti"
+                            style={{
+                                backgroundColor: colors[i % colors.length],
+                                left: '50%', top: '50%',
+                                '--tx': `${(Math.random() - 0.5) * 800}px`,
+                                '--ty': `${(Math.random() - 1) * 800}px`,
+                                animationDelay: `${Math.random() * 0.5}s`
+                            }}
+                        />
+                    ))}
+                </div>
+            );
+        };
+
+        const FlashcardsGame = () => {
+            const [gameState, setGameState] = useState('LOADING');
+            const [gameData, setGameData] = useState(null);
+            const [cards, setCards] = useState([]);
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [isFlipped, setIsFlipped] = useState(false);
+            const [isPaused, setIsPaused] = useState(false);
+            const [soundEnabled, setSoundEnabled] = useState(true);
+            const [isShuffled, setIsShuffled] = useState(false);
+            const [autoPlayAudio, setAutoPlayAudio] = useState(true);
+            const [feedback, setFeedback] = useState(null);
+            const [showConfetti, setShowConfetti] = useState(false);
+            const [introStep, setIntroStep] = useState(null);
+
+            const audioSfx = useRef({});
+            const currentVoiceRef = useRef(null);
+
+            // 1. CARGAR DATOS DE FIREBASE
+            useEffect(() => {
+                const loadGame = async () => {
+                    const params = new URLSearchParams(window.location.search);
+                    const gameId = params.get('id');
+                    if (!gameId) { alert("No se encontró ID de juego"); return; }
+
+                    try {
+                        const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', gameId);
+                        const snap = await getDoc(docRef);
+                        if (snap.exists()) {
+                            const data = snap.data();
+                            setGameData(data);
+                            setCards(data.questions.map(q => ({ ...q, status: 'pending' })));
+                            setGameState('WELCOME');
+                        }
+                    } catch (e) { console.error(e); }
+                };
+                loadGame();
+
+                // Cargar SFX
+                const sfxUrls = {
+                    click: 'https://actions.google.com/sounds/v1/percussion/wood_block_hit.ogg',
+                    flip: 'https://www.soundjay.com/misc/sounds/page-flip-02.mp3',
+                    success: 'https://www.soundjay.com/misc/sounds/magic-chime-01.mp3',
+                    wrong: 'https://actions.google.com/sounds/v1/cartoon/cartoon_boing.ogg',
+                    applause: 'https://actions.google.com/sounds/v1/crowds/applause.ogg'
+                };
+                Object.entries(sfxUrls).forEach(([k, v]) => { audioSfx.current[k] = new Audio(v); });
+            }, []);
+
+            const playSfx = (type) => { if (soundEnabled) { audioSfx.current[type].currentTime = 0; audioSfx.current[type].play(); } };
+
+            const speak = (text, lang) => {
+                window.speechSynthesis.cancel();
+                const ut = new SpeechSynthesisUtterance(text);
+                ut.lang = lang === 'en' ? 'en-US' : 'es-MX';
+                window.speechSynthesis.speak(ut);
+            };
+
+            // Lógica de Audio Automático
+            useEffect(() => {
+                if (gameState === 'PLAYING' && isFlipped && autoPlayAudio && cards[currentIndex]) {
+                    const lang = gameData.config?.audio?.right || 'es';
+                    setTimeout(() => speak(cards[currentIndex].back, lang), 300);
+                }
+            }, [isFlipped]);
+
+            const handleStart = () => {
+                let deck = [...cards].map(c => ({...c, status: 'pending'}));
+                if (isShuffled) deck = deck.sort(() => Math.random() - 0.5);
+                setCards(deck);
+                setCurrentIndex(0);
+                setIsFlipped(false);
+                setGameState('INTRO');
+                
+                setIntroStep('READY');
+                setTimeout(() => setIntroStep('SET'), 800);
+                setTimeout(() => setIntroStep('GO'), 1600);
+                setTimeout(() => { setGameState('PLAYING'); setIntroStep(null); }, 2400);
+            };
+
+            const updateStatus = (status) => {
+                const newCards = [...cards];
+                newCards[currentIndex].status = status;
+                setCards(newCards);
+                
+                if (status === 'learned') { playSfx('success'); setFeedback('success'); setShowConfetti(true); }
+                else { playSfx('wrong'); setFeedback('error'); }
+
+                setTimeout(() => {
+                    setFeedback(null);
+                    setShowConfetti(false);
+                    if (currentIndex === cards.length - 1) {
+                        const pending = newCards.filter(c => c.status !== 'learned');
+                        if (pending.length === 0) setGameState('VICTORY');
+                        else {
+                            setCards(pending.map(c => ({...c, status: 'pending'})));
+                            setCurrentIndex(0);
+                            setIsFlipped(false);
+                        }
+                    } else {
+                        setCurrentIndex(prev => prev + 1);
+                        setIsFlipped(false);
+                    }
+                }, 800);
+            };
+
+            if (gameState === 'LOADING') return <div className="min-h-screen flex items-center justify-center text-indigo-600 font-bold">Cargando Clase...</div>;
+
+            return (
+                <div className="min-h-screen flex items-center justify-center p-4">
+                    {/* El Pizarrón */}
+                    <div className="relative w-full max-w-4xl min-h-[600px] bg-[#2a4735] rounded-xl border-[16px] border-[#5d4037] shadow-2xl flex flex-col overflow-hidden">
+                        
+                        {/* WELCOME SCREEN */}
+                        {gameState === 'WELCOME' && (
+                            <div className="flex-1 flex flex-col items-center justify-center text-white text-center p-10 animate-zoom-in">
+                                <GraduationCap size={80} className="text-yellow-400 mb-6" />
+                                <h1 className="text-5xl font-black mb-2">{gameData.title}</h1>
+                                <p className="text-xl opacity-80 mb-10">¿Listo para repasar {cards.length} tarjetas?</p>
+                                <button onClick={handleStart} className="bg-yellow-500 hover:bg-yellow-400 text-yellow-900 px-12 py-5 rounded-2xl font-black text-3xl shadow-[0_6px_0_#a16207] active:translate-y-1 active:shadow-none transition-all flex items-center gap-4 uppercase">
+                                    <Play fill="currentColor"/> Empezar
+                                </button>
+                            </div>
+                        )}
+
+                        {/* INTRO SEQUENCER */}
+                        {gameState === 'INTRO' && (
+                            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center">
+                                <h1 className="text-9xl font-black text-white italic animate-bounce">{introStep}</h1>
+                            </div>
+                        )}
+
+                        {/* PLAYING SCREEN */}
+                        {gameState === 'PLAYING' && (
+                            <div className="flex-1 flex flex-col p-6">
+                                {showConfetti && <Confetti />}
+                                <div className="flex justify-between items-center text-white/50 font-bold uppercase text-xs tracking-widest mb-4">
+                                    <button onClick={() => setIsPaused(true)}><Pause/></button>
+                                    <span>Tarjeta {currentIndex + 1} de {cards.length}</span>
+                                    <button onClick={() => window.location.href = 'index.html'}><LogOut/></button>
+                                </div>
+
+                                <div className="flex-1 flex items-center justify-center">
+                                    <div className="w-full max-w-sm aspect-[4/3] perspective-1000 cursor-pointer" onClick={() => { playSfx('flip'); setIsFlipped(!isFlipped); }}>
+                                        <div className={`relative w-full h-full transition-all duration-500 transform-style-3d ${isFlipped ? 'rotate-y-180' : ''}`} 
+                                             style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)', transformStyle: 'preserve-3d' }}>
+                                            
+                                            {/* FRONT (Inglés) */}
+                                            <div className="absolute inset-0 w-full h-full bg-[#fdfbf7] rounded-xl shadow-xl flex flex-col items-center justify-center p-6 border-l-[30px] border-rose-200" style={{ backfaceVisibility: 'hidden' }}>
+                                                {cards[currentIndex].image && (
+                                                    <div className="w-48 h-32 mb-4 overflow-hidden rounded-lg border-4 border-white shadow-md relative">
+                                                        <img src={cards[currentIndex].image} 
+                                                             style={{
+                                                                transform: `translate(${cards[currentIndex].crop?.x - 50}%, ${cards[currentIndex].crop?.y - 50}%) scale(${cards[currentIndex].crop?.zoom})`,
+                                                                position: 'absolute', top: '50%', left: '50%', width: '100%', height: '100%', objectFit: 'cover'
+                                                             }} />
+                                                    </div>
+                                                )}
+                                                <h2 className="text-5xl font-black text-indigo-700 text-center">{cards[currentIndex].front}</h2>
+                                                <button onClick={(e) => { e.stopPropagation(); speak(cards[currentIndex].front, gameData.config?.audio?.left || 'en'); }} className="mt-4 p-2 bg-indigo-50 text-indigo-500 rounded-full hover:bg-indigo-100"><Volume2/></button>
+                                            </div>
+
+                                            {/* BACK (Español) */}
+                                            <div className="absolute inset-0 w-full h-full bg-[#fdfbf7] rounded-xl shadow-xl flex flex-col items-center justify-center p-6 border-l-[30px] border-rose-200" 
+                                                 style={{ backfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}>
+                                                <h2 className="text-5xl font-black text-rose-600 text-center mb-10">{cards[currentIndex].back}</h2>
+                                                <div className="flex gap-4 w-full" onClick={e => e.stopPropagation()}>
+                                                    <button onClick={() => updateStatus('review')} className="flex-1 bg-rose-100 text-rose-600 py-4 rounded-xl font-bold hover:bg-rose-200 flex flex-col items-center"><X/> Repasar</button>
+                                                    <button onClick={() => updateStatus('learned')} className="flex-1 bg-emerald-100 text-emerald-600 py-4 rounded-xl font-bold hover:bg-emerald-200 flex flex-col items-center"><Check/> ¡Lo sé!</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                {feedback && (
+                                    <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
+                                        <span className="text-9xl animate-bounce">{feedback === 'success' ? '✅' : '❌'}</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* VICTORY SCREEN */}
+                        {gameState === 'VICTORY' && (
+                            <div className="flex-1 flex flex-col items-center justify-center text-white p-10 animate-zoom-in">
+                                <Star size={100} className="text-yellow-400 fill-yellow-400 mb-6 animate-spin" />
+                                <h1 className="text-6xl font-black mb-4 italic">¡MAESTRÍA!</h1>
+                                <p className="text-xl mb-10">Has dominado todas las palabras de este mazo.</p>
+                                <button onClick={() => window.location.href = 'index.html'} className="bg-white text-indigo-600 px-10 py-4 rounded-xl font-bold uppercase tracking-widest hover:bg-indigo-50">Volver al Menú</button>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* PAUSE MODAL */}
+                    {isPaused && (
+                        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center">
+                            <div className="bg-white p-8 rounded-3xl w-full max-w-xs flex flex-col gap-4">
+                                <h3 className="text-2xl font-black text-center mb-4">RECREO</h3>
+                                <button onClick={() => setIsPaused(false)} className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold flex items-center justify-center gap-2"><Play fill="white"/> Continuar</button>
+                                <button onClick={() => {setGameState('WELCOME'); setIsPaused(false);}} className="w-full py-4 bg-slate-100 text-slate-600 rounded-xl font-bold flex items-center justify-center gap-2"><RotateCcw/> Reiniciar</button>
+                                <button onClick={() => window.location.href = 'index.html'} className="w-full py-4 text-rose-500 font-bold uppercase text-xs tracking-widest">Salir del juego</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<FlashcardsGame />);
+    </script>
+</body>
+</html>
