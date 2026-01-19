@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Creador de Flashcards - Periplo v10.0 (Simple)</title>
+    <title>Creador de Flashcards - Periplo v12.0 (Llave Maestra)</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -47,10 +47,10 @@
             const [cards, setCards] = useState([{ internalId: generateUniqueId(), front: '', back: '', image: null }]);
             const [aiPrompt, setAiPrompt] = useState('');
             const [isGenerating, setIsGenerating] = useState(false);
+            const [statusMessage, setStatusMessage] = useState(''); // Mensaje de estado para ver qué modelo prueba
             const [galleryModal, setGalleryModal] = useState({ isOpen: false, cardId: null, searchTerm: '', results: [], loading: false, source: 'unsplash' });
             const [toasts, setToasts] = useState([]);
             
-            // Configuración simple
             const [langConfig, setLangConfig] = useState({ left: 'en-US', right: 'es-MX' }); 
             const [audioEnabled, setAudioEnabled] = useState({ left: true, right: false });
 
@@ -69,7 +69,6 @@
                 setTimeout(() => removeToast(id), 6000);
             };
             const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
-            
             const cleanJsonText = (text) => text.replace(/```json/g, '').replace(/```/g, '').trim();
 
             const playAudio = (text, lang) => {
@@ -80,47 +79,75 @@
                 window.speechSynthesis.speak(u);
             };
 
-            // --- IA GOOGLE (AUTOMÁTICA) ---
+            // --- IA GOOGLE (LA LLAVE MAESTRA) ---
             const generateList = async () => {
                 const key = getCleanKey();
                 if (!key || key.includes("TU_RESTO")) return addToast("Falta la clave de Google", 'error');
                 if (!aiPrompt.trim()) return;
                 
                 setIsGenerating(true);
+                setStatusMessage("Iniciando...");
+
+                // LISTA DE MODELOS A PROBAR (Si falla uno, salta al siguiente)
+                const candidateModels = [
+                    "gemini-1.5-flash",          // Opción A: El más nuevo rápido
+                    "gemini-1.5-flash-001",      // Opción B: Versión específica
+                    "gemini-1.5-pro",            // Opción C: El inteligente
+                    "gemini-pro"                 // Opción D: El clásico (nunca falla)
+                ];
+
+                let success = false;
+
                 try {
-                    // Usamos el modelo más rápido y barato (Flash)
-                    const response = await fetch(
-                        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
-                        {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                contents: [{ parts: [{ text: `Genera una lista JSON exacta sobre: "${aiPrompt}". Formato: [{"front": "Inglés", "back": "Español"}]. JSON raw.` }] }]
-                            })
+                    for (const model of candidateModels) {
+                        try {
+                            setStatusMessage(`Probando modelo: ${model}...`);
+                            console.log(`Intentando conectar con ${model}...`);
+
+                            const response = await fetch(
+                                `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+                                {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        contents: [{ parts: [{ text: `Genera una lista JSON exacta sobre: "${aiPrompt}". Formato: [{"front": "Inglés", "back": "Español"}]. JSON raw.` }] }]
+                                    })
+                                }
+                            );
+
+                            if (!response.ok) {
+                                // Si es error 429 (Tráfico), esperamos un poco antes de seguir, o abortamos si es grave.
+                                // Pero aquí asumimos que queremos probar el siguiente modelo si es un 404.
+                                throw new Error(`Fallo en ${model} (${response.status})`);
+                            }
+
+                            const data = await response.json();
+                            const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                            const newItems = JSON.parse(cleanJsonText(rawText));
+                            
+                            if (Array.isArray(newItems)) {
+                                const formatted = newItems.map(item => ({ internalId: generateUniqueId(), front: item.front || '', back: item.back || '', image: null }));
+                                setCards(prev => [...prev, ...formatted]);
+                                setAiPrompt('');
+                                addToast(`¡Éxito usando ${model}!`, 'success');
+                                success = true;
+                                break; // ¡ÉXITO! Salimos del bucle
+                            }
+                        } catch (innerError) {
+                            console.warn(`Falló ${model}, intentando siguiente...`, innerError);
+                            // Continuamos al siguiente modelo del bucle
                         }
-                    );
-
-                    if (!response.ok) {
-                        if (response.status === 429) throw new Error("🚦 Tráfico alto: Espera 1 minuto y prueba de nuevo.");
-                        if (response.status === 404) throw new Error("🔧 Error técnico: El modelo de IA no responde.");
-                        const err = await response.json();
-                        throw new Error(`Error (${response.status}): ${err.error?.message || 'Desconocido'}`);
                     }
 
-                    const data = await response.json();
-                    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                    const newItems = JSON.parse(cleanJsonText(rawText));
-                    
-                    if (Array.isArray(newItems)) {
-                        const formatted = newItems.map(item => ({ internalId: generateUniqueId(), front: item.front || '', back: item.back || '', image: null }));
-                        setCards(prev => [...prev, ...formatted]);
-                        setAiPrompt('');
-                        addToast("¡Lista creada!", 'success');
+                    if (!success) {
+                        throw new Error("Ningún modelo de Google respondió. Verifica tu Clave API.");
                     }
+
                 } catch (e) {
                     addToast(e.message, 'error');
                 } finally {
                     setIsGenerating(false);
+                    setStatusMessage('');
                 }
             };
 
@@ -232,9 +259,10 @@
                         <div className="bg-indigo-600 rounded-2xl p-1 shadow-lg">
                             <div className="bg-white/10 backdrop-blur-md rounded-xl p-3 flex gap-2 items-center">
                                 <i className="fa-solid fa-wand-magic-sparkles text-white"></i>
-                                <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="Ej: Animales de la selva..." className="flex-1 bg-white/20 border-none rounded-lg px-3 py-1.5 text-white font-bold outline-none focus:bg-white focus:text-indigo-900 transition-colors" onKeyDown={e => e.key === 'Enter' && generateList()}/>
-                                <button onClick={generateList} disabled={isGenerating || !aiPrompt} className="bg-white text-indigo-700 px-4 py-1.5 rounded-lg font-bold hover:bg-indigo-50 disabled:opacity-50 text-sm">
-                                    {isGenerating ? <i className="fa-solid fa-spinner fa-spin"></i> : 'Generar'}
+                                <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="Ej: Verbos irregulares..." className="flex-1 bg-white/20 border-none rounded-lg px-3 py-1.5 text-white font-bold outline-none focus:bg-white focus:text-indigo-900 transition-colors" onKeyDown={e => e.key === 'Enter' && generateList()}/>
+                                
+                                <button onClick={generateList} disabled={isGenerating || !aiPrompt} className="bg-white text-indigo-700 px-4 py-1.5 rounded-lg font-bold hover:bg-indigo-50 disabled:opacity-50 text-sm flex items-center gap-2 min-w-[100px] justify-center">
+                                    {isGenerating ? <span><i className="fa-solid fa-spinner fa-spin"></i> {statusMessage || 'Pensando'}</span> : 'Generar'}
                                 </button>
                             </div>
                         </div>
