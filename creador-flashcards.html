@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Creador de Flashcards - Periplo v21.0 (Auto-Detect 2.5)</title>
+    <title>Creador de Flashcards - Periplo v22.0 (Editor Visual)</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -15,9 +15,11 @@
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap'); 
         body { font-family: 'Nunito', sans-serif; }
         .btn-icon { @apply p-2 rounded-lg transition-colors duration-200; }
-        /* Animación Modal */
+        /* Animaciones */
         @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
         .modal-box { animation: fadeIn 0.2s ease-out; }
+        .card-enter { animation: slideIn 0.3s ease-out; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900">
@@ -35,16 +37,16 @@
             const [cards, setCards] = useState([{ internalId: generateUniqueId(), front: '', back: '', image: null }]);
             const [aiPrompt, setAiPrompt] = useState('');
             const [isGenerating, setIsGenerating] = useState(false);
-            const [statusText, setStatusText] = useState(''); // Para mostrar qué modelo encontró
-            
-            // UI
-            const [galleryModal, setGalleryModal] = useState({ isOpen: false, cardId: null, searchTerm: '', results: [], loading: false });
+            const [statusText, setStatusText] = useState('');
             const [toasts, setToasts] = useState([]);
             const [manualLinkMode, setManualLinkMode] = useState(null);
+            
+            // EDITOR DE IMAGEN (NUEVO)
+            const [imageEditor, setImageEditor] = useState({ isOpen: false, cardId: null, prompt: '', currentImage: null, loading: false });
+
+            // CONFIGURACIÓN
             const [langConfig, setLangConfig] = useState({ left: 'en-US', right: 'es-MX' }); 
             const [audioEnabled, setAudioEnabled] = useState({ left: true, right: false });
-
-            // CLAVES
             const [showConfig, setShowConfig] = useState(false);
             const [apiKeys, setApiKeys] = useState({ google: '' });
 
@@ -78,45 +80,28 @@
                 window.speechSynthesis.speak(u);
             };
 
-            // --- 1. DETECTOR DE MODELO (LA LÓGICA QUE PEDISTE) ---
+            // --- 1. IA TEXTO (Google Gemini) ---
             const findBestModel = async (key) => {
-                setStatusText("🔍 Buscando modelo 2.5...");
+                setStatusText("🔍 Buscando modelo...");
                 try {
-                    // 1. Pedir lista a Google
                     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
                     if (!response.ok) throw new Error("Error al consultar modelos");
-                    
                     const data = await response.json();
-                    
-                    // 2. Filtrar solo los que generan texto
                     const availableModels = (data.models || [])
                         .filter(m => m.supportedGenerationMethods.includes("generateContent"))
                         .map(m => m.name.replace("models/", ""));
 
-                    console.log("Modelos disponibles:", availableModels);
-
-                    // 3. SELECCIÓN INTELIGENTE
-                    // Prioridad 1: Algo que tenga "2.5" (Lo que tú quieres)
-                    let chosen = availableModels.find(m => m.includes("2.5"));
-                    
-                    // Prioridad 2: Si no hay 2.5, busca "flash"
-                    if (!chosen) chosen = availableModels.find(m => m.includes("flash"));
-                    
-                    // Prioridad 3: Cualquiera
-                    if (!chosen) chosen = availableModels[0];
-
-                    if (!chosen) throw new Error("No hay modelos disponibles en tu cuenta.");
-                    
+                    let chosen = availableModels.find(m => m.includes("2.5")) || 
+                                 availableModels.find(m => m.includes("flash")) || 
+                                 availableModels[0];
+                    if (!chosen) throw new Error("Sin modelos disponibles.");
                     return chosen;
-
                 } catch (e) {
                     console.error("Fallo detección:", e);
-                    // Si falla la detección (ej: red), intentamos el fallback que sabemos que a veces va
                     return "gemini-1.5-flash"; 
                 }
             };
 
-            // --- 2. GENERAR LISTA ---
             const generateList = async () => {
                 if (!apiKeys.google) { setShowConfig(true); return; }
                 if (!aiPrompt.trim()) return;
@@ -126,23 +111,17 @@
                     let key = apiKeys.google.trim();
                     if (key.indexOf("AIzaSyAIzaSy") !== -1) key = key.replace("AIzaSyAIzaSy", "AIzaSy");
 
-                    // PASO A: Encontrar el modelo correcto
                     const modelName = await findBestModel(key);
-                    setStatusText(`🚀 Conectando con ${modelName}...`);
+                    setStatusText(`🚀 Usando ${modelName}...`);
 
-                    // PASO B: Preparar el Prompt
                     const finalPrompt = `
                         Eres un asistente educativo. Analiza: "${aiPrompt}".
-                        
                         TAREA:
                         1. Si es un TEMA (ej: "aeropuerto"): Crea una lista de 30 palabras útiles.
                         2. Si es una LISTA pegada: Tradúcela y ordénala.
-                        
-                        SALIDA OBLIGATORIA: Un único Array JSON.
-                        FORMATO: [{"front": "Inglés", "back": "Español"}]
+                        SALIDA: Array JSON [{"front": "Inglés", "back": "Español"}].
                     `;
 
-                    // PASO C: Llamar a la API con el modelo detectado
                     const response = await fetch(
                         `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${key}`,
                         {
@@ -152,11 +131,7 @@
                         }
                     );
 
-                    if (!response.ok) {
-                        const err = await response.json();
-                        if (response.status === 404) throw new Error(`El modelo ${modelName} no respondió (404).`);
-                        throw new Error(`Error ${response.status}: ${err.error?.message || 'Desconocido'}`);
-                    }
+                    if (!response.ok) throw new Error(`Error API (${response.status})`);
 
                     const data = await response.json();
                     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -166,7 +141,7 @@
                         const formatted = newItems.map(item => ({ internalId: generateUniqueId(), front: item.front || '', back: item.back || '', image: null }));
                         setCards(prev => [...prev, ...formatted]);
                         setAiPrompt('');
-                        addToast(`¡Éxito con ${modelName}! +${formatted.length} tarjetas.`, 'success');
+                        addToast(`¡+${formatted.length} tarjetas!`, 'success');
                     }
                 } catch (e) {
                     addToast(e.message, 'error');
@@ -176,42 +151,75 @@
                 }
             };
 
-            // --- IA IMÁGENES (Pollinations) ---
-            const generateAIImage = (text, id) => {
-                if (!text) return addToast("Escribe texto primero", 'warning');
-                const seed = Math.floor(Math.random() * 10000);
-                const safePrompt = encodeURIComponent(`cute illustration of ${text}, minimalist vector art, white background`); 
-                const imageUrl = `https://image.pollinations.ai/prompt/${safePrompt}?width=400&height=400&seed=${seed}&nologo=true`;
-                setCards(prev => prev.map(c => c.internalId === id ? { ...c, image: imageUrl } : c));
+            // --- 2. EDITOR DE IMÁGENES (POLLINATIONS) ---
+            
+            // Función pura para construir URL
+            const buildPollinationsUrl = (prompt) => {
+                const seed = Math.floor(Math.random() * 99999);
+                // "Simple vector art" funciona mejor que "illustration" para evitar errores
+                const finalPrompt = encodeURIComponent(`${prompt}, simple vector art, minimalist, white background`);
+                return `https://image.pollinations.ai/prompt/${finalPrompt}?width=400&height=400&seed=${seed}&nologo=true`;
             };
 
+            const openImageEditor = (card) => {
+                setImageEditor({
+                    isOpen: true,
+                    cardId: card.internalId,
+                    prompt: card.front, // Por defecto usa la palabra en inglés
+                    currentImage: card.image,
+                    loading: !card.image // Si no tiene imagen, carga una automática
+                });
+                
+                // Si no tiene imagen, generar una preliminar
+                if (!card.image) {
+                    const url = buildPollinationsUrl(card.front);
+                    setImageEditor(prev => ({ ...prev, currentImage: url, loading: false }));
+                }
+            };
+
+            const handleRegeneratePreview = () => {
+                if (!imageEditor.prompt) return;
+                setImageEditor(prev => ({ ...prev, loading: true }));
+                
+                // Pequeño timeout para simular carga y dar feedback visual
+                setTimeout(() => {
+                    const url = buildPollinationsUrl(imageEditor.prompt);
+                    setImageEditor(prev => ({ ...prev, currentImage: url, loading: false }));
+                }, 300);
+            };
+
+            const saveImageFromEditor = () => {
+                setCards(prev => prev.map(c => c.internalId === imageEditor.cardId ? { ...c, image: imageEditor.currentImage } : c));
+                setImageEditor({ ...imageEditor, isOpen: false });
+                addToast("Imagen actualizada", "success");
+            };
+
+            // --- AUTO RELLENAR (LOTE) ---
             const autoFillAIImages = async () => {
                 const pending = cards.filter(c => c.front && !c.image);
                 if (pending.length === 0) return addToast("Nada que rellenar", 'info');
                 
-                addToast("🎨 Generando imágenes...", "info");
+                addToast("🎨 Pintando imágenes...", "info");
                 for (let i = 0; i < pending.length; i++) {
                     const card = pending[i];
-                    generateAIImage(card.front, card.internalId);
-                    await new Promise(r => setTimeout(r, 800));
+                    // Generación directa sin abrir editor
+                    const url = buildPollinationsUrl(card.front);
+                    setCards(prev => prev.map(c => c.internalId === card.internalId ? { ...c, image: url } : c));
+                    await new Promise(r => setTimeout(r, 500)); // Pausa para no saturar
                 }
-                addToast("¡Listo!", 'success');
+                addToast("¡Terminado!", 'success');
             };
 
             // --- UI HELPERS ---
             const handleMoveCard = (index, direction) => {
                 if ((direction === -1 && index === 0) || (direction === 1 && index === cards.length - 1)) return;
                 const newCards = [...cards];
-                const temp = newCards[index];
-                newCards[index] = newCards[index + direction];
-                newCards[index + direction] = temp;
+                [newCards[index], newCards[index + direction]] = [newCards[index + direction], newCards[index]];
                 setCards(newCards);
             };
 
             const handleClearAll = () => {
-                if (confirm("¿Borrar todo?")) {
-                    setCards([{ internalId: generateUniqueId(), front: '', back: '', image: null }]);
-                }
+                if (confirm("¿Borrar todo?")) setCards([{ internalId: generateUniqueId(), front: '', back: '', image: null }]);
             };
 
             const handleManualLink = (id, url) => {
@@ -238,9 +246,9 @@
             return (
                 <div className="min-h-screen bg-slate-100 py-8 px-4 font-sans text-slate-900 pb-32">
                     
-                    {/* MODAL CONFIGURACIÓN */}
+                    {/* MODAL CONFIGURACIÓN (CLAVES) */}
                     {showConfig && (
-                        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
+                        <div className="fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
                             <div className="bg-white w-full max-w-md rounded-2xl p-6 shadow-2xl modal-box relative">
                                 {!apiKeys.google ? null : (
                                     <button onClick={() => setShowConfig(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><i className="fa-solid fa-times"></i></button>
@@ -260,6 +268,54 @@
                                         />
                                     </div>
                                     <button onClick={saveApiKeys} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-black transition-all">Guardar</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MODAL EDITOR DE IMAGEN (NUEVO) */}
+                    {imageEditor.isOpen && (
+                        <div className="fixed inset-0 z-[60] bg-black/90 flex items-center justify-center p-4 backdrop-blur-md">
+                            <div className="bg-white w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl modal-box flex flex-col max-h-[90vh]">
+                                {/* Header */}
+                                <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+                                    <h3 className="font-bold text-lg"><i className="fa-solid fa-palette text-pink-500"></i> Diseñador de Imagen</h3>
+                                    <button onClick={() => setImageEditor({ ...imageEditor, isOpen: false })} className="p-2 hover:bg-slate-200 rounded-full"><i className="fa-solid fa-times"></i></button>
+                                </div>
+                                
+                                {/* Preview Area */}
+                                <div className="aspect-square bg-slate-100 flex items-center justify-center relative overflow-hidden group">
+                                    {imageEditor.loading ? (
+                                        <div className="text-center">
+                                            <i className="fa-solid fa-spinner fa-spin fa-3x text-indigo-500 mb-2"></i>
+                                            <p className="font-bold text-slate-400">Pintando...</p>
+                                        </div>
+                                    ) : (
+                                        <img src={imageEditor.currentImage} className="w-full h-full object-contain" onError={(e) => { e.target.src=''; addToast("Error cargando imagen", 'error'); }} />
+                                    )}
+                                </div>
+
+                                {/* Controls */}
+                                <div className="p-5 space-y-4 bg-white">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Contexto para la IA:</label>
+                                        <div className="flex gap-2">
+                                            <input 
+                                                value={imageEditor.prompt} 
+                                                onChange={e => setImageEditor({...imageEditor, prompt: e.target.value})}
+                                                onKeyDown={e => e.key === 'Enter' && handleRegeneratePreview()}
+                                                placeholder="Ej: Manzana roja podrida con un gusano" 
+                                                className="flex-1 border-2 border-slate-200 rounded-xl px-3 py-2 font-bold text-sm focus:border-indigo-500 outline-none"
+                                            />
+                                            <button onClick={handleRegeneratePreview} className="bg-indigo-100 text-indigo-600 px-4 rounded-xl hover:bg-indigo-200 font-bold" title="Regenerar">
+                                                <i className="fa-solid fa-rotate"></i>
+                                            </button>
+                                        </div>
+                                        <p className="text-[10px] text-slate-400 mt-1">Si la imagen sale mal, intenta simplificar el texto.</p>
+                                    </div>
+                                    <button onClick={saveImageFromEditor} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-black transition-all shadow-lg">
+                                        <i className="fa-solid fa-check"></i> Usar esta Imagen
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -303,11 +359,11 @@
                             <div className="bg-white/10 backdrop-blur-md rounded-xl p-3 flex flex-col md:flex-row gap-2 items-center">
                                 <i className="fa-solid fa-wand-magic-sparkles text-white text-xl mx-2"></i>
                                 <div className="flex-1 w-full">
-                                    <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="Ej: 'Acciones en el aeropuerto' o pega tu lista..." className="w-full bg-transparent border-none text-white font-bold outline-none placeholder:text-indigo-200 text-lg" onKeyDown={e => e.key === 'Enter' && generateList()}/>
+                                    <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} placeholder="Ej: 'Aeropuerto' (Tema) o pega tu lista..." className="w-full bg-transparent border-none text-white font-bold outline-none placeholder:text-indigo-200 text-lg" onKeyDown={e => e.key === 'Enter' && generateList()}/>
                                     {statusText && <div className="text-indigo-200 text-xs font-mono mt-1">{statusText}</div>}
                                 </div>
                                 <button onClick={generateList} disabled={isGenerating || !aiPrompt} className="bg-white text-indigo-700 px-6 py-3 rounded-xl font-bold hover:bg-indigo-50 disabled:opacity-50 text-sm flex items-center gap-2 shadow-lg transition-all active:scale-95 whitespace-nowrap">
-                                    {isGenerating ? <span><i className="fa-solid fa-spinner fa-spin"></i> Trabajando...</span> : <span><i className="fa-solid fa-bolt"></i> Generar con IA</span>}
+                                    {isGenerating ? <span><i className="fa-solid fa-spinner fa-spin"></i> Trabajando...</span> : <span><i className="fa-solid fa-bolt"></i> Generar</span>}
                                 </button>
                             </div>
                         </div>
@@ -315,7 +371,7 @@
                         {/* BOTÓN RELLENAR IMÁGENES */}
                         <div className="flex justify-end">
                              <button onClick={autoFillAIImages} disabled={cards.length <= 1} className="bg-white border-2 border-pink-100 text-pink-600 px-6 py-3 rounded-xl font-bold hover:bg-pink-50 hover:border-pink-200 shadow-sm transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                                <i className="fa-solid fa-palette"></i> Pintar Imágenes (Pollinations AI)
+                                <i className="fa-solid fa-palette"></i> Pintar Todo (Auto)
                             </button>
                         </div>
 
@@ -324,9 +380,9 @@
                             <div className="grid grid-cols-12 gap-4 p-4 bg-slate-50 border-b text-xs font-black text-slate-400 uppercase items-center">
                                 <div className="col-span-1 text-center">#</div>
                                 <div className="col-span-4 pl-2">{langConfig.left === 'en-US' ? 'Inglés' : 'Español'}</div>
-                                <div className="col-span-1 text-center"><button onClick={swapColumns} className="hover:bg-slate-100 p-1 rounded text-slate-500"><i className="fa-solid fa-right-left"></i></button></div>
+                                <div className="col-span-1 text-center"><button onClick={swapColumns} className="hover:bg-slate-100 p-1 rounded text-slate-500 transition-colors" title="Intercambiar Todo"><i className="fa-solid fa-right-left"></i></button></div>
                                 <div className="col-span-4 pl-2">{langConfig.right === 'es-MX' ? 'Español' : 'Inglés'}</div>
-                                <div className="col-span-2 text-right pr-2">Mover / Borrar</div>
+                                <div className="col-span-2 text-right pr-2">Acciones</div>
                             </div>
 
                             <div className="divide-y divide-slate-100">
@@ -348,17 +404,16 @@
                                         <div className="sm:col-span-1 flex justify-center pt-1">
                                             {card.image ? (
                                                 <div className="relative w-14 h-14 rounded-lg overflow-hidden group/img shadow-sm border border-slate-200 bg-white">
-                                                    <img src={card.image} className="w-full h-full object-cover cursor-pointer hover:scale-110 transition-transform"/>
+                                                    <img src={card.image} className="w-full h-full object-cover cursor-pointer hover:scale-110 transition-transform" onClick={() => openImageEditor(card)}/>
                                                     <button onClick={() => setCards(prev => prev.map(c => c.internalId === card.internalId ? {...c, image: null} : c))} className="absolute top-0 right-0 bg-red-500 text-white w-5 h-5 flex items-center justify-center text-xs shadow-md z-10"><i className="fa-solid fa-times"></i></button>
-                                                    <button onClick={() => generateAIImage(card.front, card.internalId)} className="absolute bottom-0 right-0 bg-blue-500 text-white w-5 h-5 flex items-center justify-center text-xs shadow-md z-10" title="Regenerar Imagen"><i className="fa-solid fa-rotate"></i></button>
                                                 </div>
                                             ) : manualLinkMode === card.internalId ? (
                                                 <input autoFocus placeholder="URL..." className="w-16 text-xs border rounded p-1" 
                                                     onBlur={(e) => handleManualLink(card.internalId, e.target.value)} 
                                                     onKeyDown={(e) => e.key==='Enter' && handleManualLink(card.internalId, e.currentTarget.value)}/>
                                             ) : (
-                                                <button onClick={() => generateAIImage(card.front, card.internalId)} className="w-14 h-14 rounded-lg border-2 border-dashed border-slate-300 text-slate-300 hover:border-pink-500 hover:text-pink-500 hover:bg-pink-50 transition-all flex flex-col items-center justify-center" title="Pintar con IA">
-                                                    <i className="fa-solid fa-wand-magic-sparkles"></i>
+                                                <button onClick={() => openImageEditor(card)} className="w-14 h-14 rounded-lg border-2 border-dashed border-slate-300 text-slate-300 hover:border-pink-500 hover:text-pink-500 hover:bg-pink-50 transition-all flex flex-col items-center justify-center" title="Diseñar Imagen">
+                                                    <i className="fa-solid fa-paintbrush"></i>
                                                 </button>
                                             )}
                                         </div>
