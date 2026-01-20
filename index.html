@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Periplo - Menu Principal</title>
+    <title>Periplo - Menu v5 (Resurrección)</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="importmap">
@@ -39,7 +39,7 @@
         
         import { 
             Share2, Plus, Folder, X, 
-            Flame, Rocket, LayoutGrid, HelpCircle, Move, ArrowLeft
+            Flame, Rocket, LayoutGrid, HelpCircle, Move, ArrowLeft, AlertTriangle
         } from 'lucide-react';
 
         // --- CONFIGURACIÓN FIREBASE ---
@@ -56,17 +56,32 @@
         const db = getFirestore(app);
         const appId = 'periplo-app-v1';
 
-        // --- ERROR BOUNDARY ---
+        // --- ERROR BOUNDARY (EL SALVAVIDAS) ---
         class ErrorBoundary extends Component {
-            constructor(props) { super(props); this.state = { hasError: false }; }
-            static getDerivedStateFromError(error) { return { hasError: true }; }
+            constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+            static getDerivedStateFromError(error) { return { hasError: true, error }; }
+            
+            hardReset = () => {
+                // Borra todo rastro de memoria y recarga limpio
+                localStorage.clear();
+                sessionStorage.clear();
+                window.location.href = window.location.pathname; // Recarga sin parámetros ?folder=...
+            }
+
             render() {
-                if (this.state.hasError) return (
-                    <div className="min-h-screen flex flex-col items-center justify-center p-10 text-center">
-                        <h2 className="text-2xl font-bold text-rose-500 mb-4">¡Ups! Algo falló.</h2>
-                        <button onClick={() => window.location.reload()} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold">Recargar Página</button>
-                    </div>
-                );
+                if (this.state.hasError) {
+                    return (
+                        <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center bg-rose-50">
+                            <AlertTriangle size={64} className="text-rose-500 mb-4"/>
+                            <h2 className="text-2xl font-black text-rose-900 mb-2">¡Se trabó!</h2>
+                            <p className="text-rose-700 mb-6 max-w-md">Ocurrió un error al cargar. No te preocupes, dale al botón para arreglarlo.</p>
+                            <button onClick={this.hardReset} className="bg-rose-600 text-white px-8 py-4 rounded-2xl font-bold shadow-xl hover:bg-rose-700 hover:scale-105 transition-all">
+                                🚑 FORZAR REINICIO
+                            </button>
+                            <pre className="mt-8 text-xs text-rose-400 opacity-50">{this.state.error?.toString()}</pre>
+                        </div>
+                    );
+                }
                 return this.props.children;
             }
         }
@@ -98,28 +113,42 @@
             const [userQuizzes, setUserQuizzes] = useState([]);
             const [modals, setModals] = useState({ folder: false, activity: false });
 
-            // 1. EL GPS: Recuperar ubicación
+            // 1. EL GPS (Versión Segura)
             useEffect(() => {
-                const params = new URLSearchParams(window.location.search);
-                const folderParam = params.get('folder');
-                if (folderParam) {
-                    const newPath = decodeURIComponent(folderParam).split('/');
-                    setPath(newPath);
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    const folderParam = params.get('folder');
+                    if (folderParam) {
+                        const newPath = decodeURIComponent(folderParam).split('/');
+                        // Validación simple para evitar rutas rotas
+                        if(newPath.length > 0 && newPath[0] !== "") {
+                            setPath(newPath);
+                        }
+                    }
+                } catch(e) {
+                    console.error("Error al leer ruta", e);
+                    // Si falla, limpiar URL
+                    window.history.replaceState({}, '', window.location.pathname);
                 }
             }, []);
 
-            // 2. Carga de Firebase
+            // 2. Carga de Firebase (Protegida)
             useEffect(() => {
                 const currentPath = path.join('/');
+                let unsubF = () => {};
+                let unsubQ = () => {};
+
                 try {
                     const qF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('parentPath', '==', currentPath));
-                    const unsubF = onSnapshot(qF, (s) => setUserFolders(s.docs.map(d => ({id: d.id, ...d.data()}))));
+                    unsubF = onSnapshot(qF, (s) => setUserFolders(s.docs.map(d => ({id: d.id, ...d.data()}))), (err) => console.log("Error loading folders", err));
                     
                     const qQ = query(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'), where('parentPath', '==', currentPath));
-                    const unsubQ = onSnapshot(qQ, (s) => setUserQuizzes(s.docs.map(d => ({id: d.id, ...d.data()}))));
-                    
-                    return () => { unsubF(); unsubQ(); };
-                } catch (e) { console.error("Error Firebase:", e); }
+                    unsubQ = onSnapshot(qQ, (s) => setUserQuizzes(s.docs.map(d => ({id: d.id, ...d.data()}))), (err) => console.log("Error loading quizzes", err));
+                } catch (e) { 
+                    console.error("Error Firebase:", e);
+                }
+                
+                return () => { unsubF(); unsubQ(); };
             }, [path]);
 
             const visibleItems = useMemo(() => {
@@ -137,15 +166,12 @@
                 setModals({...modals, folder: false});
             };
 
-            // --- REDIRECCIÓN AL CREADOR (CORREGIDA) ---
             const handleActivityClick = (gameType) => {
                 if (gameType.id === 'FLASHCARDS') {
                     const currentFolderId = path.join('/'); 
-                    // AQUÍ ESTÁ LA CLAVE: Redirigimos pasando la carpeta
                     window.location.href = `dashboard.html?folderId=${encodeURIComponent(currentFolderId)}`;
                     return; 
                 }
-
                 const name = prompt(`Nombre para ${gameType.name}:`);
                 if (name) createActivityLegacy(gameType.id, name);
             };
@@ -170,7 +196,6 @@
 
             return (
                 <div className="max-w-7xl mx-auto p-6 fade-in min-h-screen">
-                    {/* Header */}
                     <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-8 flex justify-between items-center sticky top-4 z-20">
                         <div className="flex items-center gap-3">
                             {path.length > 0 && (
@@ -179,7 +204,7 @@
                                 </button>
                             )}
                             <h1 className="text-xl font-black flex items-center gap-2 text-slate-800 tracking-tight">
-                                <Share2 className="text-indigo-600"/> PERIPLO
+                                <Share2 className="text-indigo-600"/> PERIPLO <span className="text-[10px] bg-indigo-100 text-indigo-600 px-2 rounded-full border border-indigo-200">v5</span>
                             </h1>
                         </div>
                         <div className="flex gap-2">
@@ -188,7 +213,6 @@
                         </div>
                     </div>
 
-                    {/* Breadcrumbs */}
                     <div className="flex gap-2 mb-6 text-xs font-bold text-slate-400 overflow-x-auto pb-2 uppercase tracking-widest">
                         <button onClick={() => navigateTo([])} className={`hover:text-indigo-600 transition-colors ${path.length===0?"text-indigo-600":""}`}>INICIO</button>
                         {path.map((f, i) => (
@@ -199,7 +223,6 @@
                         ))}
                     </div>
 
-                    {/* Grid */}
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
                         {visibleItems.folders.map((f, i) => (
                             <button key={i} onClick={() => navigateTo([...path, f.name])} className={`aspect-[4/3] rounded-3xl flex flex-col items-center justify-center gap-3 shadow-sm border hover:border-indigo-300 hover:shadow-md hover:-translate-y-1 transition-all group ${f.color || 'bg-white border-slate-100'}`}>
@@ -214,25 +237,24 @@
                                 <div 
                                     key={q.id} 
                                     onClick={() => window.location.href = `flashcards.html?id=${q.id}`} 
-                                    className="aspect-[4/3] bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col overflow-hidden group hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer"
+                                    className="aspect-[4/3] bg-white rounded-3xl shadow-sm border border-slate-200 flex flex-col overflow-hidden group hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer relative"
                                 >
+                                    {/* Indicador de Actividad Lista (Verde) */}
+                                    <div className="absolute top-3 right-3 w-3 h-3 bg-emerald-400 rounded-full shadow-lg ring-2 ring-white animate-pulse"></div>
+
                                     <div className={`h-1/2 ${info.color} flex items-center justify-center text-white relative overflow-hidden`}>
                                         <div className="absolute inset-0 bg-black/10 group-hover:bg-transparent transition-all"/>
                                         <Icon size={32} className="group-hover:scale-110 transition-transform"/>
                                     </div>
                                     <div className="p-4 flex-1 flex flex-col justify-between bg-white">
                                         <div className="font-bold text-sm leading-tight text-slate-700 line-clamp-2">{q.title}</div>
-                                        <div className="flex justify-between items-center">
-                                            <div className="text-[9px] text-slate-400 font-black uppercase tracking-widest">{info.name}</div>
-                                            <div className="w-2 h-2 rounded-full bg-emerald-400"></div>
-                                        </div>
+                                        <div className="text-[9px] text-slate-400 font-black uppercase tracking-widest">{info.name}</div>
                                     </div>
                                 </div>
                             );
                         })}
                     </div>
 
-                    {/* Estado Vacío */}
                     {visibleItems.folders.length === 0 && visibleItems.quizzes.length === 0 && (
                         <div className="text-center py-20 text-slate-300 border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center gap-4">
                             <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center"><Folder size={32}/></div>
