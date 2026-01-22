@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Periplo Dashboard v69 - Final Fix</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛠️</text></svg>">
+    <title>Periplo Dashboard v70 - MultiGame Ready</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎨</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
@@ -59,6 +59,10 @@
             const [gameTitle, setGameTitle] = useState('');
             const [folderId, setFolderId] = useState('');
             const [editModeId, setEditModeId] = useState(null);
+            
+            // ESTADO NUEVO: Tipo de juego (Flashcards, Anagram, etc.)
+            const [gameType, setGameType] = useState('FLASHCARDS'); 
+
             const [cards, setCards] = useState([{ internalId: genId(), front: '', back: '', image: null, crop: { zoom: 1, rot: 0, x: 50, y: 50 } }]);
             const [aiPrompt, setAiPrompt] = useState('');
             const [lastTopic, setLastTopic] = useState('');
@@ -70,9 +74,7 @@
             const [imgPrefs, setImgPrefs] = useState({ front: true, back: false });
             const [gallery, setGallery] = useState({ isOpen: false, cardId: null, term: '', currentPreview: null, rotation: 0, zoom: 1, manualUrl: '', posX: 50, posY: 50 });
             
-            // AbortController para cancelar IA
             const abortControllerRef = useRef(null);
-            
             const isDragging = useRef(false);
             const startPos = useRef({ x: 0, y: 0 });
             const cropContainerRef = useRef(null);
@@ -86,6 +88,11 @@
                 
                 const params = new URLSearchParams(window.location.search);
                 setFolderId(params.get('folderId') || '');
+                
+                // DETECTAR TIPO DE JUEGO
+                const typeParam = params.get('type');
+                if(typeParam) setGameType(typeParam);
+
                 const idParam = params.get('id');
                 
                 if (idParam) {
@@ -97,6 +104,7 @@
                             if (snap.exists()) {
                                 const data = snap.data();
                                 setGameTitle(data.title || '');
+                                if (data.type) setGameType(data.type); // Recuperar tipo original si editamos
                                 if (data.config) {
                                     setAudioPrefs(data.config.audio || audioPrefs);
                                     setImgPrefs(data.config.images || imgPrefs);
@@ -110,7 +118,7 @@
                                         crop: q.crop || { zoom: 1, rot: 0, x: 50, y: 50 }
                                     })));
                                 }
-                                addToast("Editando: " + (data.title || "Sin título"), "success");
+                                addToast("Modo Edición Activado", "success");
                             }
                         } catch (e) { console.error(e); }
                     };
@@ -121,7 +129,7 @@
             const addToast = (msg, type = 'error') => {
                 const id = Date.now();
                 setToasts(p => [...p, { id, msg, type }]);
-                setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3000);
+                setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
             };
 
             const speak = (text, langCode) => {
@@ -181,7 +189,7 @@
                 try {
                     const gamePayload = {
                         title: gameTitle,
-                        type: 'FLASHCARDS',
+                        type: gameType, // USAMOS EL TIPO DETECTADO (ANAGRAM, FLASHCARDS, ETC)
                         parentPath: folderId || 'root',
                         createdAt: serverTimestamp(),
                         config: { audio: audioPrefs, images: imgPrefs },
@@ -203,19 +211,19 @@
                         targetId = docRef.id;
                         addToast("¡Juego Creado!", "success");
                     }
+                    
+                    // REDIRECCIÓN CORRECTA A ACTIVITY.HTML
                     setTimeout(() => { window.location.href = `activity.html?id=${targetId}`; }, 1200);
+                    
                 } catch (e) { addToast("Error al guardar"); console.error(e); } finally { setIsSaving(false); }
             };
 
             const handleSwitch = () => { setCards(cards.map(c => ({ ...c, front: c.back, back: c.front }))); setAudioPrefs(p => ({ ...p, left: p.right, right: p.left })); };
             const handleDragOver = (e) => { e.preventDefault(); e.currentTarget.classList.add('drag-active'); };
             
-            // --- FIX DE IMAGENES: DRAG & DROP CORRECTO ---
             const handleDrop = (e, id) => {
                 e.preventDefault();
                 e.currentTarget.classList.remove('drag-active');
-                
-                // Intentar sacar URL de HTML o Lista de URI
                 const html = e.dataTransfer.getData('text/html');
                 const srcMatch = html && html.match(/src="?([^"\s]+)"?\s*/);
                 const url = srcMatch ? srcMatch[1] : e.dataTransfer.getData('text/uri-list');
@@ -224,35 +232,23 @@
                     setCards(prev => prev.map(c => c.internalId === id ? { 
                         ...c, 
                         image: url,
-                        // Reseteamos el crop al centro por defecto al soltar una nueva imagen
                         crop: { zoom: 1, rot: 0, x: 50, y: 50 } 
                     } : c));
                     addToast("Imagen cargada", "success");
                 }
             };
 
-            // --- LÓGICA DE MOVIMIENTO DE IMAGEN EN EDITOR ---
             const handleEditorMouseDown = (e) => { isDragging.current = true; startPos.current = { x: e.clientX, y: e.clientY }; };
             
             const handleEditorMouseMove = (e) => {
                 if (!isDragging.current || !cropContainerRef.current) return;
-                
                 const rect = cropContainerRef.current.getBoundingClientRect();
-                
-                // Calculamos cuánto se movió el mouse en píxeles
                 const deltaX = e.clientX - startPos.current.x;
                 const deltaY = e.clientY - startPos.current.y;
-                
-                // Convertimos a porcentaje relativo al contenedor
                 const moveX = (deltaX / rect.width) * 100;
                 const moveY = (deltaY / rect.height) * 100;
 
-                setGallery(prev => ({
-                    ...prev,
-                    posX: prev.posX + moveX,
-                    posY: prev.posY + moveY
-                }));
-
+                setGallery(prev => ({ ...prev, posX: prev.posX + moveX, posY: prev.posY + moveY }));
                 startPos.current = { x: e.clientX, y: e.clientY };
             };
 
@@ -264,7 +260,7 @@
                             <input value={gameTitle} onChange={e => setGameTitle(e.target.value)} placeholder="Título de la Actividad..." className="w-full bg-slate-50 border-b-2 border-transparent hover:border-slate-200 focus:border-indigo-500 p-2 outline-none font-black text-xl text-slate-800 transition-all rounded-lg focus:bg-white" />
                         </div>
                         <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-1 rounded">v69</span>
+                            <span className="text-[10px] font-mono text-white bg-indigo-600 px-2 py-1 rounded font-bold">{gameType}</span>
                             <input type="password" value={apiKeys.google} onChange={e => { setApiKeys({google: e.target.value}); localStorage.setItem('periplo_google_key', e.target.value); }} className="bg-slate-100 border p-2 rounded-xl text-[10px] w-24 outline-none font-mono text-center" placeholder="API KEY" />
                         </div>
                     </nav>
@@ -318,8 +314,6 @@
                                             <input value={c.front} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, front: e.target.value} : x))} className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 font-bold text-slate-700 text-sm" placeholder="Inglés..." />
                                             {audioPrefs.leftActive && <button onClick={() => speak(c.front, audioPrefs.left)} className="absolute right-3 top-4 text-indigo-200 hover:text-indigo-500"><i className="fa-solid fa-volume-high"></i></button>}
                                         </div>
-                                        
-                                        {/* MINIATURA: Ahora respeta el posicionamiento */}
                                         <div className="col-span-12 md:col-span-4 flex justify-center py-2 md:py-0">
                                             <div className="drop-zone w-full max-w-[12rem] h-28 rounded-2xl cursor-pointer group/img flex flex-col items-center justify-center text-slate-400 relative" onClick={() => setGallery({ isOpen: true, cardId: c.internalId, term: c.front, currentPreview: c.image, rotation: c.crop.rot, zoom: c.crop.zoom, posX: c.crop.x, posY: c.crop.y, manualUrl: c.image || '' })} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, c.internalId)}>
                                                 {c.image ? (
@@ -329,7 +323,6 @@
                                                 ) : <i className="fa-solid fa-cloud-arrow-up text-2xl"></i>}
                                             </div>
                                         </div>
-
                                         <div className="col-span-12 md:col-span-4 relative">
                                             <input value={c.back} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, back: e.target.value} : x))} className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 font-bold text-slate-700 text-sm" placeholder="Español..." />
                                             {audioPrefs.rightActive && <button onClick={() => speak(c.back, audioPrefs.right)} className="absolute right-3 top-4 text-pink-200 hover:text-pink-600"><i className="fa-solid fa-volume-high"></i></button>}
@@ -352,18 +345,17 @@
                         </button>
                     </div>
 
-                    {/* MODAL EDITOR DE IMAGEN (ARREGLADO) */}
+                    {/* MODAL EDITOR */}
                     {gallery.isOpen && (
                         <div className="fixed inset-0 z-[60] bg-slate-900/95 flex items-center justify-center p-4 modal-blur" onMouseMove={handleEditorMouseMove} onMouseUp={() => isDragging.current = false}>
                             <div className="bg-white w-full max-w-4xl h-[85vh] rounded-[2.5rem] overflow-hidden flex flex-col shadow-2xl">
                                 <div className="p-4 border-b flex justify-between items-center px-8 bg-white"><h3 className="font-bold text-slate-800 text-xs uppercase tracking-widest">Editor</h3><button onClick={() => setGallery({...gallery, isOpen: false})} className="w-8 h-8 rounded-full bg-slate-100 font-bold">✕</button></div>
                                 <div className="flex-1 flex flex-col md:flex-row bg-slate-50 overflow-hidden">
                                     <div className="w-full md:w-1/2 p-6 border-r flex flex-col items-center justify-center space-y-6 bg-slate-100/50">
-                                        <div className="crop-container shadow-2xl ring-4 ring-white relative overflow-hidden" ref={cropContainerRef} onMouseDown={handleEditorMouseDown}>
+                                        <div className="crop-container shadow-2xl ring-4 ring-white" ref={cropContainerRef} onMouseDown={handleEditorMouseDown}>
                                             {gallery.currentPreview && (
                                                 <React.Fragment>
                                                     <img src={gallery.currentPreview} className="crop-img" style={{ transform: `translate(${gallery.posX - 50}%, ${gallery.posY - 50}%) rotate(${gallery.rotation}deg) scale(${gallery.zoom})`, top: '50%', left: '50%', width: '100%', height: '100%', objectFit: 'cover' }} />
-                                                    {/* Guía visual de centro */}
                                                     <div className="absolute top-1/2 left-1/2 w-4 h-4 border border-white/50 rounded-full -translate-x-1/2 -translate-y-1/2 pointer-events-none"></div>
                                                 </React.Fragment>
                                             )}
