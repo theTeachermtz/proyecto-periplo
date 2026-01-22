@@ -33,13 +33,12 @@
 </head>
 <body>
     <div id="root"></div>
-
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Play, Check, X, ArrowLeft, ArrowRight, Pause, Volume2, GraduationCap, Star, LogOut, Shuffle } from 'lucide-react';
+        import { Play, Check, X, ArrowLeft, ArrowRight, Pause, Volume2, GraduationCap, Star, LogOut, Shuffle, Loader2, VolumeX } from 'lucide-react';
 
         const firebaseConfig = {
             apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
@@ -60,9 +59,9 @@
         const FlashcardsGame = () => {
             const [gameState, setGameState] = useState('LOADING');
             const [gameData, setGameData] = useState(null);
-            const [originalCards, setOriginalCards] = useState([]);
             const [cards, setCards] = useState([]);
-            const [currentIndex, setCurrentIndex] = useState(0);
+            const [originalCards, setOriginalCards] = useState([]);
+            const [current, setCurrent] = useState(0);
             const [isFlipped, setIsFlipped] = useState(false);
             const [isPaused, setIsPaused] = useState(false);
             const [soundEnabled, setSoundEnabled] = useState(true);
@@ -74,20 +73,20 @@
             const audioSfx = useRef({});
 
             useEffect(() => {
-                const loadGame = async () => {
+                const init = async () => {
                     const params = new URLSearchParams(window.location.search);
-                    const gameId = params.get('id');
-                    if (!gameId) { alert("Error: ID perdido"); return; }
+                    const id = params.get('id');
+                    if (!id) return alert("Falta ID");
                     try {
-                        const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', gameId));
+                        const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id));
                         if (snap.exists()) {
-                            const data = snap.data();
-                            const loaded = data.questions.map(q => ({ ...q, status: 'pending' }));
-                            setGameData(data); setOriginalCards(loaded); setCards(loaded); setGameState('WELCOME');
+                            const d = snap.data();
+                            const c = d.questions.map(q => ({ ...q, status: 'pending' }));
+                            setGameData(d); setOriginalCards(c); setCards(c); setGameState('WELCOME');
                         }
                     } catch (e) { console.error(e); }
                 };
-                loadGame();
+                init();
                 const sfx = { click: 'https://actions.google.com/sounds/v1/percussion/wood_block_hit.ogg', flip: 'https://www.soundjay.com/misc/sounds/page-flip-02.mp3', success: 'https://www.soundjay.com/misc/sounds/magic-chime-01.mp3', wrong: 'https://actions.google.com/sounds/v1/cartoon/cartoon_boing.ogg' };
                 Object.entries(sfx).forEach(([k, v]) => { audioSfx.current[k] = new Audio(v); });
             }, []);
@@ -95,34 +94,35 @@
             const playSfx = (t) => { if (soundEnabled) { audioSfx.current[t].currentTime=0; audioSfx.current[t].play().catch(()=>{}); } };
             const speak = (txt, l) => { window.speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(txt); u.lang = l==='en'?'en-US':'es-MX'; window.speechSynthesis.speak(u); };
             
-            useEffect(() => { if (gameState==='PLAYING' && isFlipped && autoPlayAudio && cards[currentIndex]) setTimeout(() => speak(cards[currentIndex].back, gameData.config?.audio?.right||'es'), 400); }, [isFlipped]);
+            useEffect(() => { if (gameState==='PLAYING' && isFlipped && autoPlayAudio && cards[current]) setTimeout(() => speak(cards[current].back, gameData.config?.audio?.right||'es'), 400); }, [isFlipped]);
 
-            const handleExit = () => { window.location.href = `index.html?folder=${encodeURIComponent(gameData?.parentPath||'')}`; };
+            // --- SALIDA MAESTRA (Break Iframe) ---
+            const handleExit = () => { window.top.location.href = `index.html?folder=${encodeURIComponent(gameData?.parentPath||'')}`; };
             
             const toggleShuffle = () => {
                 const n = !isShuffled; setIsShuffled(n);
                 if (n) setCards([...cards].sort(()=>Math.random()-0.5));
-                else { setCards(originalCards); setCurrentIndex(0); }
+                else { setCards(originalCards); setCurrent(0); }
             };
 
             const handleStart = () => {
                 playSfx('click'); setGameState('INTRO');
                 let deck = originalCards.map(c => ({...c, status:'pending'}));
                 if (isShuffled) deck = deck.sort(()=>Math.random()-0.5);
-                setCards(deck); setCurrentIndex(0); setIsFlipped(false);
+                setCards(deck); setCurrent(0); setIsFlipped(false);
                 setIntroStep('READY'); setTimeout(()=>setIntroStep('SET'),800); setTimeout(()=>setIntroStep('GO!'),1600); setTimeout(()=>{setGameState('PLAYING');setIntroStep(null);},2400);
             };
 
             const updateStatus = (s) => {
-                const n = [...cards]; n[currentIndex].status = s; setCards(n);
+                const n = [...cards]; n[current].status = s; setCards(n);
                 if (s==='learned') { playSfx('success'); setFeedback('success'); setShowConfetti(true); } else { playSfx('wrong'); setFeedback('error'); }
                 setTimeout(() => {
                     setFeedback(null); setShowConfetti(false);
-                    if (currentIndex === cards.length-1) {
+                    if (current === cards.length-1) {
                         const p = n.filter(c=>c.status!=='learned');
                         if (p.length===0) setGameState('VICTORY');
-                        else { alert(`Repasando ${p.length} tarjetas.`); setCards(p.map(c=>({...c, status:'pending'}))); setCurrentIndex(0); setIsFlipped(false); }
-                    } else { setCurrentIndex(p=>p+1); setIsFlipped(false); }
+                        else { alert(`Repasando ${p.length} tarjetas.`); setCards(p.map(c=>({...c, status:'pending'}))); setCurrent(0); setIsFlipped(false); }
+                    } else { setCurrent(p=>p+1); setIsFlipped(false); }
                 }, 800);
             };
 
@@ -134,14 +134,14 @@
                         <div className="h-16 px-6 bg-white border-b border-slate-100 flex items-center justify-between z-20">
                             <div className="flex items-center gap-4">
                                 <button onClick={()=>setIsPaused(true)} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 hover:text-indigo-600"><Pause size={20}/></button>
-                                <div className="flex flex-col w-32 md:w-48"><div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase mb-1"><span>Progreso</span><span>{currentIndex+1}/{cards.length}</span></div><div className="h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500" style={{width:`${((currentIndex+1)/cards.length)*100}%`}}></div></div></div>
+                                <div className="flex flex-col w-32 md:w-48"><div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase mb-1"><span>Progreso</span><span>{current+1}/{cards.length}</span></div><div className="h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500" style={{width:`${((current+1)/cards.length)*100}%`}}></div></div></div>
                             </div>
                             <button onClick={handleExit} className="flex items-center gap-2 text-xs font-black text-slate-400 hover:text-rose-500 uppercase tracking-widest transition-colors">Salir <LogOut size={16}/></button>
                         </div>
                         <div className="flex-1 relative bg-slate-50 flex flex-col">
                             {gameState==='WELCOME' && <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-white animate-fade-in text-center p-8"><div className="w-20 h-20 bg-indigo-100 rounded-3xl flex items-center justify-center mb-6 text-indigo-600 rotate-3 shadow-lg"><GraduationCap size={40}/></div><h1 className="text-3xl md:text-5xl font-black text-slate-800 mb-3">{gameData.title}</h1><button onClick={handleStart} className="px-10 py-4 bg-slate-900 text-white rounded-2xl font-bold text-lg hover:bg-indigo-600 hover:shadow-xl transition-all flex items-center gap-3"><Play fill="currentColor" size={20}/> COMENZAR</button></div>}
                             {gameState==='INTRO' && <div className="absolute inset-0 z-40 flex items-center justify-center bg-white/80 backdrop-blur-md"><h1 className="text-8xl font-black text-indigo-600 animate-bounce">{introStep}</h1></div>}
-                            {gameState==='PLAYING' && <div className="flex-1 flex flex-col items-center justify-center p-6 relative">{showConfetti && <Confetti />}<div className="w-full max-w-md aspect-[4/5] md:aspect-[4/3] perspective-1000 cursor-pointer group" onClick={()=>{playSfx('flip');setIsFlipped(!isFlipped)}}><div className={`relative w-full h-full transition-all duration-500 transform-style-3d ${isFlipped?'rotate-y-180':''}`}><div className="absolute inset-0 w-full h-full bg-white rounded-3xl shadow-xl border border-slate-100 flex flex-col items-center justify-center p-8 backface-hidden">{cards[currentIndex].image && <div className="w-full h-40 md:h-48 mb-6 rounded-2xl overflow-hidden bg-slate-100 relative shadow-inner"><img src={cards[currentIndex].image} className="w-full h-full object-cover" style={{transform:`translate(${cards[currentIndex].crop?.x-50}%,${cards[currentIndex].crop?.y-50}%) scale(${cards[currentIndex].crop?.zoom})`,transformOrigin:'center'}}/></div>}<h2 className="text-4xl md:text-5xl font-black text-slate-800 text-center">{cards[currentIndex].front}</h2><span className="absolute bottom-6 text-[10px] font-bold text-slate-300 uppercase tracking-widest">Toca para girar</span></div><div className="absolute inset-0 w-full h-full bg-white rounded-3xl shadow-xl border border-slate-100 flex flex-col items-center justify-center p-8 rotate-y-180 backface-hidden"><h2 className="text-4xl md:text-5xl font-black text-slate-800 text-center mb-12">{cards[currentIndex].back}</h2><div className="flex gap-3 w-full mt-auto" onClick={e=>e.stopPropagation()}><button onClick={()=>updateStatus('review')} className="flex-1 py-4 bg-rose-50 text-rose-500 rounded-2xl font-bold hover:bg-rose-100 flex flex-col items-center gap-1 text-xs uppercase"><X size={24}/> Repasar</button><button onClick={()=>updateStatus('learned')} className="flex-1 py-4 bg-emerald-50 text-emerald-500 rounded-2xl font-bold hover:bg-emerald-100 flex flex-col items-center gap-1 text-xs uppercase"><Check size={24}/> ¡Lo sé!</button></div></div></div></div><div className="absolute bottom-8 left-0 w-full px-8 flex justify-between items-center pointer-events-none"><button onClick={()=>{if(currentIndex>0){playSfx('click');setIsFlipped(false);setCurrentIndex(p=>p-1)}}} disabled={currentIndex===0} className="w-12 h-12 bg-white rounded-full shadow-lg text-slate-400 hover:text-indigo-600 flex items-center justify-center pointer-events-auto disabled:opacity-0"><ArrowLeft size={20}/></button><button onClick={()=>{if(currentIndex<cards.length-1){playSfx('click');setIsFlipped(false);setCurrentIndex(p=>p+1)}}} disabled={currentIndex===cards.length-1} className="w-12 h-12 bg-white rounded-full shadow-lg text-slate-400 hover:text-indigo-600 flex items-center justify-center pointer-events-auto disabled:opacity-0"><ArrowRight size={20}/></button></div>{feedback && <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none"><div className={`p-6 rounded-3xl shadow-2xl animate-bounce-in bg-white`}>{feedback==='success'?<Check size={48} className="text-emerald-500"/>:<X size={48} className="text-rose-500"/>}</div></div>}</div>}
+                            {gameState==='PLAYING' && <div className="flex-1 flex flex-col items-center justify-center p-6 relative">{showConfetti && <Confetti />}<div className="w-full max-w-md aspect-[4/5] md:aspect-[4/3] perspective-1000 cursor-pointer group" onClick={()=>{playSfx('flip');setIsFlipped(!isFlipped)}}><div className={`relative w-full h-full transition-all duration-500 transform-style-3d ${isFlipped?'rotate-y-180':''}`}><div className="absolute inset-0 w-full h-full bg-white rounded-3xl shadow-xl border border-slate-100 flex flex-col items-center justify-center p-8 backface-hidden">{cards[current].image && <div className="w-full h-40 md:h-48 mb-6 rounded-2xl overflow-hidden bg-slate-100 relative shadow-inner"><img src={cards[current].image} className="w-full h-full object-cover" style={{transform:`translate(${cards[current].crop?.x-50}%,${cards[current].crop?.y-50}%) scale(${cards[current].crop?.zoom})`,transformOrigin:'center'}}/></div>}<h2 className="text-4xl md:text-5xl font-black text-slate-800 text-center">{cards[current].front}</h2><span className="absolute bottom-6 text-[10px] font-bold text-slate-300 uppercase tracking-widest">Toca para girar</span></div><div className="absolute inset-0 w-full h-full bg-white rounded-3xl shadow-xl border border-slate-100 flex flex-col items-center justify-center p-8 rotate-y-180 backface-hidden"><h2 className="text-4xl md:text-5xl font-black text-slate-800 text-center mb-12">{cards[current].back}</h2><div className="flex gap-3 w-full mt-auto" onClick={e=>e.stopPropagation()}><button onClick={()=>updateStatus('review')} className="flex-1 py-4 bg-rose-50 text-rose-500 rounded-2xl font-bold hover:bg-rose-100 flex flex-col items-center gap-1 text-xs uppercase"><X size={24}/> Repasar</button><button onClick={()=>updateStatus('learned')} className="flex-1 py-4 bg-emerald-50 text-emerald-500 rounded-2xl font-bold hover:bg-emerald-100 flex flex-col items-center gap-1 text-xs uppercase"><Check size={24}/> ¡Lo sé!</button></div></div></div></div><div className="absolute bottom-8 left-0 w-full px-8 flex justify-between items-center pointer-events-none"><button onClick={()=>{if(current>0){playSfx('click');setIsFlipped(false);setCurrent(p=>p-1)}}} disabled={current===0} className="w-12 h-12 bg-white rounded-full shadow-lg text-slate-400 hover:text-indigo-600 flex items-center justify-center pointer-events-auto disabled:opacity-0"><ArrowLeft size={20}/></button><button onClick={()=>{if(current<cards.length-1){playSfx('click');setIsFlipped(false);setCurrent(p=>p+1)}}} disabled={current===cards.length-1} className="w-12 h-12 bg-white rounded-full shadow-lg text-slate-400 hover:text-indigo-600 flex items-center justify-center pointer-events-auto disabled:opacity-0"><ArrowRight size={20}/></button></div>{feedback && <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none"><div className={`p-6 rounded-3xl shadow-2xl animate-bounce-in bg-white`}>{feedback==='success'?<Check size={48} className="text-emerald-500"/>:<X size={48} className="text-rose-500"/>}</div></div>}</div>}
                             {gameState==='VICTORY' && <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-white text-center p-10 animate-fade-in"><Confetti /><div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center mb-6 text-yellow-500 animate-bounce"><Star size={48} fill="currentColor"/></div><h1 className="text-4xl font-black text-slate-800 mb-2">¡Completado!</h1><button onClick={handleExit} className="px-10 py-4 bg-slate-900 text-white rounded-2xl font-bold uppercase tracking-widest hover:bg-indigo-600 transition-all">Volver al Menú</button></div>}
                         </div>
                     </div>
