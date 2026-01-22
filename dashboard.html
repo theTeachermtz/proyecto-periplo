@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Periplo Dashboard v67 - UI Polish</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>✨</text></svg>">
+    <title>Periplo Dashboard v68 - Edit Mode</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>✏️</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
@@ -13,6 +13,7 @@
       "imports": {
         "react": "https://esm.sh/react@18.2.0",
         "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
         "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
         "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
       }
@@ -21,11 +22,11 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap'); 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; padding-bottom: 120px; } /* Espacio extra abajo */
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; padding-bottom: 120px; }
         .modal-blur { backdrop-filter: blur(12px); animation: fadeIn 0.2s ease-out; }
         .crop-container { width: 100%; aspect-ratio: 1/1; border-radius: 1.5rem; background: #0f172a; position: relative; overflow: hidden; cursor: move; border: 2px solid #e2e8f0; }
         .crop-img { position: absolute; pointer-events: none; user-select: none; transform-origin: center; max-width: none; max-height: none; }
-        .drop-zone { border: 2px dashed #cbd5e1; background-color: #f8fafc; transition: all 0.2s ease; overflow: hidden; position: relative; } /* Overflow hidden clave */
+        .drop-zone { border: 2px dashed #cbd5e1; background-color: #f8fafc; transition: all 0.2s ease; overflow: hidden; position: relative; }
         .drop-zone.drag-active { border-color: #4f46e5; background-color: #eef2ff; transform: scale(1.02); }
     </style>
 </head>
@@ -36,7 +37,7 @@
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+        import { getFirestore, collection, addDoc, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
         const firebaseConfig = {
             apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
@@ -57,6 +58,7 @@
             
             const [gameTitle, setGameTitle] = useState('');
             const [folderId, setFolderId] = useState('');
+            const [editModeId, setEditModeId] = useState(null); // ID si estamos editando
             const [cards, setCards] = useState([{ internalId: genId(), front: '', back: '', image: null, crop: { zoom: 1, rot: 0, x: 50, y: 50 } }]);
             const [aiPrompt, setAiPrompt] = useState('');
             const [lastTopic, setLastTopic] = useState('');
@@ -78,8 +80,46 @@
                 loadVoices();
                 window.speechSynthesis.onvoiceschanged = loadVoices;
                 setApiKeys({ google: localStorage.getItem('periplo_google_key') || '' });
+                
                 const params = new URLSearchParams(window.location.search);
-                setFolderId(params.get('folderId') || '');
+                const folderParam = params.get('folderId') || '';
+                const idParam = params.get('id'); // ID para editar
+                
+                setFolderId(folderParam);
+
+                // LÓGICA DE MODO EDICIÓN: Si hay ID, cargamos los datos
+                if (idParam) {
+                    setEditModeId(idParam);
+                    const loadGameData = async () => {
+                        try {
+                            const docRef = doc(db, 'artifacts', appId, 'users', userUid, 'quizzes', idParam);
+                            const snap = await getDoc(docRef);
+                            if (snap.exists()) {
+                                const data = snap.data();
+                                setGameTitle(data.title || '');
+                                if (data.config) {
+                                    setAudioPrefs(data.config.audio || audioPrefs);
+                                    setImgPrefs(data.config.images || imgPrefs);
+                                }
+                                // Mapeamos las preguntas al formato interno del dashboard
+                                if (data.questions && data.questions.length > 0) {
+                                    setCards(data.questions.map(q => ({
+                                        internalId: q.id || genId(),
+                                        front: q.front || '',
+                                        back: q.back || '',
+                                        image: q.image || null,
+                                        crop: q.crop || { zoom: 1, rot: 0, x: 50, y: 50 }
+                                    })));
+                                }
+                                addToast("Datos cargados para editar", "success");
+                            }
+                        } catch (e) {
+                            console.error("Error cargando juego:", e);
+                            addToast("Error al cargar datos", "error");
+                        }
+                    };
+                    loadGameData();
+                }
             }, []);
 
             const addToast = (msg, type = 'error') => {
@@ -116,18 +156,19 @@
                 } catch (e) { addToast("Error de IA"); } finally { setIsGenerating(false); }
             };
 
-const handleFinish = async () => {
+            // --- FUNCIÓN DE GUARDADO CORREGIDA ---
+            const handleFinish = async () => {
                 if (!gameTitle.trim()) return addToast("Escribe un título (arriba)");
                 const validCards = cards.filter(c => c.front || c.back);
                 if (validCards.length < 2) return addToast("Mínimo 2 tarjetas");
 
                 setIsSaving(true);
                 try {
-                    const docRef = await addDoc(collection(db, 'artifacts', appId, 'users', userUid, 'quizzes'), {
+                    const gamePayload = {
                         title: gameTitle,
                         type: 'FLASHCARDS',
                         parentPath: folderId || 'root',
-                        createdAt: serverTimestamp(),
+                        createdAt: serverTimestamp(), // Ojo: al editar se sobrescribe la fecha, si quieres conservar la original habría que leerla primero
                         config: { audio: audioPrefs, images: imgPrefs },
                         questions: validCards.map(c => ({
                             id: genId(),
@@ -136,17 +177,30 @@ const handleFinish = async () => {
                             image: c.image,
                             crop: c.crop
                         }))
-                    });
-                    addToast("¡Juego Creado! Abriendo panel...", "success");
-                    
-                    // 👇 AQUÍ ESTÁ EL CAMBIO: REDIRIGE A ACTIVITY.HTML
-                    setTimeout(() => { window.location.href = `activity.html?id=${docRef.id}`; }, 1200);
-                    
-                } catch (e) { addToast("Error al guardar"); console.error(e); } finally { setIsSaving(false); }
-            };
-                    addToast("¡Juego Creado! Abriendo...", "success");
-                    setTimeout(() => { window.location.href = `flashcards.html?id=${docRef.id}`; }, 1200);
-                } catch (e) { addToast("Error al guardar"); console.error(e); } finally { setIsSaving(false); }
+                    };
+
+                    let targetId = editModeId;
+
+                    if (editModeId) {
+                        // ACTUALIZAR (UPDATE)
+                        await setDoc(doc(db, 'artifacts', appId, 'users', userUid, 'quizzes', editModeId), gamePayload, { merge: true });
+                        addToast("¡Cambios Guardados!", "success");
+                    } else {
+                        // CREAR NUEVO (CREATE)
+                        const docRef = await addDoc(collection(db, 'artifacts', appId, 'users', userUid, 'quizzes'), gamePayload);
+                        targetId = docRef.id;
+                        addToast("¡Juego Creado!", "success");
+                    }
+
+                    // Redirigir al Panel de Actividad
+                    setTimeout(() => { window.location.href = `activity.html?id=${targetId}`; }, 1200);
+
+                } catch (e) { 
+                    addToast("Error al guardar"); 
+                    console.error(e); 
+                } finally { 
+                    setIsSaving(false); 
+                }
             };
 
             const handleSwitch = () => { setCards(cards.map(c => ({ ...c, front: c.back, back: c.front }))); setAudioPrefs(p => ({ ...p, left: p.right, right: p.left })); };
@@ -156,17 +210,16 @@ const handleFinish = async () => {
 
             return (
                 <div className="min-h-screen pb-40" onMouseUp={() => isDragging.current = false}>
-                    {/* NAV SUPERIOR FIJO (Título y Salir) */}
+                    {/* NAV SUPERIOR */}
                     <nav className="bg-white border-b p-3 flex items-center gap-4 sticky top-0 z-50 px-6 shadow-md h-20">
-                        <button onClick={() => window.location.href = `index.html?folder=${encodeURIComponent(folderId)}`} className="flex items-center gap-2 hover:bg-slate-100 px-4 py-2 rounded-xl text-slate-500 font-bold text-xs"><i className="fa-solid fa-arrow-left"></i></button>
+                        <button onClick={() => window.history.back()} className="flex items-center gap-2 hover:bg-slate-100 px-4 py-2 rounded-xl text-slate-500 font-bold text-xs"><i className="fa-solid fa-arrow-left"></i></button>
                         
-                        {/* TÍTULO AQUÍ ARRIBA SIEMPRE VISIBLE */}
                         <div className="flex-1">
                             <input value={gameTitle} onChange={e => setGameTitle(e.target.value)} placeholder="Título de la Actividad..." className="w-full bg-slate-50 border-b-2 border-transparent hover:border-slate-200 focus:border-indigo-500 p-2 outline-none font-black text-xl text-slate-800 transition-all rounded-lg focus:bg-white" />
                         </div>
 
                         <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-1 rounded">v67</span>
+                            <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-1 rounded">v68</span>
                             <input type="password" value={apiKeys.google} onChange={e => { setApiKeys({google: e.target.value}); localStorage.setItem('periplo_google_key', e.target.value); }} className="bg-slate-100 border p-2 rounded-xl text-[10px] w-24 outline-none font-mono text-center" placeholder="API KEY" />
                         </div>
                     </nav>
@@ -175,14 +228,14 @@ const handleFinish = async () => {
                         {/* GENERADOR IA */}
                         <div className="mb-8">
                             <div className="bg-indigo-600 p-2 rounded-[2rem] shadow-xl flex items-center gap-2 border-4 border-white">
-                                <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && generate(false)} placeholder="Tema principal (ej. Cocina, Animales)..." className="flex-1 bg-white p-4 rounded-[1.5rem] outline-none font-bold text-slate-700 text-sm px-6"/>
+                                <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} onKeyDown={e => e.key === 'Enter' && generate(false)} placeholder="Tema principal..." className="flex-1 bg-white p-4 rounded-[1.5rem] outline-none font-bold text-slate-700 text-sm px-6"/>
                                 <button onClick={() => generate(false)} disabled={isGenerating} className="bg-indigo-950 text-white px-8 h-12 rounded-[1.5rem] font-black text-xs uppercase hover:bg-black transition-all flex items-center gap-2">
                                     {isGenerating ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-wand-magic-sparkles"></i>} GENERAR
                                 </button>
                             </div>
                         </div>
 
-                        {/* CONTROLES GLOBALES */}
+                        {/* CONTROLES */}
                         <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm mb-8 grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div className="space-y-3">
                                 <div className="flex justify-between items-center"><span className="text-[10px] font-black text-slate-400 uppercase">Texto & Voz</span><button onClick={handleSwitch} className="text-[10px] font-bold text-indigo-500 hover:bg-indigo-50 px-2 py-1 rounded-lg">SWITCH</button></div>
@@ -217,27 +270,11 @@ const handleFinish = async () => {
                                             <input value={c.front} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, front: e.target.value} : x))} className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 font-bold text-slate-700 text-sm" placeholder="Inglés..." />
                                             {audioPrefs.leftActive && <button onClick={() => speak(c.front, audioPrefs.left)} className="absolute right-3 top-4 text-indigo-200 hover:text-indigo-500"><i className="fa-solid fa-volume-high"></i></button>}
                                         </div>
-                                        
-                                        {/* MINIATURA CORREGIDA (Visualización exacta del recorte) */}
                                         <div className="col-span-12 md:col-span-4 flex justify-center py-2 md:py-0">
-                                            <div 
-                                                className="drop-zone w-full max-w-[12rem] h-28 rounded-2xl cursor-pointer group/img flex flex-col items-center justify-center text-slate-400 relative"
-                                                onClick={() => setGallery({ isOpen: true, cardId: c.internalId, term: c.front, currentPreview: c.image, rotation: c.crop.rot, zoom: c.crop.zoom, posX: c.crop.x, posY: c.crop.y, manualUrl: c.image || '' })}
-                                                onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, c.internalId)}
-                                            >
-                                                {c.image ? (
-                                                    // EL TRUCO VISUAL: Usamos un contenedor interno para simular el recorte
-                                                    <div className="w-full h-full relative overflow-hidden bg-white">
-                                                        <img src={c.image} style={{ 
-                                                            transform: `translate(${c.crop.x - 50}%, ${c.crop.y - 50}%) rotate(${c.crop.rot}deg) scale(${c.crop.zoom})`, 
-                                                            position: 'absolute', top: '50%', left: '50%', 
-                                                            width: '100%', height: '100%', objectFit: 'cover' // Se adapta al contenedor, mostrando el recorte
-                                                        }} />
-                                                    </div>
-                                                ) : <i className="fa-solid fa-cloud-arrow-up text-2xl"></i>}
+                                            <div className="drop-zone w-full max-w-[12rem] h-28 rounded-2xl cursor-pointer group/img flex flex-col items-center justify-center text-slate-400 relative" onClick={() => setGallery({ isOpen: true, cardId: c.internalId, term: c.front, currentPreview: c.image, rotation: c.crop.rot, zoom: c.crop.zoom, posX: c.crop.x, posY: c.crop.y, manualUrl: c.image || '' })} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, c.internalId)}>
+                                                {c.image ? <div className="w-full h-full relative overflow-hidden bg-white"><img src={c.image} style={{ transform: `translate(${c.crop.x - 50}%, ${c.crop.y - 50}%) rotate(${c.crop.rot}deg) scale(${c.crop.zoom})`, position: 'absolute', top: '50%', left: '50%', width: '100%', height: '100%', objectFit: 'cover' }} /></div> : <i className="fa-solid fa-cloud-arrow-up text-2xl"></i>}
                                             </div>
                                         </div>
-
                                         <div className="col-span-12 md:col-span-4 relative">
                                             <input value={c.back} onChange={e => setCards(cards.map(x => x.internalId === c.internalId ? {...x, back: e.target.value} : x))} className="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 font-bold text-slate-700 text-sm" placeholder="Español..." />
                                             {audioPrefs.rightActive && <button onClick={() => speak(c.back, audioPrefs.right)} className="absolute right-3 top-4 text-pink-200 hover:text-pink-600"><i className="fa-solid fa-volume-high"></i></button>}
@@ -248,7 +285,7 @@ const handleFinish = async () => {
                         </div>
                     </main>
 
-                    {/* BARRA INFERIOR FLOTANTE (Acciones Rápidas) */}
+                    {/* BARRA INFERIOR */}
                     <div className="fixed bottom-0 left-0 w-full bg-white/90 backdrop-blur-md border-t p-4 px-8 flex justify-between items-center z-40 shadow-[0_-5px_20px_rgba(0,0,0,0.05)]">
                         <div className="flex gap-2">
                             <button onClick={() => setCards([...cards, { internalId: genId(), front: '', back: '', image: null, crop: { zoom: 1, rot: 0, x: 50, y: 50 } }])} className="px-6 py-3 bg-slate-100 rounded-2xl text-slate-500 font-bold hover:bg-slate-200 text-xs uppercase">+ Añadir</button>
@@ -257,7 +294,7 @@ const handleFinish = async () => {
                             </button>
                         </div>
                         <button onClick={handleFinish} disabled={isSaving} className="bg-slate-900 text-white px-10 py-4 rounded-[1.5rem] font-black text-sm shadow-2xl hover:bg-indigo-600 hover:scale-105 transition-all flex items-center gap-3 uppercase tracking-widest">
-                            {isSaving ? "Guardando..." : "Listo: Crear Juego"} <i className="fa-solid fa-check-circle"></i>
+                            {isSaving ? "Guardando..." : (editModeId ? "Guardar Cambios" : "Listo: Crear Juego")} <i className="fa-solid fa-check-circle"></i>
                         </button>
                     </div>
 
@@ -286,4 +323,3 @@ const handleFinish = async () => {
     </script>
 </body>
 </html>
-
