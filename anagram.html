@@ -3,461 +3,302 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Juego de Anagramas</title>
-    
-    <!-- React & ReactDOM -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    
-    <!-- Babel -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <!-- Tailwind CSS -->
+    <title>Periplo - Anagrama</title>
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- Firebase SDKs (v9/10 compat via CDN) -->
-    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
-
-    <!-- FontAwesome for Icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-
-    <!-- Confetti for Victory -->
-    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
-
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f3f4f6;
-            user-select: none; /* Prevent text selection while playing */
-        }
+        @import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;700;900&display=swap'); 
+        body { font-family: 'Nunito Sans', sans-serif; background-color: #f0f4f8; }
         
-        .letter-tile {
-            transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-        }
+        /* Animaciones */
+        @keyframes popIn { 0% { transform: scale(0); opacity: 0; } 70% { transform: scale(1.1); } 100% { transform: scale(1); opacity: 1; } }
+        .animate-pop { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
         
-        .letter-tile:active {
-            transform: scale(0.95);
-        }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+        .animate-shake { animation: shake 0.3s ease-in-out; }
 
-        /* Animation for correct answer */
-        @keyframes bounce-success {
-            0%, 20%, 50%, 80%, 100% {transform: translateY(0);}
-            40% {transform: translateY(-20px);}
-            60% {transform: translateY(-10px);}
-        }
-        .animate-bounce-success {
-            animation: bounce-success 0.8s;
-        }
-
-        /* Animation for wrong shake */
-        @keyframes shake {
-            0%, 100% {transform: translateX(0);}
-            25% {transform: translateX(-5px);}
-            75% {transform: translateX(5px);}
-        }
-        .animate-shake {
-            animation: shake 0.3s;
-        }
+        @keyframes confetti { 0% { transform: translate(-50%, -50%) rotate(0deg); opacity: 1; } 100% { transform: translate(var(--tx), var(--ty)) rotate(720deg); opacity: 0; } }
+        .animate-confetti { animation: confetti 1s ease-out forwards; }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
-    <script type="text/babel">
-        // --- CONFIGURACIÓN E INICIALIZACIÓN DE FIREBASE ---
-        const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
-        
-        // Si no hay config (entorno local), usar placeholders para evitar crash inmediato
-        if (!firebaseConfig.apiKey) {
-            console.warn("No Firebase config found via global variable.");
-        } else {
-            firebase.initializeApp(firebaseConfig);
-        }
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+        import { ArrowLeft, RefreshCw, Volume2, Check, X, Trophy, LogOut, Loader2, Pause } from 'lucide-react';
 
-        const auth = firebase.auth();
-        const db = firebase.firestore();
+        // --- CONFIGURACIÓN FIREBASE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+            authDomain: "proyecto-periplo.firebaseapp.com",
+            projectId: "proyecto-periplo",
+            storageBucket: "proyecto-periplo.firebasestorage.app",
+            messagingSenderId: "236795998392",
+            appId: "1:236795998392:web:0da24b4f018611b55c844d"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
 
-        // --- SONIDOS (Sintetizados para evitar dependencias externas) ---
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
+        // --- EFECTOS DE SONIDO ---
         const playSound = (type) => {
-            if (audioCtx.state === 'suspended') audioCtx.resume();
-            const oscillator = audioCtx.createOscillator();
-            const gainNode = audioCtx.createGain();
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain); gain.connect(ctx.destination);
             
-            oscillator.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-
-            if (type === 'ding') {
-                // Sonido de éxito (Ding agudo y agradable)
-                oscillator.type = 'sine';
-                oscillator.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
-                oscillator.frequency.exponentialRampToValueAtTime(1046.5, audioCtx.currentTime + 0.1); // C6
-                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
-                oscillator.start();
-                oscillator.stop(audioCtx.currentTime + 0.6);
-            } else if (type === 'click') {
-                // Click suave
-                oscillator.type = 'triangle';
-                oscillator.frequency.setValueAtTime(300, audioCtx.currentTime);
-                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-                oscillator.start();
-                oscillator.stop(audioCtx.currentTime + 0.1);
+            const now = ctx.currentTime;
+            if (type === 'click') {
+                osc.frequency.setValueAtTime(400, now);
+                osc.frequency.exponentialRampToValueAtTime(600, now + 0.1);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.linearRampToValueAtTime(0, now + 0.1);
+                osc.start(now); osc.stop(now + 0.1);
             } else if (type === 'win') {
-                // Fanfarria simple
-                const now = audioCtx.currentTime;
-                [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
-                    const osc = audioCtx.createOscillator();
-                    const gn = audioCtx.createGain();
-                    osc.connect(gn);
-                    gn.connect(audioCtx.destination);
-                    osc.frequency.value = freq;
-                    gn.gain.setValueAtTime(0.2, now + i*0.1);
-                    gn.gain.exponentialRampToValueAtTime(0.01, now + i*0.1 + 0.4);
-                    osc.start(now + i*0.1);
-                    osc.stop(now + i*0.1 + 0.5);
-                });
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(523.25, now);
+                osc.frequency.setValueAtTime(659.25, now + 0.1);
+                osc.frequency.setValueAtTime(783.99, now + 0.2);
+                osc.frequency.setValueAtTime(1046.50, now + 0.3);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.linearRampToValueAtTime(0, now + 0.6);
+                osc.start(now); osc.stop(now + 0.6);
+            } else if (type === 'error') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(200, now);
+                osc.frequency.linearRampToValueAtTime(100, now + 0.2);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.linearRampToValueAtTime(0, now + 0.2);
+                osc.start(now); osc.stop(now + 0.2);
             }
         };
 
-        // --- COMPONENTES ---
+        const Confetti = () => {
+            const colors = ['#6366f1', '#ec4899', '#10b981', '#f59e0b'];
+            return (<div className="absolute inset-0 pointer-events-none z-50 overflow-hidden flex justify-center">{[...Array(30)].map((_, i) => (<div key={i} className="absolute w-2 h-2 rounded-full animate-confetti" style={{backgroundColor: colors[i % colors.length], left: '50%', top: '50%', '--tx': `${(Math.random()-0.5)*600}px`, '--ty': `${(Math.random()-1)*600}px`, animationDelay: `${Math.random()*0.3}s`}} />))}</div>);
+        };
 
-        function App() {
-            const [user, setUser] = React.useState(null);
-            const [loading, setLoading] = React.useState(true);
-            const [error, setError] = React.useState(null);
-            const [quizData, setQuizData] = React.useState(null);
+        const AnagramGame = () => {
+            const [loading, setLoading] = useState(true);
+            const [gameData, setGameData] = useState(null);
+            const [gameId, setGameId] = useState(null);
             
             // Estado del Juego
-            const [currentIndex, setCurrentIndex] = React.useState(0);
-            const [scrambledLetters, setScrambledLetters] = React.useState([]); // Letras disponibles para usar
-            const [userSlots, setUserSlots] = React.useState([]); // Letras colocadas por el usuario
-            const [gameState, setGameState] = React.useState('playing'); // playing, checking, success, finished
-            const [feedback, setFeedback] = React.useState(null); // 'correct', 'shake'
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [scrambled, setScrambled] = useState([]); // Letras en el banco (con ID único)
+            const [slots, setSlots] = useState([]); // Letras puestas (o null)
+            const [status, setStatus] = useState('playing'); // playing, correct, wrong, victory
+            const [isPaused, setIsPaused] = useState(false);
 
-            // Obtener ID de la URL
-            const getQuizId = () => {
-                const params = new URLSearchParams(window.location.search);
-                return params.get('id');
-            };
+            useEffect(() => {
+                const init = async () => {
+                    const params = new URLSearchParams(window.location.search);
+                    const id = params.get('id');
+                    setGameId(id);
+                    if (!id) return alert("Falta ID");
 
-            // 1. Autenticación
-            React.useEffect(() => {
-                const initAuth = async () => {
                     try {
-                        if (window.__initial_auth_token) {
-                            await auth.signInWithCustomToken(window.__initial_auth_token);
-                        } else {
-                            await auth.signInAnonymously();
+                        const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id);
+                        const snap = await getDoc(docRef);
+                        if (snap.exists()) {
+                            setGameData(snap.data());
                         }
-                    } catch (err) {
-                        console.error("Auth error:", err);
-                        setError("Error de autenticación");
-                    }
+                    } catch (e) { console.error(e); } finally { setLoading(false); }
                 };
-                
-                const unsubscribe = auth.onAuthStateChanged((u) => {
-                    setUser(u);
-                    if (!u) initAuth();
-                });
-                
-                return () => unsubscribe();
+                init();
             }, []);
 
-            // 2. Cargar Datos
-            React.useEffect(() => {
-                if (!user) return;
+            // Preparar Nivel
+            useEffect(() => {
+                if (!gameData || !gameData.questions || currentIndex >= gameData.questions.length) return;
+
+                const currentQ = gameData.questions[currentIndex];
+                const word = currentQ.front.replace(/[^a-zA-Z]/g, '').toUpperCase(); // Solo letras
                 
-                const quizId = getQuizId();
-                if (!quizId) {
-                    setError("No se especificó un ID de juego en la URL.");
-                    setLoading(false);
-                    return;
-                }
-
-                // IMPORTANTE: Ruta hardcodeada según solicitud
-                // artifacts/periplo-app-v1/users/teacher_builder_001/quizzes
-                const docRef = db.collection('artifacts')
-                                 .doc('periplo-app-v1')
-                                 .collection('users')
-                                 .doc('teacher_builder_001')
-                                 .collection('quizzes')
-                                 .doc(quizId);
-
-                const unsubscribeSnapshot = docRef.onSnapshot((doc) => {
-                    if (doc.exists) {
-                        const data = doc.data();
-                        // Filtrar preguntas válidas (que tengan front y back)
-                        if (data.questions && Array.isArray(data.questions)) {
-                            setQuizData(data);
-                        } else {
-                            setError("El formato del quiz no es válido.");
-                        }
-                    } else {
-                        setError("No se encontró el juego.");
-                    }
-                    setLoading(false);
-                }, (err) => {
-                    console.error("Firestore error:", err);
-                    setError("Error al cargar los datos.");
-                    setLoading(false);
-                });
-
-                return () => unsubscribeSnapshot();
-            }, [user]);
-
-            // 3. Preparar Pregunta Actual
-            React.useEffect(() => {
-                if (!quizData || !quizData.questions || quizData.questions.length === 0) return;
-                if (currentIndex >= quizData.questions.length) {
-                    setGameState('finished');
-                    playSound('win');
-                    confetti({
-                        particleCount: 150,
-                        spread: 70,
-                        origin: { y: 0.6 }
-                    });
-                    return;
-                }
-
-                const currentQ = quizData.questions[currentIndex];
-                const targetWord = currentQ.front.toUpperCase().replace(/[^A-Z]/g, ''); // Solo letras mayúsculas
+                // Crear objetos de letras con ID único para que React no se confunda si hay letras repetidas (ej. APPLE)
+                const letters = word.split('').map((char, i) => ({ id: `${char}-${i}-${Date.now()}`, char }));
                 
-                // Crear array de letras con IDs únicos para react
-                const letters = targetWord.split('').map((char, index) => ({
-                    id: `${char}-${index}-${Date.now()}`,
-                    char: char
-                }));
-
-                // Algoritmo de mezcla (Fisher-Yates)
-                const shuffled = [...letters];
-                for (let i = shuffled.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-                }
-
-                setScrambledLetters(shuffled);
-                setUserSlots(Array(targetWord.length).fill(null)); // Slots vacíos
-                setGameState('playing');
-                setFeedback(null);
-
-            }, [quizData, currentIndex]);
-
-            // --- LÓGICA DEL JUEGO ---
-
-            // Mover letra del banco a los slots
-            const handleBankLetterClick = (letter, index) => {
-                if (gameState !== 'playing') return;
+                // Barajar (Shuffle)
+                const shuffled = [...letters].sort(() => Math.random() - 0.5);
                 
+                setScrambled(shuffled);
+                setSlots(Array(word.length).fill(null));
+                setStatus('playing');
+
+            }, [gameData, currentIndex]);
+
+            const handleBankClick = (letterObj) => {
+                if (status !== 'playing') return;
                 playSound('click');
-
-                // Encontrar el primer slot vacío
-                const firstEmptyIndex = userSlots.findIndex(slot => slot === null);
                 
-                if (firstEmptyIndex !== -1) {
-                    // Actualizar slots
-                    const newSlots = [...userSlots];
-                    newSlots[firstEmptyIndex] = letter;
-                    setUserSlots(newSlots);
-
-                    // Quitar del banco (visualmente ocultarla o quitarla del array)
-                    // Para mantener estabilidad visual, filtramos el array
-                    const newScrambled = scrambledLetters.filter(l => l.id !== letter.id);
-                    setScrambledLetters(newScrambled);
+                // Encontrar primer slot vacío
+                const emptyIndex = slots.findIndex(s => s === null);
+                if (emptyIndex !== -1) {
+                    const newSlots = [...slots];
+                    newSlots[emptyIndex] = letterObj;
+                    setSlots(newSlots);
                     
-                    checkAnswer(newSlots);
+                    // Quitar del banco
+                    setScrambled(scrambled.filter(l => l.id !== letterObj.id));
+                    
+                    // Verificar si se completó
+                    checkWin(newSlots);
                 }
             };
 
-            // Mover letra de un slot de vuelta al banco
-            const handleSlotClick = (letter, index) => {
-                if (!letter || gameState !== 'playing') return;
-
+            const handleSlotClick = (letterObj, index) => {
+                if (status !== 'playing' || !letterObj) return;
                 playSound('click');
 
-                // Devolver al banco
-                setScrambledLetters([...scrambledLetters, letter]);
-
-                // Vaciar el slot
-                const newSlots = [...userSlots];
+                // Regresar al banco
+                setScrambled([...scrambled, letterObj]);
+                
+                // Vaciar slot
+                const newSlots = [...slots];
                 newSlots[index] = null;
-                setUserSlots(newSlots);
+                setSlots(newSlots);
             };
 
-            const checkAnswer = (currentSlots) => {
-                // Si aún hay huecos vacíos, no comprobar
-                if (currentSlots.some(s => s === null)) return;
+            const checkWin = (currentSlots) => {
+                if (currentSlots.some(s => s === null)) return; // Aún hay vacíos
 
-                const builtWord = currentSlots.map(l => l.char).join('');
-                const targetWord = quizData.questions[currentIndex].front.toUpperCase().replace(/[^A-Z]/g, '');
+                const wordBuilt = currentSlots.map(s => s.char).join('');
+                const targetWord = gameData.questions[currentIndex].front.replace(/[^a-zA-Z]/g, '').toUpperCase();
 
-                if (builtWord === targetWord) {
-                    // CORRECTO
-                    setGameState('success');
-                    setFeedback('correct');
-                    playSound('ding');
-                    
-                    // Esperar un momento y pasar a la siguiente
+                if (wordBuilt === targetWord) {
+                    setStatus('correct');
+                    playSound('win');
                     setTimeout(() => {
-                        setCurrentIndex(prev => prev + 1);
+                        if (currentIndex + 1 < gameData.questions.length) {
+                            setCurrentIndex(p => p + 1);
+                        } else {
+                            setStatus('victory');
+                        }
                     }, 1500);
                 } else {
-                    // INCORRECTO
-                    // Pequeña animación de error pero dejar que el usuario corrija
-                    setFeedback('shake');
-                    setTimeout(() => setFeedback(null), 500);
+                    setStatus('wrong');
+                    playSound('error');
+                    setTimeout(() => setStatus('playing'), 500); // Quitar rojo
                 }
             };
 
-            // --- RENDERIZADO ---
+            const handleExit = () => {
+                // Volver al Panel de Actividad
+                window.location.href = `activity.html?id=${gameId}`;
+            };
 
-            if (loading) {
-                return (
-                    <div className="min-h-screen flex items-center justify-center bg-blue-50">
-                        <div className="text-center">
-                            <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                            <p className="text-blue-600 font-semibold">Cargando juego...</p>
-                        </div>
-                    </div>
-                );
-            }
+            if (loading) return <div className="h-screen flex items-center justify-center text-indigo-500"><Loader2 className="animate-spin" size={40}/></div>;
 
-            if (error) {
-                return (
-                    <div className="min-h-screen flex items-center justify-center bg-red-50 p-4">
-                        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center">
-                            <i className="fas fa-exclamation-circle text-4xl text-red-500 mb-4"></i>
-                            <h2 className="text-xl font-bold text-gray-800 mb-2">Ups, algo salió mal</h2>
-                            <p className="text-gray-600 mb-6">{error}</p>
-                            <a href={`activity.html?id=${getQuizId()}`} className="inline-block px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium transition-colors">
-                                Volver
-                            </a>
-                        </div>
-                    </div>
-                );
-            }
+            if (status === 'victory') return (
+                <div className="h-screen flex flex-col items-center justify-center bg-indigo-600 text-white p-8 text-center">
+                    <Confetti />
+                    <Trophy size={80} className="text-yellow-300 mb-6 animate-bounce"/>
+                    <h1 className="text-5xl font-black mb-4">¡Felicidades!</h1>
+                    <p className="text-xl opacity-90 mb-8">Completaste todas las palabras.</p>
+                    <button onClick={handleExit} className="bg-white text-indigo-600 px-8 py-3 rounded-2xl font-bold hover:scale-105 transition-transform">Volver</button>
+                </div>
+            );
 
-            // PANTALLA DE VICTORIA
-            if (gameState === 'finished') {
-                return (
-                    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-green-400 to-blue-500 p-4">
-                        <div className="bg-white p-10 rounded-3xl shadow-2xl text-center max-w-lg w-full transform transition-all animate-bounce-success">
-                            <div className="mb-6">
-                                <span className="inline-block p-4 rounded-full bg-yellow-100 text-yellow-500 text-5xl">
-                                    <i className="fas fa-trophy"></i>
-                                </span>
-                            </div>
-                            <h1 className="text-4xl font-extrabold text-gray-800 mb-2">¡Excelente!</h1>
-                            <p className="text-gray-600 text-lg mb-8">Has completado todas las palabras correctamente.</p>
-                            
-                            <a href={`activity.html?id=${getQuizId()}`} 
-                               className="block w-full py-4 bg-blue-600 text-white rounded-xl font-bold text-lg shadow-lg hover:bg-blue-700 hover:scale-105 transition-all transform">
-                                Volver a Actividades
-                            </a>
-                        </div>
-                    </div>
-                );
-            }
-
-            const currentQ = quizData.questions[currentIndex];
+            const question = gameData.questions[currentIndex];
 
             return (
-                <div className="min-h-screen flex flex-col bg-slate-100">
+                <div className="h-screen flex flex-col bg-slate-100">
                     {/* Header */}
-                    <div className="bg-white shadow-sm p-4 flex justify-between items-center z-10">
-                        <a href={`activity.html?id=${getQuizId()}`} className="text-gray-500 hover:text-gray-800 transition-colors">
-                            <i className="fas fa-arrow-left text-xl"></i>
-                        </a>
-                        <h1 className="text-lg font-bold text-gray-800">{quizData.title || 'Anagrama'}</h1>
-                        <div className="text-sm font-medium px-3 py-1 bg-blue-100 text-blue-800 rounded-full">
-                            {currentIndex + 1} / {quizData.questions.length}
-                        </div>
-                    </div>
-
-                    {/* Main Game Area */}
-                    <div className="flex-1 flex flex-col items-center justify-start p-4 max-w-2xl mx-auto w-full">
-                        
-                        {/* Image & Hint Card */}
-                        <div className="w-full bg-white rounded-2xl shadow-lg overflow-hidden mb-8 mt-4 transition-all hover:shadow-xl">
-                            {currentQ.image && (
-                                <div className="w-full h-48 bg-gray-100 flex items-center justify-center overflow-hidden">
-                                    <img 
-                                        src={currentQ.image} 
-                                        alt="Hint" 
-                                        className="w-full h-full object-contain p-4"
-                                        onError={(e) => {
-                                            e.target.onerror = null; 
-                                            e.target.src = 'https://placehold.co/400x300?text=No+Image';
-                                        }}
-                                    />
-                                </div>
-                            )}
-                            <div className="p-6 text-center border-t border-gray-100">
-                                <p className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-1">PISTA (ESPAÑOL)</p>
-                                <h2 className="text-3xl font-bold text-gray-800">{currentQ.back}</h2>
-                            </div>
-                        </div>
-
-                        {/* Answer Slots */}
-                        <div className={`flex flex-wrap justify-center gap-2 mb-10 min-h-[64px] ${feedback === 'shake' ? 'animate-shake' : ''}`}>
-                            {userSlots.map((letter, idx) => (
-                                <div 
-                                    key={idx}
-                                    onClick={() => handleSlotClick(letter, idx)}
-                                    className={`
-                                        w-12 h-14 sm:w-14 sm:h-16 rounded-xl flex items-center justify-center text-2xl font-bold transition-all cursor-pointer select-none
-                                        ${letter 
-                                            ? (feedback === 'correct' ? 'bg-green-500 text-white border-green-600 shadow-green-200' : 'bg-blue-600 text-white shadow-lg shadow-blue-200 border-b-4 border-blue-800 hover:mt-1 hover:border-b-2 active:border-b-0 active:mt-1')
-                                            : 'bg-gray-200 border-2 border-dashed border-gray-300 shadow-inner'
-                                        }
-                                    `}
-                                >
-                                    {letter ? letter.char : ''}
-                                </div>
-                            ))}
-                        </div>
-
-                        {/* Scrambled Bank */}
-                        <div className="w-full">
-                            <p className="text-center text-gray-400 text-sm mb-4 font-medium uppercase tracking-widest">Elige las letras</p>
-                            <div className="flex flex-wrap justify-center gap-3">
-                                {scrambledLetters.map((letter) => (
-                                    <button
-                                        key={letter.id}
-                                        onClick={() => handleBankLetterClick(letter)}
-                                        className="
-                                            w-12 h-12 sm:w-14 sm:h-14 
-                                            bg-white text-gray-700 
-                                            rounded-xl 
-                                            shadow-md hover:shadow-lg 
-                                            border-b-4 border-gray-300 hover:border-gray-400 active:border-b-0 active:translate-y-1
-                                            flex items-center justify-center 
-                                            text-xl font-bold 
-                                            transition-all
-                                        "
-                                    >
-                                        {letter.char}
-                                    </button>
+                    <div className="h-16 bg-white shadow-sm flex items-center justify-between px-6 z-10">
+                        <button onClick={() => setIsPaused(true)} className="p-2 text-slate-400 hover:text-indigo-600"><Pause size={24}/></button>
+                        <div className="flex flex-col items-center">
+                            <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Progreso</span>
+                            <div className="flex gap-1">
+                                {gameData.questions.map((_, i) => (
+                                    <div key={i} className={`w-2 h-2 rounded-full ${i === currentIndex ? 'bg-indigo-500' : i < currentIndex ? 'bg-green-400' : 'bg-slate-200'}`}></div>
                                 ))}
                             </div>
                         </div>
+                        <button onClick={handleExit} className="flex gap-2 items-center text-xs font-bold text-slate-400 hover:text-rose-500 uppercase">Salir <LogOut size={16}/></button>
+                    </div>
+
+                    {/* Game Area */}
+                    <div className="flex-1 flex flex-col items-center justify-center p-4 max-w-3xl mx-auto w-full">
+                        
+                        {/* Pista / Imagen */}
+                        <div className="bg-white p-6 rounded-3xl shadow-lg mb-8 w-full flex flex-col items-center animate-pop">
+                            {question.image && (
+                                <img src={question.image} className="h-32 object-contain mb-4 rounded-lg" alt="pista" />
+                            )}
+                            <div className="text-center">
+                                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">ESPAÑOL</span>
+                                <h2 className="text-3xl font-black text-slate-800">{question.back}</h2>
+                            </div>
+                        </div>
+
+                        {/* SLOTS (Donde pones las letras) */}
+                        <div className={`flex gap-2 mb-10 flex-wrap justify-center ${status === 'wrong' ? 'animate-shake' : ''}`}>
+                            {slots.map((slot, i) => (
+                                <button 
+                                    key={i} 
+                                    onClick={() => handleSlotClick(slot, i)}
+                                    className={`w-12 h-14 md:w-16 md:h-20 rounded-xl border-b-4 text-2xl md:text-3xl font-black flex items-center justify-center transition-all ${
+                                        slot 
+                                        ? (status === 'correct' ? 'bg-green-500 border-green-700 text-white' : status === 'wrong' ? 'bg-rose-500 border-rose-700 text-white' : 'bg-indigo-500 border-indigo-700 text-white active:border-b-0 active:translate-y-1') 
+                                        : 'bg-slate-200 border-slate-300'
+                                    }`}
+                                >
+                                    {slot ? slot.char : ''}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* BANCO DE LETRAS */}
+                        <div className="flex gap-2 flex-wrap justify-center">
+                            {scrambled.map((letter) => (
+                                <button 
+                                    key={letter.id} 
+                                    onClick={() => handleBankClick(letter)}
+                                    className="w-12 h-12 md:w-14 md:h-14 bg-white rounded-xl shadow-md border border-slate-200 text-xl font-bold text-slate-700 hover:bg-slate-50 hover:scale-105 transition-transform flex items-center justify-center"
+                                >
+                                    {letter.char}
+                                </button>
+                            ))}
+                        </div>
 
                     </div>
-                    
-                    {/* Simple Help Footer */}
-                    <div className="p-4 text-center text-gray-400 text-xs">
-                        Toca las letras para ordenar la palabra en Inglés
-                    </div>
+
+                    {/* Pause Modal */}
+                    {isPaused && (
+                        <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center">
+                            <div className="bg-white p-8 rounded-3xl w-72 text-center shadow-2xl animate-pop">
+                                <h3 className="font-black text-2xl mb-6">Pausa</h3>
+                                <div className="flex flex-col gap-3">
+                                    <button onClick={() => setIsPaused(false)} className="bg-indigo-600 text-white py-3 rounded-xl font-bold">Continuar</button>
+                                    <button onClick={() => window.location.reload()} className="bg-slate-100 text-slate-600 py-3 rounded-xl font-bold">Reiniciar Nivel</button>
+                                    <button onClick={handleExit} className="text-rose-500 font-bold py-2">Salir</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
-        }
+        };
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        const root = createRoot(document.getElementById('root'));
+        root.render(<AnagramGame />);
     </script>
 </body>
 </html>
