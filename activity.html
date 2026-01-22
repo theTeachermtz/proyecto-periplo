@@ -12,6 +12,7 @@
             "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
             "lucide-react": "https://esm.sh/lucide-react@0.263.1",
             "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+            "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
             "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
         }
     }
@@ -27,7 +28,7 @@
         import { createRoot } from 'react-dom/client';
         import { Play, Maximize2, Edit3, Share2, LayoutGrid, Zap, Flame, Rocket, Puzzle, HelpCircle, Grid, User } from 'lucide-react';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, doc, getDoc, updateDoc } from 'firebase/firestore';
+        import { getFirestore, doc, getDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
 
         const firebaseConfig = {
             apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
@@ -40,17 +41,16 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // MAPA DE PLANTILLAS: Icono y Archivo HTML correspondiente
         const TEMPLATES = [
             { id: 'FLASHCARDS', name: 'Flashcards', icon: LayoutGrid, file: 'flashcards.html' },
             { id: 'ANAGRAM', name: 'Anagrama', icon: Puzzle, file: 'anagram.html' },
-            { id: 'CROSSWORD', name: 'Crucigrama', icon: Grid, file: 'crossword.html' }, // Asegúrate de crear este archivo después
-            { id: 'HANGMAN', name: 'Ahorcado', icon: HelpCircle, file: 'hangman.html' },   // Y este también
+            { id: 'CROSSWORD', name: 'Crucigrama', icon: Grid, file: 'crossword.html' },
+            { id: 'HANGMAN', name: 'Ahorcado', icon: HelpCircle, file: 'hangman.html' },
         ];
 
         function ActivityPage() {
             const [gameData, setGameData] = useState(null);
-            const [activeTemplate, setActiveTemplate] = useState(null); // Qué juego estamos mostrando
+            const [activeTemplate, setActiveTemplate] = useState(null);
             const [isPlaying, setIsPlaying] = useState(false);
             const [gameId, setGameId] = useState(null);
 
@@ -64,7 +64,6 @@
                     if (snap.exists()) {
                         const data = snap.data();
                         setGameData(data);
-                        // Usar el tipo guardado en Firebase como default, o Flashcards si no existe
                         const defaultType = TEMPLATES.find(t => t.id === data.type) || TEMPLATES[0];
                         setActiveTemplate(defaultType);
                     }
@@ -72,25 +71,39 @@
                 fetchGame();
             }, []);
 
-            // Función para cambiar de plantilla
-            const handleSwitchTemplate = async (template) => {
+            const handleSwitchTemplate = (template) => {
                 setActiveTemplate(template);
-                setIsPlaying(false); // Reiniciar vista previa
+                setIsPlaying(false);
+            };
+
+            const handleEditContent = async () => {
+                const isDifferentType = activeTemplate.id !== gameData.type;
                 
-                // Opcional: Actualizar el tipo en Firebase para que se recuerde la próxima vez
-                if (gameId) {
-                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes', gameId), {
-                        type: template.id
-                    });
+                if (isDifferentType) {
+                    if (confirm(`Estás viendo esto como ${activeTemplate.name}, pero el original es ${gameData.type}.\n\n¿Quieres crear una COPIA como ${activeTemplate.name}?`)) {
+                        // DUPLICAR
+                        try {
+                            const newGameData = { ...gameData, type: activeTemplate.id, title: `${gameData.title} (${activeTemplate.name})`, createdAt: serverTimestamp() };
+                            const docRef = await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), newGameData);
+                            window.location.href = `dashboard.html?id=${docRef.id}`;
+                        } catch (e) { alert("Error al duplicar"); }
+                    } else {
+                        // EDITAR ORIGINAL
+                        window.location.href = `dashboard.html?id=${gameId}`;
+                    }
+                } else {
+                    // EDITAR NORMAL
+                    window.location.href = `dashboard.html?id=${gameId}`;
                 }
             };
 
             const handleShare = () => {
-                // Compartimos el link directo al juego actual (ej. anagram.html?id=...)
                 const url = `${window.location.origin}/${activeTemplate.file}?id=${gameId}`;
                 navigator.clipboard.writeText(url);
                 alert("Link copiado: " + url);
             };
+
+            const goHome = () => { window.location.href = 'index.html'; };
 
             if (!gameData || !activeTemplate) return <div className="min-h-screen flex items-center justify-center text-slate-400">Cargando...</div>;
 
@@ -98,8 +111,8 @@
                 <div className="min-h-screen flex flex-col text-slate-800 pb-12">
                     <header className="bg-white border-b border-slate-200 px-6 py-3 sticky top-0 z-50 flex justify-between items-center">
                         <div className="flex items-center gap-8">
-                            <a href="index.html" className="font-bold text-xl tracking-tight text-slate-800">Periplo</a>
-                            <a href="index.html" className="hidden md:flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-blue-50 rounded-full">My Activities</a>
+                            <button onClick={goHome} className="font-bold text-xl tracking-tight text-slate-800 hover:text-indigo-600">Periplo</button>
+                            <button onClick={goHome} className="hidden md:flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-blue-50 rounded-full">My Activities</button>
                         </div>
                         <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500"><User className="w-4 h-4" /></div>
                     </header>
@@ -127,7 +140,7 @@
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col justify-center">
                                     <div className="flex gap-2">
-                                        <button onClick={() => window.location.href=`dashboard.html?id=${gameId}&folderId=${encodeURIComponent(gameData.parentPath||'')}`} className="flex-1 flex flex-col items-center justify-center gap-2 p-3 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-100 transition-colors">
+                                        <button onClick={handleEditContent} className="flex-1 flex flex-col items-center justify-center gap-2 p-3 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-100 transition-colors">
                                             <Edit3 className="w-5 h-5" /><span className="text-xs font-bold">Edit Content</span>
                                         </button>
                                         <button onClick={handleShare} className="flex-1 flex flex-col items-center justify-center gap-2 p-3 rounded-2xl bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-100 transition-colors">
