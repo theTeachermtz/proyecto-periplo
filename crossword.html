@@ -25,9 +25,8 @@
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
         
-        /* Grid Styles */
-        .cw-cell { transition: all 0.2s; }
-        .cw-cell:focus { outline: none; background-color: #e0e7ff; border-color: #6366f1; }
+        .cw-cell { transition: all 0.2s; caret-color: transparent; }
+        .cw-cell:focus { outline: none; background-color: #e0e7ff; border-color: #6366f1; transform: scale(1.05); z-index: 10; }
         .cw-cell.active-word { background-color: #eff6ff; }
         .cw-cell.correct { background-color: #dcfce7; color: #166534; border-color: #86efac; }
         
@@ -45,9 +44,8 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { ArrowLeft, Check, X, Trophy, LogOut, Loader2, Pause, List, RotateCcw, ChevronRight } from 'lucide-react';
+        import { ArrowLeft, RefreshCw, Check, X, Trophy, LogOut, Loader2, Pause, List, RotateCcw, ChevronRight } from 'lucide-react';
 
-        // --- TU CONFIGURACIÓN REAL ---
         const firebaseConfig = {
             apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
             authDomain: "proyecto-periplo.firebaseapp.com",
@@ -59,9 +57,9 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // --- ALGORITMO GENERADOR (Simplificado para navegador) ---
+        // --- ALGORITMO GENERADOR ROBUSTO ---
         class CrosswordGenerator {
-            constructor(width = 13, height = 13) {
+            constructor(width = 15, height = 15) { // AUMENTADO A 15x15
                 this.width = width;
                 this.height = height;
                 this.grid = Array(height).fill(null).map(() => Array(width).fill(null));
@@ -72,20 +70,28 @@
                 const sortedWords = [...wordList]
                     .filter(w => w.front && w.front.length > 1)
                     .map(w => ({ ...w, answer: w.front.toUpperCase().replace(/[^A-Z]/g, ''), clue: w.back }))
-                    .sort((a, b) => b.answer.length - a.answer.length);
+                    .sort((a, b) => b.answer.length - a.answer.length); // Más largas primero
 
                 if (sortedWords.length === 0) return null;
 
-                // Colocar primera palabra en el centro
+                // 1. Colocar primera palabra (la más larga) en el centro
                 const first = sortedWords[0];
                 const startX = Math.floor((this.width - first.answer.length) / 2);
                 const startY = Math.floor(this.height / 2);
+                
+                // SEGURIDAD: Si la primera palabra es más larga que el grid, abortar
+                if (startX < 0) return null;
+
                 this.placeWord(first, startX, startY, 'across');
 
-                // Intentar colocar las demás
+                // 2. Intentar colocar las demás
                 for (let i = 1; i < sortedWords.length; i++) {
                     this.tryPlaceWord(sortedWords[i]);
                 }
+                
+                // Si colocamos muy pocas palabras (menos de 2), considerar fallo
+                if (this.placedWords.length < 2 && sortedWords.length > 2) return null;
+
                 return this.exportData();
             }
 
@@ -109,6 +115,8 @@
                         }
                     }
                 }
+                
+                // Si hay opciones, tomamos la primera (greedy)
                 if (bestPositions.length > 0) {
                     const pos = bestPositions[0];
                     this.placeWord(wordObj, pos.r, pos.c, pos.dir);
@@ -119,10 +127,12 @@
 
             canPlace(word, row, col, direction) {
                 if (row < 0 || col < 0) return false;
+                
                 if (direction === 'across') {
                     if (col + word.length > this.width) return false;
                     if (col - 1 >= 0 && this.grid[row][col - 1] !== null) return false;
                     if (col + word.length < this.width && this.grid[row][col + word.length] !== null) return false;
+                    
                     for (let i = 0; i < word.length; i++) {
                         const cell = this.grid[row][col + i];
                         if (cell !== null && cell !== word[i]) return false;
@@ -131,10 +141,11 @@
                             if (row + 1 < this.height && this.grid[row + 1][col + i] !== null) return false;
                         }
                     }
-                } else {
+                } else { // Down
                     if (row + word.length > this.height) return false;
                     if (row - 1 >= 0 && this.grid[row - 1][col] !== null) return false;
                     if (row + word.length < this.height && this.grid[row + word.length][col] !== null) return false;
+                    
                     for (let i = 0; i < word.length; i++) {
                         const cell = this.grid[row + i][col];
                         if (cell !== null && cell !== word[i]) return false;
@@ -148,11 +159,21 @@
             }
 
             placeWord(wordObj, row, col, direction) {
+                // SEGURIDAD: Verificar límites antes de escribir
+                if (row < 0 || col < 0 || row >= this.height || col >= this.width) return;
+
                 const { answer } = wordObj;
                 this.placedWords.push({ ...wordObj, row, col, direction });
+                
                 for (let i = 0; i < answer.length; i++) {
-                    if (direction === 'across') this.grid[row][col + i] = answer[i];
-                    else this.grid[row + i][col] = answer[i];
+                    let r = row, c = col;
+                    if (direction === 'across') c += i;
+                    else r += i;
+
+                    // DOBLE CHECK: Solo escribir si la celda existe
+                    if (this.grid[r] && this.grid[r][c] !== undefined) {
+                        this.grid[r][c] = answer[i];
+                    }
                 }
             }
 
@@ -172,7 +193,7 @@
         // --- COMPONENTES ---
         const Confetti = () => {
             const colors = ['#6366f1', '#ec4899', '#10b981', '#f59e0b'];
-            return (<div className="absolute inset-0 pointer-events-none z-50 overflow-hidden flex justify-center">{[...Array(30)].map((_, i) => (<div key={i} className="absolute w-2 h-2 rounded-full animate-confetti" style={{backgroundColor: colors[i % colors.length], left: '50%', top: '50%', '--tx': `${(Math.random()-0.5)*600}px`, '--ty': `${(Math.random()-1)*600}px`, animationDelay: `${Math.random()*0.3}s`}} />))}</div>);
+            return (<div className="absolute inset-0 pointer-events-none z-50 overflow-hidden flex justify-center">{[...Array(40)].map((_, i) => (<div key={i} className="absolute w-2 h-2 rounded-full animate-confetti" style={{backgroundColor: colors[i % colors.length], left: '50%', top: '50%', '--tx': `${(Math.random()-0.5)*800}px`, '--ty': `${(Math.random()-1)*800}px`, animationDelay: `${Math.random()*0.5}s`}} />))}</div>);
         };
 
         const CrosswordGame = () => {
@@ -197,14 +218,19 @@
                         const snap = await getDoc(docRef);
                         if (snap.exists()) {
                             const data = snap.data();
-                            const generator = new CrosswordGenerator();
-                            const layout = generator.generate(data.questions);
+                            // Intentar generar hasta 3 veces para encontrar un buen layout
+                            let layout = null;
+                            for(let i=0; i<3; i++) {
+                                const gen = new CrosswordGenerator();
+                                layout = gen.generate(data.questions);
+                                if(layout) break;
+                            }
                             
                             if (layout && layout.words.length > 0) {
                                 setGameData(layout);
                                 setSelectedCell({ r: layout.words[0].row, c: layout.words[0].col });
                             } else {
-                                alert("No se pudo generar un crucigrama con estas palabras. Intenta con más palabras o palabras más largas.");
+                                alert("No se pudo generar el crucigrama. Las palabras no se cruzan bien.");
                             }
                         }
                     } catch (e) { console.error(e); } finally { setLoading(false); }
@@ -212,7 +238,7 @@
                 init();
             }, []);
 
-            // Auto-focus y Teclado
+            // Auto-focus
             useEffect(() => {
                 if (selectedCell && inputRefs.current[`${selectedCell.r}-${selectedCell.c}`]) {
                     inputRefs.current[`${selectedCell.r}-${selectedCell.c}`].focus();
@@ -257,65 +283,72 @@
                 setGridValues(p => ({ ...p, [`${r}-${c}`]: char }));
                 
                 if (char) {
-                    // Mover al siguiente
                     const dr = direction === 'across' ? 0 : 1;
                     const dc = direction === 'across' ? 1 : 0;
-                    // Verificar si la siguiente celda es válida (está dentro del grid generado)
-                    if (gameData.gridStructure[r+dr]?.[c+dc] !== null) {
+                    if (gameData.gridStructure[r+dr]?.[c+dc] !== null && gameData.gridStructure[r+dr]?.[c+dc] !== undefined) {
                         setSelectedCell({ r: r + dr, c: c + dc });
                     }
                 }
             };
 
             const handleKeyDown = (e, r, c) => {
-                if (e.key === 'Backspace' && !gridValues[`${r}-${c}`]) {
-                    const dr = direction === 'across' ? 0 : 1;
-                    const dc = direction === 'across' ? 1 : 0;
-                    if (gameData.gridStructure[r-dr]?.[c-dc] !== null) {
-                        setSelectedCell({ r: r - dr, c: c - dc });
+                if (e.key === 'Backspace') {
+                    if (!gridValues[`${r}-${c}`]) {
+                        const dr = direction === 'across' ? 0 : 1;
+                        const dc = direction === 'across' ? 1 : 0;
+                        if (gameData.gridStructure[r-dr]?.[c-dc] !== null) {
+                            setSelectedCell({ r: r - dr, c: c - dc });
+                        }
+                    } else {
+                        setGridValues(p => { const copy = {...p}; delete copy[`${r}-${c}`]; return copy; });
                     }
                 }
             };
 
-            const handleExit = () => { window.location.href = `activity.html?id=${gameId}`; };
+            const handleExit = () => {
+                // Volver a activity.html
+                window.location.href = `activity.html?id=${gameId}`; 
+            };
 
-            if (loading) return <div className="h-screen flex items-center justify-center text-indigo-500"><Loader2 className="animate-spin" size={40}/></div>;
-            if (!gameData) return <div className="h-screen flex items-center justify-center">Error al cargar</div>;
+            if (loading) return <div className="h-screen flex items-center justify-center text-indigo-500 font-bold gap-2"><Loader2 className="animate-spin" size={32}/> GENERANDO TABLERO...</div>;
+            if (!gameData) return <div className="h-screen flex items-center justify-center flex-col gap-4 text-slate-500"><AlertCircle size={48}/><p>No se pudo crear el crucigrama con estas palabras.</p><button onClick={handleExit} className="bg-slate-200 px-6 py-2 rounded-xl">Volver</button></div>;
 
             return (
-                <div className="h-screen flex flex-col bg-slate-100 overflow-hidden">
+                <div className="h-screen flex flex-col bg-slate-50 overflow-hidden">
                     {/* Header */}
                     <div className="h-16 bg-white shadow-sm flex items-center justify-between px-6 z-10 shrink-0">
-                        <div className="font-black text-slate-400 text-xs tracking-widest uppercase">CRUCIGRAMA</div>
+                        <div className="font-black text-indigo-600 text-sm tracking-widest uppercase">CRUCIGRAMA</div>
                         <button onClick={handleExit} className="flex gap-2 items-center text-xs font-bold text-slate-400 hover:text-rose-500 uppercase">Salir <LogOut size={16}/></button>
                     </div>
 
-                    <div className="flex-1 flex flex-col md:flex-row overflow-hidden max-w-6xl mx-auto w-full">
-                        {/* GRID */}
-                        <div className="flex-1 flex items-center justify-center p-4 overflow-auto bg-slate-50">
+                    <div className="flex-1 flex flex-col md:flex-row overflow-hidden max-w-7xl mx-auto w-full">
+                        
+                        {/* GRID AREA */}
+                        <div className="flex-1 flex items-center justify-center p-4 overflow-auto bg-slate-100/50">
                             <div 
-                                className="grid gap-px bg-slate-300 border border-slate-300 p-1 rounded-lg shadow-xl"
-                                style={{ gridTemplateColumns: `repeat(${gameData.width}, minmax(0, 1fr))`, width: '100%', maxWidth: '600px', aspectRatio: '1/1' }}
+                                className="grid gap-px bg-slate-300 border-[4px] border-slate-800 p-2 rounded-xl shadow-2xl bg-slate-800"
+                                style={{ gridTemplateColumns: `repeat(${gameData.width}, minmax(0, 1fr))`, width: '100%', maxWidth: '650px', aspectRatio: `${gameData.width}/${gameData.height}` }}
                             >
                                 {Array.from({ length: gameData.height }).map((_, r) => (
                                     Array.from({ length: gameData.width }).map((_, c) => {
                                         const cellData = gameData.gridStructure[r][c];
-                                        if (cellData === null) return <div key={`${r}-${c}`} className="bg-slate-900"></div>;
+                                        if (cellData === null) return <div key={`${r}-${c}`} className="bg-slate-800/50"></div>;
                                         
                                         const wordStart = gameData.words.find(w => w.row === r && w.col === c);
                                         const isSelected = selectedCell?.r === r && selectedCell?.c === c;
                                         const isActiveWord = activeWord && ((activeWord.direction === 'across' && r === activeWord.row && c >= activeWord.col && c < activeWord.col + activeWord.answer.length) || (activeWord.direction === 'down' && c === activeWord.col && r >= activeWord.row && r < activeWord.row + activeWord.answer.length));
+                                        const isCorrect = status === 'victory' || gridValues[`${r}-${c}`] === cellData;
 
                                         return (
-                                            <div key={`${r}-${c}`} className={`relative bg-white flex items-center justify-center ${isSelected ? 'bg-yellow-100' : isActiveWord ? 'bg-indigo-50' : ''}`} onClick={() => handleCellClick(r, c)}>
-                                                {wordStart && <span className="absolute top-0.5 left-0.5 text-[8px] font-bold text-slate-500 leading-none">{wordStart.number}</span>}
+                                            <div key={`${r}-${c}`} className={`relative flex items-center justify-center transition-colors duration-100 ${isSelected ? 'bg-yellow-200' : isActiveWord ? 'bg-indigo-100' : 'bg-white'}`}>
+                                                {wordStart && <span className="absolute top-0.5 left-0.5 text-[8px] md:text-[10px] font-bold text-slate-500 leading-none select-none">{wordStart.number}</span>}
                                                 <input 
                                                     ref={el => inputRefs.current[`${r}-${c}`] = el}
                                                     type="text" maxLength="1" 
                                                     value={gridValues[`${r}-${c}`] || ''}
-                                                    onChange={e => handleInput(e.target.value, r, c)}
-                                                    onKeyDown={e => handleKeyDown(e, r, c)}
-                                                    className="w-full h-full text-center font-bold uppercase bg-transparent outline-none text-slate-800 text-lg md:text-xl"
+                                                    onChange={(e) => handleInput(e.target.value, r, c)}
+                                                    onKeyDown={(e) => handleKeyDown(e, r, c)}
+                                                    className={`w-full h-full text-center font-black uppercase bg-transparent outline-none text-lg md:text-2xl ${status==='victory'?'text-emerald-600':'text-slate-800'}`}
                                                 />
                                             </div>
                                         );
@@ -324,44 +357,64 @@
                             </div>
                         </div>
 
-                        {/* CLUES */}
-                        <div className="h-1/3 md:h-full md:w-80 bg-white border-l border-slate-200 flex flex-col shadow-xl z-20">
-                            <div className="p-4 border-b bg-indigo-50">
-                                <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1 block">PISTA ACTUAL</span>
+                        {/* CLUES PANEL */}
+                        <div className="h-1/3 md:h-full md:w-96 bg-white border-l border-slate-200 flex flex-col shadow-2xl z-20">
+                            <div className="p-6 border-b bg-indigo-50/50">
+                                <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2 block">PISTA ACTUAL</span>
                                 {activeWord ? (
-                                    <div className="flex items-start gap-3">
-                                        <div className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold shrink-0">{activeWord.number}</div>
-                                        <div>
-                                            <p className="font-bold text-slate-800 text-lg leading-tight">{activeWord.clue}</p>
-                                            {activeWord.image && <div className="mt-2 h-20 rounded-lg overflow-hidden border border-indigo-100"><img src={activeWord.image} className="h-full w-full object-contain bg-white"/></div>}
+                                    <div className="flex items-start gap-4 animate-fade-in">
+                                        <div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold shrink-0 text-lg shadow-lg">{activeWord.number}</div>
+                                        <div className="flex-1">
+                                            <p className="font-bold text-slate-800 text-xl leading-tight">{activeWord.clue}</p>
+                                            <span className="text-xs font-bold text-indigo-400 uppercase mt-1 block">{activeWord.direction === 'across' ? 'Horizontal' : 'Vertical'}</span>
+                                            {activeWord.image && <div className="mt-3 h-32 rounded-xl overflow-hidden border-2 border-white shadow-md bg-white"><img src={activeWord.image} className="h-full w-full object-contain" /></div>}
                                         </div>
                                     </div>
-                                ) : <p className="text-slate-400 italic text-sm">Selecciona una celda...</p>}
+                                ) : <div className="text-slate-400 italic text-sm py-4 text-center">Selecciona una casilla para ver la pista</div>}
                             </div>
-                            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                                <div>
-                                    <h4 className="text-xs font-black text-slate-400 uppercase mb-2">Todas las Pistas</h4>
-                                    <div className="space-y-2">
-                                        {gameData.words.map((w, i) => (
-                                            <button key={i} onClick={() => { setSelectedCell({r: w.row, c: w.col}); setDirection(w.direction); }} className={`w-full text-left p-3 rounded-xl border transition-all flex gap-3 ${activeWord === w ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}>
-                                                <span className="font-bold opacity-50">{w.number}.</span>
-                                                <span className="text-sm font-medium line-clamp-1">{w.clue}</span>
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
+                            
+                            <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50">
+                                {['across', 'down'].map(dir => {
+                                    const words = gameData.words.filter(w => w.direction === dir).sort((a,b) => a.number - b.number);
+                                    if(words.length === 0) return null;
+                                    return (
+                                        <div key={dir}>
+                                            <h4 className="text-xs font-black text-slate-400 uppercase mb-3 flex items-center gap-2">
+                                                {dir === 'across' ? <ArrowLeft className="rotate-180" size={14}/> : <ArrowLeft className="-rotate-90" size={14}/>} 
+                                                {dir === 'across' ? 'Horizontales' : 'Verticales'}
+                                            </h4>
+                                            <div className="space-y-2">
+                                                {words.map((w, i) => (
+                                                    <button 
+                                                        key={i} 
+                                                        onClick={() => { setSelectedCell({r: w.row, c: w.col}); setDirection(w.direction); }}
+                                                        className={`w-full text-left p-3 rounded-xl border transition-all flex gap-3 group ${activeWord === w ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                                                    >
+                                                        <span className={`font-bold ${activeWord === w ? 'text-indigo-200' : 'text-slate-400 group-hover:text-indigo-500'}`}>{w.number}.</span>
+                                                        <span className="text-sm font-bold line-clamp-1">{w.clue}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )
+                                })}
                             </div>
                         </div>
                     </div>
 
-                    {/* VICTORY */}
+                    {/* VICTORY MODAL */}
                     {status === 'victory' && (
-                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-indigo-600/95 text-white p-8 text-center animate-fade-in backdrop-blur-sm">
+                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-indigo-900/95 text-white p-8 text-center animate-fade-in backdrop-blur-sm">
                             <Confetti />
-                            <Trophy size={80} className="text-yellow-300 mb-6 animate-bounce"/>
-                            <h1 className="text-5xl font-black mb-4">¡Crucigrama Resuelto!</h1>
-                            <button onClick={() => window.location.reload()} className="w-full max-w-xs py-4 bg-white text-indigo-600 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg mb-2"><RotateCcw size={20}/> Jugar de Nuevo</button>
-                            <button onClick={handleExit} className="w-full max-w-xs py-4 bg-indigo-800 text-indigo-200 rounded-xl font-bold flex items-center justify-center gap-2">Volver al Menú</button>
+                            <div className="w-24 h-24 bg-yellow-400 rounded-full flex items-center justify-center mb-8 shadow-[0_0_40px_rgba(250,204,21,0.6)] animate-bounce">
+                                <Trophy size={48} className="text-yellow-900" />
+                            </div>
+                            <h1 className="text-6xl font-black mb-4 tracking-tight">¡IMPECABLE!</h1>
+                            <p className="text-2xl text-indigo-200 mb-10 font-medium">Has completado el crucigrama.</p>
+                            <div className="flex flex-col gap-4 w-full max-w-sm">
+                                <button onClick={() => window.location.reload()} className="w-full py-4 bg-white text-indigo-900 rounded-2xl font-black flex items-center justify-center gap-2 hover:scale-105 transition-transform shadow-xl uppercase tracking-wider"><RotateCcw size={20}/> Jugar de Nuevo</button>
+                                <button onClick={handleExit} className="w-full py-4 bg-indigo-800 text-indigo-300 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 hover:text-white transition-colors uppercase tracking-widest">Volver al Menú</button>
+                            </div>
                         </div>
                     )}
                 </div>
