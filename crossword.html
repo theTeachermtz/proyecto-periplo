@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Periplo - Crucigrama</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧩</text></svg>">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;700;900&display=swap'); 
+        body { font-family: 'Nunito Sans', sans-serif; background-color: #f0f4f8; }
+        
+        /* Grid Styles */
+        .cw-cell { transition: all 0.2s; }
+        .cw-cell:focus { outline: none; background-color: #e0e7ff; border-color: #6366f1; }
+        .cw-cell.active-word { background-color: #eff6ff; }
+        .cw-cell.correct { background-color: #dcfce7; color: #166534; border-color: #86efac; }
+        
+        @keyframes confetti { 0% { transform: translate(-50%, -50%) rotate(0deg); opacity: 1; } 100% { transform: translate(var(--tx), var(--ty)) rotate(720deg); opacity: 0; } }
+        .animate-confetti { animation: confetti 1s ease-out forwards; }
+        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+        import { ArrowLeft, RefreshCw, Check, X, Trophy, LogOut, Loader2, Pause, List, RotateCcw, Star, Lightbulb } from 'lucide-react';
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+            authDomain: "proyecto-periplo.firebaseapp.com",
+            projectId: "proyecto-periplo",
+            storageBucket: "proyecto-periplo.firebasestorage.app",
+            messagingSenderId: "236795998392",
+            appId: "1:236795998392:web:0da24b4f018611b55c844d"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // --- MOTOR DE CRUCIGRAMA (Lógica Simple) ---
+        const generateGrid = (wordsInput) => {
+            const size = 12; // 12x12 grid
+            let grid = Array(size).fill(null).map(() => Array(size).fill(null));
+            let placedWords = [];
+            
+            // Ordenar palabras por longitud (más largas primero)
+            // Solo tomar palabras válidas (letras A-Z)
+            const cleanWords = wordsInput.filter(w => w.front && w.front.length > 1).map(w => ({
+                ...w,
+                clean: w.front.toUpperCase().replace(/[^A-Z]/g, '')
+            })).sort((a, b) => b.clean.length - a.clean.length);
+
+            if (cleanWords.length === 0) return null;
+
+            // Colocar la primera palabra en el centro horizontal
+            const first = cleanWords[0];
+            const startX = Math.floor((size - first.clean.length) / 2);
+            const startY = Math.floor(size / 2);
+            
+            if (startX < 0) return null; // Palabra muy larga
+
+            for (let i = 0; i < first.clean.length; i++) {
+                grid[startY][startX + i] = first.clean[i];
+            }
+            placedWords.push({ ...first, x: startX, y: startY, dir: 'across', num: 1 });
+
+            // Intentar colocar las demás
+            let numCounter = 2;
+            for (let i = 1; i < cleanWords.length; i++) {
+                const word = cleanWords[i];
+                let placed = false;
+
+                // Intentar cruzar con palabras existentes
+                for (let j = 0; j < placedWords.length && !placed; j++) {
+                    const anchor = placedWords[j];
+                    // Buscar letra común
+                    for (let charIdx = 0; charIdx < word.clean.length; charIdx++) {
+                        const char = word.clean[charIdx];
+                        // Buscar ese char en la palabra ancla
+                        for (let k = 0; k < anchor.clean.length; k++) {
+                            if (anchor.clean[k] === char) {
+                                // Posible intersección
+                                const isAnchorAcross = anchor.dir === 'across';
+                                // Si ancla es horizontal, nueva debe ser vertical
+                                const newDir = isAnchorAcross ? 'down' : 'across';
+                                
+                                // Calcular nueva posición tentativa
+                                const newX = isAnchorAcross ? anchor.x + k : anchor.x - charIdx;
+                                const newY = isAnchorAcross ? anchor.y - charIdx : anchor.y + k;
+
+                                // Verificar si cabe y no choca
+                                if (canPlace(grid, word.clean, newX, newY, newDir, size)) {
+                                    place(grid, word.clean, newX, newY, newDir);
+                                    placedWords.push({ ...word, x: newX, y: newY, dir: newDir, num: numCounter++ });
+                                    placed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (placed) break;
+                    }
+                }
+            }
+            return { grid, words: placedWords };
+        };
+
+        const canPlace = (grid, word, x, y, dir, size) => {
+            if (x < 0 || y < 0 || x >= size || y >= size) return false;
+            const dx = dir === 'across' ? 1 : 0;
+            const dy = dir === 'across' ? 0 : 1;
+            
+            if (dir === 'across' && x + word.length > size) return false;
+            if (dir === 'down' && y + word.length > size) return false;
+
+            for (let i = 0; i < word.length; i++) {
+                const cx = x + i * dx;
+                const cy = y + i * dy;
+                const cell = grid[cy][cx];
+                
+                // Si la celda tiene letra, debe coincidir
+                if (cell !== null && cell !== word[i]) return false;
+                
+                // Verificar vecinos (para no pegar palabras accidentalmente)
+                // Si la celda estaba vacía, verificar que no tenga vecinos perpendiculares extraños
+                if (cell === null) {
+                    if (dir === 'across') {
+                        if (cy > 0 && grid[cy-1][cx] !== null) return false;
+                        if (cy < size-1 && grid[cy+1][cx] !== null) return false;
+                    } else {
+                        if (cx > 0 && grid[cy][cx-1] !== null) return false;
+                        if (cx < size-1 && grid[cy][cx+1] !== null) return false;
+                    }
+                }
+            }
+            // Verificar celdas antes y después (no pegar cabeza ni cola)
+            if (dir === 'across') {
+                if (x > 0 && grid[y][x-1] !== null) return false;
+                if (x + word.length < size && grid[y][x+word.length] !== null) return false;
+            } else {
+                if (y > 0 && grid[y-1][x] !== null) return false;
+                if (y + word.length < size && grid[y+word.length][x] !== null) return false;
+            }
+
+            return true;
+        };
+
+        const place = (grid, word, x, y, dir) => {
+            const dx = dir === 'across' ? 1 : 0;
+            const dy = dir === 'across' ? 0 : 1;
+            for (let i = 0; i < word.length; i++) {
+                grid[y + i * dy][x + i * dx] = word[i];
+            }
+        };
+
+        // --- COMPONENTES UI ---
+
+        const Confetti = () => {
+            const colors = ['#6366f1', '#ec4899', '#10b981', '#f59e0b'];
+            return (<div className="absolute inset-0 pointer-events-none z-50 overflow-hidden flex justify-center">{[...Array(30)].map((_, i) => (<div key={i} className="absolute w-2 h-2 rounded-full animate-confetti" style={{backgroundColor: colors[i % colors.length], left: '50%', top: '50%', '--tx': `${(Math.random()-0.5)*600}px`, '--ty': `${(Math.random()-1)*600}px`, animationDelay: `${Math.random()*0.3}s`}} />))}</div>);
+        };
+
+        const CrosswordGame = () => {
+            const [loading, setLoading] = useState(true);
+            const [gameData, setGameData] = useState(null);
+            const [layout, setLayout] = useState(null); // { grid, words }
+            const [userGrid, setUserGrid] = useState([]); // User inputs
+            const [selectedWordIndex, setSelectedWordIndex] = useState(0); // Index in layout.words
+            const [status, setStatus] = useState('playing'); 
+            const [isPaused, setIsPaused] = useState(false);
+            const [showWords, setShowWords] = useState(false);
+            const inputRefs = useRef({}); // Para el foco
+
+            useEffect(() => {
+                const init = async () => {
+                    const params = new URLSearchParams(window.location.search);
+                    const id = params.get('id');
+                    if (!id) return alert("Falta ID");
+                    try {
+                        const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id);
+                        const snap = await getDoc(docRef);
+                        if (snap.exists()) {
+                            const data = snap.data();
+                            setGameData(data);
+                            // Generar Layout
+                            const generated = generateGrid(data.questions);
+                            if (generated) {
+                                setLayout(generated);
+                                setUserGrid(Array(12).fill(null).map(() => Array(12).fill('')));
+                            } else {
+                                alert("No se pudo generar un crucigrama válido con estas palabras (son muy pocas o no cruzan).");
+                            }
+                        }
+                    } catch (e) { console.error(e); } finally { setLoading(false); }
+                };
+                init();
+            }, []);
+
+            // Auto-focus cuando cambia la palabra seleccionada
+            useEffect(() => {
+                if (!layout || status !== 'playing') return;
+                const currentWord = layout.words[selectedWordIndex];
+                // Foco en la primera celda vacía de esa palabra, o la primera si todas llenas
+                focusCell(currentWord.x, currentWord.y);
+            }, [selectedWordIndex, layout]);
+
+            const focusCell = (x, y) => {
+                const key = `${x}-${y}`;
+                if (inputRefs.current[key]) inputRefs.current[key].focus();
+            };
+
+            const handleCellChange = (x, y, val) => {
+                if (status !== 'playing') return;
+                const char = val.slice(-1).toUpperCase(); // Última letra, mayúscula
+                const newGrid = userGrid.map(row => [...row]);
+                newGrid[y][x] = char;
+                setUserGrid(newGrid);
+
+                // Auto-advance
+                const currentWord = layout.words[selectedWordIndex];
+                const isAcross = currentWord.dir === 'across';
+                
+                // Determinar índice actual dentro de la palabra
+                let charIndex = isAcross ? x - currentWord.x : y - currentWord.y;
+                
+                if (char && charIndex < currentWord.clean.length - 1) {
+                    // Mover al siguiente
+                    const nextX = isAcross ? x + 1 : x;
+                    const nextY = isAcross ? y : y + 1;
+                    focusCell(nextX, nextY);
+                } else if (char && charIndex === currentWord.clean.length - 1) {
+                    // Fin de palabra, comprobar si está llena
+                    checkCompletion(newGrid);
+                }
+            };
+
+            const handleKeyDown = (e, x, y) => {
+                if (e.key === 'Backspace') {
+                    if (!userGrid[y][x]) {
+                        // Si está vacío, mover atrás y borrar
+                        const currentWord = layout.words[selectedWordIndex];
+                        const isAcross = currentWord.dir === 'across';
+                        const prevX = isAcross ? x - 1 : x;
+                        const prevY = isAcross ? y : y - 1;
+                        if (prevX >= currentWord.x && prevY >= currentWord.y) {
+                            focusCell(prevX, prevY);
+                            // Opcional: borrar el anterior al volver
+                        }
+                    }
+                }
+            };
+
+            const handleCellClick = (wordIndex) => {
+                setSelectedWordIndex(wordIndex);
+            };
+
+            const checkCompletion = (gridToCheck) => {
+                // Verificar si TODO el grid está correcto
+                let allCorrect = true;
+                layout.words.forEach(w => {
+                    const dx = w.dir === 'across' ? 1 : 0;
+                    const dy = w.dir === 'across' ? 0 : 1;
+                    for (let i = 0; i < w.clean.length; i++) {
+                        if (gridToCheck[w.y + i * dy][w.x + i * dx] !== w.clean[i]) {
+                            allCorrect = false;
+                        }
+                    }
+                });
+
+                if (allCorrect) {
+                    setStatus('victory');
+                    const audio = new Audio('https://www.soundjay.com/misc/sounds/magic-chime-01.mp3');
+                    audio.play().catch(()=>{});
+                }
+            };
+
+            const handleExit = () => {
+                const folder = gameData?.parentPath || '';
+                window.top.location.href = `index.html?folder=${encodeURIComponent(folder)}`;
+            };
+
+            if (loading) return <div className="h-screen flex items-center justify-center text-indigo-500"><Loader2 className="animate-spin" size={40}/></div>;
+            if (!layout) return <div className="h-screen flex items-center justify-center p-8 text-center"><div><h2 className="text-xl font-bold mb-2">Error de Generación</h2><p className="mb-4">Intenta añadir más palabras o palabras más largas que compartan letras.</p><button onClick={handleExit} className="bg-slate-200 px-4 py-2 rounded-lg">Volver</button></div></div>;
+
+            const currentWordObj = layout.words[selectedWordIndex];
+
+            // Renderizar Grid
+            const renderGrid = () => {
+                let cells = [];
+                // Crear mapa de celdas activas para renderizado rápido
+                const cellMap = {};
+                
+                layout.words.forEach((w, idx) => {
+                    const isSelected = idx === selectedWordIndex;
+                    const dx = w.dir === 'across' ? 1 : 0;
+                    const dy = w.dir === 'across' ? 0 : 1;
+                    
+                    for (let i = 0; i < w.clean.length; i++) {
+                        const cx = w.x + i * dx;
+                        const cy = w.y + i * dy;
+                        const key = `${cx}-${cy}`;
+                        
+                        // Si hay colisión (cruce), priorizar selección
+                        if (!cellMap[key] || isSelected) {
+                            cellMap[key] = { 
+                                x: cx, 
+                                y: cy, 
+                                char: w.clean[i], 
+                                wordIndex: idx, 
+                                isNum: i === 0 ? w.num : null,
+                                isSelected 
+                            };
+                        }
+                    }
+                });
+
+                // Dibujar Grid 12x12
+                for (let y = 0; y < 12; y++) {
+                    for (let x = 0; x < 12; x++) {
+                        const cellData = cellMap[`${x}-${y}`];
+                        if (cellData) {
+                            cells.push(
+                                <div key={`${x}-${y}`} className="relative w-8 h-8 md:w-10 md:h-10">
+                                    {cellData.isNum && <span className="absolute top-0.5 left-0.5 text-[8px] font-bold text-slate-500 z-10 leading-none">{cellData.isNum}</span>}
+                                    <input 
+                                        ref={el => inputRefs.current[`${x}-${y}`] = el}
+                                        type="text" 
+                                        maxLength="1"
+                                        value={userGrid[y][x]}
+                                        onChange={(e) => handleCellChange(x, y, e.target.value)}
+                                        onKeyDown={(e) => handleKeyDown(e, x, y)}
+                                        onClick={() => handleCellClick(cellData.wordIndex)}
+                                        className={`w-full h-full border text-center font-bold uppercase text-lg md:text-xl rounded-md focus:ring-2 focus:ring-indigo-400 cw-cell ${cellData.isSelected ? 'bg-indigo-50 border-indigo-300 text-indigo-700' : 'bg-white border-slate-300 text-slate-700'} ${status === 'victory' ? 'correct' : ''}`}
+                                        readOnly={status === 'victory'}
+                                    />
+                                </div>
+                            );
+                        } else {
+                            cells.push(<div key={`${x}-${y}`} className="w-8 h-8 md:w-10 md:h-10"></div>); // Espacio vacío
+                        }
+                    }
+                }
+                return cells;
+            };
+
+            return (
+                <div className="h-screen flex flex-col bg-slate-100 overflow-hidden">
+                    {/* Header Clean */}
+                    <div className="h-16 bg-white shadow-sm flex items-center justify-between px-6 z-10 shrink-0">
+                        <div className="font-black text-slate-400 text-xs tracking-widest uppercase">CRUCIGRAMA</div>
+                        <button onClick={handleExit} className="flex gap-2 items-center text-xs font-bold text-slate-400 hover:text-rose-500 uppercase">Salir <LogOut size={16}/></button>
+                    </div>
+
+                    <div className="flex-1 flex flex-col md:flex-row overflow-hidden max-w-6xl mx-auto w-full">
+                        
+                        {/* GRID AREA */}
+                        <div className="flex-1 flex items-center justify-center p-4 overflow-auto bg-slate-100/50">
+                            <div className="grid grid-cols-[repeat(12,minmax(0,1fr))] gap-1 p-4 bg-white rounded-2xl shadow-xl border border-slate-200 aspect-square max-h-full">
+                                {renderGrid()}
+                            </div>
+                        </div>
+
+                        {/* CLUES PANEL */}
+                        <div className="h-1/3 md:h-full md:w-80 bg-white border-l border-slate-200 flex flex-col shadow-xl z-20">
+                            <div className="p-4 border-b bg-indigo-50">
+                                <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1 block">PISTA ACTUAL</span>
+                                <div className="flex items-start gap-3">
+                                    <div className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold shrink-0">{currentWordObj.num}</div>
+                                    <div>
+                                        <p className="font-bold text-slate-800 text-lg leading-tight">{currentWordObj.back}</p>
+                                        {currentWordObj.image && <div className="mt-2 h-20 rounded-lg overflow-hidden border border-indigo-100"><img src={currentWordObj.image} className="h-full w-full object-contain bg-white"/></div>}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                                <div>
+                                    <h4 className="text-xs font-black text-slate-400 uppercase mb-2">Todas las Pistas</h4>
+                                    <div className="space-y-2">
+                                        {layout.words.map((w, i) => (
+                                            <button 
+                                                key={i} 
+                                                onClick={() => handleCellClick(i)}
+                                                className={`w-full text-left p-3 rounded-xl border transition-all flex gap-3 ${selectedWordIndex === i ? 'bg-indigo-600 text-white border-indigo-600 shadow-md transform scale-105' : 'bg-slate-50 text-slate-600 border-slate-100 hover:bg-slate-100'}`}
+                                            >
+                                                <span className={`font-bold ${selectedWordIndex === i ? 'text-indigo-200' : 'text-slate-400'}`}>{w.num}.</span>
+                                                <span className="text-sm font-medium line-clamp-2">{w.back}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* VICTORY MODAL */}
+                    {status === 'victory' && (
+                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-indigo-600/95 text-white p-8 text-center animate-fade-in backdrop-blur-sm">
+                            <Confetti />
+                            <Trophy size={80} className="text-yellow-300 mb-6 animate-bounce"/>
+                            <h1 className="text-5xl font-black mb-4">¡Crucigrama Resuelto!</h1>
+                            <p className="text-xl opacity-90 mb-8">Eres un genio de las palabras.</p>
+                            <div className="flex flex-col gap-3 w-full max-w-xs">
+                                <button onClick={() => window.location.reload()} className="w-full py-4 bg-white text-indigo-600 rounded-xl font-bold flex items-center justify-center gap-2 hover:scale-105 transition-transform shadow-lg"><RotateCcw size={20}/> Jugar de Nuevo</button>
+                                <button onClick={handleExit} className="w-full py-4 bg-indigo-800 text-indigo-200 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-900 border border-indigo-700">Volver al Menú</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<CrosswordGame />);
+    </script>
+</body>
+</html>
