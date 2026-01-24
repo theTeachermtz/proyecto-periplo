@@ -27,8 +27,6 @@
         .animate-shake { animation: shake 0.3s ease-in-out; }
         @keyframes confetti { 0% { transform: translate(-50%, -50%) rotate(0deg); opacity: 1; } 100% { transform: translate(var(--tx), var(--ty)) rotate(720deg); opacity: 0; } }
         .animate-confetti { animation: confetti 1s ease-out forwards; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
     </style>
 </head>
 <body>
@@ -99,12 +97,17 @@
             const [loading, setLoading] = useState(true);
             const [gameData, setGameData] = useState(null);
             const [gameId, setGameId] = useState(null);
+            
+            // Estado del Juego
             const [currentIndex, setCurrentIndex] = useState(0);
             const [scrambled, setScrambled] = useState([]); 
             const [slots, setSlots] = useState([]);
-            const [status, setStatus] = useState('playing');
+            const [status, setStatus] = useState('playing'); // playing, correct, wrong, victory
             const [isPaused, setIsPaused] = useState(false);
             const [showWords, setShowWords] = useState(false);
+            
+            // Ref para el contenedor principal
+            const gameContainerRef = useRef(null);
 
             useEffect(() => {
                 const init = async () => {
@@ -112,30 +115,43 @@
                     const id = params.get('id');
                     setGameId(id);
                     if (!id) return alert("Falta ID");
+
                     try {
                         const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id);
                         const snap = await getDoc(docRef);
-                        if (snap.exists()) setGameData(snap.data());
+                        if (snap.exists()) {
+                            setGameData(snap.data());
+                        }
                     } catch (e) { console.error(e); } finally { setLoading(false); }
                 };
                 init();
             }, []);
 
+            // Preparar Nivel
             useEffect(() => {
                 if (!gameData || !gameData.questions || currentIndex >= gameData.questions.length) return;
+
                 const currentQ = gameData.questions[currentIndex];
-                const word = currentQ.front.replace(/[^a-zA-Z]/g, '').toUpperCase();
+                const word = currentQ.front.replace(/[^a-zA-Z]/g, '').toUpperCase(); // Solo letras
                 const letters = word.split('').map((char, i) => ({ id: `${char}-${i}-${Date.now()}`, char }));
                 const shuffled = [...letters].sort(() => Math.random() - 0.5);
+                
                 setScrambled(shuffled);
                 setSlots(Array(word.length).fill(null));
                 setStatus('playing');
+                
+                // AUTO FOCUS AL INICIAR NIVEL
+                if(gameContainerRef.current) gameContainerRef.current.focus();
+
             }, [gameData, currentIndex]);
 
+            // --- SOPORTE TECLADO MEJORADO ---
             useEffect(() => {
                 const handleKeyDown = (e) => {
                     if (status !== 'playing' || isPaused || showWords) return;
+                    
                     const key = e.key.toUpperCase();
+                    
                     if (/^[A-Z]$/.test(key)) {
                         const availableLetter = scrambled.find(l => l.char === key);
                         if (availableLetter) handleBankClick(availableLetter);
@@ -147,6 +163,7 @@
                         if (lastFilledIndex !== -1) handleSlotClick(slots[lastFilledIndex], lastFilledIndex);
                     }
                 };
+
                 window.addEventListener('keydown', handleKeyDown);
                 return () => window.removeEventListener('keydown', handleKeyDown);
             }, [scrambled, slots, status, isPaused, showWords]);
@@ -173,6 +190,7 @@
                 if (currentSlots.some(s => s === null)) return;
                 const wordBuilt = currentSlots.map(s => s.char).join('');
                 const targetWord = gameData.questions[currentIndex].front.replace(/[^a-zA-Z]/g, '').toUpperCase();
+
                 if (wordBuilt === targetWord) {
                     setStatus('correct'); playSound('win');
                     setTimeout(() => {
@@ -185,11 +203,10 @@
                 }
             };
 
-            const handleRestart = () => {
-                setGameState('WELCOME'); // This assumes there was a welcome state, but for simple restart:
-                setCurrentIndex(0);
-                setShowWords(false);
-                setStatus('playing'); // Trigger useEffect re-shuffle
+            const handleExit = () => {
+                // SALIDA SEGURA (Rompemos el iframe y vamos al index en la carpeta correcta)
+                const folder = gameData?.parentPath || '';
+                window.top.location.href = `index.html?folder=${encodeURIComponent(folder)}`;
             };
 
             if (loading) return <div className="h-screen flex items-center justify-center text-indigo-500"><Loader2 className="animate-spin" size={40}/></div>;
@@ -215,20 +232,34 @@
             const question = gameData.questions[currentIndex];
 
             return (
-                <div className="h-screen flex flex-col bg-slate-100">
+                <div 
+                    className="h-screen flex flex-col bg-slate-100 outline-none" 
+                    tabIndex="0" 
+                    ref={gameContainerRef} // Ref para el foco automático
+                    onClick={() => gameContainerRef.current.focus()} // Clic en cualquier lado devuelve el foco
+                >
                     <div className="h-16 bg-white shadow-sm flex items-center justify-between px-6 z-10">
                         <button onClick={() => setIsPaused(true)} className="p-2 text-slate-400 hover:text-indigo-600"><Pause size={24}/></button>
                         <div className="flex flex-col items-center">
                             <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Progreso</span>
-                            <div className="flex gap-1">{gameData.questions.map((_, i) => (<div key={i} className={`w-2 h-2 rounded-full ${i === currentIndex ? 'bg-indigo-500' : i < currentIndex ? 'bg-green-400' : 'bg-slate-200'}`}></div>))}</div>
+                            <div className="flex gap-1">
+                                {gameData.questions.map((_, i) => (<div key={i} className={`w-2 h-2 rounded-full ${i === currentIndex ? 'bg-indigo-500' : i < currentIndex ? 'bg-green-400' : 'bg-slate-200'}`}></div>))}
+                            </div>
                         </div>
-                        {/* Empty div for layout balance */}
-                        <div className="w-8"></div>
+                        <button onClick={handleExit} className="flex gap-2 items-center text-xs font-bold text-slate-400 hover:text-rose-500 uppercase">Salir <LogOut size={16}/></button>
                     </div>
 
                     <div className="flex-1 flex flex-col items-center justify-center p-4 max-w-3xl mx-auto w-full">
                         <div className="bg-white p-6 rounded-3xl shadow-lg mb-8 w-full flex flex-col items-center animate-pop">
-                            {question.image && <img src={question.image} className="h-32 object-contain mb-4 rounded-lg" alt="pista" />}
+                            {question.image && (
+                                <div className="h-32 mb-4 rounded-lg overflow-hidden relative w-full flex justify-center">
+                                     <img 
+                                        src={question.image} 
+                                        className="h-full object-contain" 
+                                        style={{ transform: `scale(${question.crop?.zoom || 1}) translate(${question.crop?.x - 50}%, ${question.crop?.y - 50}%)`, transformOrigin: 'center' }} 
+                                     />
+                                </div>
+                            )}
                             <div className="text-center"><span className="text-xs font-bold text-slate-400 uppercase tracking-widest">ESPAÑOL</span><h2 className="text-3xl font-black text-slate-800">{question.back}</h2></div>
                         </div>
 
@@ -252,6 +283,7 @@
                                 <div className="flex flex-col gap-3">
                                     <button onClick={() => setIsPaused(false)} className="bg-indigo-600 text-white py-3 rounded-xl font-bold">Continuar</button>
                                     <button onClick={() => window.location.reload()} className="bg-slate-100 text-slate-600 py-3 rounded-xl font-bold">Reiniciar Nivel</button>
+                                    <button onClick={handleExit} className="text-rose-500 font-bold py-2">Salir</button>
                                 </div>
                             </div>
                         </div>
