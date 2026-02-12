@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connect 4 Builder | Periplo</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏗️</text></svg>">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap'); 
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+        import { 
+            Sparkles, Layers, Puzzle, Filter, CheckSquare, Square, 
+            ChevronDown, ChevronRight, Zap, Save, Edit3, Trash2, ArrowLeft 
+        } from 'lucide-react';
+
+        // --- CONFIGURACIÓN FIREBASE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+            authDomain: "proyecto-periplo.firebaseapp.com",
+            projectId: "proyecto-periplo",
+            storageBucket: "proyecto-periplo.firebasestorage.app",
+            messagingSenderId: "236795998392",
+            appId: "1:236795998392:web:0da24b4f018611b55c844d"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // --- DATOS ESTÁTICOS ---
+        const SPECIAL_WORDS = {
+            "Connectors": ["to", "from", "until", "with", "without", "in", "on", "at", "about", "against", "because", "although", "while", "when", "instead of"],
+            "Place Indicators": ["between", "next to", "behind", "in front of", "under", "above", "across from"],
+            "Quantifiers": ["Plenty of", "A lot of", "Many", "Some", "A few", "None"],
+            "Time Indicators": ["always", "usually", "now", "yesterday", "tomorrow", "soon", "since", "for"]
+        };
+
+        const VOCAB_PACKS = {
+            "Pack 1 (Daily)": ["wake up", "shower", "work", "drive", "eat", "sleep", "buy", "cook"],
+            "Pack 2 (Travel)": ["travel", "book", "fly", "stay", "visit", "explore", "pack", "arrive"],
+            "Pack 3 (Business)": ["hire", "fire", "negotiate", "sell", "buy", "sign", "meeting", "report"]
+        };
+
+        const GRAMMAR_LEVELS = {
+            "BASIC": [{ id: "SimplePresent", label: "Simple Present" }, { id: "PresentContinuous", label: "Present Continuous" }],
+            "ADVANCED": [{ id: "SimplePast", label: "Simple Past" }, { id: "PastContinuous", label: "Past Continuous" }, { id: "PresentPerfect", label: "Present Perfect" }]
+        };
+
+        // --- COMPONENTE EDITOR ---
+        const ContentEditor = ({ content, onSave, onCancel, title, setTitle }) => {
+            const [editableContent, setEditableContent] = useState(content);
+            const [activeTab, setActiveTab] = useState('quizzes'); // quizzes, scrambled, speaking
+
+            const handleChange = (section, index, field, value) => {
+                const updated = { ...editableContent };
+                updated[section][index][field] = value;
+                setEditableContent(updated);
+            };
+
+            return (
+                <div className="max-w-5xl mx-auto p-6">
+                    <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+                        <div className="bg-slate-900 p-6 flex justify-between items-center text-white">
+                            <div>
+                                <h2 className="text-2xl font-black flex items-center gap-2"><Edit3/> Editor de Contenido</h2>
+                                <p className="text-slate-400 text-sm">Revisa lo que generó la IA antes de guardar.</p>
+                            </div>
+                            <button onClick={onSave} className="bg-green-500 hover:bg-green-600 text-white px-6 py-2 rounded-xl font-bold flex items-center gap-2">
+                                <Save size={18}/> GUARDAR JUEGO
+                            </button>
+                        </div>
+
+                        <div className="p-6 space-y-6">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Título de la Actividad</label>
+                                <input 
+                                    value={title} 
+                                    onChange={(e) => setTitle(e.target.value)} 
+                                    className="w-full text-xl font-bold p-3 border-2 border-slate-200 rounded-xl focus:border-indigo-500 outline-none"
+                                    placeholder="Ej. Connect 4: Past Tense"
+                                />
+                            </div>
+
+                            <div className="flex gap-2 border-b border-slate-200">
+                                {['quizzes', 'scrambled', 'speaking'].map(tab => (
+                                    <button 
+                                        key={tab}
+                                        onClick={() => setActiveTab(tab)}
+                                        className={`px-4 py-2 font-bold capitalize border-b-4 transition-all ${activeTab === tab ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-400'}`}
+                                    >
+                                        {tab} ({editableContent[tab]?.length || 0})
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="h-[500px] overflow-y-auto custom-scrollbar space-y-4 p-2">
+                                {activeTab === 'quizzes' && editableContent.quizzes.map((item, i) => (
+                                    <div key={i} className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                                        <div className="flex justify-between mb-2">
+                                            <span className="font-bold text-slate-400">#{i+1}</span>
+                                        </div>
+                                        <input 
+                                            value={item.question} 
+                                            onChange={(e) => handleChange('quizzes', i, 'question', e.target.value)}
+                                            className="w-full p-2 mb-2 border rounded font-mono text-sm"
+                                        />
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {item.options.map((opt, optIdx) => (
+                                                <div key={optIdx} className={`p-2 rounded border text-xs ${optIdx === item.correct ? 'bg-green-100 border-green-300' : 'bg-white'}`}>
+                                                    {opt}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {activeTab === 'scrambled' && editableContent.scrambled.map((item, i) => (
+                                    <div key={i} className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                                        <span className="font-bold text-slate-400 text-xs">#{i+1} Correct Sentence:</span>
+                                        <input 
+                                            value={item.text} 
+                                            onChange={(e) => handleChange('scrambled', i, 'text', e.target.value)}
+                                            className="w-full p-2 mb-2 border rounded font-bold text-slate-700"
+                                        />
+                                        <span className="font-bold text-slate-400 text-xs">Translation:</span>
+                                        <input 
+                                            value={item.translation} 
+                                            onChange={(e) => handleChange('scrambled', i, 'translation', e.target.value)}
+                                            className="w-full p-2 border rounded text-slate-600 italic"
+                                        />
+                                    </div>
+                                ))}
+
+                                {activeTab === 'speaking' && editableContent.speaking.map((item, i) => (
+                                    <div key={i} className="p-4 bg-slate-50 rounded-xl border border-slate-200 grid gap-2">
+                                        <div>
+                                            <span className="text-xs font-bold text-slate-400">Spanish:</span>
+                                            <input value={item.spanish} onChange={(e) => handleChange('speaking', i, 'spanish', e.target.value)} className="w-full p-2 border rounded"/>
+                                        </div>
+                                        <div>
+                                            <span className="text-xs font-bold text-slate-400">English (Target):</span>
+                                            <input value={item.english} onChange={(e) => handleChange('speaking', i, 'english', e.target.value)} className="w-full p-2 border rounded font-bold"/>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Dashboard = () => {
+            const [selectedGrammar, setSelectedGrammar] = useState(new Set());
+            const [selectedVerbs, setSelectedVerbs] = useState(new Set());
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [generatedContent, setGeneratedContent] = useState(null);
+            const [apiKey, setApiKey] = useState(localStorage.getItem('periplo_google_key') || '');
+            const [gameTitle, setGameTitle] = useState("");
+
+            // ... (Lógica de selección de gramática/verbos igual que antes) ...
+            const toggleGrammar = (id) => {
+                const newSet = new Set(selectedGrammar);
+                newSet.has(id) ? newSet.delete(id) : newSet.add(id);
+                setSelectedGrammar(newSet);
+            };
+            const toggleVerb = (verb) => {
+                const newSet = new Set(selectedVerbs);
+                newSet.has(verb) ? newSet.delete(verb) : newSet.add(verb);
+                setSelectedVerbs(newSet);
+            };
+            const togglePack = (packName) => {
+                const verbs = VOCAB_PACKS[packName];
+                const allSelected = verbs.every(v => selectedVerbs.has(v));
+                const newSet = new Set(selectedVerbs);
+                if (allSelected) verbs.forEach(v => newSet.delete(v));
+                else verbs.forEach(v => newSet.add(v));
+                setSelectedVerbs(newSet);
+            };
+
+            const generateContent = async () => {
+                if (!apiKey) return alert("Por favor ingresa tu API Key de Google Gemini");
+                setIsGenerating(true);
+                
+                const verbs = Array.from(selectedVerbs);
+                const grammar = Array.from(selectedGrammar);
+
+                const prompt = `
+                    Create JSON for an ESL Connect 4 game.
+                    Verbs: ${verbs.join(', ')}. Grammar: ${grammar.join(', ')}.
+                    Output JSON structure:
+                    {
+                        "quizzes": [{"question": "Sent...", "options": ["A/B", "C/D"], "correct": 0, "explanation": "..."}], // 20 items
+                        "scrambled": [{"text": "English sentence.", "translation": "Spanish translation."}], // 15 items
+                        "speaking": [{"spanish": "...", "english": "...", "grammar": "..."}] // 5 items
+                    }
+                    Ensure Scrambled sentences have punctuation included in the text string.
+                `;
+
+                try {
+                    const response = await fetch(
+                        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                        }
+                    );
+                    const data = await response.json();
+                    const text = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
+                    const json = JSON.parse(text);
+                    
+                    // Pre-procesar scrambled para tener palabras separadas si se necesita luego, pero para guardar guardamos el texto base
+                    setGeneratedContent(json);
+                } catch (e) {
+                    alert("Error generando contenido: " + e.message);
+                } finally {
+                    setIsGenerating(false);
+                }
+            };
+
+            const saveToFirebase = async () => {
+                if (!gameTitle) return alert("Ponle un título al juego");
+                try {
+                    // Pre-procesar scrambled para el juego
+                    const finalContent = {
+                        ...generatedContent,
+                        scrambled: generatedContent.scrambled.map(s => ({
+                            ...s,
+                            words: s.text.split(' ').filter(w => w.trim() !== '')
+                        }))
+                    };
+
+                    await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'boardgames'), {
+                        title: gameTitle,
+                        type: 'CONNECT4',
+                        content: finalContent,
+                        createdAt: serverTimestamp(),
+                        config: {
+                            grammar: Array.from(selectedGrammar),
+                            verbs: Array.from(selectedVerbs)
+                        }
+                    });
+                    alert("¡Juego guardado exitosamente!");
+                    window.location.href = 'index.html'; // Volver al inicio
+                } catch (e) {
+                    alert("Error guardando: " + e.message);
+                }
+            };
+
+            if (generatedContent) {
+                return <ContentEditor content={generatedContent} onSave={saveToFirebase} onCancel={() => setGeneratedContent(null)} title={gameTitle} setTitle={setGameTitle} />;
+            }
+
+            return (
+                <div className="min-h-screen bg-slate-100 p-8 font-sans">
+                    <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden">
+                        <div className="bg-slate-900 p-8 text-white flex justify-between items-center">
+                            <div>
+                                <h1 className="text-3xl font-black tracking-tight">Connect 4 Builder</h1>
+                                <p className="text-slate-400">Generador de Juegos de Mesa</p>
+                            </div>
+                            <input type="password" placeholder="API KEY" value={apiKey} onChange={e => {setApiKey(e.target.value); localStorage.setItem('periplo_google_key', e.target.value)}} className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs"/>
+                        </div>
+
+                        <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div>
+                                <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Layers className="text-indigo-500"/> Gramática</h3>
+                                <div className="space-y-2">
+                                    {Object.entries(GRAMMAR_LEVELS).map(([level, items]) => (
+                                        <div key={level} className="mb-4">
+                                            <span className="text-xs font-bold text-slate-400">{level}</span>
+                                            {items.map(item => (
+                                                <button key={item.id} onClick={() => toggleGrammar(item.id)} className={`w-full text-left p-3 rounded-lg border mb-2 flex justify-between items-center ${selectedGrammar.has(item.id) ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'bg-white border-slate-200'}`}>
+                                                    {item.label}
+                                                    {selectedGrammar.has(item.id) && <CheckSquare size={16}/>}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div>
+                                <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Filter className="text-emerald-500"/> Vocabulario</h3>
+                                {Object.entries(VOCAB_PACKS).map(([pack, verbs]) => (
+                                    <div key={pack} className="mb-4 p-4 border rounded-xl bg-slate-50">
+                                        <div className="flex justify-between items-center mb-2">
+                                            <span className="font-bold text-sm">{pack}</span>
+                                            <button onClick={() => togglePack(pack)} className="text-xs bg-white border px-2 py-1 rounded">Select All</button>
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {verbs.map(v => (
+                                                <button key={v} onClick={() => toggleVerb(v)} className={`text-xs px-2 py-1 rounded border ${selectedVerbs.has(v) ? 'bg-emerald-500 text-white border-emerald-600' : 'bg-white text-slate-600'}`}>
+                                                    {v}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="p-8 border-t border-slate-100 flex justify-end">
+                            <button 
+                                onClick={() => generateContent()} 
+                                disabled={isGenerating || selectedGrammar.size === 0}
+                                className="bg-slate-900 text-white px-8 py-4 rounded-2xl font-black text-xl hover:bg-indigo-600 transition-all flex items-center gap-3 disabled:opacity-50"
+                            >
+                                {isGenerating ? <span className="animate-pulse">Generando...</span> : <><Zap/> GENERAR PREVIEW</>}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<Dashboard />);
+    </script>
+</body>
+</html>
