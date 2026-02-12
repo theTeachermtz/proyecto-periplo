@@ -204,4 +204,195 @@
                             setGameData(snap.data());
                             setQuestionPools({
                                 quizzes: shuffleArray(content.quizzes || []),
-                                scrambled
+                                scrambled: shuffleArray(content.scrambled || []),
+                                speaking: shuffleArray(content.speaking || [])
+                            });
+                        } else {
+                            throw new Error("No se encontró el juego.");
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        setError(err.message);
+                    } finally {
+                        setLoading(false);
+                    }
+                };
+                init();
+            }, []);
+
+            const checkWin = (board, player) => {
+                const R = 6, C = 7;
+                const check = (r, c, dr, dc) => {
+                    let cnt = 0;
+                    for(let i=0; i<4; i++) {
+                        if(r+dr*i >= 0 && r+dr*i < R && c+dc*i >=0 && c+dc*i < C && board[r+dr*i][c+dc*i] === player) cnt++;
+                    }
+                    return cnt === 4;
+                };
+                for(let r=0; r<R; r++) for(let c=0; c<C; c++) {
+                    if (check(r,c,0,1) || check(r,c,1,0) || check(r,c,1,1) || check(r,c,1,-1)) return true;
+                }
+                return false;
+            };
+
+            const handleColumnClick = (col) => {
+                if (winner || modal) return;
+                let row = -1;
+                for (let r = 5; r >= 0; r--) {
+                    if (!board[r][col]) { row = r; break; }
+                }
+                if (row === -1) return;
+
+                // Random Challenge Tier
+                const rand = Math.random();
+                let tier = 'quiz';
+                if (rand > 0.7 && questionPools.speaking.length > 0) tier = 'speaking';
+                else if (rand > 0.35 && questionPools.scrambled.length > 0) tier = 'scramble';
+                else if (questionPools.quizzes.length === 0) {
+                    // Fallback logic if empty
+                    if (questionPools.scrambled.length > 0) tier = 'scramble';
+                    else if (questionPools.speaking.length > 0) tier = 'speaking';
+                    else tier = 'none'; // No questions left
+                }
+
+                if (tier === 'none') {
+                    executeMove(row, col);
+                    return;
+                }
+                
+                let question = null;
+                if (tier === 'quiz') {
+                    question = questionPools.quizzes[0];
+                    setQuestionPools(p => ({...p, quizzes: p.quizzes.slice(1)}));
+                } else if (tier === 'scramble') {
+                    question = questionPools.scrambled[0];
+                    setQuestionPools(p => ({...p, scrambled: p.scrambled.slice(1)}));
+                } else if (tier === 'speaking') {
+                    question = questionPools.speaking[0];
+                    setQuestionPools(p => ({...p, speaking: p.speaking.slice(1)}));
+                }
+
+                setModal({ type: tier, data: question, pendingMove: { row, col } });
+            };
+
+            const executeMove = (r, c) => {
+                const newBoard = board.map(row => [...row]);
+                newBoard[r][c] = currentPlayer;
+                setBoard(newBoard);
+                if (checkWin(newBoard, currentPlayer)) setWinner(currentPlayer);
+                else setCurrentPlayer(currentPlayer === 'red' ? 'yellow' : 'red');
+            };
+
+            const handleChallengeComplete = (success) => {
+                if (success) executeMove(modal.pendingMove.row, modal.pendingMove.col);
+                else setCurrentPlayer(currentPlayer === 'red' ? 'yellow' : 'red'); // Lose turn
+                setModal(null);
+            };
+
+            const handleExit = () => {
+                const folder = gameData?.parentPath || '';
+                window.location.href = `index.html?folder=${encodeURIComponent(folder)}`;
+            };
+
+            if (loading) return <div className="h-screen flex items-center justify-center text-indigo-500"><Loader2 className="animate-spin" size={40}/></div>;
+            if (error) return (
+                <div className="h-screen flex flex-col items-center justify-center p-8 text-center">
+                    <h2 className="text-2xl font-bold text-slate-800 mb-2">Ups, algo salió mal</h2>
+                    <p className="text-slate-500 mb-6">{error}</p>
+                    <button onClick={() => window.location.href='index.html'} className="bg-slate-900 text-white px-6 py-2 rounded-xl font-bold">Volver al Inicio</button>
+                </div>
+            );
+
+            return (
+                <div className="min-h-screen flex flex-col items-center justify-center bg-slate-100 font-sans p-4">
+                    <div className="w-full max-w-4xl">
+                        <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+                            <div>
+                                <h1 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tight">{gameData?.title || 'Connect 4'}</h1>
+                                <div className="flex gap-2 mt-1">
+                                    <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider">AI Challenge</span>
+                                </div>
+                            </div>
+                            
+                            {!winner && (
+                                <div className={`px-8 py-3 rounded-full font-bold text-white shadow-xl text-lg flex items-center gap-3 border-4 border-white/20 ${currentPlayer === 'red' ? 'bg-red-500' : 'bg-yellow-500'}`}>
+                                    <div className="w-4 h-4 rounded-full bg-white"/>
+                                    Turno: {currentPlayer === 'red' ? 'ROJO' : 'AMARILLO'}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="bg-blue-700 p-4 md:p-6 rounded-[2.5rem] shadow-2xl border-b-[12px] border-blue-900 relative mx-auto max-w-[600px]">
+                            <div className="grid grid-cols-7 gap-2 md:gap-3 bg-blue-600 p-3 rounded-2xl border border-blue-500/30">
+                                {board.map((row, r) => (
+                                    row.map((cell, c) => (
+                                        <div key={`${r}-${c}`} onClick={() => handleColumnClick(c)} className="aspect-square bg-blue-900 rounded-full flex items-center justify-center cursor-pointer shadow-inner relative overflow-hidden group">
+                                            {/* Hover Effect */}
+                                            {!cell && !winner && (
+                                                <div className={`w-full h-full rounded-full opacity-0 group-hover:opacity-30 scale-75 transition-opacity ${currentPlayer === 'red' ? 'bg-red-500' : 'bg-yellow-400'}`}></div>
+                                            )}
+                                            {/* Token */}
+                                            {cell && <div className={`w-full h-full rounded-full token-drop shadow-[inset_0_-4px_6px_rgba(0,0,0,0.2)] border-[6px] ${cell === 'red' ? 'bg-red-500 border-red-600' : 'bg-yellow-400 border-yellow-500'}`}></div>}
+                                        </div>
+                                    ))
+                                ))}
+                            </div>
+                            
+                            {/* Legs of the board */}
+                            <div className="absolute -bottom-8 left-8 w-6 h-12 bg-blue-900 rounded-b-xl -z-10"></div>
+                            <div className="absolute -bottom-8 right-8 w-6 h-12 bg-blue-900 rounded-b-xl -z-10"></div>
+                        </div>
+
+                        <div className="mt-12 flex justify-center">
+                            <button onClick={handleExit} className="flex items-center gap-2 text-slate-400 hover:text-slate-600 font-bold bg-white px-6 py-3 rounded-xl shadow-sm hover:shadow transition-all uppercase text-sm tracking-widest"><LogOut size={18}/> Salir</button>
+                        </div>
+                    </div>
+
+                    {/* CHALLENGE MODAL */}
+                    {modal && (
+                        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+                            <div className="bg-white rounded-[2rem] p-8 max-w-lg w-full shadow-2xl animate-bounce-in border-t-8 border-indigo-500 relative">
+                                <div className="absolute top-4 right-4 text-xs font-bold text-slate-300 uppercase tracking-widest">{modal.type} CHALLENGE</div>
+                                
+                                {modal.type === 'quiz' && <QuizChallenge data={modal.data} onComplete={handleChallengeComplete} />}
+                                {modal.type === 'scramble' && <ScrambleChallenge data={modal.data} onComplete={handleChallengeComplete} />}
+                                {modal.type === 'speaking' && (
+                                    <div className="text-center w-full">
+                                        <h3 className="text-xl font-bold text-orange-500 mb-4 flex justify-center gap-2 items-center"><Mic/> Translate</h3>
+                                        <div className="bg-orange-50 p-6 rounded-2xl border-2 border-orange-100 mb-6">
+                                            <p className="text-2xl font-black text-slate-800 leading-tight">"{modal.data.spanish}"</p>
+                                        </div>
+                                        <p className="text-sm text-slate-400 mb-6">Say it in English: <b>{modal.data.english}</b></p>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <button onClick={() => handleChallengeComplete(false)} className="py-4 bg-red-50 border-2 border-red-100 text-red-600 font-bold rounded-xl hover:bg-red-100 transition-colors">Incorrect</button>
+                                            <button onClick={() => handleChallengeComplete(true)} className="py-4 bg-green-500 text-white font-bold rounded-xl shadow-lg hover:bg-green-600 transition-all flex justify-center gap-2 items-center"><CheckCircle2 size={20}/> Correct</button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* WINNER OVERLAY */}
+                    {winner && (
+                        <div className="fixed inset-0 bg-slate-900/95 flex items-center justify-center z-50 animate-bounce-in">
+                            <div className="text-center text-white">
+                                <Trophy size={120} className="mx-auto text-yellow-400 mb-6 animate-bounce drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]"/>
+                                <h1 className="text-7xl font-black mb-2 tracking-tighter">{winner === 'red' ? 'ROJO' : 'AMARILLO'}</h1>
+                                <p className="text-2xl font-medium text-slate-400 mb-10 tracking-widest uppercase">GANA LA PARTIDA</p>
+                                <div className="flex flex-col gap-4">
+                                    <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-10 py-4 rounded-full font-black text-xl hover:scale-105 transition-transform flex items-center justify-center gap-3"><RotateCcw/> Jugar Otra Vez</button>
+                                    <button onClick={handleExit} className="text-slate-500 hover:text-white font-bold transition-colors uppercase tracking-widest text-sm">Volver al Menú</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<GameBoard />);
+    </script>
+</body>
+</html>
