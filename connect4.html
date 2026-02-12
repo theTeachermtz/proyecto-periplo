@@ -26,6 +26,8 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f1f5f9; }
         .token-drop { animation: drop 0.5s cubic-bezier(0.5, 0, 0.75, 0); }
         @keyframes drop { from { transform: translateY(-300px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .animate-bounce-in { animation: bounceIn 0.3s ease-out; }
+        @keyframes bounceIn { from { opacity: 0; transform: scale(0.8); } to { opacity: 1; transform: scale(1); } }
     </style>
 </head>
 <body>
@@ -36,7 +38,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Trophy, HelpCircle, Brain, Mic, CheckCircle2, XCircle, ArrowRight, Undo2, RotateCcw, LogOut } from 'lucide-react';
+        import { Trophy, HelpCircle, Brain, Mic, CheckCircle2, XCircle, ArrowRight, Undo2, RotateCcw, LogOut, Loader2 } from 'lucide-react';
 
         // --- FIREBASE CONFIG ---
         const firebaseConfig = {
@@ -52,6 +54,7 @@
 
         // --- GAME LOGIC ---
         const shuffleArray = (array) => {
+            if (!array) return [];
             const newArray = [...array];
             for (let i = newArray.length - 1; i > 0; i--) {
                 const j = Math.floor(Math.random() * (i + 1));
@@ -60,7 +63,7 @@
             return newArray;
         };
 
-        // --- SUB-COMPONENTS (Simplified for HTML) ---
+        // --- SUB-COMPONENTS ---
         const ScrambleChallenge = ({ data, onComplete }) => {
             const [shuffledWords, setShuffledWords] = useState([]);
             const [selectedWords, setSelectedWords] = useState([]);
@@ -77,7 +80,6 @@
 
             const checkAnswer = () => {
                 const built = selectedWords.map(w => w.text).join(" ");
-                // Remove punctuation for loose comparison if needed, or keep strict
                 if (built.trim() === data.text.trim()) {
                     setStatus('correct');
                     setTimeout(() => onComplete(true), 1500);
@@ -89,67 +91,95 @@
             return (
                 <div className="w-full text-center">
                     <h3 className="text-xl font-bold text-blue-600 mb-4 flex justify-center items-center gap-2"><Brain/> Unscramble</h3>
-                    <div className="min-h-[60px] bg-slate-100 rounded-xl p-4 mb-4 flex flex-wrap gap-2 justify-center border-2 border-slate-200">
+                    <div className={`min-h-[60px] bg-slate-50 rounded-xl p-4 mb-4 flex flex-wrap gap-2 justify-center border-2 transition-colors ${status === 'correct' ? 'border-green-500 bg-green-50' : status === 'wrong' ? 'border-red-300 bg-red-50' : 'border-slate-200'}`}>
                         {selectedWords.map(w => (
                             <button key={w.id} onClick={() => {
+                                if (status !== 'playing') return;
                                 setShuffledWords([...shuffledWords, w]);
                                 setSelectedWords(selectedWords.filter(sw => sw.id !== w.id));
-                            }} className="bg-white border px-3 py-1 rounded shadow-sm font-bold">{w.text}</button>
+                            }} className="bg-white border px-3 py-1.5 rounded-lg shadow-sm font-bold text-slate-700 animate-bounce-in">{w.text}</button>
                         ))}
+                        {selectedWords.length === 0 && <span className="text-slate-400 italic text-sm">Tap words below...</span>}
                     </div>
+                    
                     <div className="flex flex-wrap gap-2 justify-center mb-6">
-                        {shuffledWords.map(w => (
+                        {status !== 'correct' && shuffledWords.map(w => (
                             <button key={w.id} onClick={() => {
+                                if (status !== 'playing') return;
                                 setSelectedWords([...selectedWords, w]);
                                 setShuffledWords(shuffledWords.filter(sw => sw.id !== w.id));
-                            }} className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full font-bold hover:bg-blue-200">{w.text}</button>
+                            }} className="bg-blue-100 text-blue-800 px-3 py-1.5 rounded-lg font-bold hover:bg-blue-200 transition-all border border-blue-200">{w.text}</button>
                         ))}
                     </div>
-                    {status === 'wrong' && <div className="text-red-500 font-bold mb-4">Incorrect. Try again or Skip.</div>}
-                    {status === 'playing' ? (
-                        <button onClick={checkAnswer} className="bg-blue-600 text-white px-8 py-2 rounded-full font-bold shadow-lg">Check</button>
-                    ) : (
-                        <button onClick={() => onComplete(false)} className="bg-slate-500 text-white px-6 py-2 rounded-full">Continue</button>
+
+                    {status === 'wrong' && (
+                        <div className="mb-4 animate-bounce-in">
+                            <div className="text-red-500 font-bold mb-1 flex items-center justify-center gap-1"><XCircle size={16}/> Incorrect</div>
+                            <div className="text-slate-500 text-sm">Correct: <b>{data.text}</b></div>
+                        </div>
                     )}
+                    
+                    {status === 'correct' && <div className="text-green-600 font-bold mb-4 animate-bounce flex items-center justify-center gap-1"><CheckCircle2/> Perfect!</div>}
+
+                    {status === 'playing' ? (
+                        <button onClick={checkAnswer} disabled={shuffledWords.length > 0} className="bg-blue-600 text-white px-8 py-3 rounded-full font-bold shadow-lg hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed">CHECK ANSWER</button>
+                    ) : status === 'wrong' ? (
+                        <button onClick={() => onComplete(false)} className="bg-slate-800 text-white px-6 py-2 rounded-full font-bold flex items-center gap-2 mx-auto">Continue <ArrowRight size={16}/></button>
+                    ) : null}
                 </div>
             );
         };
 
         const QuizChallenge = ({ data, onComplete }) => {
             const [selected, setSelected] = useState(null);
+            const [status, setStatus] = useState('playing'); // playing, correct, wrong
             
             const handleSelect = (idx) => {
+                if (status !== 'playing') return;
                 setSelected(idx);
+                
                 if (idx === data.correct) {
-                    setTimeout(() => onComplete(true), 1000);
+                    setStatus('correct');
+                    setTimeout(() => onComplete(true), 1500);
                 } else {
-                    setTimeout(() => onComplete(false), 1500); // Fail takes a bit longer to show red
+                    setStatus('wrong');
                 }
             };
 
             return (
                 <div className="w-full">
-                    <h3 className="text-xl font-bold text-purple-600 mb-4 text-center flex justify-center gap-2"><HelpCircle/> Quiz</h3>
-                    <div className="bg-slate-50 p-4 rounded-xl mb-4 font-medium text-lg text-center">{data.question}</div>
-                    <div className="grid gap-2">
+                    <h3 className="text-xl font-bold text-purple-600 mb-4 text-center flex justify-center items-center gap-2"><HelpCircle/> Quiz</h3>
+                    <div className="bg-slate-50 p-6 rounded-2xl mb-6 font-medium text-lg text-center text-slate-800 border border-slate-100 shadow-sm">{data.question}</div>
+                    
+                    <div className="grid gap-3">
                         {data.options.map((opt, idx) => (
                             <button key={idx} onClick={() => handleSelect(idx)} 
-                                className={`p-4 rounded-xl border-2 text-left font-bold transition-all ${
-                                    selected === null ? 'bg-white border-slate-200 hover:border-purple-300' :
+                                className={`p-4 rounded-xl border-2 text-left font-bold transition-all flex justify-between items-center ${
+                                    status === 'playing' ? 'bg-white border-slate-100 hover:border-purple-200 hover:bg-purple-50 text-slate-600' :
                                     idx === data.correct ? 'bg-green-100 border-green-500 text-green-800' :
-                                    selected === idx ? 'bg-red-100 border-red-500 text-red-800' : 'opacity-50'
+                                    selected === idx ? 'bg-red-100 border-red-500 text-red-800' : 'opacity-40 bg-white border-slate-100'
                                 }`}
                             >
-                                {opt}
+                                <span>{opt}</span>
+                                {status !== 'playing' && idx === data.correct && <CheckCircle2 className="text-green-600"/>}
+                                {status === 'wrong' && selected === idx && <XCircle className="text-red-600"/>}
                             </button>
                         ))}
                     </div>
+
+                    {status === 'wrong' && (
+                        <div className="mt-6 flex flex-col items-center animate-bounce-in">
+                            <div className="text-red-500 font-bold mb-2">Incorrect Answer</div>
+                            <button onClick={() => onComplete(false)} className="bg-slate-800 text-white px-6 py-2 rounded-full font-bold flex items-center gap-2">Continue <ArrowRight size={16}/></button>
+                        </div>
+                    )}
                 </div>
             );
         };
 
         const GameBoard = () => {
             const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
             const [gameData, setGameData] = useState(null);
             const [board, setBoard] = useState(Array(6).fill(null).map(() => Array(7).fill(null)));
             const [currentPlayer, setCurrentPlayer] = useState('red');
@@ -159,174 +189,19 @@
 
             useEffect(() => {
                 const init = async () => {
-                    const params = new URLSearchParams(window.location.search);
-                    const id = params.get('id');
-                    if (!id) return alert("Falta ID de juego");
-                    
-                    const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/boardgames', id));
-                    if (snap.exists()) {
-                        const content = snap.data().content;
-                        setGameData(snap.data());
-                        setQuestionPools({
-                            quizzes: shuffleArray(content.quizzes),
-                            scrambled: shuffleArray(content.scrambled),
-                            speaking: shuffleArray(content.speaking)
-                        });
-                        setLoading(false);
-                    }
-                };
-                init();
-            }, []);
+                    try {
+                        const params = new URLSearchParams(window.location.search);
+                        const id = params.get('id');
+                        if (!id) throw new Error("Falta ID de juego en la URL");
+                        
+                        // CORRECCIÓN: Apuntando a 'quizzes' en lugar de 'boardgames'
+                        const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id));
+                        
+                        if (snap.exists()) {
+                            const content = snap.data().content;
+                            if (!content) throw new Error("El juego no tiene contenido válido.");
 
-            // Game Logic similar to original but simplified hooks
-            const checkWin = (board, player) => {
-                // (Simplified check logic for brevity, assumes standard Connect 4 rules)
-                // Horizontal, Vertical, Diagonal checks...
-                // [Insert standard Connect 4 logic here or reuse from original]
-                // For brevity in this HTML view, I'll implement a basic one:
-                const R = 6, C = 7;
-                const check = (r, c, dr, dc) => {
-                    let cnt = 0;
-                    for(let i=0; i<4; i++) {
-                        if(r+dr*i >= 0 && r+dr*i < R && c+dc*i >=0 && c+dc*i < C && board[r+dr*i][c+dc*i] === player) cnt++;
-                    }
-                    return cnt === 4;
-                };
-                for(let r=0; r<R; r++) for(let c=0; c<C; c++) {
-                    if (check(r,c,0,1) || check(r,c,1,0) || check(r,c,1,1) || check(r,c,1,-1)) return true;
-                }
-                return false;
-            };
-
-            const checkLinePotential = (r, c, player) => {
-               // Logic to detect if this move creates a line of 2, 3, or 4
-               // Simple mock for this integration: 
-               // Returns random 2, 3, or 4 based on randomness for demo if logic is complex to port fully in one go.
-               // Ideally, port the exact logic from the React component.
-               // Let's assume standard move for now, triggering random challenge tiers for variety:
-               const rand = Math.random();
-               if (rand > 0.8) return 4;
-               if (rand > 0.5) return 3;
-               return 2; 
-            };
-
-            const handleColumnClick = (col) => {
-                if (winner || modal) return;
-                let row = -1;
-                for (let r = 5; r >= 0; r--) {
-                    if (!board[r][col]) { row = r; break; }
-                }
-                if (row === -1) return;
-
-                // Determine Challenge Type based on "Potential" (Simplified: Random tier for excitement)
-                // In a real port, copy the checkPotentialLine function exactly.
-                const tier = Math.random() > 0.66 ? 'speaking' : Math.random() > 0.33 ? 'scramble' : 'quiz';
-                
-                let question = null;
-                let type = 'quiz';
-                
-                if (tier === 'quiz' && questionPools.quizzes.length) {
-                    question = questionPools.quizzes[0];
-                    setQuestionPools(p => ({...p, quizzes: p.quizzes.slice(1)}));
-                    type = 'quiz';
-                } else if (tier === 'scramble' && questionPools.scrambled.length) {
-                    question = questionPools.scrambled[0];
-                    setQuestionPools(p => ({...p, scrambled: p.scrambled.slice(1)}));
-                    type = 'scramble';
-                } else if (questionPools.speaking.length) {
-                    question = questionPools.speaking[0];
-                    setQuestionPools(p => ({...p, speaking: p.speaking.slice(1)}));
-                    type = 'speaking';
-                }
-
-                // If run out of questions, fallback or allow move
-                if (!question) {
-                    executeMove(row, col);
-                    return;
-                }
-
-                setModal({ type, data: question, pendingMove: { row, col } });
-            };
-
-            const executeMove = (r, c) => {
-                const newBoard = board.map(row => [...row]);
-                newBoard[r][c] = currentPlayer;
-                setBoard(newBoard);
-                if (checkWin(newBoard, currentPlayer)) setWinner(currentPlayer);
-                else setCurrentPlayer(currentPlayer === 'red' ? 'yellow' : 'red');
-            };
-
-            const handleChallengeComplete = (success) => {
-                if (success) executeMove(modal.pendingMove.row, modal.pendingMove.col);
-                else setCurrentPlayer(currentPlayer === 'red' ? 'yellow' : 'red'); // Penalización: pierde turno
-                setModal(null);
-            };
-
-            if (loading) return <div className="h-screen flex items-center justify-center font-bold text-slate-500">Cargando tablero...</div>;
-
-            return (
-                <div className="min-h-screen flex flex-col items-center justify-center bg-slate-100 font-sans">
-                    <div className="w-full max-w-3xl px-4">
-                        <div className="flex justify-between items-center mb-6">
-                            <h1 className="text-3xl font-black text-slate-800">{gameData?.title || 'Connect 4'}</h1>
-                            <div className={`px-6 py-2 rounded-full font-bold text-white shadow-lg ${currentPlayer === 'red' ? 'bg-red-500' : 'bg-yellow-500'}`}>
-                                Turno: {currentPlayer === 'red' ? 'ROJO' : 'AMARILLO'}
-                            </div>
-                        </div>
-
-                        <div className="bg-blue-700 p-4 rounded-3xl shadow-2xl border-b-8 border-blue-900 relative">
-                            <div className="grid grid-cols-7 gap-2 bg-blue-600 p-2 rounded-xl">
-                                {board.map((row, r) => (
-                                    row.map((cell, c) => (
-                                        <div key={`${r}-${c}`} onClick={() => handleColumnClick(c)} className="w-10 h-10 sm:w-16 sm:h-16 bg-blue-900 rounded-full flex items-center justify-center cursor-pointer shadow-inner relative overflow-hidden">
-                                            {cell && <div className={`w-full h-full rounded-full token-drop shadow-inner border-4 ${cell === 'red' ? 'bg-red-500 border-red-600' : 'bg-yellow-400 border-yellow-500'}`}></div>}
-                                        </div>
-                                    ))
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className="mt-8 flex justify-center">
-                            <button onClick={() => window.location.href = 'index.html'} className="flex items-center gap-2 text-slate-400 hover:text-slate-600 font-bold"><LogOut size={20}/> Salir</button>
-                        </div>
-                    </div>
-
-                    {/* MODAL */}
-                    {modal && (
-                        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                            <div className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl animate-bounce-in">
-                                {modal.type === 'quiz' && <QuizChallenge data={modal.data} onComplete={handleChallengeComplete} />}
-                                {modal.type === 'scramble' && <ScrambleChallenge data={modal.data} onComplete={handleChallengeComplete} />}
-                                {modal.type === 'speaking' && (
-                                    <div className="text-center">
-                                        <h3 className="text-xl font-bold text-orange-500 mb-4">Speaking / Translate</h3>
-                                        <p className="text-2xl font-black text-slate-800 mb-6">"{modal.data.spanish}"</p>
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <button onClick={() => handleChallengeComplete(false)} className="py-3 bg-red-100 text-red-600 font-bold rounded-xl">Incorrect</button>
-                                            <button onClick={() => handleChallengeComplete(true)} className="py-3 bg-green-500 text-white font-bold rounded-xl shadow-lg">Correct</button>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* WINNER */}
-                    {winner && (
-                        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50">
-                            <div className="text-center text-white">
-                                <Trophy size={100} className="mx-auto text-yellow-400 mb-4 animate-bounce"/>
-                                <h1 className="text-6xl font-black mb-8">{winner === 'red' ? 'ROJO' : 'AMARILLO'} GANA!</h1>
-                                <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-8 py-4 rounded-full font-bold text-xl hover:scale-110 transition-transform">Jugar Otra Vez</button>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            );
-        };
-
-        const root = createRoot(document.getElementById('root'));
-        root.render(<GameBoard />);
-    </script>
-</body>
-</html>
+                            setGameData(snap.data());
+                            setQuestionPools({
+                                quizzes: shuffleArray(content.quizzes || []),
+                                scrambled
