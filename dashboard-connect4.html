@@ -38,7 +38,7 @@
         import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
         import { 
             Sparkles, Layers, Puzzle, Filter, CheckSquare, Square, 
-            ChevronDown, ChevronRight, Zap, Save, Edit3, Trash2, ArrowLeft, Loader2, Search, Cpu
+            ChevronDown, ChevronRight, Zap, Save, Edit3, Trash2, ArrowLeft, Loader2
         } from 'lucide-react';
 
         const firebaseConfig = {
@@ -266,11 +266,6 @@
             const [apiKey, setApiKey] = useState(localStorage.getItem('periplo_google_key') || '');
             const [gameTitle, setGameTitle] = useState("");
             const [expandedPacks, setExpandedPacks] = useState(new Set());
-            
-            // STATE PARA LOS MODELOS
-            const [availableModels, setAvailableModels] = useState([]);
-            const [selectedModel, setSelectedModel] = useState('');
-            const [isLoadingModels, setIsLoadingModels] = useState(false);
 
             const toggleGrammar = (id) => {
                 const newSet = new Set(selectedGrammar);
@@ -309,69 +304,41 @@
                 setExpandedPacks(newSet);
             };
 
-            // --- FUNCIÓN PARA ESCANEAR MODELOS DISPONIBLES ---
-            const fetchModels = async () => {
-                if (!apiKey) return alert("Ingresa tu API Key primero");
-                setIsLoadingModels(true);
-                try {
-                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-                    if (!response.ok) throw new Error("Error conectando con Google");
-                    const data = await response.json();
-                    
-                    // Filtramos solo los que sirven para generar contenido
-                    const validModels = data.models
-                        .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"))
-                        .map(m => m.name);
-                    
-                    setAvailableModels(validModels);
-                    if (validModels.length > 0) {
-                        // Preferir 1.5 flash si existe, si no el primero
-                        const preferred = validModels.find(m => m.includes("gemini-1.5-flash")) || validModels[0];
-                        setSelectedModel(preferred);
-                        alert(`¡Conectado! Se encontraron ${validModels.length} modelos disponibles.`);
-                    } else {
-                        alert("No se encontraron modelos compatibles con esta llave.");
-                    }
-                } catch (e) {
-                    alert("Error al buscar modelos: " + e.message);
-                } finally {
-                    setIsLoadingModels(false);
-                }
-            };
-
             const generateContent = async () => {
-                if (!apiKey) return alert("Por favor ingresa tu API Key");
-                if (!selectedModel) return alert("Por favor escanea y selecciona un modelo primero");
-                
+                if (!apiKey) return alert("Por favor ingresa tu API Key de Google Gemini");
                 setIsGenerating(true);
                 
                 const verbs = Array.from(selectedVerbs);
                 const grammar = Array.from(selectedGrammar);
                 const special = Array.from(selectedSpecial);
 
+                // PROMPT MEJORADO PARA EXIGIR EL "DOUBLE GAP" CON 4 OPCIONES
                 const prompt = `
-                    Create JSON for an ESL Connect 4 game.
-                    Verbs: ${verbs.join(', ')}. 
-                    Grammar: ${grammar.join(', ')}.
+                    You are an expert ESL teacher. Create a JSON object for an educational Connect 4 game.
+                    Verbs to use: ${verbs.join(', ')}. 
+                    Grammar topics: ${grammar.join(', ')}.
                     Special Words (Integrate these): ${special.join(', ')}.
                     
                     INSTRUCTIONS:
-                    1. Double-Gap Quizzes: Questions must have TWO blanks (e.g. "She ___ to the store and ___ milk"). Options must be pairs (e.g. "went / bought").
-                    2. Scrambled: Short sentences. Include punctuation.
-                    3. Speaking: Challenging translations.
+                    1. **DOUBLE-GAP QUIZZES**: For the 'quizzes' section, questions MUST contain TWO distinct gaps (______).
+                       - Structure: Two connected clauses or a compound sentence.
+                       - Options Format: "Part 1 / Part 2" (e.g., "went / didn't see").
+                       - MUST HAVE EXACTLY 4 OPTIONS.
+                    2. **SCRAMBLED**: Short sentences. Include punctuation in the 'text'.
+                    3. **SPEAKING**: Challenging translations to Spanish.
 
-                    Output JSON structure:
+                    Output FORMAT (Strict JSON):
                     {
-                        "quizzes": [{"question": "Sent... ___ ... ___ ...", "options": ["A/B", "C/D", "E/F", "G/H"], "correct": 0, "explanation": "..."}], // 20 items. 4 OPTIONS REQUIRED.
-                        "scrambled": [{"text": "English sentence.", "translation": "Spanish translation."}], // 15 items
-                        "speaking": [{"spanish": "...", "english": "...", "grammar": "..."}] // 5 items
+                        "quizzes": [{"question": "Sentence part 1 ______ ... part 2 ______.", "options": ["A / B", "C / D", "E / F", "G / H"], "correct": 0, "explanation": "..."}], // Create 20 items.
+                        "scrambled": [{"text": "English sentence.", "translation": "Spanish translation."}], // Create 15 items
+                        "speaking": [{"spanish": "...", "english": "...", "grammar": "..."}] // Create 5 items
                     }
                 `;
 
                 try {
-                    // USA EL MODELO SELECCIONADO POR EL USUARIO
+                    // LLAMADA EXACTA AL MODELO 2.5 FLASH QUE TIENES ACTIVO
                     const response = await fetch(
-                        `https://generativelanguage.googleapis.com/v1beta/${selectedModel}:generateContent?key=${apiKey}`,
+                        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
                         {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -380,14 +347,18 @@
                     );
                     const data = await response.json();
                     
-                    if (data.error) throw new Error(`Google Error: ${data.error.message}`);
-                    if (!data.candidates?.[0]?.content) throw new Error("La IA no devolvió resultados.");
+                    if (data.error) {
+                        throw new Error(`Google API Error: ${data.error.message}`);
+                    }
+                    if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
+                        throw new Error("La IA no devolvió resultados válidos o hubo un bloqueo de seguridad.");
+                    }
 
                     const text = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
                     const json = JSON.parse(text);
                     setGeneratedContent(json);
                 } catch (e) {
-                    alert("Error: " + e.message);
+                    alert("Error en la generación: " + e.message);
                 } finally {
                     setIsGenerating(false);
                 }
@@ -426,25 +397,14 @@
             return (
                 <div className="h-screen flex flex-col bg-slate-100 font-sans overflow-hidden">
                     {/* Header Fixed */}
-                    <div className="bg-slate-900 px-8 py-4 text-white flex justify-between items-center shrink-0 shadow-md z-10 gap-4">
+                    <div className="bg-slate-900 px-8 py-4 text-white flex justify-between items-center shrink-0 shadow-md z-10">
                         <div>
                             <h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><Sparkles className="text-blue-400"/> Connect 4 Builder</h1>
                             <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Teacher Console</p>
                         </div>
-                        
-                        {/* ZONA DE CONEXIÓN API Y MODELO */}
-                        <div className="flex items-center gap-2 bg-slate-800 p-1.5 rounded-xl border border-slate-700">
-                            <input type="password" placeholder="API KEY" value={apiKey} onChange={e => {setApiKey(e.target.value); localStorage.setItem('periplo_google_key', e.target.value)}} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-center w-32 focus:border-blue-500 focus:outline-none"/>
-                            
-                            <button onClick={fetchModels} disabled={isLoadingModels || !apiKey} className="p-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors" title="Escanear Modelos Disponibles">
-                                {isLoadingModels ? <Loader2 className="animate-spin" size={16}/> : <Search size={16}/>}
-                            </button>
-
-                            {availableModels.length > 0 && (
-                                <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white max-w-[150px]">
-                                    {availableModels.map(m => <option key={m} value={m}>{m.replace('models/', '')}</option>)}
-                                </select>
-                            )}
+                        <div className="flex gap-2 items-center">
+                            <span className="text-[10px] text-green-400 font-bold border border-green-800 bg-green-900/50 px-2 py-1 rounded">GEMINI-2.5-FLASH</span>
+                            <input type="password" placeholder="API KEY" value={apiKey} onChange={e => {setApiKey(e.target.value); localStorage.setItem('periplo_google_key', e.target.value)}} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-center w-32 focus:border-blue-500 focus:outline-none"/>
                         </div>
                     </div>
 
