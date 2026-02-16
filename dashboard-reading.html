@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reading Builder | Periplo</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📖</text></svg>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap'); 
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+        import { BookOpen, Brain, Sparkles, Save, RefreshCw, Eye, Edit3, CheckSquare, Square, Globe, Loader2, ArrowLeft } from 'lucide-react';
+
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        const GRAMMAR_OPTIONS = {
+            Basic: [{ id: 'present_simple', label: 'Present Simple' }, { id: 'present_continuous', label: 'Present Continuous' }, { id: 'future_will_going', label: 'Future (Will/Going to)' }, { id: 'past_simple_basic', label: 'Basic Past (was/were)' }, { id: 'prepositions', label: 'Prepositions (in, on, at)' }, { id: 'wh_questions', label: 'WH Questions' }],
+            Advanced: [{ id: 'past_narrative', label: 'Past Simple & Continuous' }, { id: 'used_to', label: 'Used to / Would' }, { id: 'second_conditional', label: 'Second Conditional' }, { id: 'future_in_past', label: 'Future in the Past' }, { id: 'conjunctions', label: 'Conjunctions (although, unless...)' }, { id: 'relative_clauses', label: 'Relative Clauses' }],
+            Pro: [{ id: 'present_perfect', label: 'Present Perfect' }, { id: 'past_perfect', label: 'Past Perfect' }, { id: 'third_conditional', label: 'Third Conditional' }, { id: 'passive_voice', label: 'Passive Voice' }, { id: 'phrasal_verbs', label: 'Advanced Phrasal Verbs' }, { id: 'idioms', label: 'Idioms & Nuance' }]
+        };
+
+        const TEXT_TYPES = [
+            { val: 'Story', label: 'Short Story / Fable', search: false },
+            { val: 'Real News', label: 'Real News', search: true },
+            { val: 'Biography', label: 'Biography', search: true },
+            { val: 'Travel Blog', label: 'Travel Guide', search: true },
+            { val: 'Review', label: 'Movie/Tech Review', search: true },
+            { val: 'Anecdote', label: 'Funny Anecdote', search: false },
+            { val: 'Dialogue', label: 'Dialogue / Script', search: false },
+            { val: 'Email', label: 'Email / Letter', search: false },
+            { val: 'Opinion', label: 'Opinion Essay', search: false },
+            { val: 'Mystery', label: 'Mystery / Thriller', search: false },
+            { val: 'Interview', label: 'Job Interview', search: false }
+        ];
+
+        const SYSTEM_INSTRUCTION = `
+        Role: You are an expert ESL curriculum designer and engaging storyteller.
+        Objective: Generate highly engaging texts adjusted to specific grammar constraints.
+        
+        IMPORTANT: 
+        - Use vocabulary suitable for the requested level (Basic=A1/A2, Advanced=B1/B2, Pro=C1/C2).
+        - STRICTLY adhere to the 'Focus Grammar' list.
+        - If the type is 'Real News', 'Biography', 'Travel Blog', or 'Review', you MUST use the Google Search tool to find REAL, up-to-date facts. Do not invent facts for these.
+        
+        Output Format (Strict JSON):
+        {
+          "title": "Creative Title with Emojis",
+          "content": "Full text content here. Keep it between 100 and 200 words. Make it natural.",
+          "level_assigned": "Basic | Advanced | Pro",
+          "target_grammar": ["List of grammar points actually used"]
+        }
+        `;
+
+        const processContent = (text) => {
+            const regex = /([a-zA-Z0-9'’\-]+|[^a-zA-Z0-9'’\-\s]+|\s+)/g;
+            const parts = text.match(regex) || [];
+            return parts.map((part, index) => ({
+                id: index, text: part, isWord: /^[a-zA-Z0-9'’\-]+$/.test(part), isHidden: false
+            }));
+        };
+
+        const Dashboard = () => {
+            const [step, setStep] = useState('config'); // config, editor
+            const [loading, setLoading] = useState(false);
+            const [apiKey, setApiKey] = useState(localStorage.getItem('periplo_google_key') || '');
+            
+            const [config, setConfig] = useState({ level: 'Basic', type: 'Story', topic: '', selectedGrammar: [] });
+            const [activityData, setActivityData] = useState({ title: '', tokens: [], grammarPoints: [], level: '' });
+
+            useEffect(() => { setConfig(prev => ({ ...prev, selectedGrammar: [] })); }, [config.level]);
+
+            const toggleGrammar = (id) => {
+                setConfig(prev => ({
+                    ...prev, selectedGrammar: prev.selectedGrammar.includes(id) 
+                        ? prev.selectedGrammar.filter(g => g !== id) 
+                        : [...prev.selectedGrammar, id]
+                }));
+            };
+
+            const toggleWordVisibility = (index) => {
+                const currentHidden = activityData.tokens.filter(t => t.isHidden).length;
+                const token = activityData.tokens[index];
+                if (!token.isHidden && currentHidden >= 15) return alert("Máximo 15 palabras ocultas permitidas.");
+                
+                const newTokens = [...activityData.tokens];
+                newTokens[index].isHidden = !newTokens[index].isHidden;
+                setActivityData({ ...activityData, tokens: newTokens });
+            };
+
+            const generateText = async () => {
+                if (!apiKey) return alert("Ingresa tu API Key de Gemini");
+                setLoading(true);
+                try {
+                    const topicReq = config.topic.trim() ? `about "${config.topic}"` : `about a creative, engaging topic`;
+                    const grammarLabels = GRAMMAR_OPTIONS[config.level].filter(opt => config.selectedGrammar.includes(opt.id)).map(opt => opt.label).join(', ');
+                    
+                    const isSearchType = TEXT_TYPES.find(t => t.val === config.type)?.search;
+
+                    const prompt = `
+                        Generate a ${config.level} English ${config.type} ${topicReq}.
+                        CRITICAL GRAMMAR: Focus heavily on these structures: [${grammarLabels}].
+                        Return ONLY valid JSON.
+                    `;
+
+                    // Payload dinámico: Habilita búsqueda en internet si el género lo requiere
+                    const payload = {
+                        contents: [{ parts: [{ text: prompt }] }],
+                        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+                        generationConfig: { responseMimeType: "application/json" }
+                    };
+
+                    if (isSearchType) {
+                        payload.tools = [{ googleSearch: {} }];
+                    }
+
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                    });
+                    
+                    const data = await response.json();
+                    if (data.error) throw new Error(data.error.message);
+                    
+                    const text = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
+                    const parsed = JSON.parse(text);
+                    
+                    setActivityData({
+                        title: parsed.title,
+                        grammarPoints: parsed.target_grammar || [],
+                        level: parsed.level_assigned,
+                        tokens: processContent(parsed.content)
+                    });
+                    setStep('editor');
+                } catch (e) { alert("Error: " + e.message); } finally { setLoading(false); }
+            };
+
+            const saveActivity = async () => {
+                const hiddenCount = activityData.tokens.filter(t => t.isHidden).length;
+                if (hiddenCount === 0) return alert("Debes ocultar al menos 1 palabra haciendo clic en el texto.");
+
+                try {
+                    await addDoc(collection(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes'), {
+                        title: activityData.title,
+                        type: 'READING',
+                        content: activityData,
+                        createdAt: serverTimestamp(),
+                        parentPath: '' 
+                    });
+                    alert("¡Lectura guardada exitosamente!");
+                    window.location.href = 'index.html'; 
+                } catch (e) { alert("Error al guardar: " + e.message); }
+            };
+
+            if (step === 'editor') {
+                const hiddenCount = activityData.tokens.filter(t => t.isHidden).length;
+                return (
+                    <div className="min-h-screen bg-slate-100 p-6 flex flex-col items-center">
+                        <div className="w-full max-w-4xl bg-white rounded-2xl shadow-xl overflow-hidden">
+                            <div className="bg-slate-900 p-6 flex justify-between items-center text-white">
+                                <div><h2 className="text-2xl font-black flex items-center gap-2"><Edit3/> Selecciona los Huecos</h2><p className="text-slate-400 text-sm">Haz clic en las palabras que quieres que los alumnos adivinen ({hiddenCount}/15)</p></div>
+                                <div className="flex gap-3">
+                                    <button onClick={() => setStep('config')} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold transition-colors">Volver</button>
+                                    <button onClick={saveActivity} className="px-6 py-2 bg-green-500 hover:bg-green-600 rounded-xl font-bold flex items-center gap-2 shadow-lg"><Save size={18}/> GUARDAR JUEGO</button>
+                                </div>
+                            </div>
+                            <div className="p-8">
+                                <h1 className="text-3xl font-black text-slate-800 mb-4">{activityData.title}</h1>
+                                <div className="flex flex-wrap gap-2 mb-8">
+                                    {activityData.grammarPoints.map((gp, i) => <span key={i} className="px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-md border border-indigo-100">{gp}</span>)}
+                                </div>
+                                <div className="p-8 bg-slate-50 rounded-2xl leading-[3rem] text-xl shadow-inner border border-slate-200">
+                                    {activityData.tokens.map((token) => (
+                                        <span key={token.id} onClick={() => token.isWord && toggleWordVisibility(token.id)}
+                                            className={`inline-block transition-all duration-200 cursor-pointer rounded px-1 ${token.isHidden ? 'bg-indigo-600 text-white font-bold shadow-md -translate-y-1' : token.isWord ? 'hover:bg-yellow-200 text-slate-700' : 'text-slate-700'}`}
+                                        >
+                                            {token.text}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-slate-100 font-sans p-6">
+                    <div className="max-w-6xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-200">
+                        <div className="bg-slate-900 p-6 text-white flex justify-between items-center">
+                            <div className="flex items-center gap-4">
+                                <button onClick={() => window.location.href='index.html'} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors"><ArrowLeft size={20}/></button>
+                                <div><h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><BookOpen className="text-cyan-400"/> Reading Builder</h1><p className="text-slate-400 text-xs font-bold uppercase tracking-widest mt-1">Generador con Google Search</p></div>
+                            </div>
+                            <input type="password" placeholder="API KEY" value={apiKey} onChange={e => {setApiKey(e.target.value); localStorage.setItem('periplo_google_key', e.target.value)}} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-center w-36 focus:border-cyan-500 focus:outline-none"/>
+                        </div>
+
+                        <div className="flex flex-col md:flex-row p-8 gap-8">
+                            {/* LEFT: Grammar & Level */}
+                            <div className="md:w-1/2 space-y-6">
+                                <div>
+                                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-3">1. Nivel del Alumno</label>
+                                    <div className="flex bg-slate-100 rounded-xl p-1">
+                                        {['Basic', 'Advanced', 'Pro'].map(lvl => (
+                                            <button key={lvl} onClick={() => setConfig({ ...config, level: lvl })} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${config.level === lvl ? 'bg-white text-cyan-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>{lvl}</button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-4">2. Gramática Principal</label>
+                                    <div className="grid grid-cols-1 gap-2">
+                                        {GRAMMAR_OPTIONS[config.level].map(opt => (
+                                            <button key={opt.id} onClick={() => toggleGrammar(opt.id)} className={`flex items-center gap-3 p-3 rounded-xl border text-sm transition-all text-left ${config.selectedGrammar.includes(opt.id) ? 'bg-cyan-50 border-cyan-400 text-cyan-900 font-bold' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'}`}>
+                                                {config.selectedGrammar.includes(opt.id) ? <CheckSquare className="text-cyan-600 w-5 h-5"/> : <Square className="text-slate-300 w-5 h-5"/>} {opt.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* RIGHT: Genre & Topic */}
+                            <div className="md:w-1/2 space-y-6">
+                                <div>
+                                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-3">3. Tipo de Texto</label>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        {TEXT_TYPES.map(type => (
+                                            <button key={type.val} onClick={() => setConfig({ ...config, type: type.val })} className={`p-3 text-left rounded-xl border text-sm transition-all flex flex-col gap-1 ${config.type === type.val ? 'bg-indigo-50 border-indigo-500 text-indigo-900 font-bold shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                                                <span>{type.label}</span>
+                                                {type.search && <span className="text-[9px] font-black uppercase text-blue-500 flex items-center gap-1"><Globe size={10}/> Live Web Search</span>}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-3">4. Tema Específico (Opcional)</label>
+                                    <textarea value={config.topic} onChange={(e) => setConfig({...config, topic: e.target.value})} className="w-full p-4 rounded-xl border-2 border-slate-200 focus:border-cyan-500 outline-none resize-none h-28 text-slate-700 bg-slate-50 focus:bg-white transition-colors" placeholder="Ej: La vida de Eliud Kipchoge, un viaje a Kyoto, un review del iPhone 16..."/>
+                                </div>
+                                <button onClick={generateText} disabled={loading || config.selectedGrammar.length === 0} className="w-full py-5 rounded-2xl bg-slate-900 text-white font-black text-lg hover:bg-cyan-600 transition-all shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-3">
+                                    {loading ? <Loader2 className="animate-spin"/> : <Sparkles className="text-cyan-400"/>}
+                                    {loading ? "INVESTIGANDO Y ESCRIBIENDO..." : "GENERAR TEXTO"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        const root = createRoot(document.getElementById('root'));
+        root.render(<Dashboard />);
+    </script>
+</body>
+</html>
