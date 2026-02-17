@@ -32,14 +32,13 @@
         import React, { useState, useEffect } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+        import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
         import { BookOpen, Brain, Sparkles, Save, RefreshCw, Eye, Edit3, ArrowLeft, CheckSquare, Square, Globe, Feather, Briefcase, Zap, HeartHandshake, Loader2, Search } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // --- CATALOGO DE GÉNEROS ---
         const GENRES = {
             "Real World (Internet Research)": [
                 { id: 'biography', label: 'Biography (Real Person)', icon: Globe },
@@ -74,12 +73,15 @@
             const [loading, setLoading] = useState(false);
             const [apiKey, setApiKey] = useState(localStorage.getItem('periplo_google_key') || '');
             
-            // --- ESTADOS PARA MODELO ---
+            // ESTADO PARA CARPETAS Y EDICIÓN
+            const [parentPath, setParentPath] = useState('');
+            const [editingId, setEditingId] = useState(null);
+            const [isLoadingData, setIsLoadingData] = useState(false);
+
             const [availableModels, setAvailableModels] = useState([]);
             const [selectedModel, setSelectedModel] = useState('');
             const [isLoadingModels, setIsLoadingModels] = useState(false);
 
-            // CONFIGURACIÓN PERSISTENTE
             const [config, setConfig] = useState({ 
                 level: 'Basic', 
                 genre: 'story', 
@@ -89,7 +91,47 @@
             
             const [readingData, setReadingData] = useState({ title: '', content: '', tokens: [] });
 
-            // TOKENIZER
+            // INICIALIZACIÓN: Capturar Carpeta e ID de edición
+            useEffect(() => {
+                const init = async () => {
+                    const params = new URLSearchParams(window.location.search);
+                    
+                    // 1. Capturar Carpeta (Para guardar donde debe ser)
+                    const folder = params.get('folder');
+                    if (folder && folder !== 'undefined' && folder !== 'null') {
+                        setParentPath(decodeURIComponent(folder));
+                    }
+
+                    // 2. Capturar ID de Edición
+                    const editId = params.get('edit');
+                    if (editId) {
+                        setIsLoadingData(true);
+                        try {
+                            const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editId);
+                            const docSnap = await getDoc(docRef);
+                            if (docSnap.exists()) {
+                                const data = docSnap.data();
+                                
+                                // Reconstruir datos para editar
+                                setReadingData({
+                                    title: data.title,
+                                    content: data.content.text,
+                                    tokens: processContent(data.content.text).map((t, i) => ({
+                                        ...t,
+                                        isHidden: data.content.blanks.includes(i)
+                                    }))
+                                });
+                                setConfig(prev => ({ ...prev, level: data.level, genre: data.genre }));
+                                setEditingId(editId);
+                                setStep('editor');
+                            }
+                        } catch (e) { console.error(e); } 
+                        finally { setIsLoadingData(false); }
+                    }
+                };
+                init();
+            }, []);
+
             const processContent = (text) => {
                 const regex = /([a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+|[^a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ\s]+|\s+)/g;
                 const parts = text.match(regex) || [];
@@ -111,32 +153,20 @@
                     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
                     if (!response.ok) throw new Error("Error conectando con Google");
                     const data = await response.json();
-                    
-                    // Filtramos modelos que soporten generación
-                    const validModels = data.models
-                        .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent"))
-                        .map(m => m.name);
-                    
+                    const validModels = data.models.filter(m => m.supportedGenerationMethods?.includes("generateContent")).map(m => m.name);
                     setAvailableModels(validModels);
                     if (validModels.length > 0) {
-                        // Preferir versiones flash recientes, si no el primero
                         const preferred = validModels.find(m => m.includes("gemini-1.5-flash")) || validModels.find(m => m.includes("gemini-2.0")) || validModels[0];
                         setSelectedModel(preferred);
-                        alert(`¡Modelos cargados! Seleccionado: ${preferred.replace('models/', '')}`);
-                    } else {
-                        alert("No se encontraron modelos compatibles.");
+                        alert(`¡Conectado! Usando: ${preferred.replace('models/', '')}`);
                     }
-                } catch (e) {
-                    alert("Error al buscar modelos: " + e.message);
-                } finally {
-                    setIsLoadingModels(false);
-                }
+                } catch (e) { alert("Error: " + e.message); } 
+                finally { setIsLoadingModels(false); }
             };
 
             const generateReading = async () => {
                 if (!apiKey) return alert("Falta API Key");
                 if (!selectedModel) return alert("Por favor escanea y selecciona un modelo primero (botón lupa)");
-                
                 setLoading(true);
 
                 const allSelectedGrammar = [
@@ -150,14 +180,17 @@
 
                 let instructions = "";
                 if (allSelectedGrammar.length === 0) {
-                    instructions += `\n- GRAMMAR MODE: FREE CREATION. Focus 100% on the natural flow of the text.`;
+                    instructions += `\n- GRAMMAR MODE: FREE CREATION. Focus 100% on the natural flow.`;
                 } else {
-                    instructions += `\n- GRAMMAR MODE: GUIDED (Soft). Try to incorporate these structures naturally: ${allSelectedGrammar.join(', ')}.`;
+                    instructions += `\n- GRAMMAR MODE: GUIDED. Try to incorporate: ${allSelectedGrammar.join(', ')}.`;
                 }
 
                 if (config.genre === 'advice') instructions += `\n- STRUCTURE: Situation -> Pros/Cons -> Advice.`;
                 else if (config.genre === 'interview') instructions += `\n- STRUCTURE: Dialogue script of a job interview.`;
-                else if (config.genre === 'email') instructions += `\n- STRUCTURE: Professional or personal email format.`;
+                else if (config.genre === 'email') instructions += `\n- STRUCTURE: Professional email format.`;
+
+                // --- AQUÍ ESTÁ EL FIX DEL FUN FACT ---
+                instructions += `\n- CRITICAL: At the very end of the text, append a separate paragraph titled "💡 Fun Fact" or "Did You Know?" with an interesting real-world fact or curiosity related to the topic (use Google Search to find a good one if needed).`;
 
                 const prompt = `
                     Generate an English reading text.
@@ -165,9 +198,9 @@
                     ${topicPrompt}
                     ${instructions}
 
-                    ${needsSearch ? "IMPORTANT: USE THE GOOGLE SEARCH TOOL to find REAL facts. Do not invent." : "Use your creativity."}
+                    ${needsSearch ? "IMPORTANT: USE THE GOOGLE SEARCH TOOL to find REAL facts." : "Use your creativity."}
 
-                    RETURN ONLY RAW JSON (NO MARKDOWN BLOCK like \`\`\`json). Just the clean JSON object:
+                    RETURN ONLY RAW JSON:
                     {
                         "title": "Title here",
                         "content": "Full text body here with \\n for line breaks."
@@ -175,8 +208,6 @@
                 `;
 
                 try {
-                    // CONFIGURACIÓN DINÁMICA: Si usa búsqueda, NO enviamos responseMimeType (Provoca error 400 en Gemini)
-                    // Si NO usa búsqueda, usamos responseMimeType para asegurar JSON.
                     const tools = needsSearch ? [{ googleSearch: {} }] : [];
                     const generationConfig = needsSearch ? {} : { responseMimeType: "application/json" };
 
@@ -192,9 +223,7 @@
 
                     const data = await response.json();
                     if(data.error) throw new Error(data.error.message);
-                    if(!data.candidates || !data.candidates[0].content) throw new Error("La IA no devolvió contenido.");
                     
-                    // LIMPIEZA MANUAL: Quitamos bloques markdown si existen
                     let text = data.candidates[0].content.parts[0].text;
                     text = text.replace(/```json|```/g, "").trim(); 
                     
@@ -217,7 +246,7 @@
             const saveActivity = async () => {
                 if (!readingData.title) return alert("Falta título");
                 try {
-                    await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), {
+                    const payload = {
                         title: readingData.title,
                         type: 'READING', 
                         content: {
@@ -226,11 +255,28 @@
                         },
                         level: config.level,
                         genre: config.genre,
-                        createdAt: serverTimestamp()
-                    });
-                    alert("Lectura guardada!");
-                    window.location.href = 'index.html';
-                } catch (e) { alert(e.message); }
+                        parentPath: parentPath // <--- AQUÍ ESTÁ EL FIX DE GUARDADO
+                    };
+
+                    if (editingId) {
+                        await updateDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editingId), {
+                            ...payload,
+                            updatedAt: serverTimestamp()
+                        });
+                        alert("¡Lectura actualizada!");
+                    } else {
+                        await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), {
+                            ...payload,
+                            createdAt: serverTimestamp()
+                        });
+                        alert("¡Lectura creada y guardada!");
+                    }
+                    
+                    // Volver al index preservando la carpeta si existe
+                    const returnUrl = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html';
+                    window.location.href = returnUrl;
+
+                } catch (e) { alert("Error guardando: " + e.message); }
             };
 
             const toggleHidden = (idx) => {
@@ -241,24 +287,26 @@
                 }
             };
 
+            const handleExit = () => {
+                const returnUrl = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html';
+                window.location.href = returnUrl;
+            };
+
+            if (isLoadingData) return <div className="h-screen flex items-center justify-center text-slate-500 font-bold"><Loader2 className="animate-spin mr-2"/> Cargando lectura...</div>;
+
             if (step === 'config') {
                 return (
                     <div className="min-h-screen bg-slate-50 p-6 font-sans">
                         <div className="max-w-6xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-200 flex flex-col h-[90vh]">
-                            {/* Header */}
                             <div className="bg-slate-900 p-6 text-white flex justify-between items-center shrink-0 gap-4">
                                 <div><h1 className="text-2xl font-black flex items-center gap-2"><BookOpen className="text-emerald-400"/> Reading Builder</h1><p className="text-slate-400 text-xs uppercase font-bold tracking-widest mt-1">Motor de Generación de Textos</p></div>
-                                
-                                {/* ZONA DE CONEXIÓN */}
-                                <div className="flex items-center gap-2 bg-slate-800 p-1.5 rounded-xl border border-slate-700">
-                                    <button onClick={() => window.location.href='index.html'} className="hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg font-bold text-xs transition-all flex items-center gap-2"><ArrowLeft size={14}/> Salir</button>
-                                    <div className="w-px h-6 bg-slate-600 mx-1"></div>
-                                    <input type="password" value={apiKey} onChange={e => {setApiKey(e.target.value); localStorage.setItem('periplo_google_key', e.target.value)}} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs w-28 focus:border-emerald-500 focus:outline-none text-center" placeholder="API Key"/>
+                                <div className="flex items-center gap-2">
+                                    <button onClick={handleExit} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg font-bold text-sm transition-all flex items-center gap-2"><ArrowLeft size={16}/> Salir</button>
+                                    <input type="password" value={apiKey} onChange={e => {setApiKey(e.target.value); localStorage.setItem('periplo_google_key', e.target.value)}} className="bg-slate-900 border-slate-700 rounded-lg px-3 py-2 text-xs w-28 focus:border-emerald-500 focus:outline-none text-center" placeholder="API Key"/>
                                     <button onClick={fetchModels} disabled={isLoadingModels || !apiKey} className="p-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors" title="Escanear Modelos">{isLoadingModels ? <Loader2 className="animate-spin" size={16}/> : <Search size={16}/>}</button>
                                     {availableModels.length > 0 && (<select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white max-w-[120px]">{availableModels.map(m => <option key={m} value={m}>{m.replace('models/', '')}</option>)}</select>)}
                                 </div>
                             </div>
-
                             <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
                                 <div className="md:w-1/3 bg-slate-50 border-r border-slate-200 flex flex-col">
                                     <div className="p-4 border-b border-slate-200 bg-white"><label className="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Nivel de Dificultad</label><div className="flex gap-1 bg-slate-100 p-1 rounded-xl">{['Basic', 'Advanced', 'Pro'].map(l => (<button key={l} onClick={() => setConfig({...config, level: l})} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${config.level===l ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>{l}</button>))}</div></div>
@@ -285,7 +333,10 @@
                         <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden flex flex-col h-[90vh]">
                             <div className="bg-white p-4 border-b border-slate-100 flex justify-between items-center sticky top-0 z-10 shrink-0">
                                 <div className="flex items-center gap-4"><button onClick={() => setStep('config')} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-800 transition-colors"><ArrowLeft size={20}/></button><div><h2 className="font-black text-slate-800 text-lg">Editor de Huecos</h2><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Haz clic en las palabras para ocultarlas ({hiddenCount} seleccionadas)</p></div></div>
-                                <button onClick={saveActivity} className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-emerald-200"><Save size={18}/> Guardar</button>
+                                <div className="flex gap-2">
+                                    <button onClick={handleExit} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-xl font-bold">Cancelar</button>
+                                    <button onClick={saveActivity} className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-emerald-200"><Save size={18}/> {editingId ? "Actualizar" : "Guardar"}</button>
+                                </div>
                             </div>
                             <div className="p-8 overflow-y-auto custom-scrollbar flex-1">
                                 <input value={readingData.title} onChange={e => setReadingData({...readingData, title: e.target.value})} className="text-3xl font-black text-slate-900 w-full border-none outline-none mb-6 placeholder-slate-300 bg-transparent" placeholder="Título de la Lectura..."/>
