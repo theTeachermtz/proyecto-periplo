@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Reading Challenge | Periplo</title>
+    <title>Reading Activity | Periplo</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📖</text></svg>">
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="importmap">
@@ -21,8 +21,9 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap'); 
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f1f5f9; }
+        .droppable-active { background-color: #dcfce7; border-color: #22c55e; }
     </style>
 </head>
 <body>
@@ -32,106 +33,155 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { CheckCircle2, AlertCircle, Archive, ArrowLeft, Loader2, BookOpen } from 'lucide-react';
+        import { Loader2, CheckCircle2, RotateCcw, ArrowLeft, BookOpen, Lightbulb } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        const ReadingGame = () => {
-            const [activity, setActivity] = useState(null);
-            const [draggedWord, setDraggedWord] = useState(null);
-            const [droppedItems, setDroppedItems] = useState({});
-            const [checkResult, setCheckResult] = useState(null);
+        const ReadingActivity = () => {
+            const [loading, setLoading] = useState(true);
+            const [data, setData] = useState(null);
+            const [tokens, setTokens] = useState([]);
+            const [dropped, setDropped] = useState({});
+            const [result, setResult] = useState(null);
 
             useEffect(() => {
                 const init = async () => {
                     const params = new URLSearchParams(window.location.search);
                     const id = params.get('id');
                     if (!id) return;
+                    
                     const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id));
-                    if (snap.exists()) setActivity(snap.data().content);
+                    if (snap.exists()) {
+                        const savedData = snap.data();
+                        setData(savedData);
+                        
+                        const regex = /([a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+|[^a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ\s]+|\s+)/g;
+                        const parts = savedData.content.text.match(regex) || [];
+                        const processedTokens = parts.map((part, index) => ({
+                            id: index,
+                            text: part,
+                            isHidden: savedData.content.blanks.includes(index)
+                        }));
+                        setTokens(processedTokens);
+                    }
+                    setLoading(false);
                 };
                 init();
             }, []);
 
-            if (!activity) return <div className="h-screen flex items-center justify-center text-cyan-600"><Loader2 className="animate-spin" size={48}/></div>;
-
-            const hiddenTokens = activity.tokens.filter(t => t.isHidden);
-            const usedWords = Object.values(droppedItems);
-            const availableWords = hiddenTokens.map(t => t.text).sort().filter(word => {
-                const totalOccurrences = hiddenTokens.filter(ht => ht.text === word).length;
-                const placedOccurrences = usedWords.filter(uw => uw === word).length;
-                return placedOccurrences < totalOccurrences;
-            });
-
-            const handleDragStart = (e, word) => { setDraggedWord(word); e.dataTransfer.setData("text/plain", word); };
-            const handleDragOver = (e) => { e.preventDefault(); };
-            const handleDrop = (e, tokenIndex) => { e.preventDefault(); if (draggedWord) setDroppedItems(prev => ({ ...prev, [tokenIndex]: draggedWord })); setDraggedWord(null); };
-            const removeWord = (tokenIndex) => { const newDropped = { ...droppedItems }; delete newDropped[tokenIndex]; setDroppedItems(newDropped); };
-            
+            const handleDragStart = (e, word) => { e.dataTransfer.setData("word", word); };
+            const handleDragOver = (e) => e.preventDefault();
+            const handleDrop = (e, index) => {
+                e.preventDefault();
+                const word = e.dataTransfer.getData("word");
+                setDropped(prev => ({ ...prev, [index]: word }));
+            };
+            const removeDrop = (index) => {
+                const newDropped = { ...dropped };
+                delete newDropped[index];
+                setDropped(newDropped);
+            };
             const checkAnswers = () => {
-                let allCorrect = true;
-                hiddenTokens.forEach(token => { if (droppedItems[token.id] !== token.text) allCorrect = false; });
-                setCheckResult(allCorrect ? 'correct' : 'incorrect');
-                if (allCorrect) confetti({ particleCount: 200, spread: 100, origin: { y: 0.6 } });
+                const isAllCorrect = tokens.filter(t => t.isHidden).every(t => dropped[t.id] === t.text);
+                setResult(isAllCorrect ? 'correct' : 'wrong');
+                if (isAllCorrect) confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
             };
 
-            return (
-                <div className="min-h-screen p-4 md:p-8 flex flex-col">
-                    <div className="w-full max-w-6xl mx-auto flex justify-between items-center mb-8">
-                        <button onClick={() => window.location.href='index.html'} className="p-3 bg-white hover:bg-slate-200 rounded-2xl shadow-sm transition-colors text-slate-500"><ArrowLeft/></button>
-                        <div className="bg-white px-6 py-2 rounded-full shadow-sm border border-slate-100 flex items-center gap-2 font-black text-slate-700 uppercase tracking-widest"><BookOpen className="text-cyan-500"/> Reading Challenge</div>
-                    </div>
+            const handleExit = () => {
+                // INTENTA VOLVER A LA CARPETA SI ES POSIBLE, SINO AL INDEX
+                const params = new URLSearchParams(window.location.search);
+                // Aquí idealmente pasaríamos el folderId en la URL al cargar el juego para saber a donde volver
+                window.location.href = 'index.html'; 
+            };
 
-                    <div className="w-full max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-8 flex-1">
-                        <div className="lg:col-span-3 bg-white p-8 md:p-12 rounded-[2.5rem] shadow-xl border border-slate-100 relative overflow-hidden">
-                            <h1 className="text-3xl md:text-4xl font-black text-slate-800 mb-8">{activity.title}</h1>
-                            <div className="leading-[3.5rem] text-xl text-slate-700 font-medium">
-                                {activity.tokens.map((token) => {
-                                    if (token.isHidden) {
-                                        const droppedWord = droppedItems[token.id];
-                                        const isCorrect = checkResult && droppedWord === token.text;
-                                        const isWrong = checkResult && droppedWord && droppedWord !== token.text;
+            if (loading) return <div className="h-screen flex items-center justify-center text-slate-400"><Loader2 className="animate-spin mr-2"/> Cargando lectura...</div>;
+            if (!data) return <div className="h-screen flex items-center justify-center text-red-400">Lectura no encontrada</div>;
+
+            const wordBank = tokens.filter(t => t.isHidden).map(t => t.text).sort(() => Math.random() - 0.5); 
+            const availableWords = wordBank.filter(word => {
+                const totalInText = tokens.filter(t => t.text === word && t.isHidden).length;
+                const totalPlaced = Object.values(dropped).filter(w => w === word).length;
+                return totalPlaced < totalInText;
+            });
+
+            return (
+                <div className="max-w-4xl mx-auto p-6 min-h-screen font-sans">
+                    <button onClick={handleExit} className="mb-6 flex items-center gap-2 text-slate-500 hover:text-slate-800 font-bold text-sm uppercase tracking-wider"><ArrowLeft size={16}/> Volver</button>
+                    
+                    <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+                        <div className="bg-slate-900 p-8 text-white">
+                            <div className="flex items-center gap-3 mb-2 opacity-50">
+                                <BookOpen size={20}/>
+                                <span className="text-xs font-bold uppercase tracking-widest">{data.genre} • {data.level}</span>
+                            </div>
+                            <h1 className="text-3xl font-black">{data.title}</h1>
+                        </div>
+
+                        <div className="p-10">
+                            <div className="leading-loose text-lg text-slate-700 mb-8 text-justify">
+                                {tokens.map((t, i) => {
+                                    if (t.isHidden) {
+                                        const val = dropped[t.id];
+                                        let statusColor = 'border-slate-300 bg-slate-50';
+                                        if (result === 'correct') statusColor = 'border-green-500 bg-green-100 text-green-800';
+                                        if (result === 'wrong' && val) statusColor = val === t.text ? 'border-green-500 bg-green-100' : 'border-red-500 bg-red-100 text-red-800';
+
                                         return (
-                                            <span key={token.id} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, token.id)}
-                                                className={`inline-flex items-center justify-center min-w-[100px] h-10 mx-1 px-3 border-b-4 rounded-t-lg transition-all align-middle font-bold ${droppedWord ? isCorrect ? 'bg-green-100 border-green-500 text-green-800' : isWrong ? 'bg-red-100 border-red-500 text-red-800' : 'bg-cyan-50 border-cyan-400 text-cyan-800 shadow-sm' : 'bg-slate-100 border-slate-300 text-slate-300 border-dashed hover:bg-slate-200'}`}
+                                            <span 
+                                                key={i}
+                                                onDragOver={handleDragOver}
+                                                onDrop={(e) => !result && handleDrop(e, t.id)}
+                                                onClick={() => !result && removeDrop(t.id)}
+                                                className={`inline-flex items-center justify-center min-w-[80px] h-8 mx-1 px-2 border-b-2 rounded transition-all align-middle font-bold cursor-pointer ${statusColor}`}
                                             >
-                                                {droppedWord ? <span className="cursor-pointer w-full text-center truncate" onClick={() => !checkResult && removeWord(token.id)}>{droppedWord}</span> : '?'}
+                                                {val || <span className="opacity-20 text-xs">...</span>}
                                             </span>
                                         );
                                     }
-                                    return <span key={token.id} className="mx-[1px]">{token.text}</span>;
+                                    return <span key={i}>{t.text}</span>;
                                 })}
                             </div>
 
-                            {checkResult && (
-                                <div className={`mt-12 p-6 rounded-2xl flex items-center gap-6 animate-in zoom-in ${checkResult === 'correct' ? 'bg-green-100 text-green-800 border-2 border-green-200' : 'bg-red-50 text-red-800 border-2 border-red-200'}`}>
-                                    {checkResult === 'correct' ? <CheckCircle2 size={48} className="text-green-600 shrink-0" /> : <AlertCircle size={48} className="text-red-500 shrink-0" />}
+                            {/* FUN FACT BOX */}
+                            {data.content.fun_fact && (
+                                <div className="bg-amber-50 border-l-4 border-amber-400 p-6 rounded-r-xl mb-8 flex gap-4">
+                                    <div className="shrink-0 text-amber-500"><Lightbulb size={24} className="fill-amber-500 text-amber-600"/></div>
                                     <div>
-                                        <p className="font-black text-2xl mb-1">{checkResult === 'correct' ? '¡Excelente Trabajo!' : 'Hay algunos errores'}</p>
-                                        <p className="font-medium opacity-90">{checkResult === 'correct' ? 'Has completado la lectura perfectamente.' : 'Revisa las palabras en rojo e inténtalo de nuevo.'}</p>
+                                        <h4 className="font-black text-amber-700 uppercase text-xs tracking-widest mb-1">Did You Know?</h4>
+                                        <p className="text-amber-900 font-medium text-sm">{data.content.fun_fact}</p>
                                     </div>
-                                    {checkResult !== 'correct' && <button onClick={() => setCheckResult(null)} className="ml-auto px-6 py-3 bg-white rounded-xl shadow-md text-red-600 font-black hover:bg-red-50 hover:scale-105 transition-all">Reintentar</button>}
                                 </div>
                             )}
                         </div>
 
-                        {/* Word Bank Sidebar */}
-                        <div className="lg:col-span-1">
-                            <div className="bg-slate-800 p-6 rounded-[2rem] shadow-2xl sticky top-8 text-white">
-                                <div className="flex items-center gap-3 mb-6"><Archive className="text-cyan-400" /><h3 className="font-black text-xl tracking-wide">Palabras</h3></div>
-                                <div className="flex flex-wrap gap-3 min-h-[150px]">
-                                    {availableWords.map((word, i) => (
-                                        <div key={`${word}-${i}`} draggable onDragStart={(e) => handleDragStart(e, word)} className="cursor-grab active:cursor-grabbing px-4 py-2 bg-white/10 border border-white/20 rounded-xl font-bold hover:bg-cyan-500 hover:border-cyan-400 hover:scale-105 transition-all w-full text-center">
-                                            {word}
-                                        </div>
-                                    ))}
-                                    {availableWords.length === 0 && !checkResult && <p className="text-slate-400 font-bold italic w-full text-center py-8">Todo colocado</p>}
-                                </div>
-                                {!checkResult && (
-                                    <button onClick={checkAnswers} disabled={availableWords.length > 0} className={`w-full mt-8 py-4 rounded-xl font-black text-lg transition-all ${availableWords.length === 0 ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-900 shadow-[0_0_20px_rgba(6,182,212,0.4)]' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}>
-                                        Comprobar
+                        <div className="bg-slate-50 p-8 border-t border-slate-200">
+                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">Banco de Palabras (Arrastra al texto)</h3>
+                            <div className="flex flex-wrap gap-3 min-h-[50px]">
+                                {availableWords.map((w, i) => (
+                                    <div 
+                                        key={i} 
+                                        draggable={!result}
+                                        onDragStart={(e) => handleDragStart(e, w)}
+                                        className="bg-white border border-slate-200 px-4 py-2 rounded-lg font-bold text-slate-700 shadow-sm hover:shadow-md hover:-translate-y-1 transition-all cursor-grab active:cursor-grabbing"
+                                    >
+                                        {w}
+                                    </div>
+                                ))}
+                                {availableWords.length === 0 && !result && <div className="text-slate-400 text-sm italic">¡Todas las palabras colocadas!</div>}
+                            </div>
+
+                            <div className="mt-8 flex justify-end">
+                                {result === 'correct' ? (
+                                    <button onClick={() => window.location.reload()} className="bg-green-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg hover:scale-105 transition-transform flex items-center gap-2"><CheckCircle2/> ¡Excelente! Otra vez</button>
+                                ) : (
+                                    <button 
+                                        onClick={checkAnswers} 
+                                        disabled={availableWords.length > 0}
+                                        className="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold shadow-lg hover:bg-emerald-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        Comprobar Respuestas
                                     </button>
                                 )}
                             </div>
@@ -140,8 +190,9 @@
                 </div>
             );
         };
+
         const root = createRoot(document.getElementById('root'));
-        root.render(<ReadingGame />);
+        root.render(<ReadingActivity />);
     </script>
 </body>
 </html>
