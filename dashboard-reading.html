@@ -72,22 +72,13 @@
             const [step, setStep] = useState('config'); 
             const [loading, setLoading] = useState(false);
             const [apiKey, setApiKey] = useState(localStorage.getItem('periplo_google_key') || '');
-            
             const [parentPath, setParentPath] = useState('');
             const [editingId, setEditingId] = useState(null);
             const [isLoadingData, setIsLoadingData] = useState(false);
-
             const [availableModels, setAvailableModels] = useState([]);
             const [selectedModel, setSelectedModel] = useState('');
             const [isLoadingModels, setIsLoadingModels] = useState(false);
-
-            const [config, setConfig] = useState({ 
-                level: 'Basic', 
-                genre: 'story', 
-                topic: '', 
-                selectedGrammar: { Basic: new Set(), Advanced: new Set(), Pro: new Set() }
-            });
-            
+            const [config, setConfig] = useState({ level: 'Basic', genre: 'story', topic: '', selectedGrammar: { Basic: new Set(), Advanced: new Set(), Pro: new Set() } });
             const [readingData, setReadingData] = useState({ title: '', content: '', fun_fact: '', tokens: [] });
 
             useEffect(() => {
@@ -95,7 +86,6 @@
                     const params = new URLSearchParams(window.location.search);
                     const folder = params.get('folder');
                     if (folder && folder !== 'undefined' && folder !== 'null') setParentPath(decodeURIComponent(folder));
-
                     const editId = params.get('edit');
                     if (editId) {
                         setIsLoadingData(true);
@@ -161,7 +151,6 @@
                 ];
 
                 const needsSearch = GENRES["Real World (Internet Research)"].some(g => g.id === config.genre);
-                // LÓGICA CORREGIDA: Detectar si es ficción para NO pedir fun_fact
                 const isFiction = GENRES["Fiction & Creative"].some(g => g.id === config.genre);
                 
                 const topicPrompt = config.topic ? `Specific Topic/Scenario: "${config.topic}"` : "Topic: Choose a creative and engaging topic relevant to the genre.";
@@ -171,28 +160,25 @@
                 else instructions += `\n- GRAMMAR MODE: GUIDED. Try to incorporate: ${allSelectedGrammar.join(', ')}.`;
 
                 if (config.genre === 'advice') instructions += `\n- STRUCTURE: Situation -> Pros/Cons -> Advice.`;
-                else if (config.genre === 'interview') instructions += `\n- STRUCTURE: Dialogue script of a job interview.`;
                 else if (config.genre === 'email') instructions += `\n- STRUCTURE: Professional email format.`;
-
-                // --- LOGICA CONDICIONAL FUN FACT ---
-                if (!isFiction) {
-                    instructions += `\n- MANDATORY: Include a 'fun_fact' field in the JSON. For Real World topics, find a verified fact. For Professional/Advice, provide a "Pro Tip" or "Key Takeaway".`;
-                } else {
-                    instructions += `\n- NOTE: Do NOT include a 'fun_fact' field for this fiction/creative text. Focus solely on the narrative.`;
+                
+                // AJUSTE CRÍTICO PARA DIÁLOGOS
+                else if (config.genre === 'interview' || config.genre === 'dialogue') {
+                    instructions += `\n- STRUCTURE: SCRIPT FORMAT. Write it strictly as a script (e.g., 'Interviewer: Hello... \\n Candidate: Hi...'). Use a new line for each speaker switch.`;
                 }
+
+                if (!isFiction) instructions += `\n- MANDATORY: Include a 'fun_fact' field in the JSON.`;
+                else instructions += `\n- NOTE: Do NOT include a 'fun_fact' field for this fiction text.`;
 
                 const jsonStructure = isFiction 
                     ? `{ "title": "Title here", "content": "Full text body here with \\n for line breaks." }`
-                    : `{ "title": "Title here", "content": "Full text body here with \\n for line breaks.", "fun_fact": "A short, interesting 'Did You Know?' fact or anecdote related to the topic." }`;
+                    : `{ "title": "Title here", "content": "Full text body here with \\n for line breaks.", "fun_fact": "A short, interesting 'Did You Know?' fact." }`;
 
                 const prompt = `
-                    Generate an English reading text.
-                    Level: ${config.level}. Genre: ${config.genre}.
+                    Generate an English reading text. Level: ${config.level}. Genre: ${config.genre}.
                     ${topicPrompt}
                     ${instructions}
-
                     ${needsSearch ? "IMPORTANT: USE THE GOOGLE SEARCH TOOL to find REAL facts." : "Use your creativity."}
-
                     RETURN ONLY RAW JSON:
                     ${jsonStructure}
                 `;
@@ -200,58 +186,31 @@
                 try {
                     const tools = needsSearch ? [{ googleSearch: {} }] : [];
                     const generationConfig = needsSearch ? {} : { responseMimeType: "application/json" };
-
                     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/${selectedModel}:generateContent?key=${apiKey}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], tools: tools, generationConfig: generationConfig })
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], tools: tools, generationConfig: generationConfig })
                     });
-
                     const data = await response.json();
                     if(data.error) throw new Error(data.error.message);
-                    
-                    let text = data.candidates[0].content.parts[0].text;
-                    text = text.replace(/```json|```/g, "").trim(); 
+                    let text = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim(); 
                     const result = JSON.parse(text);
-                    
                     setReadingData({
                         title: result.title,
                         content: result.content,
-                        fun_fact: result.fun_fact || "", // Puede venir vacío si es ficción
+                        fun_fact: result.fun_fact || "", 
                         tokens: processContent(result.content)
                     });
                     setStep('editor');
-
                 } catch (e) { alert("Error: " + e.message); console.error(e); } finally { setLoading(false); }
             };
 
             const saveActivity = async () => {
                 if (!readingData.title) return alert("Falta título");
                 try {
-                    const payload = {
-                        title: readingData.title,
-                        type: 'READING', 
-                        content: {
-                            text: readingData.content,
-                            fun_fact: readingData.fun_fact,
-                            blanks: readingData.tokens.filter(t => t.isHidden).map(t => t.id) 
-                        },
-                        level: config.level,
-                        genre: config.genre,
-                        parentPath: parentPath 
-                    };
-
-                    if (editingId) {
-                        await updateDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editingId), { ...payload, updatedAt: serverTimestamp() });
-                        alert("¡Lectura actualizada!");
-                    } else {
-                        await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), { ...payload, createdAt: serverTimestamp() });
-                        alert("¡Lectura creada!");
-                    }
-                    
+                    const payload = { title: readingData.title, type: 'READING', content: { text: readingData.content, fun_fact: readingData.fun_fact, blanks: readingData.tokens.filter(t => t.isHidden).map(t => t.id) }, level: config.level, genre: config.genre, parentPath: parentPath };
+                    if (editingId) { await updateDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editingId), { ...payload, updatedAt: serverTimestamp() }); alert("¡Lectura actualizada!"); } 
+                    else { await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), { ...payload, createdAt: serverTimestamp() }); alert("¡Lectura creada!"); }
                     const returnUrl = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html';
                     window.location.href = returnUrl;
-
                 } catch (e) { alert("Error guardando: " + e.message); }
             };
 
@@ -260,10 +219,7 @@
                 if (newTokens[idx].isWord) { newTokens[idx].isHidden = !newTokens[idx].isHidden; setReadingData({ ...readingData, tokens: newTokens }); }
             };
 
-            const handleExit = () => {
-                const returnUrl = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html';
-                window.location.href = returnUrl;
-            };
+            const handleExit = () => { const returnUrl = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html'; window.location.href = returnUrl; };
 
             if (isLoadingData) return <div className="h-screen flex items-center justify-center text-slate-500 font-bold"><Loader2 className="animate-spin mr-2"/> Cargando lectura...</div>;
 
@@ -272,10 +228,11 @@
                     <div className="min-h-screen bg-slate-50 p-6 font-sans">
                         <div className="max-w-6xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-200 flex flex-col h-[90vh]">
                             <div className="bg-slate-900 p-6 text-white flex justify-between items-center shrink-0 gap-4">
-                                <div><h1 className="text-2xl font-black flex items-center gap-2"><BookOpen className="text-emerald-400"/> Reading Builder</h1><p className="text-slate-400 text-xs uppercase font-bold tracking-widest mt-1">Motor de Generación de Textos</p></div>
+                                <div><h1 className="text-2xl font-black flex items-center gap-2"><BookOpen className="text-emerald-400"/> Reading Builder</h1><p className="text-slate-400 text-xs uppercase font-bold tracking-widest mt-1">Motor de Generación</p></div>
                                 <div className="flex items-center gap-2"><button onClick={handleExit} className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg font-bold text-sm transition-all flex items-center gap-2"><ArrowLeft size={16}/> Salir</button><input type="password" value={apiKey} onChange={e => {setApiKey(e.target.value); localStorage.setItem('periplo_google_key', e.target.value)}} className="bg-slate-900 border-slate-700 rounded-lg px-3 py-2 text-xs w-28 focus:border-emerald-500 focus:outline-none text-center" placeholder="API Key"/><button onClick={fetchModels} disabled={isLoadingModels || !apiKey} className="p-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors" title="Escanear Modelos">{isLoadingModels ? <Loader2 className="animate-spin" size={16}/> : <Search size={16}/>}</button>{availableModels.length > 0 && (<select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white max-w-[120px]">{availableModels.map(m => <option key={m} value={m}>{m.replace('models/', '')}</option>)}</select>)}</div>
                             </div>
                             <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
+                                {/* Left & Center same as before */}
                                 <div className="md:w-1/3 bg-slate-50 border-r border-slate-200 flex flex-col">
                                     <div className="p-4 border-b border-slate-200 bg-white"><label className="text-[10px] font-black text-slate-400 uppercase mb-2 block tracking-widest">Nivel de Dificultad</label><div className="flex gap-1 bg-slate-100 p-1 rounded-xl">{['Basic', 'Advanced', 'Pro'].map(l => (<button key={l} onClick={() => setConfig({...config, level: l})} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${config.level===l ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>{l}</button>))}</div></div>
                                     <div className="p-4 flex-1 overflow-y-auto custom-scrollbar bg-slate-50"><div className="flex justify-between items-center mb-2"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Gramática ({config.level})</label><span className="text-[10px] bg-slate-200 text-slate-500 px-2 py-0.5 rounded-full font-bold">{config.selectedGrammar[config.level].size}</span></div><div className="space-y-1">{GRAMMAR_OPTIONS[config.level].map(g => (<button key={g.id} onClick={() => toggleGrammar(config.level, g.id)} className={`w-full text-left p-3 rounded-xl border flex items-center gap-3 transition-all ${config.selectedGrammar[config.level].has(g.id) ? 'bg-indigo-50 border-indigo-500 text-indigo-900' : 'bg-white border-slate-200 text-slate-500 hover:border-indigo-200'}`}>{config.selectedGrammar[config.level].has(g.id) ? <CheckSquare size={16} className="text-indigo-600"/> : <Square size={16} className="text-slate-300"/>}<span className="text-xs font-bold">{g.label}</span></button>))}</div></div>
@@ -305,22 +262,8 @@
                             </div>
                             <div className="p-8 overflow-y-auto custom-scrollbar flex-1">
                                 <input value={readingData.title} onChange={e => setReadingData({...readingData, title: e.target.value})} className="text-3xl font-black text-slate-900 w-full border-none outline-none mb-6 placeholder-slate-300 bg-transparent" placeholder="Título de la Lectura..."/>
-                                
-                                <div className="leading-loose text-lg text-slate-700 bg-slate-50 p-8 rounded-[2rem] border border-slate-100 shadow-inner text-justify mb-6">
-                                    {readingData.tokens.map((t, i) => (<span key={i} onClick={() => toggleHidden(i)} className={`inline-block mx-[1px] px-1 rounded cursor-pointer transition-all border-b-2 select-none ${t.isHidden ? 'bg-emerald-100 text-emerald-800 border-emerald-400 font-bold' : t.isWord ? 'border-transparent hover:bg-slate-200 hover:border-slate-300' : 'border-transparent'}`}>{t.text}</span>))}
-                                </div>
-
-                                {/* EDITABLE FUN FACT BOX (Solo si existe en la data generada, o si no es ficción) */}
-                                <div className="bg-amber-50 border-l-4 border-amber-400 p-6 rounded-r-xl">
-                                    <div className="flex items-center gap-2 mb-2 text-amber-600 font-black text-sm uppercase tracking-widest"><Lightbulb size={18}/> Fun Fact / Key Takeaway</div>
-                                    <textarea 
-                                        value={readingData.fun_fact} 
-                                        onChange={e => setReadingData({...readingData, fun_fact: e.target.value})}
-                                        className="w-full bg-transparent border-none outline-none text-amber-900 text-base resize-none placeholder-amber-300/50"
-                                        placeholder={readingData.fun_fact ? "" : "(Opcional para ficción, obligatorio para real) Escribe un dato curioso..."}
-                                        rows={3}
-                                    />
-                                </div>
+                                <div className="leading-loose text-lg text-slate-700 bg-slate-50 p-8 rounded-[2rem] border border-slate-100 shadow-inner text-justify mb-6">{readingData.tokens.map((t, i) => (<span key={i} onClick={() => toggleHidden(i)} className={`inline-block mx-[1px] px-1 rounded cursor-pointer transition-all border-b-2 select-none ${t.isHidden ? 'bg-emerald-100 text-emerald-800 border-emerald-400 font-bold' : t.isWord ? 'border-transparent hover:bg-slate-200 hover:border-slate-300' : 'border-transparent'}`}>{t.text}</span>))}</div>
+                                <div className="bg-amber-50 border-l-4 border-amber-400 p-6 rounded-r-xl"><div className="flex items-center gap-2 mb-2 text-amber-600 font-black text-sm uppercase tracking-widest"><Lightbulb size={18}/> Fun Fact / Key Takeaway</div><textarea value={readingData.fun_fact} onChange={e => setReadingData({...readingData, fun_fact: e.target.value})} className="w-full bg-transparent border-none outline-none text-amber-900 text-base resize-none placeholder-amber-300/50" placeholder={config.genre === 'story' ? "No requerido en ficción, pero puedes añadir una nota..." : "Dato curioso..."} rows={3}/></div>
                             </div>
                         </div>
                     </div>
