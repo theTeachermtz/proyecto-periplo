@@ -29,8 +29,8 @@
         import React, { useState, useEffect } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, query, writeBatch } from 'firebase/firestore';
-        import { Plus, X, Trash2, Save, Calendar, Copy, Repeat, Palette, CheckCircle2, Moon, Sun, GripVertical, Check, ArrowLeft, Link as LinkIcon, Video, User } from 'lucide-react';
+        import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, query, writeBatch, getDocs } from 'firebase/firestore';
+        import { Plus, X, Trash2, Save, Calendar, Copy, Repeat, Palette, CheckCircle2, Moon, Sun, GripVertical, Check, ArrowLeft, Link as LinkIcon, Video, User, Wrench } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -84,10 +84,9 @@
             const [duplicationMode, setDuplicationMode] = useState({ active: false, sourceEvent: null, selectedSlots: [] });
             const [deleteConfirm, setDeleteConfirm] = useState({ open: false, event: null, deleteAll: false });
             
-            // IMPORTANTE: 'student' es el campo clave para el link
             const [formData, setFormData] = useState({
-                title: '', // Nombre del evento (ej: Clase de Inglés)
-                student: '', // Nombre del alumno (ej: Juan Perez)
+                title: '',
+                student: '',
                 type: 'class',
                 notes: '',
                 meetLink: '',
@@ -95,6 +94,10 @@
                 applyToAllWeek: false,
                 applyColorToAll: false
             });
+
+            // Estado para detectar si el usuario ha editado manualmente el campo Alumno
+            // Para saber si debemos seguir copiando el título automáticamente o no
+            const [isStudentManuallyEdited, setIsStudentManuallyEdited] = useState(false);
 
             useEffect(() => {
                 const q = query(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'));
@@ -115,13 +118,63 @@
                 localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light');
             };
 
-            // COPIAR LINK DE ALUMNO
             const copyStudentLink = () => {
                 if (!formData.student.trim()) return alert("Escribe el nombre del alumno primero");
                 const baseUrl = window.location.href.replace('dashboard-schedule.html', 'schedule.html');
                 const link = `${baseUrl}?student=${encodeURIComponent(formData.student.trim())}`;
                 navigator.clipboard.writeText(link);
                 alert(`¡Link copiado para ${formData.student}!\n\n${link}`);
+            };
+
+            // --- HERRAMIENTA DE REPARACIÓN MASIVA ---
+            const fixDatabaseNames = async () => {
+                if (!confirm("⚠️ ¿REPARAR BASE DE DATOS?\n\nEsto buscará todas las clases que tengan Título pero no tengan 'Alumno' y copiará el título al campo de alumno.\n\nÚsalo una vez para arreglar tus eventos antiguos.")) return;
+                
+                try {
+                    const q = query(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'));
+                    const snapshot = await getDocs(q);
+                    const batch = writeBatch(db);
+                    let count = 0;
+
+                    snapshot.docs.forEach((docSnap) => {
+                        const data = docSnap.data();
+                        // Si es clase, tiene título, PERO no tiene alumno (o está vacío)
+                        if (data.type === 'class' && data.title && !data.student) {
+                            batch.update(doc(db, 'artifacts/periplo-app-v1', 'schedule', docSnap.id), {
+                                student: data.title // Copiar Título a Alumno
+                            });
+                            count++;
+                        }
+                    });
+
+                    if (count > 0) {
+                        await batch.commit();
+                        alert(`✅ ¡Listo! Se repararon ${count} eventos automáticamente.`);
+                    } else {
+                        alert("👍 Todo está en orden. No se encontraron eventos para reparar.");
+                    }
+
+                } catch (e) {
+                    alert("Error en la reparación: " + e.message);
+                }
+            };
+
+            // --- MANEJO DEL FORMULARIO CON AUTO-FILL ---
+            const handleTitleChange = (e) => {
+                const newTitle = e.target.value;
+                setFormData(prev => {
+                    // Si el usuario NO ha editado manualmente el alumno, o el alumno estaba vacío/igual al titulo anterior
+                    // Entonces copiamos el título al alumno automáticamente.
+                    if (!isStudentManuallyEdited) {
+                        return { ...prev, title: newTitle, student: newTitle };
+                    }
+                    return { ...prev, title: newTitle };
+                });
+            };
+
+            const handleStudentChange = (e) => {
+                setFormData(prev => ({ ...prev, student: e.target.value }));
+                setIsStudentManuallyEdited(true); // Marcamos que el usuario tomó control de este campo
             };
 
             // --- DRAG AND DROP ---
@@ -158,7 +211,7 @@
             const confirmDuplication = async () => {
                 const { sourceEvent, selectedSlots } = duplicationMode;
                 const promises = selectedSlots.map(slot => addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), {
-                    title: sourceEvent.title, student: sourceEvent.student || '', type: sourceEvent.type, notes: sourceEvent.notes || '', customColor: sourceEvent.customColor || '', meetLink: sourceEvent.meetLink || '', day: slot.day, time: slot.time
+                    title: sourceEvent.title, student: sourceEvent.student || sourceEvent.title, type: sourceEvent.type, notes: sourceEvent.notes || '', customColor: sourceEvent.customColor || '', meetLink: sourceEvent.meetLink || '', day: slot.day, time: slot.time
                 }));
                 await Promise.all(promises);
                 setDuplicationMode({ active: false, sourceEvent: null, selectedSlots: [] });
@@ -192,6 +245,10 @@
                 }
                 const existingEvent = events.find(e => e.day === day && e.time === time);
                 setCurrentSlot({ day, time });
+                
+                // RESETEAR BANDERA MANUAL
+                setIsStudentManuallyEdited(false);
+
                 if (existingEvent) {
                     setEditingEvent(existingEvent);
                     setFormData({
@@ -206,7 +263,11 @@
 
             const handleSave = async () => {
                 if (!formData.title.trim()) return;
-                const eventData = { title: formData.title.trim(), student: formData.student.trim(), type: formData.type, notes: formData.notes, meetLink: formData.meetLink, customColor: formData.type === 'class' ? formData.customColor : '' };
+                
+                // Si el student está vacío, usar el título por defecto (seguridad)
+                const finalStudent = formData.student.trim() || formData.title.trim();
+
+                const eventData = { title: formData.title.trim(), student: finalStudent, type: formData.type, notes: formData.notes, meetLink: formData.meetLink, customColor: formData.type === 'class' ? formData.customColor : '' };
                 const batch = writeBatch(db);
 
                 try {
@@ -262,6 +323,9 @@
                                     <h1 className="text-xl font-black tracking-tight text-stone-800 dark:text-stone-100">MASTER SCHEDULE</h1>
                                 </div>
                                 <div className="flex items-center space-x-4">
+                                    {/* BOTÓN DE REPARACIÓN MASIVA */}
+                                    <button onClick={fixDatabaseNames} className="hidden sm:flex items-center gap-2 bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors" title="Reparar eventos antiguos"><Wrench size={14}/> Reparar Datos</button>
+                                    
                                     <div className="text-sm font-bold text-stone-500 dark:text-zinc-500 hidden sm:block">{events.length} Actividades</div>
                                     <button onClick={toggleTheme} className="p-2 rounded-full bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-amber-400">{isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}</button>
                                 </div>
@@ -352,9 +416,9 @@
                                         <button onClick={closeModal} className="p-2 rounded-full hover:bg-stone-200 dark:hover:bg-zinc-800 transition-colors text-stone-500 dark:text-zinc-500"><X className="w-6 h-6" /></button>
                                     </div>
                                     <div className="p-6 space-y-6 overflow-y-auto">
-                                        <div><label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Título (Ej: Inglés Básico)</label><input type="text" value={formData.title} onChange={(e) => setFormData({...formData, title: e.target.value})} className="w-full px-4 py-3 rounded-xl border-2 border-stone-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-teal-500 focus:ring-0 outline-none transition-colors font-bold text-lg" placeholder="NOMBRE" autoFocus /></div>
+                                        <div><label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Título (Ej: Inglés Básico)</label><input type="text" value={formData.title} onChange={handleTitleChange} className="w-full px-4 py-3 rounded-xl border-2 border-stone-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-teal-500 focus:ring-0 outline-none transition-colors font-bold text-lg" placeholder="NOMBRE" autoFocus /></div>
                                         
-                                        <div><label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Nombre Alumno (Para el Link)</label><div className="flex items-center gap-2"><input type="text" value={formData.student} onChange={(e) => setFormData({...formData, student: e.target.value})} className="w-full px-4 py-3 rounded-xl border-2 border-stone-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-teal-500 outline-none font-bold text-sm" placeholder="Juan Perez" /><button onClick={copyStudentLink} disabled={!formData.student} className="p-3 bg-indigo-100 text-indigo-700 rounded-xl hover:bg-indigo-200 disabled:opacity-50" title="Copiar Link para Alumno"><LinkIcon size={18}/></button></div></div>
+                                        <div><label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Nombre Alumno (Para el Link)</label><div className="flex items-center gap-2"><input type="text" value={formData.student} onChange={handleStudentChange} className="w-full px-4 py-3 rounded-xl border-2 border-stone-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-teal-500 outline-none font-bold text-sm" placeholder="Juan Perez" /><button onClick={copyStudentLink} disabled={!formData.student} className="p-3 bg-indigo-100 text-indigo-700 rounded-xl hover:bg-indigo-200 disabled:opacity-50" title="Copiar Link para Alumno"><LinkIcon size={18}/></button></div></div>
 
                                         <div><label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Link Google Meet</label><div className="flex items-center gap-2"><div className="p-3 bg-stone-100 dark:bg-zinc-800 rounded-xl"><Video size={18} className="text-blue-500"/></div><input type="text" value={formData.meetLink} onChange={(e) => setFormData({...formData, meetLink: e.target.value})} className="w-full px-4 py-3 rounded-xl border-2 border-stone-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-teal-500 outline-none font-bold text-sm text-blue-600" placeholder="https://meet.google.com/..." /></div></div>
                                         
