@@ -3,8 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agenda tu Clase | Periplo</title>
+    <title>Tu Agenda | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Configuración de Tailwind para Modo Oscuro manual
+        tailwind.config = { darkMode: 'class' };
+    </script>
     <script type="importmap">
     {
       "imports": {
@@ -20,7 +24,7 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap'); 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
     </style>
 </head>
 <body>
@@ -30,7 +34,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, onSnapshot, addDoc, query } from 'firebase/firestore';
-        import { Calendar, ChevronLeft, Video, Lock, UserPlus, ArrowLeft } from 'lucide-react';
+        import { Calendar, ChevronLeft, Video, Lock, UserPlus, ArrowLeft, Sun, Moon, CheckCircle2 } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -47,15 +51,29 @@
             return `${h12}:00 ${ampm}`;
         };
 
-        const MY_NAME_KEY = 'periplo_student_name';
-
         const StudentSchedule = () => {
             const [events, setEvents] = useState([]);
             const [modalOpen, setModalOpen] = useState(false);
             const [selectedSlot, setSelectedSlot] = useState(null);
-            const [studentName, setStudentName] = useState(localStorage.getItem(MY_NAME_KEY) || '');
+            
+            // ESTADO: Identidad del Alumno (Desde URL o LocalStorage)
+            const [studentName, setStudentName] = useState('');
+            const [isDarkMode, setIsDarkMode] = useState(true); // DEFAULT OSCURO
 
             useEffect(() => {
+                // 1. Identificar al alumno por la URL
+                const params = new URLSearchParams(window.location.search);
+                const urlName = params.get('student');
+                
+                if (urlName) {
+                    setStudentName(decodeURIComponent(urlName));
+                } else {
+                    // Fallback: LocalStorage si ya había entrado antes
+                    const savedName = localStorage.getItem('periplo_student_name');
+                    if (savedName) setStudentName(savedName);
+                }
+
+                // 2. Cargar Eventos
                 const q = query(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'));
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     setEvents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -63,109 +81,159 @@
                 return () => unsubscribe();
             }, []);
 
+            const toggleTheme = () => setIsDarkMode(!isDarkMode);
+
             const handleSlotClick = (day, time) => {
                 const existing = events.find(e => e.day === day && e.time === time);
                 
-                // Si existe y NO es mío -> Bloqueado
+                // Si existe evento
                 if (existing) {
-                    if (existing.title === studentName) { // Usamos el Título como nombre del estudiante para simplificar la lógica de "Es mio"
-                        alert("¡Esta es tu clase!");
+                    // Comparar (Case insensitive y trim) para asegurar match
+                    const isMine = existing.student && studentName && existing.student.trim().toLowerCase() === studentName.trim().toLowerCase();
+                    
+                    if (isMine) {
+                        if (existing.meetLink) window.open(existing.meetLink, '_blank');
+                        else alert("Tu clase está agendada. El profesor pondrá el link pronto.");
+                    } else {
+                        // Es de otro o bloqueado
+                        // No hacemos nada, es solo visual "Busy"
                     }
                     return; 
                 }
+
+                // Si está vacío, permitir reservar
                 setSelectedSlot({ day, time });
                 setModalOpen(true);
             };
 
             const bookClass = async () => {
-                if (!studentName.trim()) return alert("Dime tu nombre para apartar");
-                localStorage.setItem(MY_NAME_KEY, studentName);
+                if (!studentName.trim()) return alert("Necesitamos tu nombre para apartar la clase.");
+                
+                // Guardar nombre para el futuro si no vino por URL
+                localStorage.setItem('periplo_student_name', studentName);
 
                 try {
                     await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), {
                         day: selectedSlot.day,
                         time: selectedSlot.time,
-                        title: studentName, // El título será el nombre del alumno
+                        title: "Clase de " + studentName.split(' ')[0], // Título genérico
+                        student: studentName, // IMPORTANTE: Campo clave para el filtro
                         type: 'class',
                         notes: 'Reservado por alumno',
-                        customColor: 'bg-emerald-200 border-emerald-300 text-emerald-900', // Verde automático para reservas de alumnos
-                        meetLink: '' // El profe lo pondrá después
+                        customColor: 'bg-teal-100 border-teal-300 text-teal-900', // Color default bonito
+                        meetLink: '' 
                     });
                     setModalOpen(false);
-                    alert("¡Apartado! Espera a que el profe ponga el link.");
+                    alert("¡Apartado exitoso!");
                 } catch (e) { alert("Error: " + e.message); }
             };
 
             return (
-                <div className="min-h-screen bg-stone-50 font-sans text-stone-800 flex flex-col h-screen overflow-hidden">
-                    <div className="bg-white p-4 border-b border-stone-200 flex justify-between items-center shrink-0 shadow-sm z-10">
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => window.location.href='index.html'} className="p-2 hover:bg-stone-100 rounded-lg text-stone-500"><ArrowLeft/></button>
-                            <h1 className="text-xl font-black text-stone-800 tracking-tight flex gap-2 items-center"><Calendar className="text-teal-500"/> Agenda tu Clase</h1>
-                        </div>
-                        {studentName && <div className="text-xs font-bold bg-teal-50 text-teal-700 px-3 py-1 rounded-full">Hola, {studentName}</div>}
-                    </div>
-
-                    <div className="flex-1 overflow-auto p-4">
-                        <div className="min-w-[900px] bg-white rounded-2xl shadow-xl border border-stone-200 overflow-hidden">
-                            <div className="grid grid-cols-[100px_repeat(6,_1fr)] border-b-2 border-stone-200 bg-stone-100 sticky top-0 z-30 shadow-sm">
-                                <div className="p-4 text-center text-xs font-black text-stone-300 uppercase tracking-wider flex items-center justify-center border-r border-stone-200 bg-stone-200">HORA</div>
-                                {DAYS.map(day => (<div key={day} className="p-4 text-center text-lg font-black text-stone-800 border-r border-stone-200 last:border-r-0 tracking-tight">{day}</div>))}
+                <div className={`${isDarkMode ? 'dark' : ''}`}>
+                    <div className="min-h-screen bg-stone-50 dark:bg-zinc-950 text-stone-800 dark:text-stone-100 font-sans flex flex-col h-screen overflow-hidden transition-colors duration-300">
+                        
+                        {/* HEADER */}
+                        <div className="bg-white dark:bg-zinc-900 p-4 border-b border-stone-200 dark:border-zinc-800 flex justify-between items-center shrink-0 shadow-sm z-10">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-teal-500 p-2 rounded-lg text-white shadow-md"><Calendar size={20}/></div>
+                                <div>
+                                    <h1 className="text-lg font-black text-stone-800 dark:text-white leading-none">TU AGENDA</h1>
+                                    {studentName ? (
+                                        <p className="text-xs font-bold text-teal-600 dark:text-teal-400 mt-1">Hola, {studentName} 👋</p>
+                                    ) : (
+                                        <p className="text-xs text-stone-400 dark:text-zinc-500 mt-1">Vista de Invitado</p>
+                                    )}
+                                </div>
                             </div>
+                            <button onClick={toggleTheme} className="p-2 rounded-full bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-amber-400 hover:bg-stone-200 dark:hover:bg-zinc-700 transition-all">
+                                {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
+                            </button>
+                        </div>
 
-                            <div className="divide-y divide-stone-100">
-                                {TIMES.map(time => (
-                                    <div key={time} className="grid grid-cols-[100px_repeat(6,_1fr)] min-h-[80px]">
-                                        <div className="p-3 text-xs font-black text-stone-400 flex flex-col items-center justify-center border-r border-stone-200 bg-stone-50"><span>{formatTimeDisplay(time)}</span></div>
-                                        {DAYS.map(day => {
-                                            const event = events.find(e => e.day === day && e.time === time);
-                                            // LOGICA DE PRIVACIDAD: ¿Es mío?
-                                            // Asumimos que si el 'title' coincide con mi nombre guardado, es mío.
-                                            const isMine = event && event.title === studentName;
-                                            
-                                            return (
-                                                <div key={`${day}-${time}`} onClick={() => handleSlotClick(day, time)} className="relative p-1 border-r border-stone-100 last:border-r-0 transition-all duration-200 group">
-                                                    {event ? (
-                                                        isMine ? (
-                                                            <div className="h-full w-full rounded-xl p-2 border-2 shadow-sm flex flex-col justify-between bg-emerald-100 border-emerald-300 text-emerald-900">
-                                                                <div className="font-black text-xs uppercase">TU CLASE</div>
-                                                                {event.meetLink ? (
-                                                                    <a href={event.meetLink} target="_blank" className="bg-white/50 hover:bg-white text-emerald-700 font-bold text-[10px] py-1 px-2 rounded flex items-center gap-1"><Video size={12}/> UNIRSE</a>
-                                                                ) : <span className="text-[10px] opacity-60">Sin link aún</span>}
-                                                            </div>
+                        {/* CALENDAR GRID */}
+                        <div className="flex-1 overflow-auto p-4">
+                            <div className="min-w-[800px] bg-white dark:bg-zinc-900 rounded-2xl shadow-xl border border-stone-200 dark:border-zinc-800 overflow-hidden">
+                                {/* Header Días */}
+                                <div className="grid grid-cols-[80px_repeat(6,_1fr)] border-b-2 border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950 sticky top-0 z-30 shadow-sm">
+                                    <div className="p-4 text-center text-xs font-black text-stone-300 dark:text-zinc-600 uppercase tracking-wider flex items-center justify-center border-r border-stone-200 dark:border-zinc-800">HORA</div>
+                                    {DAYS.map(day => (<div key={day} className="p-4 text-center text-lg font-black text-stone-800 dark:text-zinc-300 border-r border-stone-200 dark:border-zinc-800 last:border-r-0 tracking-tight">{day}</div>))}
+                                </div>
+
+                                {/* Body Horas */}
+                                <div className="divide-y divide-stone-100 dark:divide-zinc-800">
+                                    {TIMES.map(time => (
+                                        <div key={time} className="grid grid-cols-[80px_repeat(6,_1fr)] min-h-[90px]">
+                                            <div className="p-2 text-xs font-black text-stone-400 dark:text-zinc-500 flex flex-col items-center justify-center border-r border-stone-200 dark:border-zinc-800 bg-stone-50 dark:bg-zinc-950"><span>{formatTimeDisplay(time)}</span></div>
+                                            {DAYS.map(day => {
+                                                const event = events.find(e => e.day === day && e.time === time);
+                                                
+                                                // LÓGICA MAESTRA DE PRIVACIDAD
+                                                const isMine = event && studentName && event.student && event.student.trim().toLowerCase() === studentName.trim().toLowerCase();
+                                                
+                                                return (
+                                                    <div key={`${day}-${time}`} onClick={() => handleSlotClick(day, time)} className={`relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group`}>
+                                                        {event ? (
+                                                            isMine ? (
+                                                                // VISTA: ES MI CLASE (Verde + Link)
+                                                                <div className="h-full w-full rounded-xl p-2 border-2 shadow-md flex flex-col justify-between bg-emerald-100 border-emerald-300 dark:bg-emerald-900/40 dark:border-emerald-500 cursor-pointer hover:scale-[1.02] transition-transform">
+                                                                    <div>
+                                                                        <div className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-wider mb-1 flex items-center gap-1"><CheckCircle2 size={10}/> TU CLASE</div>
+                                                                        <div className="text-sm font-bold text-emerald-900 dark:text-emerald-100 leading-tight">{event.title}</div>
+                                                                    </div>
+                                                                    {event.meetLink ? (
+                                                                        <div className="bg-white/80 dark:bg-black/40 text-emerald-700 dark:text-emerald-300 font-bold text-[10px] py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 mt-1 hover:bg-white dark:hover:bg-black transition-colors"><Video size={12}/> ENTRAR AHORA</div>
+                                                                    ) : <span className="text-[10px] opacity-60 text-emerald-800 dark:text-emerald-400 text-center block">Link pendiente</span>}
+                                                                </div>
+                                                            ) : (
+                                                                // VISTA: OCUPADO (Gris + Candado)
+                                                                <div className="h-full w-full bg-stone-100 dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-xl flex flex-col items-center justify-center cursor-not-allowed opacity-70">
+                                                                    <Lock size={16} className="text-stone-300 dark:text-zinc-600 mb-1"/>
+                                                                    <span className="text-[10px] font-bold text-stone-400 dark:text-zinc-500 uppercase tracking-widest">Ocupado</span>
+                                                                </div>
+                                                            )
                                                         ) : (
-                                                            <div className="h-full w-full bg-stone-100 border-stone-200 border rounded-xl flex items-center justify-center cursor-not-allowed">
-                                                                <div className="flex items-center gap-1 text-stone-400 font-bold text-xs uppercase"><Lock size={12}/> Ocupado</div>
+                                                            // VISTA: DISPONIBLE (Hover para reservar)
+                                                            <div className="h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity">
+                                                                <div className="flex flex-col items-center gap-1 text-teal-500 dark:text-teal-400">
+                                                                    <UserPlus size={20}/>
+                                                                    <span className="text-[10px] font-bold uppercase">Apartar</span>
+                                                                </div>
                                                             </div>
-                                                        )
-                                                    ) : (
-                                                        <div className="h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity">
-                                                            <div className="flex items-center gap-1 text-teal-400 font-bold text-xs"><UserPlus size={16}/> Apartar</div>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-
-                    {modalOpen && (
-                        <div className="fixed inset-0 bg-stone-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in">
-                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden p-6">
-                                <h3 className="text-xl font-black text-stone-800 mb-2">Reservar Clase</h3>
-                                <p className="text-stone-500 text-sm mb-6">Para el {selectedSlot.day} a las {formatTimeDisplay(selectedSlot.time)}</p>
-                                <label className="block text-xs font-bold text-stone-400 uppercase mb-2">Tu Nombre Completo</label>
-                                <input value={studentName} onChange={e => setStudentName(e.target.value)} className="w-full p-4 bg-stone-50 border border-stone-200 rounded-xl mb-6 font-bold text-stone-800 focus:border-teal-500 outline-none" placeholder="Ej. Juan Pérez" autoFocus/>
-                                <div className="flex gap-2">
-                                    <button onClick={() => setModalOpen(false)} className="flex-1 py-3 text-stone-400 font-bold hover:bg-stone-50 rounded-xl transition-colors">Cancelar</button>
-                                    <button onClick={bookClass} className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-bold hover:bg-teal-700 shadow-lg transition-colors">Confirmar</button>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
                         </div>
-                    )}
+
+                        {/* MODAL RESERVA */}
+                        {modalOpen && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
+                                <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden p-6 border border-stone-200 dark:border-zinc-700">
+                                    <h3 className="text-xl font-black text-stone-800 dark:text-white mb-1">Reservar Clase</h3>
+                                    <p className="text-stone-500 dark:text-zinc-400 text-sm mb-6 font-medium">{selectedSlot.day} a las {formatTimeDisplay(selectedSlot.time)}</p>
+                                    
+                                    <label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Tu Nombre Completo</label>
+                                    <input 
+                                        value={studentName} 
+                                        onChange={e => setStudentName(e.target.value)} 
+                                        disabled={!!studentName && window.location.search.includes('student')} // Bloquear si viene por URL
+                                        className="w-full px-4 py-3 bg-stone-50 dark:bg-zinc-800 border-2 border-stone-200 dark:border-zinc-700 rounded-xl mb-6 font-bold text-stone-900 dark:text-white focus:border-teal-500 outline-none transition-colors" 
+                                        placeholder="Ej. Juan Pérez"
+                                        autoFocus
+                                    />
+                                    
+                                    <div className="flex gap-3">
+                                        <button onClick={() => setModalOpen(false)} className="flex-1 py-3 text-stone-500 dark:text-zinc-400 font-bold hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-xl transition-colors">Cancelar</button>
+                                        <button onClick={bookClass} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold shadow-lg shadow-teal-500/30 transition-all transform active:scale-95">Confirmar</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 </div>
             );
         };
