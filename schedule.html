@@ -6,7 +6,6 @@
     <title>Tu Agenda | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        // Configuración de Tailwind para Modo Oscuro manual
         tailwind.config = { darkMode: 'class' };
     </script>
     <script type="importmap">
@@ -25,6 +24,8 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        .pulse-yellow { animation: pulse-yellow 2s infinite; }
+        @keyframes pulse-yellow { 0% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(234, 179, 8, 0); } 100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0); } }
     </style>
 </head>
 <body>
@@ -33,8 +34,8 @@
         import React, { useState, useEffect } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, onSnapshot, addDoc, query } from 'firebase/firestore';
-        import { Calendar, ChevronLeft, Video, Lock, UserPlus, ArrowLeft, Sun, Moon, CheckCircle2 } from 'lucide-react';
+        import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, updateDoc, doc, query } from 'firebase/firestore';
+        import { Calendar, ChevronLeft, Video, Lock, UserPlus, ArrowLeft, Sun, Moon, CheckCircle2, X, Clock, ArrowRightLeft, AlertCircle } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -51,29 +52,32 @@
             return `${h12}:00 ${ampm}`;
         };
 
+        // Función para normalizar nombres (ignorar mayúsculas, espacios extra y acentos simples)
+        const normalizeName = (name) => {
+            if (!name) return "";
+            return name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        };
+
         const StudentSchedule = () => {
             const [events, setEvents] = useState([]);
-            const [modalOpen, setModalOpen] = useState(false);
-            const [selectedSlot, setSelectedSlot] = useState(null);
             
-            // ESTADO: Identidad del Alumno (Desde URL o LocalStorage)
+            // MODALES Y ESTADOS
+            const [bookingModal, setBookingModal] = useState(null); // { day, time } para reservar nuevo
+            const [actionModal, setActionModal] = useState(null); // { event } para cancelar/posponer
+            const [rescheduleMode, setRescheduleMode] = useState(null); // { event } cuando estás eligiendo nuevo horario
+            
             const [studentName, setStudentName] = useState('');
-            const [isDarkMode, setIsDarkMode] = useState(true); // DEFAULT OSCURO
+            const [isDarkMode, setIsDarkMode] = useState(true);
 
             useEffect(() => {
-                // 1. Identificar al alumno por la URL
                 const params = new URLSearchParams(window.location.search);
                 const urlName = params.get('student');
-                
-                if (urlName) {
-                    setStudentName(decodeURIComponent(urlName));
-                } else {
-                    // Fallback: LocalStorage si ya había entrado antes
+                if (urlName) setStudentName(decodeURIComponent(urlName));
+                else {
                     const savedName = localStorage.getItem('periplo_student_name');
                     if (savedName) setStudentName(savedName);
                 }
 
-                // 2. Cargar Eventos
                 const q = query(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'));
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     setEvents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -83,48 +87,93 @@
 
             const toggleTheme = () => setIsDarkMode(!isDarkMode);
 
+            // --- LÓGICA DE CLICS EN CASILLAS ---
             const handleSlotClick = (day, time) => {
                 const existing = events.find(e => e.day === day && e.time === time);
-                
-                // Si existe evento
-                if (existing) {
-                    // Comparar (Case insensitive y trim) para asegurar match
-                    const isMine = existing.student && studentName && existing.student.trim().toLowerCase() === studentName.trim().toLowerCase();
-                    
-                    if (isMine) {
-                        if (existing.meetLink) window.open(existing.meetLink, '_blank');
-                        else alert("Tu clase está agendada. El profesor pondrá el link pronto.");
-                    } else {
-                        // Es de otro o bloqueado
-                        // No hacemos nada, es solo visual "Busy"
+
+                // 1. MODO POSPONER (RESCHEDULE)
+                if (rescheduleMode) {
+                    if (existing) return; // No puedes mover a un lugar ocupado
+                    if (confirm(`¿Mover clase al ${day} a las ${formatTimeDisplay(time)}?`)) {
+                        performReschedule(day, time);
                     }
-                    return; 
+                    return;
                 }
 
-                // Si está vacío, permitir reservar
-                setSelectedSlot({ day, time });
-                setModalOpen(true);
+                // 2. CLIC EN EVENTO EXISTENTE
+                if (existing) {
+                    // Verificar si es MI clase
+                    const isMine = existing.student && normalizeName(existing.student) === normalizeName(studentName);
+                    
+                    if (isMine) {
+                        if (existing.meetLink) {
+                            window.open(existing.meetLink, '_blank');
+                        } else {
+                            // Si no hay link, abrir menú de gestión
+                            setActionModal(existing);
+                        }
+                    } else {
+                        // Es de otro (Busy) -> No hace nada
+                    }
+                    return;
+                }
+
+                // 3. CLIC EN ESPACIO VACÍO (RESERVAR NUEVO)
+                if (!studentName) {
+                    // Si no tiene identidad, pedimos nombre
+                    setBookingModal({ day, time });
+                } else {
+                    // Si ya tiene identidad, confirmamos directo
+                    if(confirm(`¿Apartar clase para el ${day} a las ${formatTimeDisplay(time)}?`)) {
+                        bookClass(day, time, studentName);
+                    }
+                }
             };
 
-            const bookClass = async () => {
-                if (!studentName.trim()) return alert("Necesitamos tu nombre para apartar la clase.");
-                
-                // Guardar nombre para el futuro si no vino por URL
-                localStorage.setItem('periplo_student_name', studentName);
+            // --- ACCIONES ---
 
+            const bookClass = async (day, time, name) => {
+                localStorage.setItem('periplo_student_name', name);
+                setStudentName(name);
                 try {
                     await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), {
-                        day: selectedSlot.day,
-                        time: selectedSlot.time,
-                        title: "Clase de " + studentName.split(' ')[0], // Título genérico
-                        student: studentName, // IMPORTANTE: Campo clave para el filtro
+                        day, time,
+                        title: "Clase de " + name.split(' ')[0],
+                        student: name,
                         type: 'class',
                         notes: 'Reservado por alumno',
-                        customColor: 'bg-teal-100 border-teal-300 text-teal-900', // Color default bonito
+                        customColor: 'bg-emerald-200 border-emerald-300 text-emerald-900',
                         meetLink: '' 
                     });
-                    setModalOpen(false);
-                    alert("¡Apartado exitoso!");
+                    setBookingModal(null);
+                } catch (e) { alert("Error: " + e.message); }
+            };
+
+            const cancelClass = async () => {
+                if (!actionModal) return;
+                if (confirm("¿Seguro que quieres cancelar esta clase? Se borrará de la agenda.")) {
+                    try {
+                        await deleteDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', actionModal.id));
+                        setActionModal(null);
+                        alert("Clase cancelada.");
+                    } catch (e) { alert("Error: " + e.message); }
+                }
+            };
+
+            const initReschedule = () => {
+                setRescheduleMode(actionModal);
+                setActionModal(null);
+            };
+
+            const performReschedule = async (newDay, newTime) => {
+                if (!rescheduleMode) return;
+                try {
+                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', rescheduleMode.id), {
+                        day: newDay,
+                        time: newTime
+                    });
+                    setRescheduleMode(null);
+                    alert("¡Clase movida con éxito!");
                 } catch (e) { alert("Error: " + e.message); }
             };
 
@@ -132,23 +181,36 @@
                 <div className={`${isDarkMode ? 'dark' : ''}`}>
                     <div className="min-h-screen bg-stone-50 dark:bg-zinc-950 text-stone-800 dark:text-stone-100 font-sans flex flex-col h-screen overflow-hidden transition-colors duration-300">
                         
-                        {/* HEADER */}
-                        <div className="bg-white dark:bg-zinc-900 p-4 border-b border-stone-200 dark:border-zinc-800 flex justify-between items-center shrink-0 shadow-sm z-10">
-                            <div className="flex items-center gap-3">
-                                <div className="bg-teal-500 p-2 rounded-lg text-white shadow-md"><Calendar size={20}/></div>
-                                <div>
-                                    <h1 className="text-lg font-black text-stone-800 dark:text-white leading-none">TU AGENDA</h1>
-                                    {studentName ? (
-                                        <p className="text-xs font-bold text-teal-600 dark:text-teal-400 mt-1">Hola, {studentName} 👋</p>
-                                    ) : (
-                                        <p className="text-xs text-stone-400 dark:text-zinc-500 mt-1">Vista de Invitado</p>
-                                    )}
+                        {/* HEADER + BANNER POSPONER */}
+                        {rescheduleMode ? (
+                            <div className="bg-amber-500 text-white p-4 shadow-md z-50 flex justify-between items-center animate-in slide-in-from-top">
+                                <div className="flex items-center gap-3">
+                                    <ArrowRightLeft className="animate-pulse"/>
+                                    <div>
+                                        <p className="font-black text-sm uppercase">Modo Reprogramación</p>
+                                        <p className="text-xs">Selecciona un espacio vacío (amarillo) para mover tu clase.</p>
+                                    </div>
                                 </div>
+                                <button onClick={() => setRescheduleMode(null)} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-lg text-xs font-bold">Cancelar</button>
                             </div>
-                            <button onClick={toggleTheme} className="p-2 rounded-full bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-amber-400 hover:bg-stone-200 dark:hover:bg-zinc-700 transition-all">
-                                {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
-                            </button>
-                        </div>
+                        ) : (
+                            <div className="bg-white dark:bg-zinc-900 p-4 border-b border-stone-200 dark:border-zinc-800 flex justify-between items-center shrink-0 shadow-sm z-10">
+                                <div className="flex items-center gap-3">
+                                    <div className="bg-teal-500 p-2 rounded-lg text-white shadow-md"><Calendar size={20}/></div>
+                                    <div>
+                                        <h1 className="text-lg font-black text-stone-800 dark:text-white leading-none">TU AGENDA</h1>
+                                        {studentName ? (
+                                            <p className="text-xs font-bold text-teal-600 dark:text-teal-400 mt-1">Hola, {studentName} 👋</p>
+                                        ) : (
+                                            <p className="text-xs text-stone-400 dark:text-zinc-500 mt-1">Vista de Invitado</p>
+                                        )}
+                                    </div>
+                                </div>
+                                <button onClick={toggleTheme} className="p-2 rounded-full bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-amber-400 hover:bg-stone-200 dark:hover:bg-zinc-700 transition-all">
+                                    {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
+                                </button>
+                            </div>
+                        )}
 
                         {/* CALENDAR GRID */}
                         <div className="flex-1 overflow-auto p-4">
@@ -166,40 +228,67 @@
                                             <div className="p-2 text-xs font-black text-stone-400 dark:text-zinc-500 flex flex-col items-center justify-center border-r border-stone-200 dark:border-zinc-800 bg-stone-50 dark:bg-zinc-950"><span>{formatTimeDisplay(time)}</span></div>
                                             {DAYS.map(day => {
                                                 const event = events.find(e => e.day === day && e.time === time);
+                                                const isMine = event && studentName && normalizeName(event.student) === normalizeName(studentName);
                                                 
-                                                // LÓGICA MAESTRA DE PRIVACIDAD
-                                                const isMine = event && studentName && event.student && event.student.trim().toLowerCase() === studentName.trim().toLowerCase();
-                                                
-                                                return (
-                                                    <div key={`${day}-${time}`} onClick={() => handleSlotClick(day, time)} className={`relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group`}>
-                                                        {event ? (
-                                                            isMine ? (
-                                                                // VISTA: ES MI CLASE (Verde + Link)
-                                                                <div className="h-full w-full rounded-xl p-2 border-2 shadow-md flex flex-col justify-between bg-emerald-100 border-emerald-300 dark:bg-emerald-900/40 dark:border-emerald-500 cursor-pointer hover:scale-[1.02] transition-transform">
+                                                // ESTILOS SEGÚN ESTADO
+                                                let cellContent = null;
+                                                let cellClass = "relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group";
+
+                                                if (rescheduleMode) {
+                                                    // MODO REPROGRAMACIÓN
+                                                    if (event) {
+                                                        // Ocupado (No elegible)
+                                                        cellClass += " bg-stone-100 dark:bg-zinc-950 opacity-30 cursor-not-allowed";
+                                                    } else {
+                                                        // Libre (Elegible)
+                                                        cellClass += " cursor-pointer bg-amber-50 dark:bg-amber-900/10 hover:bg-amber-100 dark:hover:bg-amber-900/30 border-amber-200 dark:border-amber-800";
+                                                        cellContent = (
+                                                            <div className="h-full w-full rounded-xl border-2 border-dashed border-amber-300 dark:border-amber-600 flex items-center justify-center animate-pulse">
+                                                                <span className="text-amber-600 dark:text-amber-400 font-bold text-xs uppercase flex items-center gap-1"><ArrowRightLeft size={14}/> Mover Aquí</span>
+                                                            </div>
+                                                        );
+                                                    }
+                                                } else {
+                                                    // MODO NORMAL
+                                                    if (event) {
+                                                        if (isMine) {
+                                                            cellClass += " cursor-pointer";
+                                                            cellContent = (
+                                                                <div className="h-full w-full rounded-xl p-2 border-2 shadow-md flex flex-col justify-between bg-emerald-100 border-emerald-300 dark:bg-emerald-900/40 dark:border-emerald-500 hover:scale-[1.02] transition-transform">
                                                                     <div>
                                                                         <div className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-wider mb-1 flex items-center gap-1"><CheckCircle2 size={10}/> TU CLASE</div>
                                                                         <div className="text-sm font-bold text-emerald-900 dark:text-emerald-100 leading-tight">{event.title}</div>
                                                                     </div>
                                                                     {event.meetLink ? (
-                                                                        <div className="bg-white/80 dark:bg-black/40 text-emerald-700 dark:text-emerald-300 font-bold text-[10px] py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 mt-1 hover:bg-white dark:hover:bg-black transition-colors"><Video size={12}/> ENTRAR AHORA</div>
-                                                                    ) : <span className="text-[10px] opacity-60 text-emerald-800 dark:text-emerald-400 text-center block">Link pendiente</span>}
+                                                                        <div className="bg-white/80 dark:bg-black/40 text-emerald-700 dark:text-emerald-300 font-bold text-[10px] py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 mt-1"><Video size={12}/> ENTRAR</div>
+                                                                    ) : <span className="text-[10px] opacity-60 text-emerald-800 dark:text-emerald-400 text-center block">Ver opciones...</span>}
                                                                 </div>
-                                                            ) : (
-                                                                // VISTA: OCUPADO (Gris + Candado)
-                                                                <div className="h-full w-full bg-stone-100 dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-xl flex flex-col items-center justify-center cursor-not-allowed opacity-70">
-                                                                    <Lock size={16} className="text-stone-300 dark:text-zinc-600 mb-1"/>
-                                                                    <span className="text-[10px] font-bold text-stone-400 dark:text-zinc-500 uppercase tracking-widest">Ocupado</span>
+                                                            );
+                                                        } else {
+                                                            cellClass += " cursor-not-allowed";
+                                                            cellContent = (
+                                                                <div className="h-full w-full bg-stone-100 dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-xl flex flex-col items-center justify-center opacity-70">
+                                                                    <div className="flex items-center gap-1 text-stone-400 dark:text-zinc-600 font-bold text-xs uppercase"><Lock size={12}/> Ocupado</div>
                                                                 </div>
-                                                            )
-                                                        ) : (
-                                                            // VISTA: DISPONIBLE (Hover para reservar)
-                                                            <div className="h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity">
+                                                            );
+                                                        }
+                                                    } else {
+                                                        // VACÍO
+                                                        cellClass += " cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20";
+                                                        cellContent = (
+                                                            <div className="h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                                                                 <div className="flex flex-col items-center gap-1 text-teal-500 dark:text-teal-400">
                                                                     <UserPlus size={20}/>
                                                                     <span className="text-[10px] font-bold uppercase">Apartar</span>
                                                                 </div>
                                                             </div>
-                                                        )}
+                                                        );
+                                                    }
+                                                }
+
+                                                return (
+                                                    <div key={`${day}-${time}`} onClick={() => handleSlotClick(day, time)} className={cellClass}>
+                                                        {cellContent}
                                                     </div>
                                                 );
                                             })}
@@ -209,26 +298,40 @@
                             </div>
                         </div>
 
-                        {/* MODAL RESERVA */}
-                        {modalOpen && (
+                        {/* MODAL GESTIÓN (CANCELAR / POSPONER) */}
+                        {actionModal && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                                <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-stone-200 dark:border-zinc-700">
+                                    <div className="p-6">
+                                        <h3 className="text-xl font-black text-stone-800 dark:text-white mb-1">Gestionar Clase</h3>
+                                        <p className="text-stone-500 dark:text-zinc-400 text-sm mb-6">{actionModal.day} • {formatTimeDisplay(actionModal.time)}</p>
+                                        
+                                        <div className="space-y-3">
+                                            <button onClick={initReschedule} className="w-full py-4 bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 rounded-xl font-bold border-2 border-amber-200 dark:border-amber-800 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors flex items-center justify-center gap-2">
+                                                <Clock size={18}/> Posponer / Mover
+                                            </button>
+                                            <button onClick={cancelClass} className="w-full py-4 bg-white dark:bg-zinc-800 text-rose-500 rounded-xl font-bold border-2 border-rose-100 dark:border-rose-900 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors flex items-center justify-center gap-2">
+                                                <X size={18}/> Cancelar Clase
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="bg-stone-50 dark:bg-zinc-950 p-4 border-t border-stone-200 dark:border-zinc-800 text-center">
+                                        <button onClick={() => setActionModal(null)} className="text-sm font-bold text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300">Volver</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* MODAL RESERVA INICIAL (SI NO TIENE NOMBRE) */}
+                        {bookingModal && (
                             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
                                 <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden p-6 border border-stone-200 dark:border-zinc-700">
-                                    <h3 className="text-xl font-black text-stone-800 dark:text-white mb-1">Reservar Clase</h3>
-                                    <p className="text-stone-500 dark:text-zinc-400 text-sm mb-6 font-medium">{selectedSlot.day} a las {formatTimeDisplay(selectedSlot.time)}</p>
-                                    
+                                    <h3 className="text-xl font-black text-stone-800 dark:text-white mb-2">Reservar Clase</h3>
                                     <label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Tu Nombre Completo</label>
-                                    <input 
-                                        value={studentName} 
-                                        onChange={e => setStudentName(e.target.value)} 
-                                        disabled={!!studentName && window.location.search.includes('student')} // Bloquear si viene por URL
-                                        className="w-full px-4 py-3 bg-stone-50 dark:bg-zinc-800 border-2 border-stone-200 dark:border-zinc-700 rounded-xl mb-6 font-bold text-stone-900 dark:text-white focus:border-teal-500 outline-none transition-colors" 
-                                        placeholder="Ej. Juan Pérez"
-                                        autoFocus
-                                    />
-                                    
+                                    <input value={studentName} onChange={e => setStudentName(e.target.value)} className="w-full px-4 py-3 bg-stone-50 dark:bg-zinc-800 border-2 border-stone-200 dark:border-zinc-700 rounded-xl mb-6 font-bold text-stone-900 dark:text-white focus:border-teal-500 outline-none transition-colors" placeholder="Ej. Juan Pérez" autoFocus/>
                                     <div className="flex gap-3">
-                                        <button onClick={() => setModalOpen(false)} className="flex-1 py-3 text-stone-500 dark:text-zinc-400 font-bold hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-xl transition-colors">Cancelar</button>
-                                        <button onClick={bookClass} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold shadow-lg shadow-teal-500/30 transition-all transform active:scale-95">Confirmar</button>
+                                        <button onClick={() => setBookingModal(null)} className="flex-1 py-3 text-stone-500 dark:text-zinc-400 font-bold hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-xl transition-colors">Cancelar</button>
+                                        <button onClick={() => bookClass(bookingModal.day, bookingModal.time, studentName)} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold shadow-lg shadow-teal-500/30 transition-all transform active:scale-95">Confirmar</button>
                                     </div>
                                 </div>
                             </div>
