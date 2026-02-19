@@ -26,6 +26,9 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
         .sticky-col { position: sticky; left: 0; z-index: 20; }
         .sticky-corner { position: sticky; left: 0; top: 0; z-index: 40; }
+        /* Animación para el Live Dot */
+        @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+        .live-dot { animation: pulse-green 2s infinite; }
     </style>
 </head>
 <body>
@@ -34,11 +37,10 @@
         import React, { useState, useEffect } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, query, writeBatch, orderBy, limit, getDocs } from 'firebase/firestore';
-        import { format, startOfWeek, addDays, isSameDay, addWeeks, parseISO } from 'date-fns';
+        import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, query, writeBatch, orderBy, limit } from 'firebase/firestore';
+        import { format, startOfWeek, addDays, isSameDay, addWeeks } from 'date-fns';
         import { es } from 'date-fns/locale';
-        // FIX: Importaciones faltantes agregadas (ChevronLeft, ChevronRight, Wrench)
-        import { Plus, X, Trash2, Save, Calendar as CalendarIcon, Copy, Repeat, Palette, CheckCircle2, Moon, Sun, GripVertical, Check, ArrowLeft, ChevronLeft, ChevronRight, Link as LinkIcon, Video, User, Bell, Wrench } from 'lucide-react';
+        import { Plus, X, Trash2, Save, Calendar as CalendarIcon, Copy, Repeat, Palette, CheckCircle2, Moon, Sun, GripVertical, Check, ArrowLeft, ChevronLeft, ChevronRight, Link as LinkIcon, Video, User, Bell } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -54,14 +56,16 @@
         export default function App() {
             const [events, setEvents] = useState([]);
             const [currentDate, setCurrentDate] = useState(new Date());
+            const [now, setNow] = useState(new Date()); // Reloj en vivo
             
             // NOTIFICATIONS
             const [notifications, setNotifications] = useState([]);
             const [showNotifs, setShowNotifs] = useState(false);
+            const hasUnread = notifications.some(n => !n.read);
 
             const [isDarkMode, setIsDarkMode] = useState(true);
             const [isModalOpen, setIsModalOpen] = useState(false);
-            const [currentSlot, setCurrentSlot] = useState(null); // { dateStr, dayName, time }
+            const [currentSlot, setCurrentSlot] = useState(null); 
             const [editingEvent, setEditingEvent] = useState(null);
             
             const [draggedEventId, setDraggedEventId] = useState(null);
@@ -72,7 +76,9 @@
             const [isStudentManuallyEdited, setIsStudentManuallyEdited] = useState(false);
 
             useEffect(() => {
-                // Notificaciones Permisos
+                // Reloj en vivo (Actualiza cada minuto)
+                const timer = setInterval(() => setNow(new Date()), 60000);
+
                 if ("Notification" in window && Notification.permission !== "denied" && Notification.permission !== "granted") {
                     Notification.requestPermission();
                 }
@@ -82,23 +88,21 @@
                     setEvents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 });
 
-                // Listen a notificaciones (solo las últimas 5)
                 const qNotif = query(collection(db, 'artifacts', 'periplo-app-v1', 'notifications'), orderBy('createdAt', 'desc'), limit(5));
                 const unsubNotif = onSnapshot(qNotif, (snapshot) => {
                     setNotifications(snapshot.docs.map(d => ({id: d.id, ...d.data()})));
-                    
                     snapshot.docChanges().forEach(change => {
                         if (change.type === 'added' && change.doc.data().createdAt) {
                             const data = change.doc.data();
-                            const isRecent = (Date.now() - data.createdAt.toMillis()) < 10000; // 10 segs
+                            const isRecent = (Date.now() - data.createdAt.toMillis()) < 10000; 
                             if (isRecent && Notification.permission === "granted") {
-                                new Notification("Actualización Periplo", { body: data.message, icon: 'https://cdn-icons-png.flaticon.com/512/3652/3652191.png' });
+                                new Notification("Actualización Periplo", { body: data.message });
                             }
                         }
                     });
                 });
 
-                return () => { unsubscribe(); unsubNotif(); };
+                return () => { clearInterval(timer); unsubscribe(); unsubNotif(); };
             }, []);
 
             const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
@@ -119,24 +123,16 @@
             };
             const handleStudentChange = (e) => { setFormData(prev => ({ ...prev, student: e.target.value })); setIsStudentManuallyEdited(true); };
 
-            // HERRAMIENTA REPARACIÓN
-            const fixDatabaseNames = async () => {
-                if (!confirm("⚠️ ¿REPARAR BASE DE DATOS?\n\nEsto buscará todas las clases que tengan Título pero no tengan 'Alumno' y copiará el título al campo de alumno.\n\nÚsalo una vez para arreglar tus eventos antiguos.")) return;
-                try {
-                    const q = query(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'));
-                    const snapshot = await getDocs(q);
+            // MARCAR NOTIFICACIONES COMO LEÍDAS
+            const toggleNotifs = async () => {
+                setShowNotifs(!showNotifs);
+                if (!showNotifs && hasUnread) {
                     const batch = writeBatch(db);
-                    let count = 0;
-                    snapshot.docs.forEach((docSnap) => {
-                        const data = docSnap.data();
-                        if (data.type === 'class' && data.title && !data.student) {
-                            batch.update(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', docSnap.id), { student: data.title });
-                            count++;
-                        }
+                    notifications.filter(n => !n.read).forEach(n => {
+                        batch.update(doc(db, 'artifacts', 'periplo-app-v1', 'notifications', n.id), { read: true });
                     });
-                    if (count > 0) { await batch.commit(); alert(`✅ ¡Listo! Se repararon ${count} eventos automáticamente.`); } 
-                    else { alert("👍 Todo está en orden. No se encontraron eventos para reparar."); }
-                } catch (e) { alert("Error en la reparación: " + e.message); }
+                    await batch.commit();
+                }
             };
 
             // CRUD & MODALS
@@ -169,7 +165,7 @@
 
                 try {
                     if (editingEvent) {
-                        batch.update(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', editingEvent.id), { ...eventData, date: currentSlot.dateStr });
+                        batch.update(doc(db, 'artifacts/periplo-app-v1', 'schedule', editingEvent.id), { ...eventData, date: currentSlot.dateStr });
                         if (formData.applyColorToAll && formData.type === 'class' && formData.customColor) {
                             events.filter(e => e.id !== editingEvent.id && e.type === 'class' && e.title.toLowerCase() === formData.title.toLowerCase()).forEach(e => batch.update(doc(db, 'artifacts/periplo-app-v1', 'schedule', e.id), { customColor: formData.customColor }));
                         }
@@ -206,9 +202,7 @@
                 const id = e.dataTransfer.getData('id');
                 const evToMove = events.find(x => x.id === id);
                 if(!evToMove) return;
-                try {
-                    await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', id), { date: tDate, day: tDay, time: tTime });
-                } catch(err) { alert(err.message); }
+                try { await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', id), { date: tDate, day: tDay, time: tTime }); } catch(err) { alert(err.message); }
                 setDraggedEventId(null);
             };
 
@@ -216,11 +210,7 @@
             const confirmDuplication = async () => {
                 const { sourceEvent, selectedSlots } = duplicationMode;
                 const batch = writeBatch(db);
-                selectedSlots.forEach(s => {
-                    batch.set(doc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule')), {
-                        ...sourceEvent, id: undefined, date: s.dateStr, day: s.dayName, time: s.time
-                    });
-                });
+                selectedSlots.forEach(s => { batch.set(doc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule')), { ...sourceEvent, id: undefined, date: s.dateStr, day: s.dayName, time: s.time }); });
                 await batch.commit();
                 setDuplicationMode({ active: false, sourceEvent: null, selectedSlots: [] });
             };
@@ -246,20 +236,17 @@
                                 </div>
                             </div>
                             <div className="flex items-center gap-4">
-                                {/* BOTÓN DE REPARACIÓN MASIVA */}
-                                <button onClick={fixDatabaseNames} className="hidden sm:flex items-center gap-2 bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors" title="Reparar eventos antiguos"><Wrench size={14}/> Reparar Datos</button>
-                                
                                 {/* NOTIFICACIONES */}
                                 <div className="relative">
-                                    <button onClick={() => setShowNotifs(!showNotifs)} className="p-2 bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 rounded-full relative hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors">
+                                    <button onClick={toggleNotifs} className={`p-2 rounded-full relative transition-colors ${hasUnread ? 'bg-red-50 text-red-500 dark:bg-red-900/30' : 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400'}`}>
                                         <Bell size={20}/>
-                                        <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full animate-ping"></span>
+                                        {hasUnread && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse border border-white dark:border-zinc-900"></span>}
                                     </button>
                                     {showNotifs && (
-                                        <div className="absolute right-0 mt-2 w-72 bg-white dark:bg-zinc-800 rounded-xl shadow-2xl border border-stone-200 dark:border-zinc-700 p-2 z-50">
+                                        <div className="absolute right-0 mt-2 w-72 bg-white dark:bg-zinc-800 rounded-xl shadow-2xl border border-stone-200 dark:border-zinc-700 p-2 z-50 animate-in slide-in-from-top-2">
                                             <h4 className="text-xs font-black p-2 border-b border-stone-100 dark:border-zinc-700 uppercase tracking-widest text-stone-400">Últimos Movimientos</h4>
                                             {notifications.map((n, i) => (
-                                                <div key={i} className="p-3 text-sm border-b border-stone-50 dark:border-zinc-700/50 last:border-0 leading-tight">
+                                                <div key={i} className={`p-3 text-sm border-b border-stone-50 dark:border-zinc-700/50 last:border-0 leading-tight ${n.read ? 'opacity-60' : 'font-medium'}`}>
                                                     {n.message}
                                                     <div className="text-[9px] opacity-50 mt-1">{n.createdAt?.toDate().toLocaleString()}</div>
                                                 </div>
@@ -277,7 +264,7 @@
                                 <div className="grid grid-cols-[80px_repeat(6,_1fr)] border-b-2 border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950 sticky top-0 z-30 shadow-sm">
                                     <div className="sticky-corner p-4 text-center text-xs font-black text-stone-300 dark:text-zinc-600 uppercase border-r border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950 flex items-center justify-center">HORA</div>
                                     {weekDays.map(day => {
-                                        const isToday = isSameDay(day, new Date());
+                                        const isToday = isSameDay(day, now);
                                         return (
                                             <div key={day.toString()} className={`p-3 text-center border-r border-stone-200 dark:border-zinc-800 last:border-r-0 ${isToday ? 'bg-indigo-50 dark:bg-indigo-900/20 border-b-4 border-b-indigo-500' : ''}`}>
                                                 <div className={`text-[10px] font-bold uppercase ${isToday ? 'text-indigo-600 dark:text-indigo-400' : 'text-stone-400 dark:text-zinc-500'}`}>{format(day, 'EEE', { locale: es })}</div>
@@ -288,51 +275,59 @@
                                 </div>
 
                                 <div className="divide-y divide-stone-100 dark:divide-zinc-800">
-                                    {TIMES.map(time => (
-                                        <div key={time} className="grid grid-cols-[80px_repeat(6,_1fr)] min-h-[100px]">
-                                            <div className="sticky-col p-2 text-xs font-black text-stone-400 dark:text-zinc-500 flex items-center justify-center border-r border-stone-200 dark:border-zinc-800 bg-stone-50 dark:bg-zinc-950/90 backdrop-blur-sm shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">{formatTimeDisplay(time)}</div>
-                                            {weekDays.map(day => {
-                                                const dateStr = format(day, 'yyyy-MM-dd');
-                                                const dayName = format(day, 'EEE', {locale: es}).toUpperCase().replace('.','');
-                                                const event = getEventForSlot(dateStr, dayName, time);
-                                                
-                                                const isDuplicationTarget = duplicationMode.active && !event;
-                                                const isSelectedForDuplication = duplicationMode.selectedSlots.some(s => s.dateStr === dateStr && s.time === time);
-                                                const isToday = isSameDay(day, new Date());
+                                    {TIMES.map(time => {
+                                        const currentHourStr = format(now, 'HH:00');
+                                        const isCurrentHourRow = time === currentHourStr;
 
-                                                let cellColor = 'bg-stone-50 border-stone-200 dark:bg-zinc-900 dark:border-zinc-800';
-                                                if (event) {
-                                                    cellColor = event.customColor || (ACTIVITY_TYPES.find(t => t.id === event.type)?.color || cellColor);
-                                                }
+                                        return (
+                                            <div key={time} className="grid grid-cols-[80px_repeat(6,_1fr)] min-h-[100px]">
+                                                <div className={`sticky-col p-2 text-xs font-black flex items-center justify-center border-r border-stone-200 dark:border-zinc-800 backdrop-blur-sm shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] ${isCurrentHourRow ? 'bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300' : 'bg-stone-50 dark:bg-zinc-950/90 text-stone-400 dark:text-zinc-500'}`}>
+                                                    {formatTimeDisplay(time)}
+                                                </div>
+                                                {weekDays.map(day => {
+                                                    const dateStr = format(day, 'yyyy-MM-dd');
+                                                    const dayName = format(day, 'EEE', {locale: es}).toUpperCase().replace('.','');
+                                                    const event = getEventForSlot(dateStr, dayName, time);
+                                                    
+                                                    const isDuplicationTarget = duplicationMode.active && !event;
+                                                    const isSelectedForDuplication = duplicationMode.selectedSlots.some(s => s.dateStr === dateStr && s.time === time);
+                                                    const isToday = isSameDay(day, now);
+                                                    const isLiveNow = isToday && isCurrentHourRow;
 
-                                                return (
-                                                    <div key={`${dateStr}-${time}`} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={e=>handleDrop(e,dateStr,dayName,time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={`relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group ${event ? 'bg-white dark:bg-zinc-900' : isToday ? 'bg-indigo-50/30 dark:bg-indigo-900/5' : ''} ${isDuplicationTarget ? 'cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}`}>
-                                                        {isSelectedForDuplication && <div className="absolute inset-0 bg-indigo-500/20 z-10 flex items-center justify-center animate-pulse"><CheckCircle2 className="text-indigo-500"/></div>}
-                                                        {event ? (
-                                                            <div draggable={!duplicationMode.active} onDragStart={e=>handleDragStart(e,event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`h-full w-full rounded-xl p-3 border-2 shadow-sm flex flex-col justify-center relative transition-transform ${draggedEventId===event.id ? 'opacity-40 scale-95' : 'hover:scale-[1.02]'} ${cellColor} ${duplicationMode.active ? 'opacity-50 pointer-events-none' : 'cursor-grab'}`}>
-                                                                {!duplicationMode.active && (
-                                                                    <div className="absolute top-1 right-1 flex space-x-1 opacity-0 group-hover:opacity-100 z-20 transition-opacity">
-                                                                        <button onClick={e=>startDuplication(e,event)} className="p-1 bg-indigo-500 text-white rounded-full"><Copy size={12}/></button>
-                                                                        <button onClick={e=>openDeleteConfirm(e,event)} className="p-1 bg-rose-500 text-white rounded-full"><Trash2 size={12}/></button>
-                                                                    </div>
-                                                                )}
-                                                                <div className="font-black text-sm leading-tight break-words uppercase z-10">{event.title}</div>
-                                                                {event.student && event.student !== event.title && <div className="flex items-center gap-1 text-[10px] font-bold opacity-60"><User size={10}/> {event.student}</div>}
-                                                                {event.meetLink && <div className="flex items-center gap-1 text-[10px] font-bold text-blue-600 dark:text-blue-400 mt-1"><LinkIcon size={10}/> Link OK</div>}
-                                                            </div>
-                                                        ) : (
-                                                            <div className={`h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer ${isDuplicationTarget ? 'opacity-100 border-2 border-dashed border-indigo-400 rounded-xl' : ''}`}>{isDuplicationTarget ? <span className="text-xs font-bold text-indigo-400">Pegar</span> : <Plus className="text-stone-300"/>}</div>
-                                                        )}
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    ))}
+                                                    let cellColor = 'bg-stone-50 border-stone-200 dark:bg-zinc-900 dark:border-zinc-800';
+                                                    if (event) cellColor = event.customColor || (ACTIVITY_TYPES.find(t => t.id === event.type)?.color || cellColor);
+
+                                                    return (
+                                                        <div key={`${dateStr}-${time}`} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={e=>handleDrop(e,dateStr,dayName,time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={`relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group ${event ? 'bg-white dark:bg-zinc-900' : isToday ? 'bg-indigo-50/30 dark:bg-indigo-900/5' : ''} ${isDuplicationTarget ? 'cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}`}>
+                                                            {isSelectedForDuplication && <div className="absolute inset-0 bg-indigo-500/20 z-10 flex items-center justify-center animate-pulse"><CheckCircle2 className="text-indigo-500"/></div>}
+                                                            {isLiveNow && <div className="absolute top-2 right-2 w-2.5 h-2.5 bg-emerald-500 rounded-full live-dot z-30"></div>}
+                                                            
+                                                            {event ? (
+                                                                <div draggable={!duplicationMode.active} onDragStart={e=>handleDragStart(e,event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`h-full w-full rounded-xl p-3 border-2 shadow-sm flex flex-col justify-center relative transition-transform ${draggedEventId===event.id ? 'opacity-40 scale-95' : 'hover:scale-[1.02]'} ${cellColor} ${duplicationMode.active ? 'opacity-50 pointer-events-none' : 'cursor-grab'}`}>
+                                                                    {!duplicationMode.active && (
+                                                                        <div className="absolute top-1 right-1 flex space-x-1 opacity-0 group-hover:opacity-100 z-20 transition-opacity">
+                                                                            <button onClick={e=>startDuplication(e,event)} className="p-1 bg-indigo-500 text-white rounded-full"><Copy size={12}/></button>
+                                                                            <button onClick={e=>openDeleteConfirm(e,event)} className="p-1 bg-rose-500 text-white rounded-full"><Trash2 size={12}/></button>
+                                                                        </div>
+                                                                    )}
+                                                                    <div className="font-black text-sm leading-tight break-words uppercase z-10">{event.title}</div>
+                                                                    {event.student && event.student !== event.title && <div className="flex items-center gap-1 text-[10px] font-bold opacity-60"><User size={10}/> {event.student}</div>}
+                                                                    {event.meetLink && <div className="flex items-center gap-1 text-[10px] font-bold text-blue-600 dark:text-blue-400 mt-1"><LinkIcon size={10}/> Link OK</div>}
+                                                                </div>
+                                                            ) : (
+                                                                <div className={`h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer ${isDuplicationTarget ? 'opacity-100 border-2 border-dashed border-indigo-400 rounded-xl' : ''}`}>{isDuplicationTarget ? <span className="text-xs font-bold text-indigo-400">Pegar</span> : <Plus className="text-stone-300"/>}</div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </div>
                         </div>
 
-                        {/* MODALS REUTILIZADOS (Con lógica idéntica a la anterior, abreviados por espacio) */}
+                        {/* Modals Generales */}
                         {isModalOpen && (
                             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
                                 <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-stone-200 dark:border-zinc-700 flex flex-col max-h-[90vh]">
@@ -364,7 +359,6 @@
                                 </div>
                             </div>
                         )}
-
                         {deleteConfirm.open && (
                             <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
                                 <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl p-6">
