@@ -36,10 +36,8 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
         .sticky-col { position: sticky; left: 0; z-index: 20; }
         .sticky-corner { position: sticky; left: 0; top: 0; z-index: 40; }
-        .draggable-item { touch-action: none; }
-        /* Cuaderno de Proyectos */
-        .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px); background-attachment: local; line-height: 32px; padding-top: 6px; }
-        .dark .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #3f3f46 31px, #3f3f46 32px); }
+        /* Mejora para el arrastre táctil en Chrome Mobile */
+        .draggable-item { touch-action: none; -webkit-user-drag: element; }
     </style>
 </head>
 <body>
@@ -57,6 +55,7 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        // OFFSET HORARIO (Ontario)
         const MY_TIME_OFFSET = 1; 
 
         const DAYS = ['LUN', 'MAR', 'MIER', 'JUE', 'VIE', 'SAB'];
@@ -139,14 +138,13 @@
             };
             const handleStudentChange = (e) => { setFormData(prev => ({ ...prev, student: e.target.value })); setIsStudentManuallyEdited(true); };
 
-            // LÓGICA INTELIGENTE DE TIPOS DE EVENTO
             const handleTypeChange = (newTypeId) => {
                 const config = ACTIVITY_TYPES.find(t => t.id === newTypeId);
                 setFormData(prev => ({
                     ...prev,
                     type: newTypeId,
                     title: config.defaultTitle || (prev.type !== 'class' ? '' : prev.title),
-                    customColor: '' // Reset palette selection
+                    customColor: ''
                 }));
             };
 
@@ -223,11 +221,15 @@
                 setIsModalOpen(false);
             };
 
-            // DND
-            const handleDragStart = (e, id) => { setDraggedEventId(id); e.dataTransfer.setData('id', id); e.dataTransfer.effectAllowed = 'move'; };
+            // DND (FIXED FOR MOBILE: using text/plain format)
+            const handleDragStart = (e, id) => { 
+                setDraggedEventId(id); 
+                e.dataTransfer.setData('text/plain', id); // OBLIGATORIO PARA CELULARES
+                e.dataTransfer.effectAllowed = 'move'; 
+            };
             const handleDrop = async (e, tDate, tDay, tTime) => {
                 e.preventDefault();
-                const id = e.dataTransfer.getData('id');
+                const id = e.dataTransfer.getData('text/plain'); // LEER FORMATO CORRECTO
                 if(!id) return;
                 const evToMove = events.find(x => x.id === id);
                 if(!evToMove) return;
@@ -329,25 +331,18 @@
                                                     if (event) cellColor = event.customColor || (ACTIVITY_TYPES.find(t => t.id === event.type)?.color || cellColor);
 
                                                     return (
-                                                        <div key={`${dateStr}-${time}`} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={e=>handleDrop(e,dateStr,dayName,time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={`relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group overflow-hidden ${event ? 'bg-white dark:bg-zinc-900' : isToday ? 'bg-indigo-50/30 dark:bg-indigo-900/5' : ''} ${isDuplicationTarget ? 'cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}`}>
+                                                        <div key={`${dateStr}-${time}`} onDragEnter={e=>e.preventDefault()} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={e=>handleDrop(e,dateStr,dayName,time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={`relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group overflow-hidden ${event ? 'bg-white dark:bg-zinc-900' : isToday ? 'bg-indigo-50/30 dark:bg-indigo-900/5' : ''} ${isDuplicationTarget ? 'cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}`}>
                                                             {isSelectedForDuplication && <div className="absolute inset-0 bg-indigo-500/20 z-10 flex items-center justify-center animate-pulse"><CheckCircle2 className="text-indigo-500"/></div>}
                                                             
                                                             {event ? (
                                                                 <div draggable={!duplicationMode.active} onDragStart={e=>handleDragStart(e,event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`draggable-item h-full w-full rounded-xl p-2.5 border-2 shadow-sm flex flex-col justify-between relative transition-transform ${draggedEventId===event.id ? 'opacity-40 scale-95' : 'hover:scale-[1.02]'} ${cellColor} ${duplicationMode.active ? 'opacity-50 pointer-events-none' : 'cursor-grab'}`}>
                                                                     
-                                                                    {/* BOTONES ANTI-FAT-FINGER (Más grandes y con stopPropagation) */}
+                                                                    {/* BOTÓN ELIMINAR (ÚNICO, FUNCIONAL Y GRANDE) */}
                                                                     {!duplicationMode.active && (
-                                                                        <div className="absolute top-1.5 right-1.5 flex space-x-1.5 opacity-0 group-hover:opacity-100 z-20 transition-opacity">
+                                                                        <div className="absolute top-1.5 right-1.5 flex opacity-0 group-hover:opacity-100 z-20 transition-opacity">
                                                                             <button 
                                                                                 onPointerDown={e => e.stopPropagation()} 
-                                                                                onClick={e => { e.stopPropagation(); startDuplication(e,event); }} 
-                                                                                className="p-2 md:p-1.5 bg-indigo-500 text-white rounded-lg shadow-md hover:bg-indigo-600"
-                                                                            >
-                                                                                <Copy size={18} className="md:w-4 md:h-4"/>
-                                                                            </button>
-                                                                            <button 
-                                                                                onPointerDown={e => e.stopPropagation()} 
-                                                                                onClick={e => { e.stopPropagation(); openDeleteConfirm(e,event); }} 
+                                                                                onClick={e => { e.preventDefault(); e.stopPropagation(); openDeleteConfirm(e,event); }} 
                                                                                 className="p-2 md:p-1.5 bg-rose-500 text-white rounded-lg shadow-md hover:bg-rose-600"
                                                                             >
                                                                                 <Trash2 size={18} className="md:w-4 md:h-4"/>
@@ -373,17 +368,25 @@
                             </div>
                         </div>
 
-                        {/* MODALS */}
+                        {/* MODAL EDICIÓN Y DUPLICACIÓN */}
                         {isModalOpen && (
                             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
                                 <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-stone-200 dark:border-zinc-700 flex flex-col max-h-[90vh]">
                                     <div className="bg-stone-50 dark:bg-zinc-950 px-6 py-4 flex justify-between items-center shrink-0">
-                                        <div><h3 className="font-black">{editingEvent ? 'Editar' : 'Nueva Entrada'}</h3><p className="text-sm">{currentSlot.dayName} {currentSlot.dateStr} • {formatTimeDisplay(currentSlot.time, MY_TIME_OFFSET)}</p></div>
-                                        <button onClick={()=>setIsModalOpen(false)}><X size={20}/></button>
+                                        <div><h3 className="font-black">{editingEvent ? 'Editar' : 'Nueva Entrada'}</h3><p className="text-sm text-stone-500">{currentSlot.dayName} {currentSlot.dateStr} • {formatTimeDisplay(currentSlot.time, MY_TIME_OFFSET)}</p></div>
+                                        <div className="flex items-center gap-3">
+                                            {/* BOTÓN DUPLICAR MOVIDO AQUÍ */}
+                                            {editingEvent && (
+                                                <button onClick={(e) => { e.preventDefault(); closeModal(); startDuplication(e, editingEvent); }} className="flex items-center gap-1 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-200 transition-colors">
+                                                    <Copy size={14}/> Duplicar
+                                                </button>
+                                            )}
+                                            <button onClick={()=>setIsModalOpen(false)} className="p-1 text-stone-400 hover:text-stone-600"><X size={20}/></button>
+                                        </div>
                                     </div>
                                     <div className="p-6 space-y-4 overflow-y-auto">
                                         
-                                        {/* TIPO DE EVENTO (SIEMPRE VISIBLE) */}
+                                        {/* TIPO DE EVENTO */}
                                         <div>
                                             <label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Tipo</label>
                                             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2">
@@ -407,7 +410,7 @@
                                             </div>
                                         )}
 
-                                        {/* FORMULARIO PROYECTO / OTRO (CON CUADERNO) */}
+                                        {/* FORMULARIO PROYECTO / OTRO */}
                                         {(formData.type === 'project' || formData.type === 'other') && (
                                             <div className="space-y-4 animate-in fade-in">
                                                 <div><label className="text-xs font-black uppercase">Título</label><input value={formData.title} onChange={e=>setFormData({...formData, title: e.target.value})} className="w-full p-3 rounded-xl border-2 dark:bg-zinc-800 dark:border-zinc-700 font-bold" autoFocus/></div>
@@ -415,7 +418,7 @@
                                             </div>
                                         )}
 
-                                        {/* FORMULARIO BLOQUE RÁPIDO (COMIDA/PERSONAL) */}
+                                        {/* FORMULARIO BLOQUE RÁPIDO */}
                                         {(formData.type === 'lunch' || formData.type === 'personal') && (
                                             <div className="bg-stone-100 dark:bg-zinc-800 p-6 rounded-xl text-center text-stone-500 dark:text-zinc-400 font-bold animate-in fade-in flex flex-col items-center gap-2">
                                                 <CheckCircle2 size={32} className="opacity-50"/>
@@ -423,12 +426,10 @@
                                             </div>
                                         )}
                                         
-                                        {/* OPCION REPETIR SEMANA (Solo nuevo) */}
                                         {!editingEvent && formData.type === 'class' && (<div className="flex items-center space-x-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-800 cursor-pointer" onClick={()=>setFormData({...formData, applyToAllWeek:!formData.applyToAllWeek})}><Repeat className="text-blue-500 w-5 h-5" /><span className="text-sm font-bold flex-1">Repetir Lunes a Sábado</span><input type="checkbox" checked={formData.applyToAllWeek} readOnly className="w-5 h-5"/></div>)}
                                     </div>
 
-                                    <div className="p-4 bg-stone-50 dark:bg-zinc-950 flex justify-between">
-                                        {editingEvent ? <button onClick={()=>setDeleteConfirm({open:true, event:editingEvent})} className="text-red-500 font-bold"><Trash2/></button> : <div></div>}
+                                    <div className="p-4 bg-stone-50 dark:bg-zinc-950 flex justify-end">
                                         <button onClick={handleSave} className="bg-stone-900 dark:bg-white text-white dark:text-black px-6 py-2 rounded-xl font-bold hover:scale-105 transition-transform">Guardar</button>
                                     </div>
                                 </div>
