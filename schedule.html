@@ -3,20 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tu Agenda y Cuaderno | Periplo</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📓</text></svg>">
+    <title>Tu Agenda | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>tailwind.config = { darkMode: 'class' };</script>
-    
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/default.css">
-    <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/index.min.js"></script>
     <script>
-        window.onload = function() {
-            MobileDragDrop.polyfill({ holdToDrag: 300 }); 
-            window.addEventListener('touchmove', function() {}, {passive: false});
-        };
+        tailwind.config = { darkMode: 'class' };
     </script>
-
     <script type="importmap">
     {
       "imports": {
@@ -24,8 +15,6 @@
         "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
         "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
         "lucide-react": "https://esm.sh/lucide-react@0.263.1",
-        "date-fns": "https://esm.sh/date-fns@2.30.0",
-        "date-fns/locale": "https://esm.sh/date-fns@2.30.0/locale",
         "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
         "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
       }
@@ -35,11 +24,8 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
-        .sticky-col { position: sticky; left: 0; z-index: 20; }
-        .sticky-corner { position: sticky; left: 0; top: 0; z-index: 40; }
-        .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px); background-attachment: local; line-height: 32px; padding-top: 6px; }
-        .dark .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #3f3f46 31px, #3f3f46 32px); }
-        .draggable-item { touch-action: none; -webkit-user-drag: element; }
+        .pulse-yellow { animation: pulse-yellow 2s infinite; }
+        @keyframes pulse-yellow { 0% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(234, 179, 8, 0); } 100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0); } }
     </style>
 </head>
 <body>
@@ -48,39 +34,42 @@
         import React, { useState, useEffect } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, updateDoc, doc, query, serverTimestamp } from 'firebase/firestore';
-        import { format, startOfWeek, addDays, isSameDay, addWeeks, isAfter, parseISO } from 'date-fns';
-        import { es } from 'date-fns/locale';
-        import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Video, Lock, UserPlus, ArrowLeft, Sun, Moon, CheckCircle2, X, Clock, ArrowRightLeft, BookOpen, PenTool, Save } from 'lucide-react';
+        import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, updateDoc, doc, query } from 'firebase/firestore';
+        import { Calendar, ChevronLeft, Video, Lock, UserPlus, ArrowLeft, Sun, Moon, CheckCircle2, X, Clock, ArrowRightLeft, AlertCircle } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        const DAYS = ['LUN', 'MAR', 'MIER', 'JUE', 'VIE', 'SAB'];
         const TIMES = ['07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00'];
-        const formatTimeDisplay = (time24) => { const h = parseInt(time24.split(':')[0], 10); return `${h % 12 || 12}:00 ${h >= 12 ? 'pm' : 'am'}`; };
-        const normalizeName = (name) => name ? name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "") : "";
+
+        const formatTimeDisplay = (time24) => {
+            const [hour] = time24.split(':');
+            const h = parseInt(hour, 10);
+            const ampm = h >= 12 ? 'pm' : 'am';
+            const h12 = h % 12 || 12;
+            return `${h12}:00 ${ampm}`;
+        };
+
+        // Función para normalizar nombres (ignorar mayúsculas, espacios extra y acentos simples)
+        const normalizeName = (name) => {
+            if (!name) return "";
+            return name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        };
 
         const StudentSchedule = () => {
             const [events, setEvents] = useState([]);
-            const [currentDate, setCurrentDate] = useState(new Date());
-            const [now, setNow] = useState(new Date());
             
-            const [bookingModal, setBookingModal] = useState(null); 
-            const [classHubModal, setClassHubModal] = useState(null); 
-            const [rescheduleMode, setRescheduleMode] = useState(null); 
-            
-            const [vocabNotes, setVocabNotes] = useState('');
-            const [grammarNotes, setGrammarNotes] = useState('');
-            const [isSavingNotes, setIsSavingNotes] = useState(false);
+            // MODALES Y ESTADOS
+            const [bookingModal, setBookingModal] = useState(null); // { day, time } para reservar nuevo
+            const [actionModal, setActionModal] = useState(null); // { event } para cancelar/posponer
+            const [rescheduleMode, setRescheduleMode] = useState(null); // { event } cuando estás eligiendo nuevo horario
             
             const [studentName, setStudentName] = useState('');
             const [isDarkMode, setIsDarkMode] = useState(true);
-            const [draggedEventId, setDraggedEventId] = useState(null);
 
             useEffect(() => {
-                const timer = setInterval(() => setNow(new Date()), 60000);
-                
                 const params = new URLSearchParams(window.location.search);
                 const urlName = params.get('student');
                 if (urlName) setStudentName(decodeURIComponent(urlName));
@@ -93,139 +82,98 @@
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     setEvents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 });
-                return () => { clearInterval(timer); unsubscribe(); };
+                return () => unsubscribe();
             }, []);
-
-            const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
-            const weekDays = Array.from({ length: 6 }).map((_, i) => addDays(weekStart, i));
-            
-            const handlePrevWeek = () => setCurrentDate(addWeeks(currentDate, -1));
-            const handleNextWeek = () => {
-                const next = addWeeks(currentDate, 1);
-                if (!isAfter(next, addWeeks(new Date(), 2))) setCurrentDate(next);
-            };
 
             const toggleTheme = () => setIsDarkMode(!isDarkMode);
 
-            const notifyTeacher = async (message) => {
-                await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'notifications'), { message, createdAt: serverTimestamp(), read: false });
-            };
+            // --- LÓGICA DE CLICS EN CASILLAS ---
+            const handleSlotClick = (day, time) => {
+                const existing = events.find(e => e.day === day && e.time === time);
 
-            const canBookMore = (targetDateStr) => {
-                const normName = normalizeName(studentName);
-                const myEvents = events.filter(e => e.student && normalizeName(e.student) === normName);
-                
-                const hasClassToday = myEvents.some(e => e.date === targetDateStr || (!e.date && e.day === format(parseISO(targetDateStr), 'EEE', {locale:es}).toUpperCase().replace('.','')));
-                if (hasClassToday) { alert("⚠️ Ya tienes una clase para este día. Máximo 1 por día."); return false; }
-
-                const targetWeekStart = startOfWeek(parseISO(targetDateStr), { weekStartsOn: 1 });
-                let countThisWeek = 0;
-                myEvents.forEach(e => {
-                    if (e.date) {
-                        if (isSameDay(startOfWeek(parseISO(e.date), { weekStartsOn: 1 }), targetWeekStart)) countThisWeek++;
-                    } else countThisWeek++;
-                });
-
-                if (countThisWeek >= 3) { alert("⚠️ Límite de 3 clases por semana alcanzado."); return false; }
-                return true;
-            };
-
-            const getEventForSlot = (dateStr, dayName, time) => events.find(e => (e.date === dateStr && e.time === time) || (!e.date && e.day === dayName && e.time === time));
-
-            const handleSlotClick = (dateStr, dayName, time) => {
-                const existing = getEventForSlot(dateStr, dayName, time);
-
+                // 1. MODO POSPONER (RESCHEDULE)
                 if (rescheduleMode) {
-                    if (existing) return; 
-                    if (confirm(`¿Mover clase al ${dayName} ${dateStr} a las ${formatTimeDisplay(time)}?`)) performReschedule(dateStr, dayName, time);
-                    return;
-                }
-
-                if (existing) {
-                    const isMine = existing.student && normalizeName(existing.student) === normalizeName(studentName);
-                    if (isMine) {
-                        setVocabNotes(existing.notes_vocab || '');
-                        setGrammarNotes(existing.notes_grammar || '');
-                        setClassHubModal(existing);
+                    if (existing) return; // No puedes mover a un lugar ocupado
+                    if (confirm(`¿Mover clase al ${day} a las ${formatTimeDisplay(time)}?`)) {
+                        performReschedule(day, time);
                     }
                     return;
                 }
 
-                if (!studentName) setBookingModal({ dateStr, dayName, time });
-                else {
-                    if (canBookMore(dateStr) && confirm(`¿Reservar NUEVA clase el ${dateStr} a las ${formatTimeDisplay(time)}?`)) bookClass(dateStr, dayName, time, studentName);
-                }
-            };
-
-            // DND MOBILE FIX
-            const handleDragStart = (e, id) => {
-                setDraggedEventId(id);
-                e.dataTransfer.setData('text/plain', id); // OBLIGATORIO CHROME MOBILE
-                e.dataTransfer.effectAllowed = 'move';
-            };
-            const handleDrop = async (e, tDate, tDay, tTime) => {
-                e.preventDefault();
-                const id = e.dataTransfer.getData('text/plain');
-                if(!id) return;
-                const evToMove = events.find(x => x.id === id);
-                if(!evToMove) return;
-
-                const existingTarget = getEventForSlot(tDate, tDay, tTime);
-                if(existingTarget) {
-                    alert("⚠️ Ese espacio ya está ocupado.");
-                    setDraggedEventId(null);
+                // 2. CLIC EN EVENTO EXISTENTE
+                if (existing) {
+                    // Verificar si es MI clase
+                    const isMine = existing.student && normalizeName(existing.student) === normalizeName(studentName);
+                    
+                    if (isMine) {
+                        if (existing.meetLink) {
+                            window.open(existing.meetLink, '_blank');
+                        } else {
+                            // Si no hay link, abrir menú de gestión
+                            setActionModal(existing);
+                        }
+                    } else {
+                        // Es de otro (Busy) -> No hace nada
+                    }
                     return;
                 }
 
-                if(confirm(`¿Mover tu clase al ${tDate} a las ${formatTimeDisplay(tTime)}?`)) {
-                    try { 
-                        await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', id), { date: tDate, day: tDay, time: tTime }); 
-                        notifyTeacher(`🔄 ${studentName} arrastró su clase al ${tDate} a las ${tTime}`);
-                    } catch(err) { alert(err.message); }
+                // 3. CLIC EN ESPACIO VACÍO (RESERVAR NUEVO)
+                if (!studentName) {
+                    // Si no tiene identidad, pedimos nombre
+                    setBookingModal({ day, time });
+                } else {
+                    // Si ya tiene identidad, confirmamos directo
+                    if(confirm(`¿Apartar clase para el ${day} a las ${formatTimeDisplay(time)}?`)) {
+                        bookClass(day, time, studentName);
+                    }
                 }
-                setDraggedEventId(null);
             };
 
-            const bookClass = async (dateStr, dayName, time, name) => {
+            // --- ACCIONES ---
+
+            const bookClass = async (day, time, name) => {
                 localStorage.setItem('periplo_student_name', name);
                 setStudentName(name);
                 try {
                     await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), {
-                        date: dateStr, day: dayName, time, title: "Clase de " + name.split(' ')[0], student: name, type: 'class', notes: 'Agendado por alumno', customColor: 'bg-emerald-200 border-emerald-300 text-emerald-900', meetLink: '' 
+                        day, time,
+                        title: "Clase de " + name.split(' ')[0],
+                        student: name,
+                        type: 'class',
+                        notes: 'Reservado por alumno',
+                        customColor: 'bg-emerald-200 border-emerald-300 text-emerald-900',
+                        meetLink: '' 
                     });
-                    notifyTeacher(`📗 ${name} agendó una clase el ${dateStr} a las ${time}`);
                     setBookingModal(null);
                 } catch (e) { alert("Error: " + e.message); }
             };
 
-            const saveNotes = async () => {
-                if(!classHubModal) return;
-                setIsSavingNotes(true);
-                try {
-                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', classHubModal.id), { notes_vocab: vocabNotes, notes_grammar: grammarNotes });
-                    setTimeout(() => setIsSavingNotes(false), 500);
-                } catch (e) { alert(e.message); setIsSavingNotes(false); }
-            };
-
             const cancelClass = async () => {
-                if (!classHubModal) return;
-                if (confirm("¿Seguro que quieres CANCELAR esta clase? El espacio quedará libre.")) {
+                if (!actionModal) return;
+                if (confirm("¿Seguro que quieres cancelar esta clase? Se borrará de la agenda.")) {
                     try {
-                        await deleteDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', classHubModal.id));
-                        notifyTeacher(`🚨 ${studentName} CANCELÓ su clase del ${classHubModal.date || classHubModal.day} a las ${classHubModal.time}`);
-                        setClassHubModal(null);
+                        await deleteDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', actionModal.id));
+                        setActionModal(null);
+                        alert("Clase cancelada.");
                     } catch (e) { alert("Error: " + e.message); }
                 }
             };
 
-            const initReschedule = () => { setRescheduleMode(classHubModal); setClassHubModal(null); };
+            const initReschedule = () => {
+                setRescheduleMode(actionModal);
+                setActionModal(null);
+            };
 
-            const performReschedule = async (newDate, newDayName, newTime) => {
+            const performReschedule = async (newDay, newTime) => {
                 if (!rescheduleMode) return;
                 try {
-                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', rescheduleMode.id), { date: newDate, day: newDayName, time: newTime });
-                    notifyTeacher(`🔄 ${studentName} MOVIÓ su clase al ${newDate} a las ${newTime}`);
+                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', rescheduleMode.id), {
+                        day: newDay,
+                        time: newTime
+                    });
                     setRescheduleMode(null);
+                    alert("¡Clase movida con éxito!");
                 } catch (e) { alert("Error: " + e.message); }
             };
 
@@ -233,152 +181,158 @@
                 <div className={`${isDarkMode ? 'dark' : ''}`}>
                     <div className="min-h-screen bg-stone-50 dark:bg-zinc-950 text-stone-800 dark:text-stone-100 font-sans flex flex-col h-screen overflow-hidden transition-colors duration-300">
                         
+                        {/* HEADER + BANNER POSPONER */}
                         {rescheduleMode ? (
                             <div className="bg-amber-500 text-white p-4 shadow-md z-50 flex justify-between items-center animate-in slide-in-from-top">
-                                <div className="flex items-center gap-3"><ArrowRightLeft className="animate-pulse"/><div><p className="font-black text-sm uppercase">Modo Reprogramación</p><p className="text-xs">Selecciona un espacio vacío (amarillo).</p></div></div>
+                                <div className="flex items-center gap-3">
+                                    <ArrowRightLeft className="animate-pulse"/>
+                                    <div>
+                                        <p className="font-black text-sm uppercase">Modo Reprogramación</p>
+                                        <p className="text-xs">Selecciona un espacio vacío (amarillo) para mover tu clase.</p>
+                                    </div>
+                                </div>
                                 <button onClick={() => setRescheduleMode(null)} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-lg text-xs font-bold">Cancelar</button>
                             </div>
                         ) : (
                             <div className="bg-white dark:bg-zinc-900 p-4 border-b border-stone-200 dark:border-zinc-800 flex justify-between items-center shrink-0 shadow-sm z-10">
                                 <div className="flex items-center gap-3">
-                                    <div className="bg-teal-500 p-2 rounded-lg text-white shadow-md"><CalendarIcon size={20}/></div>
-                                    <div><h1 className="text-lg font-black text-stone-800 dark:text-white leading-none">TU AGENDA</h1>{studentName ? <p className="text-xs font-bold text-teal-600 dark:text-teal-400 mt-1">Hola, {studentName} 👋</p> : <p className="text-xs text-stone-400 dark:text-zinc-500 mt-1">Modo Invitado</p>}</div>
-                                </div>
-                                <div className="flex items-center gap-4">
-                                    <div className="flex items-center gap-2 bg-stone-100 dark:bg-zinc-800 px-3 py-1.5 rounded-xl border border-stone-200 dark:border-zinc-700">
-                                        <button onClick={handlePrevWeek} className="p-1 hover:bg-white dark:hover:bg-zinc-700 rounded transition-colors"><ChevronLeft size={16}/></button>
-                                        <span className="font-bold text-xs min-w-[100px] text-center capitalize">{format(weekStart, 'MMM d')} - {format(addDays(weekStart, 5), 'MMM d')}</span>
-                                        <button onClick={handleNextWeek} disabled={isAfter(addWeeks(currentDate, 1), addWeeks(new Date(), 2))} className="p-1 hover:bg-white dark:hover:bg-zinc-700 rounded disabled:opacity-30"><ChevronRight size={16}/></button>
+                                    <div className="bg-teal-500 p-2 rounded-lg text-white shadow-md"><Calendar size={20}/></div>
+                                    <div>
+                                        <h1 className="text-lg font-black text-stone-800 dark:text-white leading-none">TU AGENDA</h1>
+                                        {studentName ? (
+                                            <p className="text-xs font-bold text-teal-600 dark:text-teal-400 mt-1">Hola, {studentName} 👋</p>
+                                        ) : (
+                                            <p className="text-xs text-stone-400 dark:text-zinc-500 mt-1">Vista de Invitado</p>
+                                        )}
                                     </div>
-                                    <button onClick={toggleTheme} className="p-2 rounded-full bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-amber-400 hover:bg-stone-200 dark:hover:bg-zinc-700"><Sun size={18} className={isDarkMode ? 'block' : 'hidden'}/><Moon size={18} className={!isDarkMode ? 'block' : 'hidden'}/></button>
                                 </div>
+                                <button onClick={toggleTheme} className="p-2 rounded-full bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-amber-400 hover:bg-stone-200 dark:hover:bg-zinc-700 transition-all">
+                                    {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
+                                </button>
                             </div>
                         )}
 
-                        <div className="flex-1 overflow-auto p-4 custom-scrollbar relative">
-                            <div className="min-w-[800px] bg-white dark:bg-zinc-900 rounded-2xl shadow-xl border border-stone-200 dark:border-zinc-800">
+                        {/* CALENDAR GRID */}
+                        <div className="flex-1 overflow-auto p-4">
+                            <div className="min-w-[800px] bg-white dark:bg-zinc-900 rounded-2xl shadow-xl border border-stone-200 dark:border-zinc-800 overflow-hidden">
+                                {/* Header Días */}
                                 <div className="grid grid-cols-[80px_repeat(6,_1fr)] border-b-2 border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950 sticky top-0 z-30 shadow-sm">
-                                    <div className="sticky-corner p-4 text-center text-xs font-black text-stone-400 dark:text-zinc-500 uppercase border-r border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950 flex items-center justify-center">HORA</div>
-                                    {weekDays.map(day => {
-                                        const isToday = isSameDay(day, now);
-                                        return (
-                                            <div key={day.toString()} className={`p-3 text-center border-r border-stone-200 dark:border-zinc-800 last:border-r-0 ${isToday ? 'bg-teal-50 dark:bg-teal-900/20 border-b-4 border-b-teal-500' : ''}`}>
-                                                <div className={`text-[10px] font-bold uppercase ${isToday ? 'text-teal-600 dark:text-teal-400' : 'text-stone-400 dark:text-zinc-500'}`}>{format(day, 'EEE', { locale: es })}</div>
-                                                <div className={`text-lg font-black tracking-tight ${isToday ? 'text-teal-700 dark:text-teal-300' : 'text-stone-800 dark:text-zinc-300'}`}>{format(day, 'd')}</div>
-                                            </div>
-                                        )
-                                    })}
+                                    <div className="p-4 text-center text-xs font-black text-stone-300 dark:text-zinc-600 uppercase tracking-wider flex items-center justify-center border-r border-stone-200 dark:border-zinc-800">HORA</div>
+                                    {DAYS.map(day => (<div key={day} className="p-4 text-center text-lg font-black text-stone-800 dark:text-zinc-300 border-r border-stone-200 dark:border-zinc-800 last:border-r-0 tracking-tight">{day}</div>))}
                                 </div>
 
+                                {/* Body Horas */}
                                 <div className="divide-y divide-stone-100 dark:divide-zinc-800">
-                                    {TIMES.map(time => {
-                                        const currentHourStr = format(now, 'HH:00');
-                                        const isCurrentHourRow = time === currentHourStr;
+                                    {TIMES.map(time => (
+                                        <div key={time} className="grid grid-cols-[80px_repeat(6,_1fr)] min-h-[90px]">
+                                            <div className="p-2 text-xs font-black text-stone-400 dark:text-zinc-500 flex flex-col items-center justify-center border-r border-stone-200 dark:border-zinc-800 bg-stone-50 dark:bg-zinc-950"><span>{formatTimeDisplay(time)}</span></div>
+                                            {DAYS.map(day => {
+                                                const event = events.find(e => e.day === day && e.time === time);
+                                                const isMine = event && studentName && normalizeName(event.student) === normalizeName(studentName);
+                                                
+                                                // ESTILOS SEGÚN ESTADO
+                                                let cellContent = null;
+                                                let cellClass = "relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group";
 
-                                        return (
-                                            <div key={time} className="grid grid-cols-[80px_repeat(6,_1fr)] h-[110px]">
-                                                <div className={`sticky-col p-2 text-xs font-black flex items-center justify-center border-r border-stone-200 dark:border-zinc-800 backdrop-blur-sm shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] ${isCurrentHourRow ? 'bg-teal-100 dark:bg-teal-900/60 text-teal-700 dark:text-teal-300' : 'bg-stone-50 dark:bg-zinc-950/90 text-stone-400 dark:text-zinc-500'}`}><span>{formatTimeDisplay(time)}</span></div>
-                                                {weekDays.map(day => {
-                                                    const dateStr = format(day, 'yyyy-MM-dd');
-                                                    const dayName = format(day, 'EEE', {locale: es}).toUpperCase().replace('.',''); 
-                                                    const event = getEventForSlot(dateStr, dayName, time);
-                                                    const isMine = event && studentName && normalizeName(event.student) === normalizeName(studentName);
-                                                    
-                                                    const isToday = isSameDay(day, now);
-                                                    
-                                                    let cellClass = `relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group overflow-hidden ${isToday ? 'bg-teal-50/30 dark:bg-teal-900/5' : ''}`;
-                                                    let cellContent = null;
-
-                                                    if (rescheduleMode) {
-                                                        if (event) cellClass += " bg-stone-100 dark:bg-zinc-950 opacity-30 cursor-not-allowed";
-                                                        else {
-                                                            cellClass += " cursor-pointer bg-amber-50 dark:bg-amber-900/10 hover:bg-amber-100 border-amber-200";
-                                                            cellContent = <div className="h-full w-full rounded-xl border-2 border-dashed border-amber-300 flex items-center justify-center animate-pulse"><span className="text-amber-600 font-bold text-xs uppercase flex items-center gap-1"><ArrowRightLeft size={14}/> Mover Aquí</span></div>;
+                                                if (rescheduleMode) {
+                                                    // MODO REPROGRAMACIÓN
+                                                    if (event) {
+                                                        // Ocupado (No elegible)
+                                                        cellClass += " bg-stone-100 dark:bg-zinc-950 opacity-30 cursor-not-allowed";
+                                                    } else {
+                                                        // Libre (Elegible)
+                                                        cellClass += " cursor-pointer bg-amber-50 dark:bg-amber-900/10 hover:bg-amber-100 dark:hover:bg-amber-900/30 border-amber-200 dark:border-amber-800";
+                                                        cellContent = (
+                                                            <div className="h-full w-full rounded-xl border-2 border-dashed border-amber-300 dark:border-amber-600 flex items-center justify-center animate-pulse">
+                                                                <span className="text-amber-600 dark:text-amber-400 font-bold text-xs uppercase flex items-center gap-1"><ArrowRightLeft size={14}/> Mover Aquí</span>
+                                                            </div>
+                                                        );
+                                                    }
+                                                } else {
+                                                    // MODO NORMAL
+                                                    if (event) {
+                                                        if (isMine) {
+                                                            cellClass += " cursor-pointer";
+                                                            cellContent = (
+                                                                <div className="h-full w-full rounded-xl p-2 border-2 shadow-md flex flex-col justify-between bg-emerald-100 border-emerald-300 dark:bg-emerald-900/40 dark:border-emerald-500 hover:scale-[1.02] transition-transform">
+                                                                    <div>
+                                                                        <div className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase tracking-wider mb-1 flex items-center gap-1"><CheckCircle2 size={10}/> TU CLASE</div>
+                                                                        <div className="text-sm font-bold text-emerald-900 dark:text-emerald-100 leading-tight">{event.title}</div>
+                                                                    </div>
+                                                                    {event.meetLink ? (
+                                                                        <div className="bg-white/80 dark:bg-black/40 text-emerald-700 dark:text-emerald-300 font-bold text-[10px] py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 mt-1"><Video size={12}/> ENTRAR</div>
+                                                                    ) : <span className="text-[10px] opacity-60 text-emerald-800 dark:text-emerald-400 text-center block">Ver opciones...</span>}
+                                                                </div>
+                                                            );
+                                                        } else {
+                                                            cellClass += " cursor-not-allowed";
+                                                            cellContent = (
+                                                                <div className="h-full w-full bg-stone-100 dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-xl flex flex-col items-center justify-center opacity-70">
+                                                                    <div className="flex items-center gap-1 text-stone-400 dark:text-zinc-600 font-bold text-xs uppercase"><Lock size={12}/> Ocupado</div>
+                                                                </div>
+                                                            );
                                                         }
                                                     } else {
-                                                        if (event) {
-                                                            if (isMine) {
-                                                                cellClass += " cursor-pointer";
-                                                                cellContent = (
-                                                                    <div draggable="true" onDragStart={e=>handleDragStart(e,event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`draggable-item h-full w-full rounded-xl p-2.5 border-2 shadow-md flex flex-col justify-between bg-emerald-100 border-emerald-300 dark:bg-emerald-900/40 dark:border-emerald-500 hover:scale-[1.02] cursor-grab active:cursor-grabbing ${draggedEventId === event.id ? 'opacity-40' : ''}`}>
-                                                                        <div><div className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase mb-1 flex items-center gap-1"><BookOpen size={10}/> MI CLASE</div><div className="text-xs md:text-sm font-bold text-emerald-900 dark:text-emerald-100 leading-tight line-clamp-2" title={event.title}>{event.title}</div></div>
-                                                                        <span className="text-[10px] text-emerald-800 dark:text-emerald-400 mt-2 font-bold flex items-center justify-center gap-1 bg-white/40 dark:bg-black/20 w-full py-1 rounded"><PenTool size={10}/> Abrir / Posponer</span>
-                                                                    </div>
-                                                                );
-                                                            } else {
-                                                                cellClass += " cursor-not-allowed";
-                                                                cellContent = <div className="h-full w-full bg-stone-100 dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-xl flex items-center justify-center opacity-70"><div className="flex items-center gap-1 text-stone-400 dark:text-zinc-600 font-bold text-xs uppercase"><Lock size={12}/> Ocupado</div></div>;
-                                                            }
-                                                        } else {
-                                                            cellClass += " cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20";
-                                                            cellContent = <div className="h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><div className="flex flex-col items-center gap-1 text-teal-500 dark:text-teal-400"><UserPlus size={20}/><span className="text-[10px] font-bold uppercase">Apartar</span></div></div>;
-                                                        }
+                                                        // VACÍO
+                                                        cellClass += " cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20";
+                                                        cellContent = (
+                                                            <div className="h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                <div className="flex flex-col items-center gap-1 text-teal-500 dark:text-teal-400">
+                                                                    <UserPlus size={20}/>
+                                                                    <span className="text-[10px] font-bold uppercase">Apartar</span>
+                                                                </div>
+                                                            </div>
+                                                        );
                                                     }
+                                                }
 
-                                                    return (
-                                                        <div key={`${dateStr}-${time}`} onDragEnter={e=>e.preventDefault()} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={e=>handleDrop(e,dateStr,dayName,time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={cellClass}>
-                                                            {cellContent}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        );
-                                    })}
+                                                return (
+                                                    <div key={`${day}-${time}`} onClick={() => handleSlotClick(day, time)} className={cellClass}>
+                                                        {cellContent}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
                         </div>
 
-                        {/* CLASS HUB MODAL (CUADERNO) */}
-                        {classHubModal && (
-                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
-                                <div className="bg-white dark:bg-zinc-900 rounded-[2rem] shadow-2xl w-full max-w-2xl overflow-hidden border border-stone-200 dark:border-zinc-700 flex flex-col max-h-[90vh]">
-                                    <div className="bg-teal-600 p-6 text-white shrink-0 flex justify-between items-start">
-                                        <div>
-                                            <h3 className="text-2xl font-black">{classHubModal.title}</h3>
-                                            <p className="opacity-80 font-medium text-sm flex items-center gap-2 mt-1"><CalendarIcon size={14}/> {classHubModal.date || classHubModal.day} • {formatTimeDisplay(classHubModal.time)}</p>
-                                        </div>
-                                        <button onClick={() => setClassHubModal(null)} className="bg-black/20 hover:bg-black/40 p-2 rounded-full transition-colors"><X size={20}/></button>
-                                    </div>
-
-                                    <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6 bg-stone-50 dark:bg-zinc-950">
-                                        <div className="flex gap-4">
-                                            {classHubModal.meetLink ? (
-                                                <a href={classHubModal.meetLink} target="_blank" className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-2xl font-black text-center shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 flex items-center justify-center gap-2 text-lg">
-                                                    <Video size={24}/> ENTRAR A LA CLASE
-                                                </a>
-                                            ) : (
-                                                <div className="flex-1 bg-stone-200 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400 p-4 rounded-2xl font-bold text-center border-2 border-dashed border-stone-300 dark:border-zinc-700 flex items-center justify-center gap-2">
-                                                    <Clock size={20}/> El profe pondrá el link de Meet pronto
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div className="grid md:grid-cols-2 gap-4">
-                                            <div className="bg-yellow-50 dark:bg-zinc-900 border border-yellow-200 dark:border-zinc-700 rounded-2xl p-4 shadow-inner relative group">
-                                                <h4 className="text-yellow-800 dark:text-yellow-500 font-black uppercase text-xs tracking-widest mb-2 flex items-center gap-2"><BookOpen size={14}/> Vocabulario</h4>
-                                                <textarea value={vocabNotes} onChange={e => setVocabNotes(e.target.value)} onBlur={saveNotes} placeholder="Anota palabras nuevas aquí..." className="w-full h-48 bg-transparent outline-none resize-none text-stone-700 dark:text-stone-300 font-medium notebook-lines placeholder-yellow-800/30 dark:placeholder-zinc-600 text-sm"/>
-                                            </div>
-                                            <div className="bg-blue-50 dark:bg-zinc-900 border border-blue-200 dark:border-zinc-700 rounded-2xl p-4 shadow-inner relative group">
-                                                <h4 className="text-blue-800 dark:text-blue-400 font-black uppercase text-xs tracking-widest mb-2 flex items-center gap-2"><PenTool size={14}/> Gramática</h4>
-                                                <textarea value={grammarNotes} onChange={e => setGrammarNotes(e.target.value)} onBlur={saveNotes} placeholder="Apuntes de reglas y estructuras..." className="w-full h-48 bg-transparent outline-none resize-none text-stone-700 dark:text-stone-300 font-medium notebook-lines placeholder-blue-800/30 dark:placeholder-zinc-600 text-sm"/>
-                                            </div>
+                        {/* MODAL GESTIÓN (CANCELAR / POSPONER) */}
+                        {actionModal && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                                <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-stone-200 dark:border-zinc-700">
+                                    <div className="p-6">
+                                        <h3 className="text-xl font-black text-stone-800 dark:text-white mb-1">Gestionar Clase</h3>
+                                        <p className="text-stone-500 dark:text-zinc-400 text-sm mb-6">{actionModal.day} • {formatTimeDisplay(actionModal.time)}</p>
+                                        
+                                        <div className="space-y-3">
+                                            <button onClick={initReschedule} className="w-full py-4 bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 rounded-xl font-bold border-2 border-amber-200 dark:border-amber-800 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors flex items-center justify-center gap-2">
+                                                <Clock size={18}/> Posponer / Mover
+                                            </button>
+                                            <button onClick={cancelClass} className="w-full py-4 bg-white dark:bg-zinc-800 text-rose-500 rounded-xl font-bold border-2 border-rose-100 dark:border-rose-900 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors flex items-center justify-center gap-2">
+                                                <X size={18}/> Cancelar Clase
+                                            </button>
                                         </div>
                                     </div>
-                                    <div className="bg-white dark:bg-zinc-900 p-4 border-t border-stone-200 dark:border-zinc-800 shrink-0 flex items-center justify-between">
-                                        <div className="flex items-center gap-2 text-stone-400 text-xs font-bold">{isSavingNotes ? <span className="flex items-center gap-1 text-emerald-500"><Save size={14}/> Guardando...</span> : "Notas autoguardadas."}</div>
-                                        <div className="flex gap-2"><button onClick={cancelClass} className="px-4 py-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl font-bold text-sm transition-colors border border-transparent hover:border-rose-200">Cancelar Clase</button><button onClick={initReschedule} className="px-4 py-2 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 hover:bg-stone-200 dark:hover:bg-zinc-700 rounded-xl font-bold text-sm transition-colors border border-stone-200 dark:border-zinc-700">Mover / Posponer</button></div>
+                                    <div className="bg-stone-50 dark:bg-zinc-950 p-4 border-t border-stone-200 dark:border-zinc-800 text-center">
+                                        <button onClick={() => setActionModal(null)} className="text-sm font-bold text-stone-400 hover:text-stone-600 dark:hover:text-zinc-300">Volver</button>
                                     </div>
                                 </div>
                             </div>
                         )}
 
-                        {/* MODAL RESERVA NUEVA */}
+                        {/* MODAL RESERVA INICIAL (SI NO TIENE NOMBRE) */}
                         {bookingModal && (
                             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
                                 <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden p-6 border border-stone-200 dark:border-zinc-700">
-                                    <h3 className="text-xl font-black text-stone-800 dark:text-white mb-2">Nueva Reserva</h3>
-                                    <label className="block text-xs font-black text-stone-400 uppercase mb-2">Tu Nombre Completo</label>
-                                    <input value={studentName} onChange={e => setStudentName(e.target.value)} className="w-full px-4 py-3 bg-stone-50 dark:bg-zinc-800 border-2 border-stone-200 dark:border-zinc-700 rounded-xl mb-6 font-bold text-stone-900 dark:text-white focus:border-teal-500 outline-none" placeholder="Ej. Juan Pérez" autoFocus/>
-                                    <div className="flex gap-3"><button onClick={() => setBookingModal(null)} className="flex-1 py-3 text-stone-500 font-bold hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-xl">Cancelar</button><button onClick={() => bookClass(bookingModal.dateStr, bookingModal.dayName, bookingModal.time, studentName)} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold shadow-lg">Confirmar</button></div>
+                                    <h3 className="text-xl font-black text-stone-800 dark:text-white mb-2">Reservar Clase</h3>
+                                    <label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Tu Nombre Completo</label>
+                                    <input value={studentName} onChange={e => setStudentName(e.target.value)} className="w-full px-4 py-3 bg-stone-50 dark:bg-zinc-800 border-2 border-stone-200 dark:border-zinc-700 rounded-xl mb-6 font-bold text-stone-900 dark:text-white focus:border-teal-500 outline-none transition-colors" placeholder="Ej. Juan Pérez" autoFocus/>
+                                    <div className="flex gap-3">
+                                        <button onClick={() => setBookingModal(null)} className="flex-1 py-3 text-stone-500 dark:text-zinc-400 font-bold hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-xl transition-colors">Cancelar</button>
+                                        <button onClick={() => bookClass(bookingModal.day, bookingModal.time, studentName)} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white rounded-xl font-bold shadow-lg shadow-teal-500/30 transition-all transform active:scale-95">Confirmar</button>
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -386,6 +340,7 @@
                 </div>
             );
         };
+
         const root = createRoot(document.getElementById('root'));
         root.render(<StudentSchedule />);
     </script>
