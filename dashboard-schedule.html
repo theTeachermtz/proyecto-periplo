@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Master Schedule | Periplo</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📅</text></svg>">
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/default.css">
+    <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/index.min.js"></script>
+    <script>
+        window.onload = function() {
+            MobileDragDrop.polyfill({ holdToDrag: 300 }); // Medio segundo de presión para arrastrar en cel
+            window.addEventListener('touchmove', function() {}, {passive: false});
+        };
+    </script>
+
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="importmap">
     {
@@ -26,9 +36,10 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
         .sticky-col { position: sticky; left: 0; z-index: 20; }
         .sticky-corner { position: sticky; left: 0; top: 0; z-index: 40; }
-        /* Animación para el Live Dot */
-        @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+        @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
         .live-dot { animation: pulse-green 2s infinite; }
+        /* Mejora para el arrastre táctil */
+        .draggable-item { touch-action: none; }
     </style>
 </head>
 <body>
@@ -46,9 +57,21 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        // --- CONFIGURACIÓN DE TU ZONA HORARIA (Ontario vs México) ---
+        // 1 significa que tu panel sumará 1 hora a la hora base de México.
+        // En verano, si son 2 horas de diferencia, solo cambia esto a 2.
+        const MY_TIME_OFFSET = 1; 
+
         const DAYS = ['LUN', 'MAR', 'MIER', 'JUE', 'VIE', 'SAB'];
+        // Estas son las horas BASE (Hora México) que se guardan en la DB. No las cambies.
         const TIMES = ['07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00'];
-        const formatTimeDisplay = (time24) => { const h = parseInt(time24.split(':')[0], 10); return `${h % 12 || 12}:00 ${h >= 12 ? 'pm' : 'am'}`; };
+        
+        const formatTimeDisplay = (time24, offset = 0) => { 
+            let h = parseInt(time24.split(':')[0], 10) + offset;
+            const ampm = (h >= 12 && h < 24) ? 'pm' : 'am';
+            const h12 = h % 12 || 12;
+            return `${h12}:00 ${ampm}`; 
+        };
 
         const FRUIT_FLOWER_PALETTE = [ { id: 'lavanda', class: 'bg-violet-200 border-violet-300 text-violet-900 dark:bg-violet-900/50 dark:border-violet-500 dark:text-violet-100' }, { id: 'lirio', class: 'bg-stone-50 border-stone-200 text-stone-600 dark:bg-stone-800 dark:border-stone-500 dark:text-stone-200' }, { id: 'menta', class: 'bg-teal-200 border-teal-300 text-teal-900 dark:bg-teal-900/50 dark:border-teal-500 dark:text-teal-100' }, { id: 'durazno', class: 'bg-orange-200 border-orange-300 text-orange-900 dark:bg-orange-900/50 dark:border-orange-500 dark:text-orange-100' }, { id: 'cereza', class: 'bg-rose-300 border-rose-400 text-rose-900 dark:bg-rose-900/50 dark:border-rose-500 dark:text-rose-100' }, { id: 'arandano', class: 'bg-blue-300 border-blue-400 text-blue-900 dark:bg-blue-900/50 dark:border-blue-500 dark:text-blue-100' }, { id: 'kiwi', class: 'bg-lime-200 border-lime-300 text-lime-900 dark:bg-lime-900/50 dark:border-lime-500 dark:text-lime-100' }, { id: 'uva', class: 'bg-purple-300 border-purple-400 text-purple-900 dark:bg-purple-900/50 dark:border-purple-500 dark:text-purple-100' }, { id: 'fresa', class: 'bg-pink-200 border-pink-300 text-pink-900 dark:bg-pink-900/50 dark:border-pink-500 dark:text-pink-100' }, { id: 'mandarina', class: 'bg-amber-200 border-amber-300 text-amber-900 dark:bg-amber-900/50 dark:border-amber-500 dark:text-amber-100' }, { id: 'coco', class: 'bg-stone-200 border-stone-300 text-stone-800 dark:bg-stone-700 dark:border-stone-500 dark:text-stone-100' }, { id: 'ciruela', class: 'bg-fuchsia-200 border-fuchsia-300 text-fuchsia-900 dark:bg-fuchsia-900/50 dark:border-fuchsia-500 dark:text-fuchsia-100' }, { id: 'manzana', class: 'bg-emerald-200 border-emerald-300 text-emerald-900 dark:bg-emerald-900/50 dark:border-emerald-500 dark:text-emerald-100' }, { id: 'cielo', class: 'bg-sky-200 border-sky-300 text-sky-900 dark:bg-sky-900/50 dark:border-sky-500 dark:text-sky-100' }, { id: 'coral', class: 'bg-red-200 border-red-300 text-red-900 dark:bg-red-900/50 dark:border-red-500 dark:text-red-100' } ];
         const ACTIVITY_TYPES = [ { id: 'class', label: 'Clase', color: 'bg-teal-100 border-teal-300 text-teal-900 dark:bg-teal-900/60 dark:border-teal-500 dark:text-teal-100' }, { id: 'personal', label: 'Personal', color: 'bg-green-100 border-green-300 text-green-900 dark:bg-green-900/60 dark:border-green-500 dark:text-green-100' }, { id: 'project', label: 'Proyecto', color: 'bg-red-100 border-red-300 text-red-900 dark:bg-red-900/60 dark:border-red-500 dark:text-red-100' }, { id: 'other', label: 'Otro', color: 'bg-gray-200 border-gray-300 text-gray-900 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100' }, { id: 'lunch', label: 'Comida', color: 'bg-yellow-100 border-yellow-300 text-yellow-900 dark:bg-yellow-900/60 dark:border-yellow-500 dark:text-yellow-100' } ];
@@ -56,9 +79,8 @@
         export default function App() {
             const [events, setEvents] = useState([]);
             const [currentDate, setCurrentDate] = useState(new Date());
-            const [now, setNow] = useState(new Date()); // Reloj en vivo
+            const [now, setNow] = useState(new Date()); 
             
-            // NOTIFICATIONS
             const [notifications, setNotifications] = useState([]);
             const [showNotifs, setShowNotifs] = useState(false);
             const hasUnread = notifications.some(n => !n.read);
@@ -76,9 +98,7 @@
             const [isStudentManuallyEdited, setIsStudentManuallyEdited] = useState(false);
 
             useEffect(() => {
-                // Reloj en vivo (Actualiza cada minuto)
                 const timer = setInterval(() => setNow(new Date()), 60000);
-
                 if ("Notification" in window && Notification.permission !== "denied" && Notification.permission !== "granted") {
                     Notification.requestPermission();
                 }
@@ -95,7 +115,7 @@
                         if (change.type === 'added' && change.doc.data().createdAt) {
                             const data = change.doc.data();
                             const isRecent = (Date.now() - data.createdAt.toMillis()) < 10000; 
-                            if (isRecent && Notification.permission === "granted") {
+                            if (isRecent && Notification.permission === "granted" && !data.read) {
                                 new Notification("Actualización Periplo", { body: data.message });
                             }
                         }
@@ -123,7 +143,6 @@
             };
             const handleStudentChange = (e) => { setFormData(prev => ({ ...prev, student: e.target.value })); setIsStudentManuallyEdited(true); };
 
-            // MARCAR NOTIFICACIONES COMO LEÍDAS
             const toggleNotifs = async () => {
                 setShowNotifs(!showNotifs);
                 if (!showNotifs && hasUnread) {
@@ -165,7 +184,7 @@
 
                 try {
                     if (editingEvent) {
-                        batch.update(doc(db, 'artifacts/periplo-app-v1', 'schedule', editingEvent.id), { ...eventData, date: currentSlot.dateStr });
+                        batch.update(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', editingEvent.id), { ...eventData, date: currentSlot.dateStr });
                         if (formData.applyColorToAll && formData.type === 'class' && formData.customColor) {
                             events.filter(e => e.id !== editingEvent.id && e.type === 'class' && e.title.toLowerCase() === formData.title.toLowerCase()).forEach(e => batch.update(doc(db, 'artifacts/periplo-app-v1', 'schedule', e.id), { customColor: formData.customColor }));
                         }
@@ -197,9 +216,11 @@
             };
 
             // DND
-            const handleDragStart = (e, id) => { setDraggedEventId(id); e.dataTransfer.setData('id', id); };
+            const handleDragStart = (e, id) => { setDraggedEventId(id); e.dataTransfer.setData('id', id); e.dataTransfer.effectAllowed = 'move'; };
             const handleDrop = async (e, tDate, tDay, tTime) => {
+                e.preventDefault();
                 const id = e.dataTransfer.getData('id');
+                if(!id) return;
                 const evToMove = events.find(x => x.id === id);
                 if(!evToMove) return;
                 try { await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', id), { date: tDate, day: tDay, time: tTime }); } catch(err) { alert(err.message); }
@@ -236,11 +257,13 @@
                                 </div>
                             </div>
                             <div className="flex items-center gap-4">
-                                {/* NOTIFICACIONES */}
+                                <div className="text-xs font-bold text-stone-500 bg-stone-100 dark:bg-zinc-800 px-3 py-1.5 rounded-lg border border-stone-200 dark:border-zinc-700 hidden md:block">
+                                    🌐 UTC - {MY_TIME_OFFSET > 0 ? `+${MY_TIME_OFFSET}` : MY_TIME_OFFSET}h
+                                </div>
                                 <div className="relative">
                                     <button onClick={toggleNotifs} className={`p-2 rounded-full relative transition-colors ${hasUnread ? 'bg-red-50 text-red-500 dark:bg-red-900/30' : 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400'}`}>
                                         <Bell size={20}/>
-                                        {hasUnread && <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse border border-white dark:border-zinc-900"></span>}
+                                        {hasUnread && <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full"></span>}
                                     </button>
                                     {showNotifs && (
                                         <div className="absolute right-0 mt-2 w-72 bg-white dark:bg-zinc-800 rounded-xl shadow-2xl border border-stone-200 dark:border-zinc-700 p-2 z-50 animate-in slide-in-from-top-2">
@@ -276,13 +299,17 @@
 
                                 <div className="divide-y divide-stone-100 dark:divide-zinc-800">
                                     {TIMES.map(time => {
-                                        const currentHourStr = format(now, 'HH:00');
-                                        const isCurrentHourRow = time === currentHourStr;
+                                        // OJO AQUI: El tracker "en vivo" busca la hora base de México (time)
+                                        // Restamos nuestro Offset a la hora actual de la compu para ver si coincide
+                                        const currentLocalHour = parseInt(format(now, 'HH'), 10);
+                                        const mexicoHour = currentLocalHour - MY_TIME_OFFSET;
+                                        const mexicoHourStr = `${mexicoHour.toString().padStart(2, '0')}:00`;
+                                        const isCurrentHourRow = time === mexicoHourStr;
 
                                         return (
                                             <div key={time} className="grid grid-cols-[80px_repeat(6,_1fr)] min-h-[100px]">
                                                 <div className={`sticky-col p-2 text-xs font-black flex items-center justify-center border-r border-stone-200 dark:border-zinc-800 backdrop-blur-sm shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] ${isCurrentHourRow ? 'bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300' : 'bg-stone-50 dark:bg-zinc-950/90 text-stone-400 dark:text-zinc-500'}`}>
-                                                    {formatTimeDisplay(time)}
+                                                    {formatTimeDisplay(time, MY_TIME_OFFSET)}
                                                 </div>
                                                 {weekDays.map(day => {
                                                     const dateStr = format(day, 'yyyy-MM-dd');
@@ -299,82 +326,4 @@
 
                                                     return (
                                                         <div key={`${dateStr}-${time}`} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={e=>handleDrop(e,dateStr,dayName,time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={`relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group ${event ? 'bg-white dark:bg-zinc-900' : isToday ? 'bg-indigo-50/30 dark:bg-indigo-900/5' : ''} ${isDuplicationTarget ? 'cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}`}>
-                                                            {isSelectedForDuplication && <div className="absolute inset-0 bg-indigo-500/20 z-10 flex items-center justify-center animate-pulse"><CheckCircle2 className="text-indigo-500"/></div>}
-                                                            {isLiveNow && <div className="absolute top-2 right-2 w-2.5 h-2.5 bg-emerald-500 rounded-full live-dot z-30"></div>}
-                                                            
-                                                            {event ? (
-                                                                <div draggable={!duplicationMode.active} onDragStart={e=>handleDragStart(e,event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`h-full w-full rounded-xl p-3 border-2 shadow-sm flex flex-col justify-center relative transition-transform ${draggedEventId===event.id ? 'opacity-40 scale-95' : 'hover:scale-[1.02]'} ${cellColor} ${duplicationMode.active ? 'opacity-50 pointer-events-none' : 'cursor-grab'}`}>
-                                                                    {!duplicationMode.active && (
-                                                                        <div className="absolute top-1 right-1 flex space-x-1 opacity-0 group-hover:opacity-100 z-20 transition-opacity">
-                                                                            <button onClick={e=>startDuplication(e,event)} className="p-1 bg-indigo-500 text-white rounded-full"><Copy size={12}/></button>
-                                                                            <button onClick={e=>openDeleteConfirm(e,event)} className="p-1 bg-rose-500 text-white rounded-full"><Trash2 size={12}/></button>
-                                                                        </div>
-                                                                    )}
-                                                                    <div className="font-black text-sm leading-tight break-words uppercase z-10">{event.title}</div>
-                                                                    {event.student && event.student !== event.title && <div className="flex items-center gap-1 text-[10px] font-bold opacity-60"><User size={10}/> {event.student}</div>}
-                                                                    {event.meetLink && <div className="flex items-center gap-1 text-[10px] font-bold text-blue-600 dark:text-blue-400 mt-1"><LinkIcon size={10}/> Link OK</div>}
-                                                                </div>
-                                                            ) : (
-                                                                <div className={`h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 cursor-pointer ${isDuplicationTarget ? 'opacity-100 border-2 border-dashed border-indigo-400 rounded-xl' : ''}`}>{isDuplicationTarget ? <span className="text-xs font-bold text-indigo-400">Pegar</span> : <Plus className="text-stone-300"/>}</div>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Modals Generales */}
-                        {isModalOpen && (
-                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
-                                <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-stone-200 dark:border-zinc-700 flex flex-col max-h-[90vh]">
-                                    <div className="bg-stone-50 dark:bg-zinc-950 px-6 py-4 flex justify-between items-center shrink-0">
-                                        <div><h3 className="font-black">{editingEvent ? 'Editar' : 'Nueva Entrada'}</h3><p className="text-sm">{currentSlot.dayName} {currentSlot.dateStr} • {formatTimeDisplay(currentSlot.time)}</p></div>
-                                        <button onClick={()=>setIsModalOpen(false)}><X size={20}/></button>
-                                    </div>
-                                    <div className="p-6 space-y-4 overflow-y-auto">
-                                        <div><label className="text-xs font-black uppercase">Título</label><input value={formData.title} onChange={handleTitleChange} className="w-full p-3 rounded-xl border-2 dark:bg-zinc-800 dark:border-zinc-700" autoFocus/></div>
-                                        <div><label className="text-xs font-black uppercase">Alumno</label><div className="flex gap-2"><input value={formData.student} onChange={handleStudentChange} className="w-full p-3 rounded-xl border-2 dark:bg-zinc-800 dark:border-zinc-700"/><button onClick={copyStudentLink} className="p-3 bg-indigo-100 text-indigo-700 rounded-xl"><LinkIcon size={18}/></button></div></div>
-                                        <div><label className="text-xs font-black uppercase">Meet Link</label><input value={formData.meetLink} onChange={e=>setFormData({...formData, meetLink:e.target.value})} className="w-full p-3 rounded-xl border-2 dark:bg-zinc-800 dark:border-zinc-700 text-blue-500"/></div>
-                                        <div>
-                                            <div className="grid grid-cols-2 gap-2 mt-2">
-                                                {ACTIVITY_TYPES.map(t=>(<button key={t.id} onClick={()=>setFormData({...formData, type:t.id, customColor:''})} className={`p-2 border-2 rounded-lg text-xs font-bold text-left ${formData.type===t.id?'border-teal-500 bg-teal-50 dark:bg-teal-900/40':'dark:border-zinc-700'}`}>{t.label}</button>))}
-                                            </div>
-                                        </div>
-                                        {formData.type === 'class' && (
-                                            <div>
-                                                <div className="grid grid-cols-5 gap-2 mt-2">
-                                                    {FRUIT_FLOWER_PALETTE.map(c=>(<button key={c.id} onClick={()=>setFormData({...formData, customColor:c.class})} className={`h-8 w-8 rounded-full border-2 ${c.class.split(' ')[0]} ${formData.customColor===c.class?'ring-2 ring-black dark:ring-white scale-110':''}`}></button>))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="p-4 bg-stone-50 dark:bg-zinc-950 flex justify-between">
-                                        {editingEvent ? <button onClick={()=>setDeleteConfirm({open:true, event:editingEvent})} className="text-red-500 font-bold"><Trash2/></button> : <div></div>}
-                                        <button onClick={handleSave} className="bg-stone-900 dark:bg-white text-white dark:text-black px-6 py-2 rounded-xl font-bold">Guardar</button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                        {deleteConfirm.open && (
-                            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-                                <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl p-6">
-                                    <h3 className="font-black text-lg mb-4">¿Eliminar {deleteConfirm.event?.title}?</h3>
-                                    <label className="flex items-center gap-2 mb-6 cursor-pointer"><input type="checkbox" onChange={e=>setDeleteConfirm({...deleteConfirm, deleteAll: e.target.checked})} className="w-5 h-5"/> Borrar todos los de este alumno</label>
-                                    <div className="flex justify-end gap-2"><button onClick={()=>setDeleteConfirm({open:false})} className="px-4 py-2 font-bold">Cancelar</button><button onClick={confirmDelete} className="bg-red-500 text-white px-4 py-2 rounded-lg font-bold">Eliminar</button></div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            );
-        }
-
-        const root = createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+                                                            {isSelectedForDuplication && <div className="absolute inset-0 bg-indigo-500/20 z-10 flex
