@@ -6,6 +6,16 @@
     <title>Tu Agenda y Cuaderno | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config = { darkMode: 'class' };</script>
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/default.css">
+    <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/index.min.js"></script>
+    <script>
+        window.onload = function() {
+            MobileDragDrop.polyfill({ holdToDrag: 300 }); 
+            window.addEventListener('touchmove', function() {}, {passive: false});
+        };
+    </script>
+
     <script type="importmap">
     {
       "imports": {
@@ -26,11 +36,11 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
         .sticky-col { position: sticky; left: 0; z-index: 20; }
         .sticky-corner { position: sticky; left: 0; top: 0; z-index: 40; }
-        @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+        @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
         .live-dot { animation: pulse-green 2s infinite; }
-        /* Estilos Cuaderno */
         .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px); background-attachment: local; line-height: 32px; padding-top: 6px; }
         .dark .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #3f3f46 31px, #3f3f46 32px); }
+        .draggable-item { touch-action: none; }
     </style>
 </head>
 <body>
@@ -58,16 +68,17 @@
             const [now, setNow] = useState(new Date());
             
             const [bookingModal, setBookingModal] = useState(null); 
-            const [classHubModal, setClassHubModal] = useState(null); // { event }
-            const [rescheduleMode, setRescheduleMode] = useState(null); // { event }
+            const [classHubModal, setClassHubModal] = useState(null); 
+            const [rescheduleMode, setRescheduleMode] = useState(null); 
             
-            // Estado para el cuaderno
+            // Cuaderno
             const [vocabNotes, setVocabNotes] = useState('');
             const [grammarNotes, setGrammarNotes] = useState('');
             const [isSavingNotes, setIsSavingNotes] = useState(false);
             
             const [studentName, setStudentName] = useState('');
             const [isDarkMode, setIsDarkMode] = useState(true);
+            const [draggedEventId, setDraggedEventId] = useState(null);
 
             useEffect(() => {
                 const timer = setInterval(() => setNow(new Date()), 60000);
@@ -87,7 +98,7 @@
                 return () => { clearInterval(timer); unsubscribe(); };
             }, []);
 
-            // NAVEGACIÓN (Adelante max 2 semanas, atrás infinito)
+            // NAVEGACIÓN
             const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
             const weekDays = Array.from({ length: 6 }).map((_, i) => addDays(weekStart, i));
             
@@ -137,7 +148,6 @@
                 if (existing) {
                     const isMine = existing.student && normalizeName(existing.student) === normalizeName(studentName);
                     if (isMine) {
-                        // ABRIR CLASS HUB
                         setVocabNotes(existing.notes_vocab || '');
                         setGrammarNotes(existing.notes_grammar || '');
                         setClassHubModal(existing);
@@ -149,6 +159,35 @@
                 else {
                     if (canBookMore(dateStr) && confirm(`¿Reservar NUEVA clase el ${dateStr} a las ${formatTimeDisplay(time)}?`)) bookClass(dateStr, dayName, time, studentName);
                 }
+            };
+
+            // DRAG AND DROP ESTUDIANTE
+            const handleDragStart = (e, id) => {
+                setDraggedEventId(id);
+                e.dataTransfer.setData('id', id);
+                e.dataTransfer.effectAllowed = 'move';
+            };
+            const handleDrop = async (e, tDate, tDay, tTime) => {
+                e.preventDefault();
+                const id = e.dataTransfer.getData('id');
+                if(!id) return;
+                const evToMove = events.find(x => x.id === id);
+                if(!evToMove) return;
+
+                const existingTarget = getEventForSlot(tDate, tDay, tTime);
+                if(existingTarget) {
+                    alert("⚠️ Ese espacio ya está ocupado.");
+                    setDraggedEventId(null);
+                    return;
+                }
+
+                if(confirm(`¿Mover tu clase al ${tDate} a las ${formatTimeDisplay(tTime)}?`)) {
+                    try { 
+                        await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', id), { date: tDate, day: tDay, time: tTime }); 
+                        notifyTeacher(`🔄 ${studentName} arrastró su clase al ${tDate} a las ${tTime}`);
+                    } catch(err) { alert(err.message); }
+                }
+                setDraggedEventId(null);
             };
 
             // ACCIONES
@@ -168,10 +207,7 @@
                 if(!classHubModal) return;
                 setIsSavingNotes(true);
                 try {
-                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', classHubModal.id), {
-                        notes_vocab: vocabNotes, notes_grammar: grammarNotes
-                    });
-                    // Feedback visual sutil
+                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', classHubModal.id), { notes_vocab: vocabNotes, notes_grammar: grammarNotes });
                     setTimeout(() => setIsSavingNotes(false), 500);
                 } catch (e) { alert(e.message); setIsSavingNotes(false); }
             };
@@ -216,7 +252,6 @@
                                 </div>
                                 <div className="flex items-center gap-4">
                                     <div className="flex items-center gap-2 bg-stone-100 dark:bg-zinc-800 px-3 py-1.5 rounded-xl border border-stone-200 dark:border-zinc-700">
-                                        {/* Hacia atrás infinito, hacia adelante Max 2 semanas */}
                                         <button onClick={handlePrevWeek} className="p-1 hover:bg-white dark:hover:bg-zinc-700 rounded transition-colors"><ChevronLeft size={16}/></button>
                                         <span className="font-bold text-xs min-w-[100px] text-center capitalize">{format(weekStart, 'MMM d')} - {format(addDays(weekStart, 5), 'MMM d')}</span>
                                         <button onClick={handleNextWeek} disabled={isAfter(addWeeks(currentDate, 1), addWeeks(new Date(), 2))} className="p-1 hover:bg-white dark:hover:bg-zinc-700 rounded disabled:opacity-30"><ChevronRight size={16}/></button>
@@ -273,9 +308,10 @@
                                                             if (isMine) {
                                                                 cellClass += " cursor-pointer";
                                                                 cellContent = (
-                                                                    <div className="h-full w-full rounded-xl p-2 border-2 shadow-md flex flex-col justify-between bg-emerald-100 border-emerald-300 dark:bg-emerald-900/40 dark:border-emerald-500 hover:scale-[1.02]">
-                                                                        <div><div className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase mb-1 flex items-center gap-1"><BookOpen size={10}/> MI CLASE</div><div className="text-sm font-bold text-emerald-900 dark:text-emerald-100 leading-tight">{event.title}</div></div>
-                                                                        <span className="text-[10px] text-emerald-800 dark:text-emerald-400 mt-2 font-bold flex items-center gap-1"><PenTool size={10}/> Ver Cuaderno</span>
+                                                                    // AQUI EL DRAG AND DROP DEL ALUMNO
+                                                                    <div draggable="true" onDragStart={e=>handleDragStart(e,event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`draggable-item h-full w-full rounded-xl p-2 border-2 shadow-md flex flex-col justify-between bg-emerald-100 border-emerald-300 dark:bg-emerald-900/40 dark:border-emerald-500 hover:scale-[1.02] cursor-grab active:cursor-grabbing ${draggedEventId === event.id ? 'opacity-40' : ''}`}>
+                                                                        <div><div className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase mb-1 flex items-center gap-1"><BookOpen size={10}/> MI CLASE</div><div className="text-sm font-bold text-emerald-900 dark:text-emerald-100 leading-tight pr-4">{event.title}</div></div>
+                                                                        <span className="text-[10px] text-emerald-800 dark:text-emerald-400 mt-2 font-bold flex items-center gap-1 bg-white/40 dark:bg-black/20 w-fit px-1.5 py-0.5 rounded"><PenTool size={10}/> Abrir / Posponer</span>
                                                                     </div>
                                                                 );
                                                             } else {
@@ -289,8 +325,8 @@
                                                     }
 
                                                     return (
-                                                        <div key={`${dateStr}-${time}`} onClick={() => handleSlotClick(dateStr, dayName, time)} className={cellClass}>
-                                                            {isLiveNow && !rescheduleMode && <div className="absolute top-2 right-2 w-2.5 h-2.5 bg-emerald-500 rounded-full live-dot z-30"></div>}
+                                                        <div key={`${dateStr}-${time}`} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={e=>handleDrop(e,dateStr,dayName,time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={cellClass}>
+                                                            {isLiveNow && !rescheduleMode && <div className="absolute top-1.5 right-1.5 w-2 h-2 bg-emerald-500 rounded-full live-dot z-30 shadow-md"></div>}
                                                             {cellContent}
                                                         </div>
                                                     );
@@ -307,7 +343,6 @@
                             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
                                 <div className="bg-white dark:bg-zinc-900 rounded-[2rem] shadow-2xl w-full max-w-2xl overflow-hidden border border-stone-200 dark:border-zinc-700 flex flex-col max-h-[90vh]">
                                     
-                                    {/* CABECERA HUB */}
                                     <div className="bg-teal-600 p-6 text-white shrink-0 flex justify-between items-start">
                                         <div>
                                             <h3 className="text-2xl font-black">{classHubModal.title}</h3>
@@ -316,10 +351,7 @@
                                         <button onClick={() => setClassHubModal(null)} className="bg-black/20 hover:bg-black/40 p-2 rounded-full transition-colors"><X size={20}/></button>
                                     </div>
 
-                                    {/* CUERPO: LINK MEET + NOTAS */}
                                     <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6 bg-stone-50 dark:bg-zinc-950">
-                                        
-                                        {/* Meet Button */}
                                         <div className="flex gap-4">
                                             {classHubModal.meetLink ? (
                                                 <a href={classHubModal.meetLink} target="_blank" className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-2xl font-black text-center shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 flex items-center justify-center gap-2 text-lg">
@@ -332,48 +364,32 @@
                                             )}
                                         </div>
 
-                                        {/* CUADERNO ZONE */}
                                         <div className="grid md:grid-cols-2 gap-4">
-                                            {/* Vocabulario */}
                                             <div className="bg-yellow-50 dark:bg-zinc-900 border border-yellow-200 dark:border-zinc-700 rounded-2xl p-4 shadow-inner relative group">
                                                 <h4 className="text-yellow-800 dark:text-yellow-500 font-black uppercase text-xs tracking-widest mb-2 flex items-center gap-2"><BookOpen size={14}/> Vocabulario</h4>
-                                                <textarea 
-                                                    value={vocabNotes} 
-                                                    onChange={e => setVocabNotes(e.target.value)}
-                                                    onBlur={saveNotes}
-                                                    placeholder="Anota palabras nuevas aquí..."
-                                                    className="w-full h-48 bg-transparent outline-none resize-none text-stone-700 dark:text-stone-300 font-medium notebook-lines placeholder-yellow-800/30 dark:placeholder-zinc-600 text-sm"
-                                                />
+                                                <textarea value={vocabNotes} onChange={e => setVocabNotes(e.target.value)} onBlur={saveNotes} placeholder="Anota palabras nuevas aquí..." className="w-full h-48 bg-transparent outline-none resize-none text-stone-700 dark:text-stone-300 font-medium notebook-lines placeholder-yellow-800/30 dark:placeholder-zinc-600 text-sm"/>
                                             </div>
-
-                                            {/* Gramática */}
                                             <div className="bg-blue-50 dark:bg-zinc-900 border border-blue-200 dark:border-zinc-700 rounded-2xl p-4 shadow-inner relative group">
                                                 <h4 className="text-blue-800 dark:text-blue-400 font-black uppercase text-xs tracking-widest mb-2 flex items-center gap-2"><PenTool size={14}/> Gramática</h4>
-                                                <textarea 
-                                                    value={grammarNotes} 
-                                                    onChange={e => setGrammarNotes(e.target.value)}
-                                                    onBlur={saveNotes}
-                                                    placeholder="Apuntes de reglas y estructuras..."
-                                                    className="w-full h-48 bg-transparent outline-none resize-none text-stone-700 dark:text-stone-300 font-medium notebook-lines placeholder-blue-800/30 dark:placeholder-zinc-600 text-sm"
-                                                />
+                                                <textarea value={grammarNotes} onChange={e => setGrammarNotes(e.target.value)} onBlur={saveNotes} placeholder="Apuntes de reglas y estructuras..." className="w-full h-48 bg-transparent outline-none resize-none text-stone-700 dark:text-stone-300 font-medium notebook-lines placeholder-blue-800/30 dark:placeholder-zinc-600 text-sm"/>
                                             </div>
                                         </div>
                                     </div>
 
-                                    {/* FOOTER: ACCIONES */}
                                     <div className="bg-white dark:bg-zinc-900 p-4 border-t border-stone-200 dark:border-zinc-800 shrink-0 flex items-center justify-between">
                                         <div className="flex items-center gap-2 text-stone-400 text-xs font-bold">
-                                            {isSavingNotes ? <span className="flex items-center gap-1 text-emerald-500"><Save size={14}/> Guardando...</span> : "Tus notas se guardan solas."}
+                                            {isSavingNotes ? <span className="flex items-center gap-1 text-emerald-500"><Save size={14}/> Guardando...</span> : "Notas autoguardadas."}
                                         </div>
                                         <div className="flex gap-2">
-                                            <button onClick={cancelClass} className="px-4 py-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl font-bold text-sm transition-colors">Cancelar Clase</button>
-                                            <button onClick={initReschedule} className="px-4 py-2 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 hover:bg-stone-200 dark:hover:bg-zinc-700 rounded-xl font-bold text-sm transition-colors">Mover / Posponer</button>
+                                            <button onClick={cancelClass} className="px-4 py-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl font-bold text-sm transition-colors border border-transparent hover:border-rose-200">Cancelar Clase</button>
+                                            <button onClick={initReschedule} className="px-4 py-2 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 hover:bg-stone-200 dark:hover:bg-zinc-700 rounded-xl font-bold text-sm transition-colors border border-stone-200 dark:border-zinc-700">Mover / Posponer</button>
                                         </div>
                                     </div>
                                 </div>
                             </div>
                         )}
 
+                        {/* MODAL RESERVA NUEVA */}
                         {bookingModal && (
                             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
                                 <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden p-6 border border-stone-200 dark:border-zinc-700">
