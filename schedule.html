@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tu Agenda | Periplo</title>
+    <title>Tu Agenda y Cuaderno | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config = { darkMode: 'class' };</script>
     <script type="importmap">
@@ -24,11 +24,13 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
-        .pulse-yellow { animation: pulse-yellow 2s infinite; }
-        @keyframes pulse-yellow { 0% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(234, 179, 8, 0); } 100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0); } }
-        /* STICKY COLUMN MAGIC */
         .sticky-col { position: sticky; left: 0; z-index: 20; }
         .sticky-corner { position: sticky; left: 0; top: 0; z-index: 40; }
+        @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+        .live-dot { animation: pulse-green 2s infinite; }
+        /* Estilos Cuaderno */
+        .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px); background-attachment: local; line-height: 32px; padding-top: 6px; }
+        .dark .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #3f3f46 31px, #3f3f46 32px); }
     </style>
 </head>
 <body>
@@ -38,9 +40,9 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, updateDoc, doc, query, serverTimestamp } from 'firebase/firestore';
-        import { format, startOfWeek, addDays, isSameDay, addWeeks, isBefore, isAfter, parseISO } from 'date-fns';
+        import { format, startOfWeek, addDays, isSameDay, addWeeks, isAfter, parseISO } from 'date-fns';
         import { es } from 'date-fns/locale';
-        import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Video, Lock, UserPlus, ArrowLeft, Sun, Moon, CheckCircle2, X, Clock, ArrowRightLeft } from 'lucide-react';
+        import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Video, Lock, UserPlus, ArrowLeft, Sun, Moon, CheckCircle2, X, Clock, ArrowRightLeft, BookOpen, PenTool, Save } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -48,21 +50,28 @@
 
         const TIMES = ['07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00'];
         const formatTimeDisplay = (time24) => { const h = parseInt(time24.split(':')[0], 10); return `${h % 12 || 12}:00 ${h >= 12 ? 'pm' : 'am'}`; };
-        
         const normalizeName = (name) => name ? name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "") : "";
 
         const StudentSchedule = () => {
             const [events, setEvents] = useState([]);
             const [currentDate, setCurrentDate] = useState(new Date());
+            const [now, setNow] = useState(new Date());
             
             const [bookingModal, setBookingModal] = useState(null); 
-            const [actionModal, setActionModal] = useState(null); 
-            const [rescheduleMode, setRescheduleMode] = useState(null); 
+            const [classHubModal, setClassHubModal] = useState(null); // { event }
+            const [rescheduleMode, setRescheduleMode] = useState(null); // { event }
+            
+            // Estado para el cuaderno
+            const [vocabNotes, setVocabNotes] = useState('');
+            const [grammarNotes, setGrammarNotes] = useState('');
+            const [isSavingNotes, setIsSavingNotes] = useState(false);
             
             const [studentName, setStudentName] = useState('');
             const [isDarkMode, setIsDarkMode] = useState(true);
 
             useEffect(() => {
+                const timer = setInterval(() => setNow(new Date()), 60000);
+                
                 const params = new URLSearchParams(window.location.search);
                 const urlName = params.get('student');
                 if (urlName) setStudentName(decodeURIComponent(urlName));
@@ -75,17 +84,14 @@
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     setEvents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 });
-                return () => unsubscribe();
+                return () => { clearInterval(timer); unsubscribe(); };
             }, []);
 
-            // NAVEGACIÓN DE FECHAS (Regla: Máximo 2 semanas adelante)
+            // NAVEGACIÓN (Adelante max 2 semanas, atrás infinito)
             const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
-            const weekDays = Array.from({ length: 6 }).map((_, i) => addDays(weekStart, i)); // Lunes a Sábado
+            const weekDays = Array.from({ length: 6 }).map((_, i) => addDays(weekStart, i));
             
-            const handlePrevWeek = () => {
-                const prev = addWeeks(currentDate, -1);
-                if (!isBefore(prev, startOfWeek(new Date(), { weekStartsOn: 1 }))) setCurrentDate(prev);
-            };
+            const handlePrevWeek = () => setCurrentDate(addWeeks(currentDate, -1));
             const handleNextWeek = () => {
                 const next = addWeeks(currentDate, 1);
                 if (!isAfter(next, addWeeks(new Date(), 2))) setCurrentDate(next);
@@ -93,11 +99,8 @@
 
             const toggleTheme = () => setIsDarkMode(!isDarkMode);
 
-            // LOGICA NOTIFICACIONES AL PROFE
             const notifyTeacher = async (message) => {
-                await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'notifications'), {
-                    message, createdAt: serverTimestamp(), read: false
-                });
+                await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'notifications'), { message, createdAt: serverTimestamp(), read: false });
             };
 
             // CHECK LÍMITES
@@ -105,102 +108,91 @@
                 const normName = normalizeName(studentName);
                 const myEvents = events.filter(e => e.student && normalizeName(e.student) === normName);
                 
-                // 1. Ya tiene clase ese día?
                 const hasClassToday = myEvents.some(e => e.date === targetDateStr || (!e.date && e.day === format(parseISO(targetDateStr), 'EEE', {locale:es}).toUpperCase().replace('.','')));
-                if (hasClassToday) {
-                    alert("⚠️ Ya tienes una clase agendada para este día. Máximo 1 por día.");
-                    return false;
-                }
+                if (hasClassToday) { alert("⚠️ Ya tienes una clase para este día. Máximo 1 por día."); return false; }
 
-                // 2. Ya tiene 3 clases en la semana de la fecha target?
                 const targetWeekStart = startOfWeek(parseISO(targetDateStr), { weekStartsOn: 1 });
                 let countThisWeek = 0;
                 myEvents.forEach(e => {
                     if (e.date) {
-                        const evWeekStart = startOfWeek(parseISO(e.date), { weekStartsOn: 1 });
-                        if (isSameDay(evWeekStart, targetWeekStart)) countThisWeek++;
-                    } else {
-                        countThisWeek++; // Legados asumen todas las semanas
-                    }
+                        if (isSameDay(startOfWeek(parseISO(e.date), { weekStartsOn: 1 }), targetWeekStart)) countThisWeek++;
+                    } else countThisWeek++;
                 });
 
-                if (countThisWeek >= 3) {
-                    alert("⚠️ Has alcanzado el límite de 3 clases esta semana.");
-                    return false;
-                }
-
+                if (countThisWeek >= 3) { alert("⚠️ Límite de 3 clases por semana alcanzado."); return false; }
                 return true;
             };
 
-            const getEventForSlot = (dateStr, dayName, time) => {
-                return events.find(e => (e.date === dateStr && e.time === time) || (!e.date && e.day === dayName && e.time === time));
-            };
+            const getEventForSlot = (dateStr, dayName, time) => events.find(e => (e.date === dateStr && e.time === time) || (!e.date && e.day === dayName && e.time === time));
 
             const handleSlotClick = (dateStr, dayName, time) => {
                 const existing = getEventForSlot(dateStr, dayName, time);
 
                 if (rescheduleMode) {
                     if (existing) return; 
-                    if (confirm(`¿Mover clase al ${dayName} ${dateStr} a las ${formatTimeDisplay(time)}?`)) {
-                        performReschedule(dateStr, dayName, time);
-                    }
+                    if (confirm(`¿Mover clase al ${dayName} ${dateStr} a las ${formatTimeDisplay(time)}?`)) performReschedule(dateStr, dayName, time);
                     return;
                 }
 
                 if (existing) {
                     const isMine = existing.student && normalizeName(existing.student) === normalizeName(studentName);
                     if (isMine) {
-                        if (existing.meetLink) window.open(existing.meetLink, '_blank');
-                        else setActionModal(existing);
+                        // ABRIR CLASS HUB
+                        setVocabNotes(existing.notes_vocab || '');
+                        setGrammarNotes(existing.notes_grammar || '');
+                        setClassHubModal(existing);
                     }
                     return;
                 }
 
-                if (!studentName) {
-                    setBookingModal({ dateStr, dayName, time });
-                } else {
-                    if (canBookMore(dateStr)) {
-                        if(confirm(`¿Reservar NUEVA clase el ${dateStr} a las ${formatTimeDisplay(time)}?`)) {
-                            bookClass(dateStr, dayName, time, studentName);
-                        }
-                    }
+                if (!studentName) setBookingModal({ dateStr, dayName, time });
+                else {
+                    if (canBookMore(dateStr) && confirm(`¿Reservar NUEVA clase el ${dateStr} a las ${formatTimeDisplay(time)}?`)) bookClass(dateStr, dayName, time, studentName);
                 }
             };
 
+            // ACCIONES
             const bookClass = async (dateStr, dayName, time, name) => {
                 localStorage.setItem('periplo_student_name', name);
                 setStudentName(name);
                 try {
                     await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), {
-                        date: dateStr, day: dayName, time,
-                        title: "Clase de " + name.split(' ')[0], student: name,
-                        type: 'class', notes: 'Agendado por alumno',
-                        customColor: 'bg-emerald-200 border-emerald-300 text-emerald-900', meetLink: '' 
+                        date: dateStr, day: dayName, time, title: "Clase de " + name.split(' ')[0], student: name, type: 'class', notes: 'Agendado por alumno', customColor: 'bg-emerald-200 border-emerald-300 text-emerald-900', meetLink: '' 
                     });
                     notifyTeacher(`📗 ${name} agendó una clase el ${dateStr} a las ${time}`);
                     setBookingModal(null);
                 } catch (e) { alert("Error: " + e.message); }
             };
 
+            const saveNotes = async () => {
+                if(!classHubModal) return;
+                setIsSavingNotes(true);
+                try {
+                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', classHubModal.id), {
+                        notes_vocab: vocabNotes, notes_grammar: grammarNotes
+                    });
+                    // Feedback visual sutil
+                    setTimeout(() => setIsSavingNotes(false), 500);
+                } catch (e) { alert(e.message); setIsSavingNotes(false); }
+            };
+
             const cancelClass = async () => {
-                if (!actionModal) return;
+                if (!classHubModal) return;
                 if (confirm("¿Seguro que quieres CANCELAR esta clase? El espacio quedará libre.")) {
                     try {
-                        await deleteDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', actionModal.id));
-                        notifyTeacher(`🚨 ${studentName} CANCELÓ su clase del ${actionModal.date || actionModal.day} a las ${actionModal.time}`);
-                        setActionModal(null);
+                        await deleteDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', classHubModal.id));
+                        notifyTeacher(`🚨 ${studentName} CANCELÓ su clase del ${classHubModal.date || classHubModal.day} a las ${classHubModal.time}`);
+                        setClassHubModal(null);
                     } catch (e) { alert("Error: " + e.message); }
                 }
             };
 
-            const initReschedule = () => { setRescheduleMode(actionModal); setActionModal(null); };
+            const initReschedule = () => { setRescheduleMode(classHubModal); setClassHubModal(null); };
 
             const performReschedule = async (newDate, newDayName, newTime) => {
                 if (!rescheduleMode) return;
                 try {
-                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', rescheduleMode.id), {
-                        date: newDate, day: newDayName, time: newTime
-                    });
+                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', rescheduleMode.id), { date: newDate, day: newDayName, time: newTime });
                     notifyTeacher(`🔄 ${studentName} MOVIÓ su clase al ${newDate} a las ${newTime}`);
                     setRescheduleMode(null);
                 } catch (e) { alert("Error: " + e.message); }
@@ -224,7 +216,8 @@
                                 </div>
                                 <div className="flex items-center gap-4">
                                     <div className="flex items-center gap-2 bg-stone-100 dark:bg-zinc-800 px-3 py-1.5 rounded-xl border border-stone-200 dark:border-zinc-700">
-                                        <button onClick={handlePrevWeek} disabled={isBefore(addWeeks(currentDate, -1), startOfWeek(new Date(), {weekStartsOn:1}))} className="p-1 hover:bg-white dark:hover:bg-zinc-700 rounded disabled:opacity-30"><ChevronLeft size={16}/></button>
+                                        {/* Hacia atrás infinito, hacia adelante Max 2 semanas */}
+                                        <button onClick={handlePrevWeek} className="p-1 hover:bg-white dark:hover:bg-zinc-700 rounded transition-colors"><ChevronLeft size={16}/></button>
                                         <span className="font-bold text-xs min-w-[100px] text-center capitalize">{format(weekStart, 'MMM d')} - {format(addDays(weekStart, 5), 'MMM d')}</span>
                                         <button onClick={handleNextWeek} disabled={isAfter(addWeeks(currentDate, 1), addWeeks(new Date(), 2))} className="p-1 hover:bg-white dark:hover:bg-zinc-700 rounded disabled:opacity-30"><ChevronRight size={16}/></button>
                                     </div>
@@ -237,9 +230,9 @@
                         <div className="flex-1 overflow-auto p-4 custom-scrollbar relative">
                             <div className="min-w-[800px] bg-white dark:bg-zinc-900 rounded-2xl shadow-xl border border-stone-200 dark:border-zinc-800">
                                 <div className="grid grid-cols-[80px_repeat(6,_1fr)] border-b-2 border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950 sticky top-0 z-30 shadow-sm">
-                                    <div className="sticky-corner p-4 text-center text-xs font-black text-stone-400 dark:text-zinc-500 uppercase flex items-center justify-center border-r border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950">HORA</div>
+                                    <div className="sticky-corner p-4 text-center text-xs font-black text-stone-400 dark:text-zinc-500 uppercase border-r border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950 flex items-center justify-center">HORA</div>
                                     {weekDays.map(day => {
-                                        const isToday = isSameDay(day, new Date());
+                                        const isToday = isSameDay(day, now);
                                         return (
                                             <div key={day.toString()} className={`p-3 text-center border-r border-stone-200 dark:border-zinc-800 last:border-r-0 ${isToday ? 'bg-teal-50 dark:bg-teal-900/20 border-b-4 border-b-teal-500' : ''}`}>
                                                 <div className={`text-[10px] font-bold uppercase ${isToday ? 'text-teal-600 dark:text-teal-400' : 'text-stone-400 dark:text-zinc-500'}`}>{format(day, 'EEE', { locale: es })}</div>
@@ -250,66 +243,133 @@
                                 </div>
 
                                 <div className="divide-y divide-stone-100 dark:divide-zinc-800">
-                                    {TIMES.map(time => (
-                                        <div key={time} className="grid grid-cols-[80px_repeat(6,_1fr)] min-h-[90px]">
-                                            <div className="sticky-col p-2 text-xs font-black text-stone-400 dark:text-zinc-500 flex flex-col items-center justify-center border-r border-stone-200 dark:border-zinc-800 bg-stone-50 dark:bg-zinc-950/90 backdrop-blur-sm shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"><span>{formatTimeDisplay(time)}</span></div>
-                                            {weekDays.map(day => {
-                                                const dateStr = format(day, 'yyyy-MM-dd');
-                                                const dayName = format(day, 'EEE', {locale: es}).toUpperCase().replace('.',''); // ej: "LUN"
-                                                const event = getEventForSlot(dateStr, dayName, time);
-                                                const isMine = event && studentName && normalizeName(event.student) === normalizeName(studentName);
-                                                const isToday = isSameDay(day, new Date());
-                                                
-                                                let cellClass = `relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group ${isToday ? 'bg-teal-50/30 dark:bg-teal-900/5' : ''}`;
-                                                let cellContent = null;
+                                    {TIMES.map(time => {
+                                        const currentHourStr = format(now, 'HH:00');
+                                        const isCurrentHourRow = time === currentHourStr;
 
-                                                if (rescheduleMode) {
-                                                    if (event) cellClass += " bg-stone-100 dark:bg-zinc-950 opacity-30 cursor-not-allowed";
-                                                    else {
-                                                        cellClass += " cursor-pointer bg-amber-50 dark:bg-amber-900/10 hover:bg-amber-100 border-amber-200";
-                                                        cellContent = <div className="h-full w-full rounded-xl border-2 border-dashed border-amber-300 flex items-center justify-center animate-pulse"><span className="text-amber-600 font-bold text-xs uppercase flex items-center gap-1"><ArrowRightLeft size={14}/> Mover Aquí</span></div>;
-                                                    }
-                                                } else {
-                                                    if (event) {
-                                                        if (isMine) {
-                                                            cellClass += " cursor-pointer";
-                                                            cellContent = (
-                                                                <div className="h-full w-full rounded-xl p-2 border-2 shadow-md flex flex-col justify-between bg-emerald-100 border-emerald-300 dark:bg-emerald-900/40 dark:border-emerald-500 hover:scale-[1.02]">
-                                                                    <div><div className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase mb-1 flex items-center gap-1"><CheckCircle2 size={10}/> TU CLASE</div><div className="text-sm font-bold text-emerald-900 dark:text-emerald-100 leading-tight">{event.title}</div></div>
-                                                                    {event.meetLink ? <div className="bg-white/80 text-emerald-700 font-bold text-[10px] py-1.5 px-2 rounded-lg flex items-center justify-center gap-1 mt-1"><Video size={12}/> ENTRAR</div> : <span className="text-[10px] text-emerald-800 dark:text-emerald-400 flex items-center gap-1"><Clock size={10}/> Modificar</span>}
-                                                                </div>
-                                                            );
-                                                        } else {
-                                                            cellClass += " cursor-not-allowed";
-                                                            cellContent = <div className="h-full w-full bg-stone-100 dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-xl flex items-center justify-center opacity-70"><div className="flex items-center gap-1 text-stone-400 dark:text-zinc-600 font-bold text-xs uppercase"><Lock size={12}/> Ocupado</div></div>;
+                                        return (
+                                            <div key={time} className="grid grid-cols-[80px_repeat(6,_1fr)] min-h-[90px]">
+                                                <div className={`sticky-col p-2 text-xs font-black flex items-center justify-center border-r border-stone-200 dark:border-zinc-800 backdrop-blur-sm shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] ${isCurrentHourRow ? 'bg-teal-100 dark:bg-teal-900/60 text-teal-700 dark:text-teal-300' : 'bg-stone-50 dark:bg-zinc-950/90 text-stone-400 dark:text-zinc-500'}`}><span>{formatTimeDisplay(time)}</span></div>
+                                                {weekDays.map(day => {
+                                                    const dateStr = format(day, 'yyyy-MM-dd');
+                                                    const dayName = format(day, 'EEE', {locale: es}).toUpperCase().replace('.',''); 
+                                                    const event = getEventForSlot(dateStr, dayName, time);
+                                                    const isMine = event && studentName && normalizeName(event.student) === normalizeName(studentName);
+                                                    
+                                                    const isToday = isSameDay(day, now);
+                                                    const isLiveNow = isToday && isCurrentHourRow;
+                                                    
+                                                    let cellClass = `relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group ${isToday ? 'bg-teal-50/30 dark:bg-teal-900/5' : ''}`;
+                                                    let cellContent = null;
+
+                                                    if (rescheduleMode) {
+                                                        if (event) cellClass += " bg-stone-100 dark:bg-zinc-950 opacity-30 cursor-not-allowed";
+                                                        else {
+                                                            cellClass += " cursor-pointer bg-amber-50 dark:bg-amber-900/10 hover:bg-amber-100 border-amber-200";
+                                                            cellContent = <div className="h-full w-full rounded-xl border-2 border-dashed border-amber-300 flex items-center justify-center animate-pulse"><span className="text-amber-600 font-bold text-xs uppercase flex items-center gap-1"><ArrowRightLeft size={14}/> Mover Aquí</span></div>;
                                                         }
                                                     } else {
-                                                        cellClass += " cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20";
-                                                        cellContent = <div className="h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><div className="flex flex-col items-center gap-1 text-teal-500 dark:text-teal-400"><UserPlus size={20}/><span className="text-[10px] font-bold uppercase">Apartar</span></div></div>;
+                                                        if (event) {
+                                                            if (isMine) {
+                                                                cellClass += " cursor-pointer";
+                                                                cellContent = (
+                                                                    <div className="h-full w-full rounded-xl p-2 border-2 shadow-md flex flex-col justify-between bg-emerald-100 border-emerald-300 dark:bg-emerald-900/40 dark:border-emerald-500 hover:scale-[1.02]">
+                                                                        <div><div className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase mb-1 flex items-center gap-1"><BookOpen size={10}/> MI CLASE</div><div className="text-sm font-bold text-emerald-900 dark:text-emerald-100 leading-tight">{event.title}</div></div>
+                                                                        <span className="text-[10px] text-emerald-800 dark:text-emerald-400 mt-2 font-bold flex items-center gap-1"><PenTool size={10}/> Ver Cuaderno</span>
+                                                                    </div>
+                                                                );
+                                                            } else {
+                                                                cellClass += " cursor-not-allowed";
+                                                                cellContent = <div className="h-full w-full bg-stone-100 dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-xl flex items-center justify-center opacity-70"><div className="flex items-center gap-1 text-stone-400 dark:text-zinc-600 font-bold text-xs uppercase"><Lock size={12}/> Ocupado</div></div>;
+                                                            }
+                                                        } else {
+                                                            cellClass += " cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20";
+                                                            cellContent = <div className="h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><div className="flex flex-col items-center gap-1 text-teal-500 dark:text-teal-400"><UserPlus size={20}/><span className="text-[10px] font-bold uppercase">Apartar</span></div></div>;
+                                                        }
                                                     }
-                                                }
 
-                                                return <div key={`${dateStr}-${time}`} onClick={() => handleSlotClick(dateStr, dayName, time)} className={cellClass}>{cellContent}</div>;
-                                            })}
-                                        </div>
-                                    ))}
+                                                    return (
+                                                        <div key={`${dateStr}-${time}`} onClick={() => handleSlotClick(dateStr, dayName, time)} className={cellClass}>
+                                                            {isLiveNow && !rescheduleMode && <div className="absolute top-2 right-2 w-2.5 h-2.5 bg-emerald-500 rounded-full live-dot z-30"></div>}
+                                                            {cellContent}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </div>
                         </div>
 
-                        {/* MODALS REUTILIZADOS ABAJO */}
-                        {actionModal && (
-                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-                                <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-stone-200 dark:border-zinc-700">
-                                    <div className="p-6">
-                                        <h3 className="text-xl font-black text-stone-800 dark:text-white mb-1">Gestionar Clase</h3>
-                                        <p className="text-stone-500 dark:text-zinc-400 text-sm mb-6 font-medium">{actionModal.date || actionModal.day} • {formatTimeDisplay(actionModal.time)}</p>
-                                        <div className="space-y-3">
-                                            <button onClick={initReschedule} className="w-full py-4 bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 rounded-xl font-bold border-2 border-amber-200 dark:border-amber-800 hover:bg-amber-200 transition-colors flex items-center justify-center gap-2"><ArrowRightLeft size={18}/> Posponer / Mover</button>
-                                            <button onClick={cancelClass} className="w-full py-4 bg-white dark:bg-zinc-800 text-rose-500 rounded-xl font-bold border-2 border-rose-100 dark:border-rose-900 hover:bg-rose-50 transition-colors flex items-center justify-center gap-2"><X size={18}/> Cancelar Clase</button>
+                        {/* CLASS HUB MODAL (CUADERNO) */}
+                        {classHubModal && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
+                                <div className="bg-white dark:bg-zinc-900 rounded-[2rem] shadow-2xl w-full max-w-2xl overflow-hidden border border-stone-200 dark:border-zinc-700 flex flex-col max-h-[90vh]">
+                                    
+                                    {/* CABECERA HUB */}
+                                    <div className="bg-teal-600 p-6 text-white shrink-0 flex justify-between items-start">
+                                        <div>
+                                            <h3 className="text-2xl font-black">{classHubModal.title}</h3>
+                                            <p className="opacity-80 font-medium text-sm flex items-center gap-2 mt-1"><CalendarIcon size={14}/> {classHubModal.date || classHubModal.day} • {formatTimeDisplay(classHubModal.time)}</p>
+                                        </div>
+                                        <button onClick={() => setClassHubModal(null)} className="bg-black/20 hover:bg-black/40 p-2 rounded-full transition-colors"><X size={20}/></button>
+                                    </div>
+
+                                    {/* CUERPO: LINK MEET + NOTAS */}
+                                    <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6 bg-stone-50 dark:bg-zinc-950">
+                                        
+                                        {/* Meet Button */}
+                                        <div className="flex gap-4">
+                                            {classHubModal.meetLink ? (
+                                                <a href={classHubModal.meetLink} target="_blank" className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-2xl font-black text-center shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 flex items-center justify-center gap-2 text-lg">
+                                                    <Video size={24}/> ENTRAR A LA CLASE
+                                                </a>
+                                            ) : (
+                                                <div className="flex-1 bg-stone-200 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400 p-4 rounded-2xl font-bold text-center border-2 border-dashed border-stone-300 dark:border-zinc-700 flex items-center justify-center gap-2">
+                                                    <Clock size={20}/> El profe pondrá el link de Meet pronto
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* CUADERNO ZONE */}
+                                        <div className="grid md:grid-cols-2 gap-4">
+                                            {/* Vocabulario */}
+                                            <div className="bg-yellow-50 dark:bg-zinc-900 border border-yellow-200 dark:border-zinc-700 rounded-2xl p-4 shadow-inner relative group">
+                                                <h4 className="text-yellow-800 dark:text-yellow-500 font-black uppercase text-xs tracking-widest mb-2 flex items-center gap-2"><BookOpen size={14}/> Vocabulario</h4>
+                                                <textarea 
+                                                    value={vocabNotes} 
+                                                    onChange={e => setVocabNotes(e.target.value)}
+                                                    onBlur={saveNotes}
+                                                    placeholder="Anota palabras nuevas aquí..."
+                                                    className="w-full h-48 bg-transparent outline-none resize-none text-stone-700 dark:text-stone-300 font-medium notebook-lines placeholder-yellow-800/30 dark:placeholder-zinc-600 text-sm"
+                                                />
+                                            </div>
+
+                                            {/* Gramática */}
+                                            <div className="bg-blue-50 dark:bg-zinc-900 border border-blue-200 dark:border-zinc-700 rounded-2xl p-4 shadow-inner relative group">
+                                                <h4 className="text-blue-800 dark:text-blue-400 font-black uppercase text-xs tracking-widest mb-2 flex items-center gap-2"><PenTool size={14}/> Gramática</h4>
+                                                <textarea 
+                                                    value={grammarNotes} 
+                                                    onChange={e => setGrammarNotes(e.target.value)}
+                                                    onBlur={saveNotes}
+                                                    placeholder="Apuntes de reglas y estructuras..."
+                                                    className="w-full h-48 bg-transparent outline-none resize-none text-stone-700 dark:text-stone-300 font-medium notebook-lines placeholder-blue-800/30 dark:placeholder-zinc-600 text-sm"
+                                                />
+                                            </div>
                                         </div>
                                     </div>
-                                    <div className="bg-stone-50 dark:bg-zinc-950 p-4 border-t border-stone-200 dark:border-zinc-800 text-center"><button onClick={() => setActionModal(null)} className="text-sm font-bold text-stone-400 hover:text-stone-600">Volver</button></div>
+
+                                    {/* FOOTER: ACCIONES */}
+                                    <div className="bg-white dark:bg-zinc-900 p-4 border-t border-stone-200 dark:border-zinc-800 shrink-0 flex items-center justify-between">
+                                        <div className="flex items-center gap-2 text-stone-400 text-xs font-bold">
+                                            {isSavingNotes ? <span className="flex items-center gap-1 text-emerald-500"><Save size={14}/> Guardando...</span> : "Tus notas se guardan solas."}
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button onClick={cancelClass} className="px-4 py-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl font-bold text-sm transition-colors">Cancelar Clase</button>
+                                            <button onClick={initReschedule} className="px-4 py-2 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 hover:bg-stone-200 dark:hover:bg-zinc-700 rounded-xl font-bold text-sm transition-colors">Mover / Posponer</button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         )}
