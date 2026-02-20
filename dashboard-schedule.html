@@ -39,13 +39,17 @@
         .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px); background-attachment: local; line-height: 32px; padding-top: 6px; }
         .dark .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #3f3f46 31px, #3f3f46 32px); }
         
-        /* LED LINE EXACTAMENTE EN LA BASE */
+        /* LÁSER LED - BARRA DELGADA Y BRILLANTE */
         @keyframes led-glow {
-            0% { box-shadow: 0 -2px 10px rgba(16,185,129,0.4); }
-            50% { box-shadow: 0 -4px 15px rgba(16,185,129,1); }
-            100% { box-shadow: 0 -2px 10px rgba(16,185,129,0.4); }
+            0% { box-shadow: 0 0 4px rgba(16,185,129,0.5), 0 0 8px rgba(16,185,129,0.3); }
+            50% { box-shadow: 0 0 10px rgba(16,185,129,1), 0 0 20px rgba(16,185,129,0.8); }
+            100% { box-shadow: 0 0 4px rgba(16,185,129,0.5), 0 0 8px rgba(16,185,129,0.3); }
         }
-        .led-line { animation: led-glow 2s infinite; }
+        .led-line { 
+            height: 2px; 
+            background-color: #10b981; 
+            animation: led-glow 1.5s infinite alternate; 
+        }
     </style>
 </head>
 <body>
@@ -85,7 +89,8 @@
             const [now, setNow] = useState(new Date()); 
             
             const [zoomLevel, setZoomLevel] = useState(1);
-            
+            const scrollContainerRef = useRef(null);
+
             const [notifications, setNotifications] = useState([]);
             const [showNotifs, setShowNotifs] = useState(false);
             const hasUnread = notifications.some(n => !n.read);
@@ -102,7 +107,6 @@
             const [formData, setFormData] = useState({ title: '', student: '', type: 'class', notes: '', meetLink: '', customColor: '', applyToAllWeek: false, applyColorToAll: false });
             const [isStudentManuallyEdited, setIsStudentManuallyEdited] = useState(false);
 
-            // AUTO-SCROLL A HORA ACTUAL
             const scrollToCurrentTime = () => {
                 setZoomLevel(1);
                 setTimeout(() => {
@@ -112,6 +116,7 @@
             };
 
             useEffect(() => {
+                // Actualiza el reloj cada minuto
                 const timer = setInterval(() => setNow(new Date()), 60000);
                 if ("Notification" in window && Notification.permission !== "denied" && Notification.permission !== "granted") Notification.requestPermission();
                 
@@ -164,6 +169,7 @@
                 }
             };
 
+            // CRUD & MODALS
             const getEventForSlot = (dateStr, dayName, time) => events.find(e => (e.date === dateStr && e.time === time) || (!e.date && e.day === dayName && e.time === time));
 
             const handleSlotClick = (dateStr, dayName, time) => {
@@ -228,7 +234,13 @@
             };
 
             const initDeleteTile = (e, ev) => { e.preventDefault(); e.stopPropagation(); setDeleteConfirm({ open: true, event: ev, deleteAll: false }); };
-            const initDuplicateModal = (e) => { e.preventDefault(); e.stopPropagation(); setDuplicationMode({ active: true, sourceEvent: editingEvent, selectedSlots: [] }); setIsModalOpen(false); };
+            
+            const initDuplicateModal = (e) => { 
+                e.preventDefault(); 
+                e.stopPropagation(); 
+                setDuplicationMode({ active: true, sourceEvent: editingEvent, selectedSlots: [] }); 
+                setIsModalOpen(false); 
+            };
 
             const handleDragStart = (e, id) => { setDraggedEventId(id); e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; };
             const handleDrop = async (e, tDate, tDay, tTime) => {
@@ -241,12 +253,25 @@
                 setDraggedEventId(null);
             };
 
+            // FIX: BUG DE DUPLICACIÓN RESUELTO
             const confirmDuplication = async () => {
-                const { sourceEvent, selectedSlots } = duplicationMode;
-                const batch = writeBatch(db);
-                selectedSlots.forEach(s => { batch.set(doc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule')), { ...sourceEvent, id: undefined, date: s.dateStr, day: s.dayName, time: s.time }); });
-                await batch.commit();
-                setDuplicationMode({ active: false, sourceEvent: null, selectedSlots: [] });
+                try {
+                    const { sourceEvent, selectedSlots } = duplicationMode;
+                    const batch = writeBatch(db);
+                    
+                    // IMPORTANTE: Extraemos el id viejo para que no choque en Firebase
+                    const { id, ...dataToCopy } = sourceEvent; 
+
+                    selectedSlots.forEach(s => { 
+                        const newRef = doc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'));
+                        batch.set(newRef, { ...dataToCopy, date: s.dateStr, day: s.dayName, time: s.time }); 
+                    });
+                    
+                    await batch.commit();
+                    setDuplicationMode({ active: false, sourceEvent: null, selectedSlots: [] });
+                } catch(err) {
+                    alert("Error duplicando: " + err.message);
+                }
             };
 
             return (
@@ -256,7 +281,10 @@
                         {duplicationMode.active && (
                             <div className="fixed top-0 left-0 right-0 z-50 bg-indigo-600 text-white shadow-lg p-3 flex justify-between px-8 animate-in slide-in-from-top">
                                 <div><Copy className="inline mr-2 w-4"/> Duplicando "{duplicationMode.sourceEvent.title}" ({duplicationMode.selectedSlots.length})</div>
-                                <div><button onClick={()=>setDuplicationMode({active:false, sourceEvent:null, selectedSlots:[]})} className="mr-4 hover:underline">Cancelar</button><button onClick={confirmDuplication} className="bg-white text-indigo-700 px-4 py-1 rounded font-bold">Pegar</button></div>
+                                <div className="flex gap-4 items-center">
+                                    <button onClick={()=>setDuplicationMode({active:false, sourceEvent:null, selectedSlots:[]})} className="hover:underline text-sm font-bold">Cancelar</button>
+                                    <button onClick={confirmDuplication} className="bg-white text-indigo-700 px-4 py-1.5 rounded-lg font-black shadow-md hover:bg-indigo-50 active:scale-95 transition-all">Pegar Clases</button>
+                                </div>
                             </div>
                         )}
 
@@ -296,7 +324,7 @@
                         </header>
 
                         {/* CONTENEDOR CON ZOOM (Y RESTRICCIÓN DE TAMAÑO MÍNIMO BLINDADA) */}
-                        <div className="flex-1 overflow-auto p-4 custom-scrollbar relative">
+                        <div className="flex-1 overflow-auto p-4 custom-scrollbar relative" ref={scrollContainerRef}>
                             <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-xl border border-stone-200 dark:border-zinc-800 origin-top-left transition-transform duration-200 w-full min-w-max" style={{ zoom: zoomLevel }}>
                                 
                                 {/* GRID MÍNIMO OBLIGATORIO PARA EVITAR QUE SE APLASTE */}
@@ -332,10 +360,11 @@
                                                     
                                                     const isDuplicationTarget = duplicationMode.active && !event;
                                                     const isSelectedForDuplication = duplicationMode.selectedSlots.some(s => s.dateStr === dateStr && s.time === time);
-                                                    const isToday = isSameDay(day, now);
                                                     
-                                                    // MARCADOR LED LINE (Base de la celda actual)
+                                                    // CALCULADOR DEL LASER LED POR PORCENTAJE
+                                                    const isToday = isSameDay(day, now);
                                                     const isLiveCell = isToday && isCurrentHourRow;
+                                                    const currentMinutePercent = (now.getMinutes() / 60) * 100;
 
                                                     let cellColor = 'bg-stone-50 border-stone-200 dark:bg-zinc-900 dark:border-zinc-800';
                                                     if (event) cellColor = event.customColor || (ACTIVITY_TYPES.find(t => t.id === event.type)?.color || cellColor);
@@ -344,15 +373,23 @@
                                                         <div id={isLiveCell ? "live-cell" : ""} key={`${dateStr}-${time}`} onDragEnter={e=>e.preventDefault()} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={e=>handleDrop(e,dateStr,dayName,time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={`relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group overflow-hidden ${event ? 'bg-white dark:bg-zinc-900' : isToday ? 'bg-indigo-50/30 dark:bg-indigo-900/5' : ''} ${isDuplicationTarget ? 'cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}`}>
                                                             {isSelectedForDuplication && <div className="absolute inset-0 bg-indigo-500/20 z-10 flex items-center justify-center animate-pulse"><CheckCircle2 className="text-indigo-500"/></div>}
                                                             
-                                                            {/* LÍNEA LED (NO PUNTITO) EN LA BASE */}
-                                                            {isLiveCell && <div className="absolute bottom-0 left-0 w-full h-1 bg-emerald-500 led-line z-30"></div>}
+                                                            {/* LÁSER LED DINÁMICO */}
+                                                            {isLiveCell && <div className="absolute left-0 w-full led-line z-30 pointer-events-none" style={{ top: `${currentMinutePercent}%` }}></div>}
 
                                                             {event ? (
                                                                 <div draggable={!duplicationMode.active} onDragStart={e=>handleDragStart(e,event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`draggable-item h-full w-full rounded-xl p-2.5 border-2 shadow-sm flex flex-col justify-between relative transition-transform ${draggedEventId===event.id ? 'opacity-40 scale-95' : 'hover:scale-[1.02]'} ${cellColor} ${duplicationMode.active ? 'opacity-50 pointer-events-none' : 'cursor-grab active:cursor-grabbing'}`}>
                                                                     
+                                                                    {/* BOTÓN ELIMINAR BLINDADO */}
                                                                     {!duplicationMode.active && (
                                                                         <div className="absolute top-1.5 right-1.5 flex opacity-0 group-hover:opacity-100 z-20 transition-opacity">
-                                                                            <button onTouchStart={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()} onClick={e => initDeleteTile(e,event)} className="p-2 md:p-1.5 bg-rose-500 text-white rounded-lg shadow-md hover:bg-rose-600 active:scale-95"><Trash2 size={18} className="md:w-4 md:h-4"/></button>
+                                                                            <button 
+                                                                                onTouchStart={e => e.stopPropagation()} 
+                                                                                onPointerDown={e => e.stopPropagation()} 
+                                                                                onClick={e => initDeleteTile(e,event)} 
+                                                                                className="p-2 md:p-1.5 bg-rose-500 text-white rounded-lg shadow-md hover:bg-rose-600 active:scale-95"
+                                                                            >
+                                                                                <Trash2 size={18} className="md:w-4 md:h-4"/>
+                                                                            </button>
                                                                         </div>
                                                                     )}
                                                                     <div className="font-black text-xs md:text-sm leading-tight uppercase z-10 mr-8 line-clamp-2" title={event.title}>{event.title}</div>
@@ -388,11 +425,18 @@
                                     <div className="bg-stone-50 dark:bg-zinc-950 px-6 py-4 flex justify-between items-center shrink-0">
                                         <div><h3 className="font-black">{editingEvent ? 'Editar' : 'Nueva Entrada'}</h3><p className="text-sm text-stone-500">{currentSlot.dayName} {currentSlot.dateStr} • {formatTimeDisplay(currentSlot.time, MY_TIME_OFFSET)}</p></div>
                                         <div className="flex items-center gap-3">
-                                            {editingEvent && <button onClick={initDuplicateModal} className="flex items-center gap-1 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-200 transition-colors active:scale-95"><Copy size={14}/> Duplicar</button>}
+                                            {/* BOTÓN DUPLICAR */}
+                                            {editingEvent && (
+                                                <button onClick={initDuplicateModal} className="flex items-center gap-1 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-indigo-200 transition-colors active:scale-95">
+                                                    <Copy size={14}/> Duplicar
+                                                </button>
+                                            )}
                                             <button onClick={()=>setIsModalOpen(false)} className="p-1 text-stone-400 hover:text-stone-600"><X size={20}/></button>
                                         </div>
                                     </div>
                                     <div className="p-6 space-y-4 overflow-y-auto custom-scrollbar">
+                                        
+                                        {/* TIPO DE EVENTO */}
                                         <div>
                                             <label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Tipo</label>
                                             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2">
@@ -400,6 +444,7 @@
                                             </div>
                                         </div>
 
+                                        {/* FORMULARIO CLASE NORMAL */}
                                         {formData.type === 'class' && (
                                             <div className="space-y-4 animate-in fade-in">
                                                 <div><label className="text-xs font-black uppercase">Título</label><input value={formData.title} onChange={handleTitleChange} className="w-full p-3 rounded-xl border-2 dark:bg-zinc-800 dark:border-zinc-700" autoFocus/></div>
@@ -415,6 +460,7 @@
                                             </div>
                                         )}
 
+                                        {/* FORMULARIO PROYECTO / OTRO */}
                                         {(formData.type === 'project' || formData.type === 'other') && (
                                             <div className="space-y-4 animate-in fade-in">
                                                 <div><label className="text-xs font-black uppercase">Título</label><input value={formData.title} onChange={e=>setFormData({...formData, title: e.target.value})} className="w-full p-3 rounded-xl border-2 dark:bg-zinc-800 dark:border-zinc-700 font-bold" autoFocus/></div>
@@ -422,6 +468,7 @@
                                             </div>
                                         )}
 
+                                        {/* FORMULARIO BLOQUE RÁPIDO */}
                                         {(formData.type === 'lunch' || formData.type === 'personal') && (
                                             <div className="bg-stone-100 dark:bg-zinc-800 p-6 rounded-xl text-center text-stone-500 dark:text-zinc-400 font-bold animate-in fade-in flex flex-col items-center gap-2">
                                                 <CheckCircle2 size={32} className="opacity-50"/> Bloque Rápido Seleccionado.
