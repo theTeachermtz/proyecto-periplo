@@ -45,7 +45,7 @@
         import React, { useState, useEffect, Component } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, deleteDoc, updateDoc, writeBatch } from 'firebase/firestore';
+        import { getFirestore, collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
         import { 
             Plus, Folder, X, LayoutGrid, Puzzle, Grid, ArrowLeft, Trash2, Copy, 
             Edit2, AlertTriangle, Map as MapIcon, Gamepad2, BookOpen, Calendar, Users, Sun, Moon 
@@ -56,7 +56,6 @@
         const db = getFirestore(app);
         const appId = 'periplo-app-v1';
 
-        // EL ESCUDO ANTI-ERRORES (Faltaba esto)
         class ErrorBoundary extends Component {
             constructor(props) { super(props); this.state = { hasError: false }; }
             static getDerivedStateFromError(error) { return { hasError: true }; }
@@ -175,6 +174,38 @@
                 if(confirm("¿Eliminar carpeta?")) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'folders', id));
             };
 
+            // Ruteo Limpio de Actividades
+            const handleActivityClick = (e, gameType) => {
+                e.preventDefault();
+                const encodedFolder = encodeURIComponent(path.join('/'));
+                if (gameType.id === 'CONNECT4') window.location.href = `dashboard-connect4.html?folder=${encodedFolder}`;
+                else if (gameType.id === 'READING') window.location.href = `dashboard-reading.html?folder=${encodedFolder}`;
+                else window.location.href = `dashboard.html?folderId=${encodedFolder}&type=${gameType.id}`;
+            };
+
+            const getPlayLink = (q) => {
+                if (q.type === 'CONNECT4') return `connect4.html?id=${q.id}`;
+                if (q.type === 'READING') return `reading.html?id=${q.id}`;
+                return `activity.html?id=${q.id}`;
+            };
+
+            const handleCardClick = (e, q) => {
+                // Previene clics accidentales si tocaste los botones de editar/borrar
+                if (e.target.closest('button')) return; 
+                const link = getPlayLink(q);
+                // Mouse Ruedita (1) o Clic Izquierdo (0) + Ctrl
+                if (e.button === 1 || e.ctrlKey || e.metaKey) window.open(link, '_blank');
+                else if (e.button === 0) window.location.href = link;
+            };
+
+            const handleEditActivity = (e, q) => {
+                e.preventDefault(); e.stopPropagation();
+                const encodedFolder = encodeURIComponent(path.join('/'));
+                if (q.type === 'CONNECT4') window.location.href = `dashboard-connect4.html?edit=${q.id}&folder=${encodedFolder}`;
+                else if (q.type === 'READING') window.location.href = `dashboard-reading.html?edit=${q.id}&folder=${encodedFolder}`;
+                else alert("Editor no disponible en esta versión para este juego.");
+            };
+
             const handleDeleteActivity = async (e, id) => {
                 e.preventDefault(); e.stopPropagation();
                 if(confirm("¿Estás seguro de eliminar esta actividad?")) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', id));
@@ -191,7 +222,6 @@
                 const itemId = e.dataTransfer.getData('itemId');
                 const itemType = e.dataTransfer.getData('itemType');
                 if (!itemId) return;
-                
                 try { 
                     if (itemType === 'quiz') await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', itemId), { parentPath: newParentPath }); 
                     else if (itemType === 'folder') await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'folders', itemId), { parentPath: newParentPath });
@@ -249,15 +279,14 @@
 
                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
                                 {userFolders.map((f) => (
-                                    <a 
+                                    <div 
                                         key={f.id} 
-                                        href={`?folder=${encodeURIComponent([...path, f.name].join('/'))}`}
-                                        onClick={(e) => { if(e.button === 0 && !e.ctrlKey && !e.metaKey) { e.preventDefault(); navigateTo([...path, f.name]); } }}
+                                        onClick={(e) => { if(e.button === 0 && !e.ctrlKey && !e.metaKey) { navigateTo([...path, f.name]); } }}
                                         draggable
                                         onDragStart={e => handleDragStart(e, f.id, 'folder')}
                                         onDragOver={e => e.preventDefault()}
                                         onDrop={e => handleDropOnTarget(e, path.length > 0 ? `${path.join('/')}/${f.name}` : f.name)}
-                                        className={`relative aspect-[4/3] ${f.colorClass || FOLDER_PALETTE[0]} border border-transparent rounded-3xl flex flex-col items-center justify-center gap-3 shadow-sm hover:scale-105 hover:shadow-lg transition-all group`}
+                                        className={`relative aspect-[4/3] ${f.colorClass || FOLDER_PALETTE[0]} border border-transparent rounded-3xl flex flex-col items-center justify-center gap-3 shadow-sm hover:scale-105 hover:shadow-lg transition-all group cursor-pointer`}
                                     >
                                         <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
                                             <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); openFolderModal(f); }} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-white dark:hover:bg-black/50 transition-colors"><Edit2 size={12}/></button>
@@ -266,29 +295,29 @@
                                         </div>
                                         <Folder size={40} className="opacity-80"/>
                                         <span className="font-black text-[12px] text-center px-4 uppercase tracking-wide truncate w-full">{f.name}</span>
-                                    </a>
+                                    </div>
                                 ))}
 
                                 {userQuizzes.map((q) => {
                                     const info = GAME_TYPES.find(g => g.id === q.type) || GAME_TYPES[0];
                                     return (
-                                        <a 
+                                        <div 
                                             key={q.id} 
-                                            href={q.type === 'CONNECT4' ? `connect4.html?id=${q.id}` : q.type === 'READING' ? `reading.html?id=${q.id}` : `activity.html?id=${q.id}`}
+                                            onMouseUp={(e) => handleCardClick(e, q)}
                                             draggable
                                             onDragStart={e => handleDragStart(e, q.id, 'quiz')}
                                             className="aspect-[4/3] bg-white dark:bg-zinc-900 rounded-3xl shadow-sm border border-slate-200 dark:border-zinc-800 flex flex-col overflow-hidden group hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer relative"
                                         >
                                             <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                                                <button onClick={(e) => { e.preventDefault(); window.location.href = q.type === 'CONNECT4' ? `dashboard-connect4.html?edit=${q.id}&folder=${encodeURIComponent(path.join('/'))}` : q.type === 'READING' ? `dashboard-reading.html?edit=${q.id}&folder=${encodeURIComponent(path.join('/'))}` : '#'; }} className="p-2 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 shadow-sm transition-colors"><Edit2 size={14}/></button>
+                                                <button onClick={(e) => handleEditActivity(e, q)} className="p-2 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 shadow-sm transition-colors"><Edit2 size={14}/></button>
                                                 <button onClick={(e) => handleDeleteActivity(e, q.id)} className="p-2 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-red-600 dark:hover:text-red-400 shadow-sm transition-colors"><Trash2 size={14}/></button>
                                             </div>
-                                            <div className={`h-1/2 ${info.color} flex items-center justify-center text-white relative`}><info.icon size={32} /></div>
-                                            <div className="p-4 flex-1 flex flex-col justify-between text-slate-700 dark:text-zinc-200">
+                                            <div className={`h-1/2 ${info.color} flex items-center justify-center text-white relative pointer-events-none`}><info.icon size={32} /></div>
+                                            <div className="p-4 flex-1 flex flex-col justify-between text-slate-700 dark:text-zinc-200 pointer-events-none">
                                                 <div className="font-bold text-sm leading-tight line-clamp-2">{q.title}</div>
                                                 <div className="text-[9px] text-slate-400 dark:text-zinc-500 font-black uppercase tracking-widest">{info.name}</div>
                                             </div>
-                                        </a>
+                                        </div>
                                     );
                                 })}
                             </div>
@@ -298,13 +327,11 @@
                                     <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl w-full max-w-sm shadow-2xl animate-in zoom-in-95 border border-transparent dark:border-zinc-800">
                                         <h3 className="font-black text-xl mb-4">{editingFolder ? 'Editar Carpeta' : 'Nueva Carpeta'}</h3>
                                         <input value={folderForm.name} onChange={e => setFolderForm({...folderForm, name: e.target.value})} placeholder="Nombre..." className="w-full p-4 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-2xl mb-4 font-bold outline-none focus:border-indigo-500 dark:focus:border-indigo-500 dark:text-white" autoFocus/>
-                                        
                                         <div className="flex flex-wrap gap-2 mb-6 justify-center p-2">
                                             {FOLDER_PALETTE.map(c => (
                                                 <button key={c} onClick={() => setFolderForm({...folderForm, colorClass: c})} className={`w-8 h-8 rounded-full border-2 transition-transform ${c.split(' ')[0]} ${folderForm.colorClass === c ? 'scale-125 border-stone-800 dark:border-white' : 'border-transparent'}`}></button>
                                             ))}
                                         </div>
-
                                         <div className="flex gap-2"><button onClick={() => setModals({...modals, folder: false})} className="flex-1 py-3 text-slate-400 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded-xl font-bold transition-colors">Cancelar</button><button onClick={saveFolder} className="flex-1 py-3 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold transition-colors">Guardar</button></div>
                                     </div>
                                 </div>
@@ -322,7 +349,7 @@
                                                 <h4 className="text-[10px] font-black text-slate-400 dark:text-zinc-500 uppercase tracking-[0.2em] mb-4">Generadores (IA Ready)</h4>
                                                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                                                     {GAME_TYPES.map(g => (
-                                                        <button key={g.id} onClick={() => { window.location.href = g.id === 'CONNECT4' ? `dashboard-connect4.html?folder=${encodeURIComponent(path.join('/'))}` : g.id === 'READING' ? `dashboard-reading.html?folder=${encodeURIComponent(path.join('/'))}` : `dashboard.html?type=${g.id}&folderId=${encodeURIComponent(path.join('/'))}`; }} className="bg-white dark:bg-zinc-800 p-5 rounded-[1.5rem] border border-slate-100 dark:border-zinc-700 hover:border-indigo-500 dark:hover:border-indigo-500 hover:shadow-xl transition-all text-left flex flex-col gap-4 group">
+                                                        <button key={g.id} onClick={(e) => handleActivityClick(e, g)} className="bg-white dark:bg-zinc-800 p-5 rounded-[1.5rem] border border-slate-100 dark:border-zinc-700 hover:border-indigo-500 dark:hover:border-indigo-500 hover:shadow-xl transition-all text-left flex flex-col gap-4 group">
                                                             <div className={`w-12 h-12 ${g.color} text-white rounded-2xl flex items-center justify-center shadow-md group-hover:scale-110 transition-transform`}><g.icon size={24}/></div>
                                                             <div><div className="font-black text-slate-700 dark:text-zinc-100 text-lg">{g.name}</div><div className="text-xs text-slate-400 dark:text-zinc-400 font-medium">{g.desc}</div></div>
                                                         </button>
