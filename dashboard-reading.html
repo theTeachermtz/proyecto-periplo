@@ -20,7 +20,7 @@
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap'); 
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; height: 100vh; overflow: hidden; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
@@ -39,6 +39,7 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        // CATEGORÍAS RESTAURADAS Y EXPANDIDAS
         const GENRES = {
             "Real World": [
                 { id: 'biography', label: 'Biography (Real Person)', icon: Globe },
@@ -47,11 +48,14 @@
             ],
             "Professional": [
                 { id: 'advice', label: 'Advice / Consultation', icon: HeartHandshake, desc: 'Dilemas complejos' },
-                { id: 'email', label: 'Email / Letter', icon: Briefcase }
+                { id: 'email', label: 'Email / Letter', icon: Briefcase },
+                { id: 'interview', label: 'Job Interview Simulation', icon: Briefcase }
             ],
             "Creative": [
                 { id: 'story', label: 'Short Story', icon: Feather },
-                { id: 'anecdote', label: 'Funny Anecdote', icon: Feather }
+                { id: 'dialogue', label: 'Dialogue / Script', icon: Feather },
+                { id: 'anecdote', label: 'Funny Anecdote', icon: Feather },
+                { id: 'grammar_check', label: 'Grammar Check', icon: Feather, desc: 'ESL Standard (A1-C2)' }
             ]
         };
 
@@ -61,7 +65,7 @@
             const [apiKey, setApiKey] = useState(localStorage.getItem('periplo_google_key') || '');
             const [parentPath, setParentPath] = useState('');
             const [editingId, setEditingId] = useState(null);
-            const [isLoadingData, setIsLoadingData] = useState(false);
+            
             const [availableModels, setAvailableModels] = useState([]);
             const [selectedModel, setSelectedModel] = useState('');
             const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -76,71 +80,44 @@
                     if (folder && folder !== 'undefined' && folder !== 'null') setParentPath(decodeURIComponent(folder));
                     const editId = params.get('edit');
                     if (editId) {
-                        setIsLoadingData(true);
                         try {
-                            const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editId);
-                            const docSnap = await getDoc(docRef);
+                            const docSnap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editId));
                             if (docSnap.exists()) {
                                 const data = docSnap.data();
                                 setReadingData({
-                                    title: data.title,
-                                    content: data.content.text,
-                                    fun_fact: data.content.fun_fact || "", 
-                                    image_url: data.content.image_url || "", 
-                                    tokens: processContent(data.content.text, [], data.content.blanks),
-                                    questions: data.content.questions || []
+                                    title: data.title, content: data.content.text, fun_fact: data.content.fun_fact || "", 
+                                    image_url: data.content.image_url || "", questions: data.content.questions || [],
+                                    tokens: processContent(data.content.text, [], data.content.blanks)
                                 });
                                 setConfig(prev => ({ ...prev, level: data.level, genre: data.genre }));
                                 setEditingId(editId);
                                 setStep('editor');
                             }
-                        } catch (e) { console.error(e); } finally { setIsLoadingData(false); }
+                        } catch (e) { console.error(e); }
                     }
                 };
                 init();
             }, []);
 
-            // Normalizador mejorado para ignorar mayúsculas y puntuación básica
             const cleanWord = (w) => w.toLowerCase().replace(/[^a-z0-9áéíóúñ]/g, '');
 
             const processContent = (text, suggestions = [], existingBlanks = []) => {
                 const regex = /([a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+|[^a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ\s]+|\s+)/g;
                 const parts = text.match(regex) || [];
-                
-                let tokens = parts.map((part, index) => ({ 
-                    id: index, 
-                    text: part, 
-                    isWord: /^[a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+$/.test(part), 
-                    isHidden: existingBlanks.includes(index),
-                    isSuggested: false
-                }));
+                let tokens = parts.map((part, index) => ({ id: index, text: part, isWord: /^[a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+$/.test(part), isHidden: existingBlanks.includes(index), isSuggested: false }));
 
-                // Lógica para encontrar sugerencias (incluso frases de varias palabras)
                 if (suggestions.length > 0) {
                     suggestions.forEach(sug => {
                         const sugWords = sug.split(' ').map(cleanWord).filter(w => w);
                         for (let i = 0; i < tokens.length; i++) {
                             if (!tokens[i].isWord) continue;
-                            
-                            // Check si empieza la coincidencia
-                            let match = true;
-                            let tokenIdx = i;
-                            let matchedTokens = [];
-
+                            let match = true; let tokenIdx = i; let matchedTokens = [];
                             for (let j = 0; j < sugWords.length; j++) {
-                                // Avanzar espacios
                                 while(tokenIdx < tokens.length && !tokens[tokenIdx].isWord) tokenIdx++;
-                                
-                                if (tokenIdx >= tokens.length || cleanWord(tokens[tokenIdx].text) !== sugWords[j]) {
-                                    match = false; break;
-                                }
-                                matchedTokens.push(tokenIdx);
-                                tokenIdx++;
+                                if (tokenIdx >= tokens.length || cleanWord(tokens[tokenIdx].text) !== sugWords[j]) { match = false; break; }
+                                matchedTokens.push(tokenIdx); tokenIdx++;
                             }
-
-                            if (match) {
-                                matchedTokens.forEach(idx => tokens[idx].isSuggested = true);
-                            }
+                            if (match) matchedTokens.forEach(idx => tokens[idx].isSuggested = true);
                         }
                     });
                 }
@@ -156,42 +133,41 @@
                     const data = await response.json();
                     const validModels = data.models.filter(m => m.supportedGenerationMethods?.includes("generateContent")).map(m => m.name);
                     setAvailableModels(validModels);
-                    if (validModels.length > 0) {
-                        const preferred = validModels.find(m => m.includes("gemini-1.5-flash")) || validModels.find(m => m.includes("gemini-2.0")) || validModels[0];
-                        setSelectedModel(preferred);
-                    }
-                } catch (e) { alert("Error al buscar modelos: " + e.message); } finally { setIsLoadingModels(false); }
+                    if (validModels.length > 0) setSelectedModel(validModels.find(m => m.includes("gemini-1.5-flash")) || validModels[0]);
+                } catch (e) { alert(e.message); } finally { setIsLoadingModels(false); }
             };
 
             const generateReading = async () => {
                 if (!apiKey) return alert("Falta API Key");
-                if (!selectedModel) return alert("Por favor escanea y selecciona un modelo primero");
+                if (!selectedModel) return alert("Selecciona un modelo primero");
                 setLoading(true);
 
                 const needsSearch = GENRES["Real World"].some(g => g.id === config.genre);
                 
-                // MAPPING CEFR
-                let cefr = "";
-                if(config.level === 'Basic') cefr = "CEFR A1/A2. Use simple vocabulary and basic present/past simple structures. Short clear sentences.";
-                else if(config.level === 'Advanced') cefr = "CEFR B1/B2. Use moderate complexity, past narrative tenses, perfect tenses, and some conditionals.";
-                else cefr = "CEFR C1/C2. Use rich, sophisticated vocabulary, passive voice, advanced phrasal verbs, and complex clauses.";
+                // LÓGICA DE INSTRUCCIONES: ESL vs NATIVE
+                let levelInstructions = "Focus on making the text highly engaging, natural, and entertaining for a general audience. Do not restrict vocabulary to basic ESL levels.";
+                if (config.genre === 'grammar_check') {
+                    if(config.level === 'Basic') levelInstructions = "GRAMMAR FOCUS: CEFR A1/A2. Use simple vocabulary and basic present/past simple structures. Short clear sentences.";
+                    else if(config.level === 'Advanced') levelInstructions = "GRAMMAR FOCUS: CEFR B1/B2. Use moderate complexity, past narrative tenses, perfect tenses, and some conditionals.";
+                    else levelInstructions = "GRAMMAR FOCUS: CEFR C1/C2. Use rich, sophisticated vocabulary, passive voice, advanced phrasal verbs, and complex clauses.";
+                }
 
-                // MAPPING GENRE
                 let genreInstructions = "";
-                if(config.genre === 'biography') genreInstructions = "Must be detailed, at least 3-4 distinct paragraphs chronologically.";
+                if(config.genre === 'biography') genreInstructions = "Must be detailed, at least 3 distinct paragraphs chronologically.";
                 else if(config.genre === 'advice') genreInstructions = "Present a complex moral or professional dilemma, nuanced pros and cons, and a final advice. Avoid trivial problems.";
+                else if(config.genre === 'interview' || config.genre === 'dialogue') genreInstructions = "Use Script format (e.g., 'Interviewer: ...'). Use new lines for each speaker turn.";
 
                 const prompt = `
                     Generate an English reading text. 
-                    Target Level: ${cefr}
                     Genre: ${config.genre}. ${genreInstructions}
                     Topic: ${config.topic || "Choose an engaging topic relevant to the genre."}
+                    ${levelInstructions}
 
                     MANDATORY JSON OUTPUT FORMAT:
                     {
                         "title": "Title here",
                         "content": "Full text body here. Use \\n\\n to separate paragraphs.",
-                        "fun_fact": "A short 'Did You Know?' fact in English.",
+                        "fun_fact": "A short, mind-blowing 'Did You Know?' fact related to the topic.",
                         "suggested_words_to_blank": ["verb1", "phrasal verb", "key noun"],
                         "questions": [
                             { "q": "Question asking for a specific detail?", "a": "Short answer", "paragraph_index": 0 }
@@ -201,6 +177,7 @@
                     Rules:
                     - 'suggested_words_to_blank' MUST contain 5-8 key vocabulary words or verbs actually present in the text.
                     - 'questions' MUST contain exactly 3 reading comprehension questions. 'paragraph_index' is a 0-based integer indicating which paragraph contains the answer.
+                    - You MUST include the 'fun_fact' in English.
                     ${needsSearch ? "IMPORTANT: USE THE GOOGLE SEARCH TOOL to ensure facts are accurate." : ""}
                     RETURN ONLY RAW JSON.
                 `;
@@ -218,12 +195,8 @@
                     const result = JSON.parse(text);
                     
                     setReadingData({
-                        title: result.title,
-                        content: result.content,
-                        fun_fact: result.fun_fact || "", 
-                        image_url: "", 
-                        questions: result.questions || [],
-                        tokens: processContent(result.content, result.suggested_words_to_blank || [])
+                        title: result.title, content: result.content, fun_fact: result.fun_fact || "", image_url: "", 
+                        questions: result.questions || [], tokens: processContent(result.content, result.suggested_words_to_blank || [])
                     });
                     setStep('editor');
                 } catch (e) { alert("Error: " + e.message); console.error(e); } finally { setLoading(false); }
@@ -233,21 +206,11 @@
                 if (!readingData.title) return alert("Falta título");
                 try {
                     const payload = {
-                        title: readingData.title,
-                        type: 'READING', 
-                        content: {
-                            text: readingData.content,
-                            fun_fact: readingData.fun_fact,
-                            image_url: readingData.image_url, 
-                            blanks: readingData.tokens.filter(t => t.isHidden).map(t => t.id),
-                            questions: readingData.questions 
-                        },
-                        level: config.level,
-                        genre: config.genre,
-                        parentPath: parentPath 
+                        title: readingData.title, type: 'READING', level: config.level, genre: config.genre, parentPath: parentPath,
+                        content: { text: readingData.content, fun_fact: readingData.fun_fact, image_url: readingData.image_url, blanks: readingData.tokens.filter(t => t.isHidden).map(t => t.id), questions: readingData.questions }
                     };
-                    if (editingId) { await updateDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editingId), { ...payload, updatedAt: serverTimestamp() }); } 
-                    else { await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), { ...payload, createdAt: serverTimestamp() }); }
+                    if (editingId) await updateDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editingId), { ...payload, updatedAt: serverTimestamp() }); 
+                    else await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), { ...payload, createdAt: serverTimestamp() }); 
                     window.location.href = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html';
                 } catch (e) { alert("Error guardando: " + e.message); }
             };
@@ -257,25 +220,35 @@
                 if (newTokens[idx].isWord) { newTokens[idx].isHidden = !newTokens[idx].isHidden; setReadingData({ ...readingData, tokens: newTokens }); }
             };
 
+            // RESTAURADA: LÓGICA DE IMAGEN DRAG & DROP
+            const handleImageDrop = (e) => {
+                e.preventDefault();
+                const html = e.dataTransfer.getData('text/html');
+                const uri = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text/uri-list');
+                let foundUrl = '';
+                if (html) {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    const img = doc.querySelector('img');
+                    if (img) foundUrl = img.src;
+                }
+                if (!foundUrl && uri) foundUrl = uri;
+                if (foundUrl) setReadingData({ ...readingData, image_url: foundUrl });
+                else alert("No se detectó una imagen válida.");
+            };
+
             return (
                 <div className="min-h-screen bg-slate-50 font-sans">
                     {step === 'config' ? (
                         <div className="max-w-5xl mx-auto p-6 flex flex-col h-screen">
                             <div className="bg-slate-900 p-6 rounded-t-3xl text-white flex justify-between items-center shrink-0">
-                                <div><h1 className="text-2xl font-black flex items-center gap-2"><BookOpen className="text-emerald-400"/> Reading Builder</h1><p className="text-slate-400 text-xs uppercase font-bold tracking-widest mt-1">Motor IA (Normas CEFR)</p></div>
+                                <div><h1 className="text-2xl font-black flex items-center gap-2"><BookOpen className="text-emerald-400"/> Reading Builder</h1><p className="text-slate-400 text-xs uppercase font-bold tracking-widest mt-1">Motor de Generación IA</p></div>
                                 <div className="flex items-center gap-2"><button onClick={() => window.location.href='index.html'} className="p-2 hover:bg-slate-800 rounded-lg transition-colors"><ArrowLeft/></button><input type="password" value={apiKey} onChange={e => {setApiKey(e.target.value); localStorage.setItem('periplo_google_key', e.target.value)}} className="bg-slate-800 rounded-lg px-3 py-2 text-xs w-28 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-center" placeholder="API Key"/><button onClick={fetchModels} disabled={isLoadingModels || !apiKey} className="p-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg"><Search size={16}/></button>{availableModels.length > 0 && (<select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} className="bg-slate-800 rounded-lg px-2 py-2 text-xs text-white max-w-[120px]">{availableModels.map(m => <option key={m} value={m}>{m.replace('models/', '')}</option>)}</select>)}</div>
                             </div>
                             
                             <div className="flex flex-1 overflow-hidden bg-white border-x border-b border-slate-200 rounded-b-3xl shadow-xl">
                                 {/* LEFT: CONFIG */}
                                 <div className="w-1/2 p-6 border-r border-slate-100 flex flex-col">
-                                    <label className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">Nivel (CEFR Standard)</label>
-                                    <div className="flex gap-2 bg-slate-100 p-1.5 rounded-xl mb-8">
-                                        {['Basic', 'Advanced', 'Pro'].map(l => (
-                                            <button key={l} onClick={() => setConfig({...config, level: l})} className={`flex-1 py-3 text-sm font-bold rounded-lg transition-all ${config.level===l ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>{l}</button>
-                                        ))}
-                                    </div>
-
                                     <label className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">Género de Lectura</label>
                                     <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-6">
                                         {Object.entries(GENRES).map(([cat, items]) => (
@@ -293,13 +266,23 @@
                                 </div>
 
                                 {/* RIGHT: TOPIC & GEN */}
-                                <div className="w-1/2 p-6 bg-slate-50 flex flex-col">
-                                    <label className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">Tema Específico (Opcional)</label>
-                                    <textarea value={config.topic} onChange={e => setConfig({...config, topic: e.target.value})} className="w-full h-40 bg-white border border-slate-200 rounded-2xl p-4 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 resize-none font-medium text-slate-700 placeholder-slate-300" placeholder="Ej: Biografía de Marie Curie, Un dilema sobre robar wifi en la oficina..."></textarea>
-                                    
-                                    <div className="flex-1"></div>
+                                <div className="w-1/2 p-6 bg-slate-50 flex flex-col relative overflow-y-auto">
+                                    {/* CONDICIONAL: SOLO MUESTRA LEVEL SI ES GRAMMAR CHECK */}
+                                    {config.genre === 'grammar_check' && (
+                                        <div className="mb-6 animate-in fade-in slide-in-from-top-4">
+                                            <label className="text-xs font-black text-indigo-400 uppercase tracking-widest mb-3 flex items-center gap-2"><CheckCircle2 size={16}/> Estándar CEFR</label>
+                                            <div className="flex gap-2 bg-white p-1.5 rounded-xl border border-indigo-100 shadow-sm">
+                                                {['Basic', 'Advanced', 'Pro'].map(l => (
+                                                    <button key={l} onClick={() => setConfig({...config, level: l})} className={`flex-1 py-3 text-sm font-bold rounded-lg transition-all ${config.level===l ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>{l}</button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
 
-                                    <button onClick={generateReading} disabled={loading || !selectedModel} className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-emerald-600 transition-all flex items-center justify-center gap-3 disabled:opacity-50 shadow-xl hover:-translate-y-1">
+                                    <label className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">Tema Específico (Opcional)</label>
+                                    <textarea value={config.topic} onChange={e => setConfig({...config, topic: e.target.value})} className="w-full flex-1 min-h-[150px] bg-white border border-slate-200 rounded-2xl p-4 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 resize-none font-medium text-slate-700 placeholder-slate-300" placeholder="Ej: Biografía de Marie Curie, Un dilema sobre robar wifi en la oficina..."></textarea>
+                                    
+                                    <button onClick={generateReading} disabled={loading || !selectedModel} className="w-full mt-6 py-5 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-emerald-600 transition-all flex items-center justify-center gap-3 disabled:opacity-50 shadow-xl hover:-translate-y-1 shrink-0">
                                         {loading ? <Loader2 className="animate-spin"/> : <Sparkles className="text-yellow-400"/>} {loading ? "Construyendo Lectura..." : "Generar con Gemini"}
                                     </button>
                                 </div>
@@ -313,10 +296,31 @@
                             </div>
                             
                             <div className="flex-1 overflow-y-auto bg-white border-x border-b border-slate-200 p-8 rounded-b-3xl">
-                                <input value={readingData.title} onChange={e => setReadingData({...readingData, title: e.target.value})} className="text-3xl font-black w-full border-none outline-none mb-8 bg-transparent" placeholder="Título..."/>
+                                <input value={readingData.title} onChange={e => setReadingData({...readingData, title: e.target.value})} className="text-4xl font-black w-full border-none outline-none mb-8 bg-transparent" placeholder="Título..."/>
                                 
+                                {/* RESTAURADA: ZONA DE IMAGEN */}
+                                <div className="mb-8 space-y-2">
+                                    {!readingData.image_url ? (
+                                        <div onDrop={handleImageDrop} onDragOver={e=>e.preventDefault()} className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 transition-colors p-8 relative flex flex-col items-center justify-center text-slate-400 cursor-pointer">
+                                            <ImageIcon size={32} className="mb-3"/>
+                                            <span className="text-sm font-bold uppercase tracking-widest">Arrastra una imagen de Google aquí</span>
+                                        </div>
+                                    ) : (
+                                        <div className="relative w-full h-64 rounded-2xl overflow-hidden group border-4 border-slate-100 shadow-sm">
+                                            <img src={readingData.image_url} className="w-full h-full object-cover"/>
+                                            <button onClick={() => setReadingData({...readingData, image_url: ''})} className="absolute top-4 right-4 bg-black/70 text-white p-2 rounded-full hover:bg-red-500 transition-colors z-10 backdrop-blur"><X size={18}/></button>
+                                        </div>
+                                    )}
+                                    {!readingData.image_url && (
+                                        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-4 py-3">
+                                            <LinkIcon size={16} className="text-slate-400"/>
+                                            <input value={readingData.image_url} onChange={e => setReadingData({...readingData, image_url: e.target.value})} className="w-full text-sm outline-none text-slate-700 font-medium" placeholder="O pega el enlace directo a la imagen aquí..."/>
+                                        </div>
+                                    )}
+                                </div>
+
                                 {/* TEXTO INTERACTIVO CON FUSIÓN VISUAL Y SUGERENCIAS */}
-                                <div className="text-lg text-slate-800 bg-slate-50 p-8 rounded-3xl border border-slate-100 shadow-inner leading-[2.5rem] mb-8 text-justify">
+                                <div className="text-lg text-slate-800 bg-slate-50 p-8 md:p-12 rounded-[2rem] border border-slate-100 shadow-inner leading-[2.5rem] mb-8 text-justify">
                                     {readingData.tokens.map((t, i) => {
                                         const prevHidden = i > 0 && readingData.tokens[i-1].isHidden && readingData.tokens[i-1].isWord;
                                         const nextHidden = i < readingData.tokens.length - 1 && readingData.tokens[i+1].isHidden && readingData.tokens[i+1].isWord;
@@ -333,21 +337,30 @@
                                             classes += "border-transparent mx-[1px] rounded hover:bg-slate-200 ";
                                             if (t.isSuggested) classes += "ring-2 ring-amber-300 bg-amber-50 animate-pulse text-amber-900 font-bold ";
                                         } else {
-                                            classes = "inline-block "; // Puntuación/Espacios
+                                            if (t.text.match(/\n/)) return <br key={i}/>;
+                                            classes = "inline-block "; 
                                         }
 
                                         return <span key={i} onClick={() => toggleHidden(i)} className={classes}>{t.text}</span>;
                                     })}
                                 </div>
 
+                                {/* DATO CURIOSO */}
+                                {readingData.fun_fact && (
+                                    <div className="bg-amber-50 border-l-4 border-amber-400 p-6 rounded-r-2xl mb-8 flex gap-4 items-start shadow-sm">
+                                        <div className="bg-amber-100 p-2 rounded-full text-amber-600 shrink-0"><Lightbulb size={24}/></div>
+                                        <textarea value={readingData.fun_fact} onChange={e => setReadingData({...readingData, fun_fact: e.target.value})} className="w-full bg-transparent border-none outline-none text-amber-900 font-medium resize-none" rows={3}/>
+                                    </div>
+                                )}
+
                                 {/* PREGUNTAS GENERADAS */}
-                                <div className="bg-indigo-50 border border-indigo-100 p-6 rounded-3xl mb-8">
-                                    <h4 className="font-black text-indigo-800 uppercase tracking-widest text-xs mb-4 flex items-center gap-2"><HelpCircle size={16}/> Preguntas Post-Reading Generadas</h4>
-                                    <div className="space-y-3">
+                                <div className="bg-indigo-50 border border-indigo-100 p-8 rounded-[2rem]">
+                                    <h4 className="font-black text-indigo-800 uppercase tracking-widest text-xs mb-6 flex items-center gap-2"><HelpCircle size={16}/> Preguntas Post-Reading Generadas</h4>
+                                    <div className="space-y-4">
                                         {readingData.questions.map((q, i) => (
-                                            <div key={i} className="bg-white p-4 rounded-xl shadow-sm border border-indigo-50">
-                                                <p className="font-bold text-sm">{i+1}. {q.q}</p>
-                                                <p className="text-xs text-slate-500 mt-1">R: {q.a} <span className="opacity-50">(Párrafo {q.paragraph_index + 1})</span></p>
+                                            <div key={i} className="bg-white p-5 rounded-2xl shadow-sm border border-indigo-50">
+                                                <p className="font-bold text-slate-800">{i+1}. {q.q}</p>
+                                                <p className="text-sm text-indigo-600 font-medium mt-1">R: {q.a} <span className="opacity-50 text-slate-400 text-xs ml-2">(Párrafo {q.paragraph_index + 1})</span></p>
                                             </div>
                                         ))}
                                     </div>
