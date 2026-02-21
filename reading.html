@@ -21,21 +21,25 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap'); 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; transition: background-color 0.3s; }
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800;900&display=swap'); 
+        body { font-family: 'Plus Jakarta Sans', sans-serif; transition: background-color 0.3s; overflow-x: hidden;}
         
         .token-base {
             display: inline-flex;
             align-items: center;
             justify-content: center;
             vertical-align: middle;
-            margin: 0 0.2em;
             padding: 0 0.5em;
-            border-radius: 0.3em;
-            min-width: 5em; 
+            min-width: 3em; 
             height: 1.8em;  
             transition: all 0.2s ease;
         }
+
+        /* Fusión Visual de Huecos Contiguos */
+        .token-start { border-top-left-radius: 0.3em; border-bottom-left-radius: 0.3em; margin-left: 0.2em; border-left-width: 2px !important; }
+        .token-end { border-top-right-radius: 0.3em; border-bottom-right-radius: 0.3em; margin-right: 0.2em; border-right-width: 2px !important; }
+        .token-middle { border-left-width: 0px !important; border-right-width: 0px !important; margin: 0; border-radius: 0; }
+        .token-single { border-radius: 0.3em; margin: 0 0.2em; border-left-width: 2px !important; border-right-width: 2px !important; }
 
         .token-hidden-light { background-color: #f1f5f9; border: 2px dashed #94a3b8; border-bottom-width: 4px; }
         .token-hidden-dark { background-color: #334155; border: 2px dashed #64748b; border-bottom-width: 4px; }
@@ -43,16 +47,20 @@
         .token-filled { background-color: #e0e7ff; border: 2px solid #6366f1; color: #3730a3; font-weight: 800; border-bottom-width: 4px; }
         .token-correct { background-color: #dcfce7; border: 2px solid #22c55e; color: #14532d; border-bottom-width: 4px; }
         .token-wrong { background-color: #fee2e2; border: 2px solid #ef4444; color: #7f1d1d; border-bottom-width: 4px; }
+
+        /* Timer Bar Animation */
+        @keyframes shrink { from { width: 100%; } to { width: 0%; } }
+        .timer-bar { animation: shrink linear forwards; }
     </style>
 </head>
 <body>
     <div id="root"></div>
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect } from 'react';
+        import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Loader2, CheckCircle2, RotateCcw, ArrowLeft, BookOpen, Lightbulb, Puzzle, Moon, Sun, ZoomIn, ZoomOut } from 'lucide-react';
+        import { Loader2, CheckCircle2, RotateCcw, ArrowLeft, Lightbulb, Puzzle, Moon, Sun, ZoomIn, ZoomOut, Timer, Swords, ArrowRight } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -66,6 +74,15 @@
             const [result, setResult] = useState(null);
             const [isDarkMode, setIsDarkMode] = useState(false);
             const [fontSize, setFontSize] = useState(20);
+
+            // POST-READING CHALLENGE (Q/A)
+            const [qaMode, setQaMode] = useState(false);
+            const [currentQIdx, setCurrentQIdx] = useState(0);
+            const [timeLeft, setTimeLeft] = useState(12);
+            const [showParagraphHelp, setShowParagraphHelp] = useState(false);
+            const [qaFinished, setQaFinished] = useState(false);
+            const [score, setScore] = useState(0);
+            const timerRef = useRef(null);
 
             useEffect(() => {
                 const init = async () => {
@@ -82,6 +99,7 @@
                         const processedTokens = parts.map((part, index) => ({
                             id: index,
                             text: part,
+                            isWord: /^[a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+$/.test(part),
                             isHidden: savedData.content.blanks.includes(index)
                         }));
                         setTokens(processedTokens);
@@ -91,6 +109,7 @@
                 init();
             }, []);
 
+            // --- LÓGICA DEL DRAG & DROP ---
             const handleDragStart = (e, word) => { e.dataTransfer.setData("word", word); };
             const handleDragOver = (e) => e.preventDefault();
             const handleDrop = (e, index) => {
@@ -103,6 +122,7 @@
                 delete newDropped[index];
                 setDropped(newDropped);
             };
+            
             const checkAnswers = () => {
                 const isAllCorrect = tokens.filter(t => t.isHidden).every(t => dropped[t.id] === t.text);
                 setResult(isAllCorrect ? 'correct' : 'wrong');
@@ -111,7 +131,77 @@
 
             const handleExit = () => { window.location.href = 'index.html'; };
 
-            if (loading) return <div className="h-screen flex items-center justify-center text-slate-400 bg-slate-50"><Loader2 className="animate-spin mr-2"/> Cargando lectura...</div>;
+            // --- LÓGICA DEL CONTRARRELOJ (Q/A) ---
+            const startChallenge = () => {
+                if (!data.content.questions || data.content.questions.length === 0) {
+                    alert("Esta lectura no tiene preguntas configuradas."); return;
+                }
+                setQaMode(true);
+                startTimer();
+            };
+
+            const startTimer = () => {
+                setTimeLeft(12);
+                setShowParagraphHelp(false);
+                if (timerRef.current) clearInterval(timerRef.current);
+                timerRef.current = setInterval(() => {
+                    setTimeLeft(prev => {
+                        if (prev <= 1) {
+                            clearInterval(timerRef.current);
+                            setShowParagraphHelp(true); // Se acabó el tiempo, mostrar ayuda
+                            return 0;
+                        }
+                        return prev - 1;
+                    });
+                }, 1000);
+            };
+
+            const handleSentenceClick = (sentence) => {
+                // Lógica simple: Si la oración clickeada contiene parte de la respuesta corta ("a"), es correcta.
+                // Usamos la respuesta corta de Gemini como clave para validar.
+                const currentQ = data.content.questions[currentQIdx];
+                const cleanAnswer = currentQ.a.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const cleanSentence = sentence.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+                if (cleanSentence.includes(cleanAnswer) || cleanAnswer.includes(cleanSentence.substring(0, 10))) {
+                    // CORRECTO!
+                    confetti({ particleCount: 50, spread: 30, origin: { y: 0.8 } });
+                    setScore(s => s + 1);
+                    nextQuestion();
+                } else {
+                    // ERROR!
+                    const el = document.getElementById('qa-box');
+                    el.classList.add('bg-red-100', 'animate-shake');
+                    setTimeout(() => el.classList.remove('bg-red-100', 'animate-shake'), 500);
+                }
+            };
+
+            const nextQuestion = () => {
+                if (currentQIdx < data.content.questions.length - 1) {
+                    setCurrentQIdx(idx => idx + 1);
+                    startTimer();
+                } else {
+                    setQaFinished(true);
+                    if (timerRef.current) clearInterval(timerRef.current);
+                    confetti({ particleCount: 200, spread: 100, origin: { y: 0.5 } });
+                }
+            };
+
+            // Helpers para el Q/A
+            const getTargetParagraphSentences = () => {
+                if (!data || !data.content.questions) return [];
+                const q = data.content.questions[currentQIdx];
+                const pIndex = q.paragraph_index || 0;
+                
+                // Separar texto original por párrafos reales (\n\n)
+                const paragraphs = data.content.text.split(/\n\n+/);
+                const targetP = paragraphs[pIndex] || paragraphs[0]; // Fallback al primero
+
+                // Separar el párrafo en oraciones clickeables (por punto y espacio)
+                return targetP.split(/(?<=\.)\s+/).filter(s => s.trim().length > 0);
+            };
+
+            if (loading) return <div className="h-screen flex items-center justify-center text-slate-400 bg-slate-50"><Loader2 className="animate-spin mr-2"/> Cargando...</div>;
             if (!data) return <div className="h-screen flex items-center justify-center text-red-400">Lectura no encontrada</div>;
 
             const wordBank = tokens.filter(t => t.isHidden).map(t => t.text).sort(() => Math.random() - 0.5); 
@@ -158,8 +248,62 @@
                         </div>
                     </div>
 
-                    {/* Main Layout - Split Screen */}
-                    <div className="max-w-7xl mx-auto w-full p-6 grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1">
+                    {/* MODO Q/A (CONTRARRELOJ) */}
+                    {qaMode && (
+                        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex flex-col items-center justify-center p-6 animate-in zoom-in-95 duration-300">
+                            {qaFinished ? (
+                                <div className="bg-white rounded-[3rem] p-12 text-center max-w-lg w-full shadow-2xl">
+                                    <div className="w-24 h-24 bg-emerald-100 text-emerald-500 rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={48} strokeWidth={3}/></div>
+                                    <h2 className="text-4xl font-black text-slate-800 mb-2">¡Completado!</h2>
+                                    <p className="text-lg text-slate-500 font-bold mb-8">Puntuación: {score} / {data.content.questions.length}</p>
+                                    <button onClick={handleExit} className="w-full bg-slate-900 text-white py-4 rounded-2xl font-black text-lg hover:-translate-y-1 transition-transform">Volver al Hub</button>
+                                </div>
+                            ) : (
+                                <div id="qa-box" className="bg-white dark:bg-slate-800 w-full max-w-3xl rounded-[2rem] overflow-hidden shadow-2xl transition-colors duration-200">
+                                    {/* Timer Header */}
+                                    <div className="bg-slate-900 text-white p-6 relative">
+                                        <div className="flex justify-between items-center relative z-10">
+                                            <span className="font-black tracking-widest text-slate-400 text-xs uppercase flex items-center gap-2"><Swords size={16}/> Pregunta {currentQIdx + 1} de {data.content.questions.length}</span>
+                                            <div className={`font-black text-2xl flex items-center gap-2 ${timeLeft <= 3 ? 'text-red-400 animate-pulse' : 'text-emerald-400'}`}><Timer size={24}/> {timeLeft}s</div>
+                                        </div>
+                                        {/* Barra que se encoje */}
+                                        <div className="absolute bottom-0 left-0 h-1.5 bg-emerald-500 timer-bar" style={{ animationDuration: '12s', animationPlayState: timeLeft === 0 ? 'paused' : 'running' }}></div>
+                                    </div>
+                                    
+                                    <div className="p-8 md:p-12 text-center">
+                                        <h3 className={`text-2xl md:text-3xl font-black mb-8 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>"{data.content.questions[currentQIdx].q}"</h3>
+                                        
+                                        {showParagraphHelp ? (
+                                            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 text-left">
+                                                <div className="bg-amber-100 text-amber-800 text-xs font-black uppercase tracking-widest p-3 rounded-t-xl text-center border-b border-amber-200">¡Tiempo agotado! Encuentra la respuesta aquí:</div>
+                                                <div className={`p-6 md:p-8 rounded-b-xl border border-t-0 leading-relaxed text-lg font-medium shadow-inner ${isDarkMode ? 'bg-slate-900 border-slate-700 text-slate-300' : 'bg-slate-50 border-amber-100 text-slate-700'}`}>
+                                                    {getTargetParagraphSentences().map((sentence, i) => (
+                                                        <span 
+                                                            key={i} 
+                                                            onClick={() => handleSentenceClick(sentence)}
+                                                            className="inline hover:bg-amber-200 dark:hover:bg-indigo-900 cursor-pointer transition-colors rounded px-1 py-0.5 mx-0.5 border border-transparent hover:border-amber-300 dark:hover:border-indigo-700"
+                                                        >
+                                                            {sentence}. 
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                                <p className="text-center text-xs text-slate-400 mt-4 uppercase font-bold tracking-widest">Haz clic en la oración correcta</p>
+                                            </div>
+                                        ) : (
+                                            <div className="h-48 flex items-center justify-center flex-col text-slate-400">
+                                                <Lightbulb size={40} className="mb-4 opacity-30"/>
+                                                <p className="font-bold">Piensa rápido...</p>
+                                                <p className="text-sm">Si no lo sabes, te mostraremos el texto en {timeLeft}s</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* MODO LECTURA NORMAL (JUEGO) */}
+                    <div className={`max-w-7xl mx-auto w-full p-6 grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1 ${qaMode ? 'hidden' : ''}`}>
                         
                         {/* COLUMNA IZQUIERDA: TEXTO */}
                         <div className="lg:col-span-8 space-y-8">
@@ -169,6 +313,7 @@
                                         {chatSegments.map((segment, segIdx) => (
                                             <div key={segIdx} className={`flex ${segIdx % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
                                                 <div className={`max-w-[85%] p-4 rounded-2xl ${segIdx % 2 === 0 ? (isDarkMode ? 'bg-slate-700 rounded-tl-none' : 'bg-slate-100 rounded-tl-none') : (isDarkMode ? 'bg-indigo-900 text-indigo-100 rounded-tr-none' : 'bg-indigo-50 text-indigo-900 rounded-tr-none')}`}>
+                                                    {/* Chat Rendering (Simplified for space, using same logic as standard text) */}
                                                     {segment.map((t, i) => {
                                                         if (t.isHidden) {
                                                             const val = dropped[t.id];
@@ -176,7 +321,7 @@
                                                             if (val) className = 'token-filled'; 
                                                             if (result === 'correct') className = 'token-correct';
                                                             if (result === 'wrong' && val) className = val === t.text ? 'token-correct' : 'token-wrong';
-                                                            return <span key={t.id} onDragOver={handleDragOver} onDrop={(e) => !result && handleDrop(e, t.id)} onClick={() => !result && removeDrop(t.id)} className={`token-base cursor-pointer ${className}`}>{val || ""}</span>;
+                                                            return <span key={t.id} onDragOver={handleDragOver} onDrop={(e) => !result && handleDrop(e, t.id)} onClick={() => !result && removeDrop(t.id)} className={`token-base cursor-pointer token-single ${className}`}>{val || ""}</span>;
                                                         }
                                                         return <span key={t.id}>{t.text}</span>;
                                                     })}
@@ -189,11 +334,21 @@
                                         {tokens.map((t, i) => {
                                             if (t.isHidden) {
                                                 const val = dropped[t.id];
-                                                let className = isDarkMode ? 'token-hidden-dark' : 'token-hidden-light';
-                                                if (val) className = 'token-filled'; 
-                                                if (result === 'correct') className = 'token-correct';
-                                                if (result === 'wrong' && val) className = val === t.text ? 'token-correct' : 'token-wrong';
-                                                return <span key={i} onDragOver={handleDragOver} onDrop={(e) => !result && handleDrop(e, t.id)} onClick={() => !result && removeDrop(t.id)} className={`token-base cursor-pointer ${className}`}>{val || ""}</span>;
+                                                let stateClass = isDarkMode ? 'token-hidden-dark' : 'token-hidden-light';
+                                                if (val) stateClass = 'token-filled'; 
+                                                if (result === 'correct') stateClass = 'token-correct';
+                                                if (result === 'wrong' && val) stateClass = val === t.text ? 'token-correct' : 'token-wrong';
+                                                
+                                                // LÓGICA DE FUSIÓN VISUAL
+                                                const prevIsHidden = i > 0 && tokens[i-1].isHidden && tokens[i-1].isWord;
+                                                const nextIsHidden = i < tokens.length - 1 && tokens[i+1].isHidden && tokens[i+1].isWord;
+                                                
+                                                let shapeClass = "token-single";
+                                                if (prevIsHidden && nextIsHidden) shapeClass = "token-middle";
+                                                else if (prevIsHidden && !nextIsHidden) shapeClass = "token-end";
+                                                else if (!prevIsHidden && nextIsHidden) shapeClass = "token-start";
+
+                                                return <span key={i} onDragOver={handleDragOver} onDrop={(e) => !result && handleDrop(e, t.id)} onClick={() => !result && removeDrop(t.id)} className={`token-base cursor-pointer ${stateClass} ${shapeClass}`}>{val || ""}</span>;
                                             }
                                             if (t.text.match(/\n/)) return <br key={i}/>;
                                             return <span key={i}>{t.text}</span>;
@@ -204,58 +359,62 @@
 
                             {/* FUN FACT BOX */}
                             {data.content.fun_fact && (
-                                <div className={`border-l-8 rounded-r-2xl p-6 shadow-sm flex gap-5 items-start ${isDarkMode ? 'bg-amber-900/30 border-amber-600' : 'bg-amber-50 border-amber-400'}`} style={{ fontSize: `${fontSize * 0.9}px` }}>
-                                    <div className={`p-3 rounded-full shadow-sm shrink-0 ${isDarkMode ? 'bg-slate-800 text-amber-400' : 'bg-white text-amber-500'}`}>
-                                        <Lightbulb size={28} strokeWidth={2.5}/>
-                                    </div>
-                                    <div>
-                                        <h3 className={`font-black text-sm uppercase tracking-widest mb-2 ${isDarkMode ? 'text-amber-400' : 'text-amber-800'}`}>Did You Know?</h3>
-                                        <p className={`font-medium leading-relaxed ${isDarkMode ? 'text-amber-100' : 'text-amber-900'}`}>{data.content.fun_fact}</p>
-                                    </div>
+                                <div className={`border-l-8 rounded-r-2xl p-6 shadow-sm flex gap-5 items-start ${isDarkMode ? 'bg-amber-900/30 border-amber-600' : 'bg-amber-50 border-amber-400'}`} style={{ fontSize: `${fontSize * 0.8}px` }}>
+                                    <div className={`p-3 rounded-full shadow-sm shrink-0 ${isDarkMode ? 'bg-slate-800 text-amber-400' : 'bg-white text-amber-500'}`}><Lightbulb size={28} strokeWidth={2.5}/></div>
+                                    <div><h3 className={`font-black text-sm uppercase tracking-widest mb-2 ${isDarkMode ? 'text-amber-400' : 'text-amber-800'}`}>Did You Know?</h3><p className={`font-medium leading-relaxed ${isDarkMode ? 'text-amber-100' : 'text-amber-900'}`}>{data.content.fun_fact}</p></div>
                                 </div>
                             )}
                         </div>
 
-                        {/* COLUMNA DERECHA: BANCO + IMAGEN (STICKY) */}
+                        {/* COLUMNA DERECHA: BANCO + ACCIONES */}
                         <div className="lg:col-span-4 relative">
                             <div className="sticky top-24 space-y-6">
                                 
-                                {/* WORD BANK */}
+                                {/* WORD BANK (Ahora responde al fontSize) */}
                                 <div className={`rounded-2xl shadow-xl border overflow-hidden ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
                                     <div className="bg-slate-900 p-4 flex items-center justify-between text-white">
                                         <div className="flex items-center gap-2 font-bold uppercase text-xs tracking-widest"><Puzzle size={16} className="text-emerald-400"/> Word Bank</div>
                                         <span className="bg-slate-800 px-2 py-1 rounded text-[10px] font-bold text-slate-300">{availableWords.length} left</span>
                                     </div>
-                                    <div className={`p-6 min-h-[150px] ${isDarkMode ? 'bg-slate-800/50' : 'bg-slate-50'}`}>
+                                    
+                                    {/* El fontSize aquí se escala proporcionalmente */}
+                                    <div className={`p-6 min-h-[150px] ${isDarkMode ? 'bg-slate-800/50' : 'bg-slate-50'}`} style={{ fontSize: `${Math.max(14, fontSize * 0.8)}px` }}>
                                         {availableWords.length === 0 && !result ? (
                                             <div className="h-full flex flex-col items-center justify-center text-slate-400 py-8"><CheckCircle2 size={32} className="mb-2 opacity-50"/><p className="text-sm font-bold">¡Todo listo!</p><p className="text-xs">Revisa y comprueba</p></div>
                                         ) : (
                                             <div className="flex flex-wrap gap-2">
                                                 {availableWords.map((w, i) => (
-                                                    <div key={i} draggable={!result} onDragStart={(e) => handleDragStart(e, w)} className={`border border-b-4 px-3 py-2 rounded-lg font-bold shadow-sm cursor-grab active:cursor-grabbing transition-all text-sm ${isDarkMode ? 'bg-slate-700 border-slate-600 border-b-slate-900 text-slate-200 hover:bg-indigo-900' : 'bg-white border-slate-300 border-b-slate-300 text-slate-700 hover:bg-indigo-50'}`}>{w}</div>
+                                                    <div key={i} draggable={!result} onDragStart={(e) => handleDragStart(e, w)} className={`border border-b-4 px-3 py-2 rounded-lg font-bold shadow-sm cursor-grab active:cursor-grabbing transition-all ${isDarkMode ? 'bg-slate-700 border-slate-600 border-b-slate-900 text-slate-200 hover:bg-indigo-900' : 'bg-white border-slate-300 border-b-slate-300 text-slate-700 hover:bg-indigo-50'}`}>{w}</div>
                                                 ))}
                                             </div>
                                         )}
                                     </div>
-                                    <div className={`p-4 border-t ${isDarkMode ? 'border-slate-700 bg-slate-800' : 'border-slate-200 bg-white'}`}>
+
+                                    {/* BOTONES DE ACCIÓN */}
+                                    <div className={`p-4 border-t space-y-3 ${isDarkMode ? 'border-slate-700 bg-slate-800' : 'border-slate-200 bg-white'}`}>
                                         {result === 'correct' ? (
-                                            <button onClick={() => window.location.reload()} className="w-full bg-green-500 text-white py-3 rounded-xl font-black shadow-lg hover:bg-green-600 hover:-translate-y-1 transition-all flex items-center justify-center gap-2 animate-bounce"><RotateCcw size={20}/> ¡Jugar de Nuevo!</button>
+                                            <>
+                                                <button onClick={() => window.location.reload()} className="w-full bg-green-500 text-white py-3 rounded-xl font-black shadow-lg hover:bg-green-600 hover:-translate-y-1 transition-transform flex items-center justify-center gap-2"><RotateCcw size={20}/> Leer de Nuevo</button>
+                                                
+                                                {/* BOTÓN MÁGICO DEL CHALLENGE */}
+                                                {data.content.questions && data.content.questions.length > 0 && (
+                                                    <button onClick={startChallenge} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-black shadow-xl shadow-indigo-500/40 hover:bg-indigo-700 hover:-translate-y-1 transition-transform flex items-center justify-center gap-2 animate-in fade-in zoom-in duration-500">
+                                                        <Swords size={20}/> CHALLENGE: Q&A <ArrowRight size={18}/>
+                                                    </button>
+                                                )}
+                                            </>
                                         ) : (
-                                            <button onClick={checkAnswers} disabled={availableWords.length > 0} className="w-full bg-slate-900 text-white py-3 rounded-xl font-black shadow-lg hover:bg-indigo-600 hover:-translate-y-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:bg-slate-900">Comprobar</button>
+                                            <button onClick={checkAnswers} disabled={availableWords.length > 0} className="w-full bg-slate-900 text-white py-3 rounded-xl font-black shadow-lg hover:bg-indigo-600 hover:-translate-y-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:bg-slate-900">Comprobar Respuestas</button>
                                         )}
                                     </div>
                                 </div>
 
-                                {/* IMAGE CARD (Mover aquí) */}
                                 {data.content.image_url && (
                                     <div className={`rounded-2xl overflow-hidden shadow-md border-4 ${isDarkMode ? 'border-slate-700' : 'border-white'}`}>
                                         <img src={data.content.image_url} alt="Topic" className="w-full h-auto object-cover"/>
                                     </div>
                                 )}
 
-                                <div className={`rounded-xl p-4 border text-xs font-medium leading-relaxed ${isDarkMode ? 'bg-indigo-900/30 border-indigo-800 text-indigo-300' : 'bg-blue-50 border-blue-100 text-blue-800'}`}>
-                                    💡 <strong>Tip:</strong> Lee el contexto de la oración antes de arrastrar la palabra. Si te equivocas, haz clic en la palabra en el texto para devolverla al banco.
-                                </div>
                             </div>
                         </div>
                     </div>
