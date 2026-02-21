@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Periplo - Teacher Hub v18</title>
+    <title>Periplo - Teacher Hub v19</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚀</text></svg>">
     
     <script src="https://cdn.tailwindcss.com"></script>
@@ -31,10 +31,12 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;800&display=swap'); 
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;800;900&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
         .fade-in { animation: fadeIn 0.3s ease-in; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* Efecto al arrastrar sobre breadcrumb */
+        .drag-over-breadcrumb { background-color: rgba(99, 102, 241, 0.2); border-radius: 0.5rem; padding: 0 0.5rem; }
     </style>
 </head>
 <body>
@@ -44,7 +46,7 @@
         import React, { useState, useEffect, Component } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+        import { getFirestore, collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, deleteDoc, updateDoc, writeBatch } from 'firebase/firestore';
         import { 
             Plus, Folder, X, LayoutGrid, Puzzle, Grid, ArrowLeft, Trash2, Copy, 
             Edit2, AlertTriangle, Map as MapIcon, Gamepad2, BookOpen, Calendar, Users, Sun, Moon 
@@ -55,19 +57,29 @@
         const db = getFirestore(app);
         const appId = 'periplo-app-v1';
 
+        // COLORES VIBRANTES PARA ACTIVIDADES
         const GAME_TYPES = [
-            { id: 'FLASHCARDS', name: 'Flashcards', icon: LayoutGrid, color: 'bg-indigo-500', isWordGame: true, desc: 'Repaso con imágenes' }, 
-            { id: 'ANAGRAM', name: 'Anagrama', icon: Puzzle, color: 'bg-pink-500', isWordGame: true, desc: 'Ordena las letras' },
-            { id: 'CROSSWORD', name: 'Crucigrama', icon: Grid, color: 'bg-emerald-500', isWordGame: true, desc: 'Cruza tus palabras' },
-            { id: 'CONNECT4', name: 'Connect 4', icon: Gamepad2, color: 'bg-orange-500', isWordGame: false, desc: 'Estrategia y Gramática' },
-            { id: 'READING', name: 'Reading Builder', icon: BookOpen, color: 'bg-emerald-600', isWordGame: false, desc: 'Lecturas con IA y Huecos' },
+            { id: 'FLASHCARDS', name: 'Flashcards', icon: LayoutGrid, color: 'bg-gradient-to-br from-indigo-500 to-purple-600', isWordGame: true, desc: 'Repaso con imágenes' }, 
+            { id: 'ANAGRAM', name: 'Anagrama', icon: Puzzle, color: 'bg-gradient-to-br from-pink-500 to-rose-500', isWordGame: true, desc: 'Ordena las letras' },
+            { id: 'CROSSWORD', name: 'Crucigrama', icon: Grid, color: 'bg-gradient-to-br from-emerald-400 to-teal-600', isWordGame: true, desc: 'Cruza tus palabras' },
+            { id: 'CONNECT4', name: 'Connect 4', icon: Gamepad2, color: 'bg-gradient-to-br from-orange-400 to-amber-500', isWordGame: false, desc: 'Estrategia y Gramática' },
+            { id: 'READING', name: 'Reading Builder', icon: BookOpen, color: 'bg-gradient-to-br from-cyan-500 to-blue-600', isWordGame: false, desc: 'Lecturas con IA y Huecos' },
         ];
 
         const TOOL_TYPES = [
             { id: 'CITYMAP', name: 'City Map', icon: MapIcon, color: 'bg-slate-800', file: 'citymap.html', desc: 'Práctica de direcciones' },
         ];
 
-        const FOLDER_PALETTE = ['bg-slate-100 text-slate-500', 'bg-rose-100 text-rose-500', 'bg-amber-100 text-amber-500', 'bg-emerald-100 text-emerald-500', 'bg-sky-100 text-sky-500', 'bg-indigo-100 text-indigo-500', 'bg-fuchsia-100 text-fuchsia-500'];
+        // COLORES DE CARPETAS DE ALTO CONTRASTE (Legibles en Dark Mode)
+        const FOLDER_PALETTE = [
+            'bg-slate-200 text-slate-800 dark:bg-slate-800 dark:text-slate-200', 
+            'bg-rose-200 text-rose-900 dark:bg-rose-900/60 dark:text-rose-200', 
+            'bg-amber-200 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200', 
+            'bg-emerald-200 text-emerald-900 dark:bg-emerald-900/60 dark:text-emerald-200', 
+            'bg-sky-200 text-sky-900 dark:bg-sky-900/60 dark:text-sky-200', 
+            'bg-indigo-200 text-indigo-900 dark:bg-indigo-900/60 dark:text-indigo-200', 
+            'bg-fuchsia-200 text-fuchsia-900 dark:bg-fuchsia-900/60 dark:text-fuchsia-200'
+        ];
 
         function Dashboard() {
             const user = { uid: "teacher_builder_001" };
@@ -75,12 +87,18 @@
             const [userFolders, setUserFolders] = useState([]);
             const [userQuizzes, setUserQuizzes] = useState([]);
             const [modals, setModals] = useState({ folder: false, activity: false });
-            const [newFolderColor, setNewFolderColor] = useState(FOLDER_PALETTE[0]);
-            const [isDarkMode, setIsDarkMode] = useState(false);
+            
+            // Estado para crear/editar carpetas
+            const [editingFolder, setEditingFolder] = useState(null);
+            const [folderForm, setFolderForm] = useState({ name: '', colorClass: FOLDER_PALETTE[0] });
+
+            // MODO OSCURO POR DEFECTO
+            const [isDarkMode, setIsDarkMode] = useState(true);
 
             useEffect(() => {
                 const savedTheme = localStorage.getItem('themePreference');
-                if (savedTheme) setIsDarkMode(savedTheme === 'dark');
+                if (savedTheme === 'light') setIsDarkMode(false);
+                else setIsDarkMode(true);
 
                 const params = new URLSearchParams(window.location.search);
                 const folderParam = params.get('folder');
@@ -105,23 +123,48 @@
                 window.history.pushState({}, '', url);
             };
 
-            const createFolder = async (name) => {
-                if (!name) return;
-                await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), { name, colorClass: newFolderColor, parentPath: path.join('/'), createdAt: serverTimestamp() });
-                setModals({...modals, folder: false});
+            // FOLDER CRUD
+            const openFolderModal = (folder = null) => {
+                if (folder) {
+                    setEditingFolder(folder);
+                    setFolderForm({ name: folder.name, colorClass: folder.colorClass || FOLDER_PALETTE[0] });
+                } else {
+                    setEditingFolder(null);
+                    setFolderForm({ name: '', colorClass: FOLDER_PALETTE[0] });
+                }
+                setModals({...modals, folder: true});
             };
 
-            const getPlayLink = (q) => {
-                if (q.type === 'CONNECT4') return `connect4.html?id=${q.id}`;
-                if (q.type === 'READING') return `reading.html?id=${q.id}`;
-                return `activity.html?id=${q.id}`;
+            const saveFolder = async () => {
+                if (!folderForm.name.trim()) return;
+                try {
+                    if (editingFolder) {
+                        await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'folders', editingFolder.id), { 
+                            name: folderForm.name.trim(), colorClass: folderForm.colorClass 
+                        });
+                    } else {
+                        await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), { 
+                            name: folderForm.name.trim(), colorClass: folderForm.colorClass, parentPath: path.join('/'), createdAt: serverTimestamp() 
+                        });
+                    }
+                    setModals({...modals, folder: false});
+                } catch(e) { alert(e.message); }
             };
 
-            const getEditLink = (q) => {
-                const encodedFolder = encodeURIComponent(path.join('/'));
-                if (q.type === 'CONNECT4') return `dashboard-connect4.html?edit=${q.id}&folder=${encodedFolder}`;
-                if (q.type === 'READING') return `dashboard-reading.html?edit=${q.id}&folder=${encodedFolder}`; 
-                return '#';
+            const duplicateFolder = async (e, folder) => {
+                e.preventDefault(); e.stopPropagation();
+                try {
+                    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), { 
+                        name: `${folder.name} (Copia)`, colorClass: folder.colorClass, parentPath: folder.parentPath, createdAt: serverTimestamp() 
+                    });
+                } catch(err) { alert(err.message); }
+            };
+
+            const deleteFolder = async (e, id) => {
+                e.preventDefault(); e.stopPropagation();
+                if(confirm("¿Eliminar carpeta? (Las actividades adentro quedarán huérfanas o se borrarán dependiendo de tu lógica, por ahora solo borramos la carpeta)")) {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'folders', id));
+                }
             };
 
             const handleDeleteActivity = async (e, id) => {
@@ -129,16 +172,23 @@
                 if(confirm("¿Estás seguro de eliminar esta actividad?")) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', id));
             };
 
-            // DRAG AND DROP
-            const handleDragStart = (e, id, type) => { e.dataTransfer.setData('itemId', id); e.dataTransfer.setData('itemType', type); };
-            const handleDropOnFolder = async (e, targetFolder) => {
+            // DRAG AND DROP (Avanzado: Hacia carpetas y Hacia Breadcrumbs)
+            const handleDragStart = (e, id, type) => { 
+                e.dataTransfer.setData('itemId', id); 
+                e.dataTransfer.setData('itemType', type); 
+            };
+
+            const handleDropOnTarget = async (e, newParentPath) => {
                 e.preventDefault();
+                e.currentTarget.classList.remove('drag-over-breadcrumb');
                 const itemId = e.dataTransfer.getData('itemId');
                 const itemType = e.dataTransfer.getData('itemType');
-                if (!itemId || itemType !== 'quiz') return; // Por ahora solo moveremos actividades
+                if (!itemId) return;
                 
-                const targetPath = path.length > 0 ? `${path.join('/')}/${targetFolder.name}` : targetFolder.name;
-                try { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', itemId), { parentPath: targetPath }); } 
+                try { 
+                    if (itemType === 'quiz') await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', itemId), { parentPath: newParentPath }); 
+                    else if (itemType === 'folder') await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'folders', itemId), { parentPath: newParentPath });
+                } 
                 catch (err) { alert(err.message); }
             };
 
@@ -148,53 +198,86 @@
                         <div className="max-w-7xl mx-auto p-6 fade-in">
                             <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl shadow-sm border border-slate-200 dark:border-zinc-800 mb-8 flex justify-between items-center sticky top-4 z-20 transition-colors">
                                 <div className="flex items-center gap-3">
-                                    {path.length > 0 && <button onClick={() => navigateTo(path.slice(0, -1))} className="p-2 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-xl text-slate-400 dark:text-zinc-400 hover:text-indigo-600 transition-all"><ArrowLeft size={20}/></button>}
-                                    <h1 className="text-xl font-black flex items-center gap-2 tracking-tight text-indigo-600 dark:text-indigo-400 uppercase italic">PERIPLO <span className="text-[10px] not-italic bg-indigo-100 dark:bg-indigo-900/50 dark:border-indigo-700 px-2 rounded-full border border-indigo-200">v18</span></h1>
+                                    {path.length > 0 && <button onClick={() => navigateTo(path.slice(0, -1))} className="p-2 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-xl text-slate-400 dark:text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"><ArrowLeft size={20}/></button>}
+                                    <h1 className="text-xl font-black flex items-center gap-2 tracking-tight text-indigo-600 dark:text-indigo-400 uppercase italic">PERIPLO <span className="text-[10px] not-italic bg-indigo-100 dark:bg-indigo-900/50 dark:border-indigo-700 px-2 rounded-full border border-indigo-200">v19</span></h1>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                    <button onClick={() => window.open('schedule.html', '_blank')} className="bg-white dark:bg-zinc-800 border-2 border-indigo-100 dark:border-zinc-700 text-indigo-600 dark:text-indigo-400 px-4 py-2 rounded-xl font-bold flex gap-2 text-sm items-center hover:bg-indigo-50 dark:hover:bg-zinc-700"><Users size={16}/> Link Alumnos</button>
-                                    <button onClick={() => window.location.href='dashboard-schedule.html'} className="bg-emerald-500 hover:bg-emerald-600 dark:bg-emerald-600 dark:hover:bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold flex gap-2 text-sm items-center shadow-md shadow-emerald-200 dark:shadow-emerald-900/20"><Calendar size={16}/> Mi Agenda</button>
+                                    <a href="schedule.html" target="_blank" className="bg-white dark:bg-zinc-800 border-2 border-indigo-100 dark:border-zinc-700 text-indigo-600 dark:text-indigo-400 px-4 py-2 rounded-xl font-bold flex gap-2 text-sm items-center hover:bg-indigo-50 dark:hover:bg-zinc-700"><Users size={16}/> Link Alumnos</a>
+                                    <a href="dashboard-schedule.html" className="bg-emerald-500 hover:bg-emerald-600 dark:bg-emerald-600 dark:hover:bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold flex gap-2 text-sm items-center shadow-md shadow-emerald-200 dark:shadow-emerald-900/20"><Calendar size={16}/> Mi Agenda</a>
                                     <div className="w-px h-8 bg-slate-200 dark:bg-zinc-800 mx-1"></div>
-                                    <button onClick={() => setModals({...modals, folder: true})} className="bg-slate-50 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 px-4 py-2 rounded-xl font-bold flex gap-2 hover:bg-slate-100 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 transition-all text-sm items-center"><Plus size={16}/> Carpeta</button>
+                                    <button onClick={() => openFolderModal()} className="bg-slate-50 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 px-4 py-2 rounded-xl font-bold flex gap-2 hover:bg-slate-100 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 transition-all text-sm items-center"><Plus size={16}/> Carpeta</button>
                                     <button onClick={() => setModals({...modals, activity: true})} className="bg-indigo-600 dark:bg-indigo-500 text-white px-5 py-2 rounded-xl font-bold flex gap-2 hover:bg-indigo-700 dark:hover:bg-indigo-600 shadow-lg shadow-indigo-200 dark:shadow-none transition-all text-sm items-center"><Plus size={16}/> Nueva Actividad</button>
                                     <button onClick={toggleTheme} className="p-2 ml-2 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-amber-400 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors">{isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}</button>
                                 </div>
                             </div>
 
-                            <div className="flex gap-2 mb-6 text-xs font-bold text-slate-400 dark:text-zinc-500 overflow-x-auto pb-2 uppercase tracking-widest">
-                                <button onClick={() => navigateTo([])} className={`hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors ${path.length===0?"text-indigo-600 dark:text-indigo-400":""}`}>INICIO</button>
-                                {path.map((f, i) => (<React.Fragment key={i}><span className="opacity-50">/</span><button onClick={() => navigateTo(path.slice(0, i+1))} className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors text-slate-600 dark:text-zinc-300">{f}</button></React.Fragment>))}
+                            {/* BREADCRUMBS: ZONAS DE DROP PARA RETROCEDER */}
+                            <div className="flex gap-2 mb-6 text-xs font-bold text-slate-400 dark:text-zinc-500 overflow-x-auto pb-2 uppercase tracking-widest items-center">
+                                <span 
+                                    onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag-over-breadcrumb'); }}
+                                    onDragLeave={e => e.currentTarget.classList.remove('drag-over-breadcrumb')}
+                                    onDrop={e => handleDropOnTarget(e, "")}
+                                    onClick={() => navigateTo([])} 
+                                    className={`cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors py-1 ${path.length===0?"text-indigo-600 dark:text-indigo-400":""}`}
+                                >
+                                    INICIO
+                                </span>
+                                {path.map((f, i) => {
+                                    const targetPath = path.slice(0, i+1).join('/');
+                                    return (
+                                        <React.Fragment key={i}>
+                                            <span className="opacity-50">/</span>
+                                            <span 
+                                                onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag-over-breadcrumb'); }}
+                                                onDragLeave={e => e.currentTarget.classList.remove('drag-over-breadcrumb')}
+                                                onDrop={e => handleDropOnTarget(e, targetPath)}
+                                                onClick={() => navigateTo(path.slice(0, i+1))} 
+                                                className="cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors text-slate-600 dark:text-zinc-300 py-1"
+                                            >
+                                                {f}
+                                            </span>
+                                        </React.Fragment>
+                                    )
+                                })}
                             </div>
 
                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                                {/* CARPETAS (Drop Targets) */}
+                                {/* CARPETAS */}
                                 {userFolders.map((f) => (
                                     <a 
                                         key={f.id} 
                                         href={`?folder=${encodeURIComponent([...path, f.name].join('/'))}`}
-                                        onClick={(e) => { if(e.button === 0 && !e.ctrlKey) { e.preventDefault(); navigateTo([...path, f.name]); } }}
+                                        onClick={(e) => { if(e.button === 0 && !e.ctrlKey && !e.metaKey) { e.preventDefault(); navigateTo([...path, f.name]); } }}
+                                        draggable
+                                        onDragStart={e => handleDragStart(e, f.id, 'folder')}
                                         onDragOver={e => e.preventDefault()}
-                                        onDrop={e => handleDropOnFolder(e, f)}
-                                        className={`aspect-[4/3] ${f.colorClass ? f.colorClass.split(' ')[0] : 'bg-white dark:bg-zinc-900'} border border-slate-200 dark:border-zinc-800 rounded-3xl flex flex-col items-center justify-center gap-3 shadow-sm hover:scale-105 hover:shadow-lg transition-all group`}
+                                        onDrop={e => handleDropOnTarget(e, path.length > 0 ? `${path.join('/')}/${f.name}` : f.name)}
+                                        className={`relative aspect-[4/3] ${f.colorClass || FOLDER_PALETTE[0]} border border-transparent rounded-3xl flex flex-col items-center justify-center gap-3 shadow-sm hover:scale-105 hover:shadow-lg transition-all group`}
                                     >
-                                        <Folder size={36} className={`${f.colorClass ? f.colorClass.split(' ')[1] : 'text-slate-300 dark:text-zinc-600'} transition-colors`}/>
-                                        <span className="font-bold text-[11px] text-center px-4 uppercase tracking-wide text-slate-700 dark:text-zinc-200 truncate w-full">{f.name}</span>
+                                        {/* ACCIONES DE CARPETA FLOTANTES */}
+                                        <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                                            <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); openFolderModal(f); }} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-white dark:hover:bg-black/50 transition-colors"><Edit2 size={12}/></button>
+                                            <button onClick={(e) => duplicateFolder(e, f)} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-white dark:hover:bg-black/50 transition-colors"><Copy size={12}/></button>
+                                            <button onClick={(e) => deleteFolder(e, f.id)} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-rose-500 hover:text-white transition-colors"><Trash2 size={12}/></button>
+                                        </div>
+                                        <Folder size={40} className="opacity-80"/>
+                                        <span className="font-black text-[12px] text-center px-4 uppercase tracking-wide truncate w-full">{f.name}</span>
                                     </a>
                                 ))}
 
-                                {/* ACTIVIDADES (Draggables) */}
+                                {/* ACTIVIDADES */}
                                 {userQuizzes.map((q) => {
                                     const info = GAME_TYPES.find(g => g.id === q.type) || GAME_TYPES[0];
                                     return (
                                         <a 
                                             key={q.id} 
-                                            href={getPlayLink(q)}
+                                            href={q.type === 'CONNECT4' ? `connect4.html?id=${q.id}` : q.type === 'READING' ? `reading.html?id=${q.id}` : `activity.html?id=${q.id}`}
                                             draggable
                                             onDragStart={e => handleDragStart(e, q.id, 'quiz')}
                                             className="aspect-[4/3] bg-white dark:bg-zinc-900 rounded-3xl shadow-sm border border-slate-200 dark:border-zinc-800 flex flex-col overflow-hidden group hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer relative"
                                         >
                                             <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                                                <button onClick={(e) => { e.preventDefault(); window.location.href = getEditLink(q); }} className="p-2 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 shadow-sm transition-colors"><Edit2 size={14}/></button>
+                                                <button onClick={(e) => { e.preventDefault(); window.location.href = q.type === 'CONNECT4' ? `dashboard-connect4.html?edit=${q.id}&folder=${encodeURIComponent(path.join('/'))}` : q.type === 'READING' ? `dashboard-reading.html?edit=${q.id}&folder=${encodeURIComponent(path.join('/'))}` : '#'; }} className="p-2 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 shadow-sm transition-colors"><Edit2 size={14}/></button>
                                                 <button onClick={(e) => handleDeleteActivity(e, q.id)} className="p-2 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-red-600 dark:hover:text-red-400 shadow-sm transition-colors"><Trash2 size={14}/></button>
                                             </div>
                                             <div className={`h-1/2 ${info.color} flex items-center justify-center text-white relative`}><info.icon size={32} /></div>
@@ -211,16 +294,14 @@
                             {modals.folder && (
                                 <div className="fixed inset-0 bg-slate-900/60 dark:bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
                                     <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl w-full max-w-sm shadow-2xl animate-in zoom-in-95 border border-transparent dark:border-zinc-800">
-                                        <h3 className="font-black text-xl mb-4">Nueva Carpeta</h3>
-                                        <input id="fName" placeholder="Nombre..." className="w-full p-4 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-2xl mb-4 font-bold outline-none focus:border-indigo-500 dark:focus:border-indigo-500 dark:text-white" autoFocus/>
-                                        
-                                        <div className="flex gap-2 mb-6 justify-center">
+                                        <h3 className="font-black text-xl mb-4">{editingFolder ? 'Editar Carpeta' : 'Nueva Carpeta'}</h3>
+                                        <input value={folderForm.name} onChange={e => setFolderForm({...folderForm, name: e.target.value})} placeholder="Nombre..." className="w-full p-4 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-2xl mb-4 font-bold outline-none focus:border-indigo-500 dark:focus:border-indigo-500 dark:text-white" autoFocus/>
+                                        <div className="flex flex-wrap gap-2 mb-6 justify-center p-2">
                                             {FOLDER_PALETTE.map(c => (
-                                                <button key={c} onClick={() => setNewFolderColor(c)} className={`w-8 h-8 rounded-full border-2 transition-transform ${c.split(' ')[0]} ${newFolderColor === c ? 'scale-125 border-stone-800 dark:border-white' : 'border-transparent'}`}></button>
+                                                <button key={c} onClick={() => setFolderForm({...folderForm, colorClass: c})} className={`w-8 h-8 rounded-full border-2 transition-transform ${c.split(' ')[0]} ${folderForm.colorClass === c ? 'scale-125 border-stone-800 dark:border-white' : 'border-transparent'}`}></button>
                                             ))}
                                         </div>
-
-                                        <div className="flex gap-2"><button onClick={() => setModals({...modals, folder: false})} className="flex-1 py-3 text-slate-400 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded-xl font-bold transition-colors">Cancelar</button><button onClick={() => createFolder(document.getElementById('fName').value)} className="flex-1 py-3 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold transition-colors">Crear</button></div>
+                                        <div className="flex gap-2"><button onClick={() => setModals({...modals, folder: false})} className="flex-1 py-3 text-slate-400 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded-xl font-bold transition-colors">Cancelar</button><button onClick={saveFolder} className="flex-1 py-3 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold transition-colors">Guardar</button></div>
                                     </div>
                                 </div>
                             )}
@@ -238,7 +319,7 @@
                                                 <h4 className="text-[10px] font-black text-slate-400 dark:text-zinc-500 uppercase tracking-[0.2em] mb-4">Generadores (IA Ready)</h4>
                                                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                                                     {GAME_TYPES.map(g => (
-                                                        <button key={g.id} onClick={() => handleActivityClick(g)} className="bg-white dark:bg-zinc-800 p-5 rounded-[1.5rem] border border-slate-100 dark:border-zinc-700 hover:border-indigo-500 dark:hover:border-indigo-500 hover:shadow-xl transition-all text-left flex flex-col gap-4 group">
+                                                        <button key={g.id} onClick={() => { window.location.href = g.id === 'CONNECT4' ? `dashboard-connect4.html?folder=${encodeURIComponent(path.join('/'))}` : g.id === 'READING' ? `dashboard-reading.html?folder=${encodeURIComponent(path.join('/'))}` : `dashboard.html?type=${g.id}&folderId=${encodeURIComponent(path.join('/'))}`; }} className="bg-white dark:bg-zinc-800 p-5 rounded-[1.5rem] border border-slate-100 dark:border-zinc-700 hover:border-indigo-500 dark:hover:border-indigo-500 hover:shadow-xl transition-all text-left flex flex-col gap-4 group">
                                                             <div className={`w-12 h-12 ${g.color} text-white rounded-2xl flex items-center justify-center shadow-md group-hover:scale-110 transition-transform`}><g.icon size={24}/></div>
                                                             <div><div className="font-black text-slate-700 dark:text-zinc-100 text-lg">{g.name}</div><div className="text-xs text-slate-400 dark:text-zinc-400 font-medium">{g.desc}</div></div>
                                                         </button>
@@ -265,8 +346,9 @@
                 </div>
             );
         }
+
         const root = createRoot(document.getElementById('root'));
-        root.render(<Dashboard />);
+        root.render(<ErrorBoundary><Dashboard /></ErrorBoundary>);
     </script>
 </body>
 </html>
