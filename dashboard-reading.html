@@ -7,9 +7,7 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📖</text></svg>">
     
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = { darkMode: 'class' };
-    </script>
+    <script>tailwind.config = { darkMode: 'class' };</script>
 
     <script type="importmap">
     {
@@ -39,7 +37,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
-        import { BookOpen, Sparkles, Save, ArrowLeft, Globe, Feather, Briefcase, HeartHandshake, Loader2, Search, Lightbulb, Image as ImageIcon, X, Link as LinkIcon, HelpCircle, Sun, Moon, Edit3, CheckCircle2 } from 'lucide-react';
+        import { BookOpen, Sparkles, Save, ArrowLeft, Globe, Feather, Briefcase, HeartHandshake, Loader2, Search, Lightbulb, Image as ImageIcon, X, Link as LinkIcon, HelpCircle, Sun, Moon, Edit3, CheckCircle2, ChevronLeft, ChevronRight, Flame } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -49,7 +47,7 @@
             "Real World": [
                 { id: 'biography', label: 'Biography (Real Person)', icon: Globe },
                 { id: 'news', label: 'Breaking News / Current Events', icon: Globe },
-                { id: 'travel', label: 'Travel Guide (Real Place)', icon: Globe }
+                { id: 'reddit_drama', label: 'r/AmIOverReacting', icon: Flame, desc: '3 historias reales (Slang & Rants)' }
             ],
             "Professional": [
                 { id: 'advice', label: 'Advice / Consultation', icon: HeartHandshake, desc: 'Dilemas complejos' },
@@ -59,7 +57,6 @@
             "Creative": [
                 { id: 'story', label: 'Short Story', icon: Feather },
                 { id: 'dialogue', label: 'Dialogue / Script', icon: Feather },
-                { id: 'anecdote', label: 'Funny Anecdote', icon: Feather },
                 { id: 'grammar_check', label: 'Grammar Check', icon: Feather, desc: 'ESL Standard (A1-C2)' }
             ]
         };
@@ -76,10 +73,12 @@
             const [isLoadingModels, setIsLoadingModels] = useState(false);
             
             const [config, setConfig] = useState({ level: 'Basic', genre: 'biography', topic: '' });
-            const [readingData, setReadingData] = useState({ title: '', content: '', fun_fact: '', image_url: '', tokens: [], questions: [] });
+            
+            // NUEVO ESTADO: Álbum de historias
+            const [readingData, setReadingData] = useState({ title: '', stories: [] });
+            const [curIdx, setCurIdx] = useState(0);
 
-            // NUEVOS ESTADOS (DARK MODE, CAMBIOS SIN GUARDAR Y EDITOR DE TEXTO)
-            const [isDarkMode, setIsDarkMode] = useState(true); // Default Dark Mode
+            const [isDarkMode, setIsDarkMode] = useState(true);
             const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
             const [isEditingText, setIsEditingText] = useState(false);
             const [tempText, setTempText] = useState("");
@@ -99,12 +98,28 @@
                             const docSnap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editId));
                             if (docSnap.exists()) {
                                 const data = docSnap.data();
-                                setReadingData({
-                                    title: data.title, content: data.content.text, fun_fact: data.content.fun_fact || "", 
-                                    image_url: data.content.image_url || "", questions: data.content.questions || [],
-                                    tokens: processContent(data.content.text, [], data.content.blanks)
-                                });
+                                // RETROCOMPATIBILIDAD: Formato viejo (content) vs Formato nuevo (stories)
+                                let loadedStories = [];
+                                if (data.stories) {
+                                    loadedStories = data.stories.map(s => ({
+                                        ...s,
+                                        content: s.text,
+                                        tokens: processContent(s.text, [], s.blanks)
+                                    }));
+                                } else if (data.content) {
+                                    loadedStories = [{
+                                        title: data.title,
+                                        content: data.content.text,
+                                        fun_fact: data.content.fun_fact || "",
+                                        image_url: data.content.image_url || "",
+                                        questions: data.content.questions || [],
+                                        tokens: processContent(data.content.text, [], data.content.blanks)
+                                    }];
+                                }
+
+                                setReadingData({ title: data.title, stories: loadedStories });
                                 setConfig(prev => ({ ...prev, level: data.level, genre: data.genre }));
+                                setCurIdx(0);
                                 setEditingId(editId);
                                 setStep('editor');
                                 setHasUnsavedChanges(false);
@@ -114,7 +129,6 @@
                 };
                 init();
 
-                // Alerta nativa del navegador al intentar cerrar la pestaña
                 const handleBeforeUnload = (e) => { if (hasUnsavedChanges) e.preventDefault(); };
                 window.addEventListener('beforeunload', handleBeforeUnload);
                 return () => window.removeEventListener('beforeunload', handleBeforeUnload);
@@ -122,17 +136,13 @@
 
             const toggleTheme = () => { setIsDarkMode(!isDarkMode); localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light'); };
 
-            // NAVEGACIÓN SEGURA
             const safeNavigate = (url) => {
-                if (!hasUnsavedChanges || confirm("⚠️ Tienes cambios sin guardar. ¿Seguro que quieres salir y perderlos?")) {
-                    window.location.href = url;
-                }
+                if (!hasUnsavedChanges || confirm("⚠️ Tienes cambios sin guardar. ¿Seguro que quieres salir y perderlos?")) window.location.href = url;
             };
 
             const safeGoBack = () => {
                 if (!hasUnsavedChanges || confirm("⚠️ Perderás la lectura generada si regresas sin guardar. ¿Continuar?")) {
-                    setStep('config');
-                    setHasUnsavedChanges(false);
+                    setStep('config'); setHasUnsavedChanges(false);
                 }
             };
 
@@ -180,50 +190,49 @@
                 setLoading(true);
 
                 const needsSearch = GENRES["Real World"].some(g => g.id === config.genre);
+                const isReddit = config.genre === 'reddit_drama';
+                const storyCount = isReddit ? 3 : 1;
                 
-                let levelInstructions = "Write in 'COOL MODE': Tell the story like a charismatic, eloquent storyteller explaining it to a friend or like a fascinating YouTube video essay. Keep the language natural, easy to follow, and highly engaging. AVOID dry, academic, or overly formal 'encyclopedia' language. Do not push overly complex vocabulary just to sound smart.";
+                let levelInstructions = "Write in 'COOL MODE': Tell the story like a charismatic, eloquent storyteller explaining it to a friend or like a fascinating YouTube video essay. Keep the language natural, easy to follow, and highly engaging. AVOID dry, academic, or overly formal 'encyclopedia' language.";
                 
                 if (config.genre === 'grammar_check') {
-                    if(config.level === 'Basic') levelInstructions = "GRAMMAR FOCUS: CEFR A1/A2. Use simple vocabulary and basic present/past simple structures. Short clear sentences. Keep the tone friendly and easy.";
-                    else if(config.level === 'Advanced') levelInstructions = "GRAMMAR FOCUS: CEFR B1/B2. Use moderate complexity, past narrative tenses, perfect tenses. Tone should be engaging and conversational.";
-                    else levelInstructions = "GRAMMAR FOCUS: CEFR C1/C2. Use rich vocabulary, passive voice, advanced phrasal verbs, but keep the tone like a charismatic storyteller, not a boring textbook.";
+                    if(config.level === 'Basic') levelInstructions = "GRAMMAR FOCUS: CEFR A1/A2. Use simple vocabulary and basic present/past simple structures. Short clear sentences.";
+                    else if(config.level === 'Advanced') levelInstructions = "GRAMMAR FOCUS: CEFR B1/B2. Use moderate complexity, past narrative tenses, perfect tenses.";
+                    else levelInstructions = "GRAMMAR FOCUS: CEFR C1/C2. Use rich vocabulary, passive voice, advanced phrasal verbs.";
                 }
 
                 let genreInstructions = "";
-                if(config.genre === 'biography') {
-                    genreInstructions = `
-                        Must be a 4-paragraph biography following this EXACT structure, written in a captivating, documentary-style tone:
-                        Paragraph 1: Early life and formation (Focus on what shaped their career and context, e.g., musical roots for musicians, street smarts, poverty, etc. Ignore irrelevant boring schooling).
-                        Paragraph 2: Rise to fame and main achievements / why they are famous. Make it sound epic.
-                        Paragraph 3: Polemics, controversies, or their biggest struggles. Bring the drama.
-                        Paragraph 4: Current life and future plans, OR legacy/after fame to death.
-                    `;
-                }
-                else if(config.genre === 'advice') genreInstructions = "Present a complex moral or professional dilemma, nuanced pros and cons, and a final advice. Avoid trivial problems.";
-                else if(config.genre === 'interview' || config.genre === 'dialogue') genreInstructions = "Use Script format (e.g., 'Interviewer: ...'). Use new lines for each speaker turn. Make the conversation flow naturally.";
+                if(config.genre === 'biography') genreInstructions = "Must be a 4-paragraph biography: 1. Early life/formation. 2. Rise to fame/achievements. 3. Polemics/struggles. 4. Current life/future/legacy.";
+                else if(config.genre === 'advice') genreInstructions = "Present a complex moral or professional dilemma, nuanced pros and cons, and a final advice.";
+                else if(isReddit) genreInstructions = "Search the subreddit r/AmIOverReacting. Pick 3 distinct, highly engaging, popular recent stories. Keep the authentic Reddit tone, slang (e.g., 'gaslighting', 'red flags'), and rants. Filter out extreme profanity but keep the drama. Present them as 3 separate stories.";
 
                 const prompt = `
-                    Generate an English reading text. 
+                    Generate an English reading activity. 
                     Genre: ${config.genre}. ${genreInstructions}
                     Topic: ${config.topic || "Choose an engaging topic relevant to the genre."}
                     ${levelInstructions}
 
                     MANDATORY JSON OUTPUT FORMAT:
                     {
-                        "title": "Catchy Title here",
-                        "content": "Full text body here. Use \\n\\n to separate paragraphs.",
-                        "fun_fact": "A short, mind-blowing 'Did You Know?' fact related to the topic.",
-                        "suggested_words_to_blank": ["verb1", "phrasal verb", "key noun"],
-                        "questions": [
-                            { "q": "Question asking for a specific detail?", "a": "Short answer", "paragraph_index": 0 }
+                        "album_title": "Catchy Overall Title (e.g., 'Reddit Drama of the Week' or 'Marie Curie Biography')",
+                        "stories": [
+                            {
+                                "title": "Specific Story Title",
+                                "content": "Full text body here. Use \\n\\n to separate paragraphs.",
+                                "fun_fact": "A short, mind-blowing 'Did You Know?' fact related to the topic.",
+                                "suggested_words_to_blank": ["verb1", "phrasal verb", "key noun"],
+                                "questions": [
+                                    { "q": "Question asking for a specific detail?", "a": "Short answer", "paragraph_index": 0 }
+                                ]
+                            }
                         ]
                     }
 
                     Rules:
+                    - You MUST generate exactly ${storyCount} item(s) in the 'stories' array.
                     - 'suggested_words_to_blank' MUST contain 5-8 key vocabulary words or verbs actually present in the text.
-                    - 'questions' MUST contain exactly 3 reading comprehension questions. 'paragraph_index' is a 0-based integer indicating which paragraph contains the answer.
-                    - You MUST include the 'fun_fact' in English.
-                    ${needsSearch ? "IMPORTANT: USE THE GOOGLE SEARCH TOOL to ensure facts are accurate." : ""}
+                    - 'questions' MUST contain exactly 3 reading comprehension questions per story. 'paragraph_index' is a 0-based integer indicating which paragraph contains the answer.
+                    ${needsSearch ? "IMPORTANT: USE THE GOOGLE SEARCH TOOL to ensure facts/stories are real and accurate." : ""}
                     RETURN ONLY RAW JSON.
                 `;
 
@@ -239,37 +248,53 @@
                     let text = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim(); 
                     const result = JSON.parse(text);
                     
-                    setReadingData({
-                        title: result.title, content: result.content, fun_fact: result.fun_fact || "", image_url: "", 
-                        questions: result.questions || [], tokens: processContent(result.content, result.suggested_words_to_blank || [])
-                    });
+                    const processedStories = result.stories.map(s => ({
+                        title: s.title,
+                        content: s.content,
+                        fun_fact: s.fun_fact || "",
+                        image_url: "",
+                        questions: s.questions || [],
+                        tokens: processContent(s.content, s.suggested_words_to_blank || [])
+                    }));
+
+                    setReadingData({ title: result.album_title, stories: processedStories });
+                    setCurIdx(0);
                     setStep('editor');
-                    setHasUnsavedChanges(true); // Se generó algo nuevo, requiere guardarse
+                    setHasUnsavedChanges(true);
                 } catch (e) { alert("Error: " + e.message); console.error(e); } finally { setLoading(false); }
             };
 
             const saveActivity = async () => {
-                if (!readingData.title) return alert("Falta título");
+                if (!readingData.title) return alert("Falta el Título Principal del Álbum");
                 try {
+                    // Preparamos el array de historias para Firebase
+                    const savedStories = readingData.stories.map(s => ({
+                        title: s.title, text: s.content, fun_fact: s.fun_fact, image_url: s.image_url,
+                        blanks: s.tokens.filter(t => t.isHidden).map(t => t.id),
+                        questions: s.questions
+                    }));
+
                     const payload = {
                         title: readingData.title, type: 'READING', level: config.level, genre: config.genre, parentPath: parentPath,
-                        content: { text: readingData.content, fun_fact: readingData.fun_fact, image_url: readingData.image_url, blanks: readingData.tokens.filter(t => t.isHidden).map(t => t.id), questions: readingData.questions }
+                        stories: savedStories
                     };
+
                     if (editingId) await updateDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editingId), { ...payload, updatedAt: serverTimestamp() }); 
                     else await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), { ...payload, createdAt: serverTimestamp() }); 
+                    
                     setHasUnsavedChanges(false);
                     window.location.href = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html';
                 } catch (e) { alert("Error guardando: " + e.message); }
             };
 
-            const toggleHidden = (idx) => {
+            // LÓGICA DE EDITOR MUTABLE POR HISTORIA
+            const toggleHidden = (tokenIdx) => {
                 setHasUnsavedChanges(true);
                 setReadingData(prev => {
-                    const newTokens = prev.tokens.map((t, i) => {
-                        if (i === idx && t.isWord) return { ...t, isHidden: !t.isHidden };
-                        return t;
-                    });
-                    return { ...prev, tokens: newTokens };
+                    const newStories = [...prev.stories];
+                    const curStory = newStories[curIdx];
+                    curStory.tokens = curStory.tokens.map((t, i) => i === tokenIdx && t.isWord ? { ...t, isHidden: !t.isHidden } : t);
+                    return { ...prev, stories: newStories };
                 });
             };
 
@@ -286,25 +311,29 @@
                     if (img) foundUrl = img.src;
                 }
                 if (!foundUrl && uri) foundUrl = uri;
-                if (foundUrl) setReadingData({ ...readingData, image_url: foundUrl });
-                else alert("No se detectó una imagen válida.");
+                if (foundUrl) {
+                    setReadingData(prev => {
+                        const newStories = [...prev.stories];
+                        newStories[curIdx].image_url = foundUrl;
+                        return { ...prev, stories: newStories };
+                    });
+                } else alert("No se detectó una imagen válida.");
             };
 
-            // LÓGICA DE COMMITS TIPO GITHUB
             const handleTextEditToggle = () => {
                 if (!isEditingText) {
-                    // Entrar a modo edición
-                    setTempText(readingData.content);
+                    setTempText(readingData.stories[curIdx].content);
                     setIsEditingText(true);
                 } else {
-                    // Hacer el Commit
-                    if (confirm("¿Aplicar y Commitear cambios en el texto? Esto reconstruirá las palabras y podrías tener que volver a seleccionar tus huecos.")) {
+                    if (confirm("¿Aplicar y Commitear cambios en el texto? Los huecos seleccionados podrían desfasarse.")) {
                         setHasUnsavedChanges(true);
-                        setReadingData(prev => ({
-                            ...prev,
-                            content: tempText,
-                            tokens: processContent(tempText, [], prev.tokens.filter(t=>t.isHidden).map(t=>t.id)) // Intenta preservar huecos, aunque pueden desfasarse
-                        }));
+                        setReadingData(prev => {
+                            const newStories = [...prev.stories];
+                            const curStory = newStories[curIdx];
+                            curStory.content = tempText;
+                            curStory.tokens = processContent(tempText, [], curStory.tokens.filter(t=>t.isHidden).map(t=>t.id));
+                            return { ...prev, stories: newStories };
+                        });
                         setIsEditingText(false);
                     }
                 }
@@ -328,7 +357,6 @@
                                 </div>
                                 
                                 <div className="flex flex-1 overflow-hidden bg-white dark:bg-zinc-950 border-x border-b border-slate-200 dark:border-zinc-800 rounded-b-3xl shadow-xl transition-colors">
-                                    {/* LEFT: CONFIG */}
                                     <div className="w-1/2 p-6 border-r border-slate-100 dark:border-zinc-800 flex flex-col">
                                         <label className="text-xs font-black text-slate-400 dark:text-zinc-500 uppercase tracking-widest mb-3">Género de Lectura</label>
                                         <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-6">
@@ -346,7 +374,6 @@
                                         </div>
                                     </div>
 
-                                    {/* RIGHT: TOPIC & GEN */}
                                     <div className="w-1/2 p-6 bg-slate-50 dark:bg-zinc-900/50 flex flex-col relative overflow-y-auto">
                                         {config.genre === 'grammar_check' && (
                                             <div className="mb-6 animate-in fade-in slide-in-from-top-4">
@@ -379,7 +406,6 @@
                                         <button onClick={toggleTheme} className="p-2 text-slate-400 hover:text-amber-400 dark:hover:text-amber-400 transition-colors">{isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}</button>
                                         <div className="w-px h-6 bg-slate-200 dark:bg-zinc-700"></div>
                                         
-                                        {/* BOTÓN MAGICO DE COMMIT TEXTO */}
                                         <button onClick={handleTextEditToggle} className={`px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all ${isEditingText ? 'bg-amber-500 hover:bg-amber-600 text-white shadow-md animate-pulse' : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700'}`}>
                                             {isEditingText ? <><CheckCircle2 size={18}/> Commit de Texto</> : <><Edit3 size={18}/> Editar Texto</>}
                                         </button>
@@ -388,30 +414,69 @@
                                     </div>
                                 </div>
                                 
+                                {/* BARRA NAVEGACIÓN DE HISTORIAS (Si es álbum) */}
+                                {readingData.stories.length > 1 && (
+                                    <div className="bg-indigo-50 dark:bg-indigo-900/30 border-x border-b border-indigo-100 dark:border-indigo-800/50 p-3 flex items-center justify-between">
+                                        <span className="text-xs font-black text-indigo-800 dark:text-indigo-300 uppercase tracking-widest flex items-center gap-2"><BookOpen size={14}/> Álbum Múltiple</span>
+                                        <div className="flex items-center gap-4">
+                                            <button onClick={() => setCurIdx(c => Math.max(0, c - 1))} disabled={curIdx === 0} className="p-1 text-indigo-600 dark:text-indigo-400 disabled:opacity-30 hover:bg-indigo-200 dark:hover:bg-indigo-800 rounded"><ChevronLeft/></button>
+                                            <span className="font-bold text-sm dark:text-zinc-200">Historia {curIdx + 1} de {readingData.stories.length}</span>
+                                            <button onClick={() => setCurIdx(c => Math.min(readingData.stories.length - 1, c + 1))} disabled={curIdx === readingData.stories.length - 1} className="p-1 text-indigo-600 dark:text-indigo-400 disabled:opacity-30 hover:bg-indigo-200 dark:hover:bg-indigo-800 rounded"><ChevronRight/></button>
+                                        </div>
+                                    </div>
+                                )}
+
                                 <div className="flex-1 overflow-y-auto bg-white dark:bg-zinc-950 border-x border-b border-slate-200 dark:border-zinc-800 p-8 rounded-b-3xl transition-colors">
-                                    <input value={readingData.title} onChange={e => {setHasUnsavedChanges(true); setReadingData({...readingData, title: e.target.value});}} className="text-4xl font-black w-full border-none outline-none mb-8 bg-transparent dark:text-zinc-100 placeholder-slate-300 dark:placeholder-zinc-700" placeholder="Título..."/>
+                                    
+                                    {/* TÍTULO PRINCIPAL (Solo se edita en la primera historia o como campo global) */}
+                                    <div className="mb-8">
+                                        <label className="text-[10px] text-slate-400 dark:text-zinc-500 font-bold uppercase tracking-widest">Título General del Álbum / Actividad</label>
+                                        <input value={readingData.title} onChange={e => {setHasUnsavedChanges(true); setReadingData({...readingData, title: e.target.value});}} className="text-4xl font-black w-full border-none outline-none bg-transparent dark:text-zinc-100 placeholder-slate-300 dark:placeholder-zinc-700" placeholder="Título Principal..."/>
+                                    </div>
+
+                                    {/* TÍTULO DE LA HISTORIA ACTUAL */}
+                                    <div className="mb-8">
+                                        <label className="text-[10px] text-slate-400 dark:text-zinc-500 font-bold uppercase tracking-widest">Título de esta Historia</label>
+                                        <input value={readingData.stories[curIdx]?.title || ''} onChange={e => {
+                                            setHasUnsavedChanges(true);
+                                            setReadingData(prev => {
+                                                const newStories = [...prev.stories];
+                                                newStories[curIdx].title = e.target.value;
+                                                return { ...prev, stories: newStories };
+                                            });
+                                        }} className="text-2xl font-bold w-full border-b border-dashed border-slate-300 dark:border-zinc-700 outline-none bg-transparent dark:text-zinc-300 placeholder-slate-300 dark:placeholder-zinc-700 pb-2" placeholder="Subtítulo..."/>
+                                    </div>
                                     
                                     <div className="mb-8 space-y-2">
-                                        {!readingData.image_url ? (
+                                        {!readingData.stories[curIdx]?.image_url ? (
                                             <div onDrop={handleImageDrop} onDragOver={e=>e.preventDefault()} className="rounded-2xl border-2 border-dashed border-slate-300 dark:border-zinc-700 bg-slate-50 dark:bg-zinc-900 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:border-indigo-300 transition-colors p-8 relative flex flex-col items-center justify-center text-slate-400 dark:text-zinc-500 cursor-pointer">
                                                 <ImageIcon size={32} className="mb-3"/>
                                                 <span className="text-sm font-bold uppercase tracking-widest">Arrastra una imagen de Google aquí</span>
                                             </div>
                                         ) : (
                                             <div className="relative w-full h-64 rounded-2xl overflow-hidden group border-4 border-slate-100 dark:border-zinc-800 shadow-sm">
-                                                <img src={readingData.image_url} className="w-full h-full object-cover"/>
-                                                <button onClick={() => {setHasUnsavedChanges(true); setReadingData({...readingData, image_url: ''});}} className="absolute top-4 right-4 bg-black/70 text-white p-2 rounded-full hover:bg-red-500 transition-colors z-10 backdrop-blur"><X size={18}/></button>
+                                                <img src={readingData.stories[curIdx].image_url} className="w-full h-full object-cover"/>
+                                                <button onClick={() => {
+                                                    setHasUnsavedChanges(true); 
+                                                    setReadingData(prev => {
+                                                        const newS = [...prev.stories]; newS[curIdx].image_url = ''; return {...prev, stories: newS};
+                                                    });
+                                                }} className="absolute top-4 right-4 bg-black/70 text-white p-2 rounded-full hover:bg-red-500 transition-colors z-10 backdrop-blur"><X size={18}/></button>
                                             </div>
                                         )}
-                                        {!readingData.image_url && (
+                                        {!readingData.stories[curIdx]?.image_url && (
                                             <div className="flex items-center gap-2 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-700 rounded-xl px-4 py-3">
                                                 <LinkIcon size={16} className="text-slate-400 dark:text-zinc-500"/>
-                                                <input value={readingData.image_url} onChange={e => {setHasUnsavedChanges(true); setReadingData({...readingData, image_url: e.target.value});}} className="w-full text-sm outline-none text-slate-700 dark:text-zinc-300 font-medium bg-transparent" placeholder="O pega el enlace directo a la imagen aquí..."/>
+                                                <input value={readingData.stories[curIdx]?.image_url || ''} onChange={e => {
+                                                    setHasUnsavedChanges(true); 
+                                                    setReadingData(prev => {
+                                                        const newS = [...prev.stories]; newS[curIdx].image_url = e.target.value; return {...prev, stories: newS};
+                                                    });
+                                                }} className="w-full text-sm outline-none text-slate-700 dark:text-zinc-300 font-medium bg-transparent" placeholder="O pega el enlace directo a la imagen aquí..."/>
                                             </div>
                                         )}
                                     </div>
 
-                                    {/* INTERCAMBIADOR EDITOR / JUEGO */}
                                     {isEditingText ? (
                                         <textarea 
                                             value={tempText} 
@@ -420,9 +485,10 @@
                                         />
                                     ) : (
                                         <div className="text-lg text-slate-800 dark:text-zinc-200 bg-slate-50 dark:bg-zinc-900 p-8 md:p-12 rounded-[2rem] border border-slate-100 dark:border-zinc-800 shadow-inner leading-[2.5rem] mb-8 text-justify transition-colors">
-                                            {readingData.tokens.map((t, i) => {
-                                                const prevHidden = i > 0 && readingData.tokens[i-1].isHidden && readingData.tokens[i-1].isWord;
-                                                const nextHidden = i < readingData.tokens.length - 1 && readingData.tokens[i+1].isHidden && readingData.tokens[i+1].isWord;
+                                            {readingData.stories[curIdx]?.tokens.map((t, i) => {
+                                                const curStory = readingData.stories[curIdx];
+                                                const prevHidden = i > 0 && curStory.tokens[i-1].isHidden && curStory.tokens[i-1].isWord;
+                                                const nextHidden = i < curStory.tokens.length - 1 && curStory.tokens[i+1].isHidden && curStory.tokens[i+1].isWord;
                                                 
                                                 let classes = "inline-block px-0.5 cursor-pointer transition-colors border-b-2 select-none ";
                                                 
@@ -445,17 +511,22 @@
                                         </div>
                                     )}
 
-                                    {readingData.fun_fact && (
+                                    {readingData.stories[curIdx]?.fun_fact && (
                                         <div className="bg-amber-50 dark:bg-amber-900/20 border-l-4 border-amber-400 dark:border-amber-600 p-6 rounded-r-2xl mb-8 flex gap-4 items-start shadow-sm">
                                             <div className="bg-amber-100 dark:bg-amber-800 p-2 rounded-full text-amber-600 dark:text-amber-300 shrink-0"><Lightbulb size={24}/></div>
-                                            <textarea value={readingData.fun_fact} onChange={e => {setHasUnsavedChanges(true); setReadingData({...readingData, fun_fact: e.target.value});}} className="w-full bg-transparent border-none outline-none text-amber-900 dark:text-amber-200 font-medium resize-none" rows={3}/>
+                                            <textarea value={readingData.stories[curIdx].fun_fact} onChange={e => {
+                                                setHasUnsavedChanges(true); 
+                                                setReadingData(prev => {
+                                                    const newS = [...prev.stories]; newS[curIdx].fun_fact = e.target.value; return {...prev, stories: newS};
+                                                });
+                                            }} className="w-full bg-transparent border-none outline-none text-amber-900 dark:text-amber-200 font-medium resize-none" rows={3}/>
                                         </div>
                                     )}
 
                                     <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800/50 p-8 rounded-[2rem]">
                                         <h4 className="font-black text-indigo-800 dark:text-indigo-400 uppercase tracking-widest text-xs mb-6 flex items-center gap-2"><HelpCircle size={16}/> Preguntas Post-Reading Generadas</h4>
                                         <div className="space-y-4">
-                                            {readingData.questions.map((q, i) => (
+                                            {readingData.stories[curIdx]?.questions.map((q, i) => (
                                                 <div key={i} className="bg-white dark:bg-zinc-800 p-5 rounded-2xl shadow-sm border border-indigo-50 dark:border-zinc-700">
                                                     <p className="font-bold text-slate-800 dark:text-zinc-200">{i+1}. {q.q}</p>
                                                     <p className="text-sm text-indigo-600 dark:text-indigo-400 font-medium mt-1">R: {q.a} <span className="opacity-50 text-slate-400 dark:text-zinc-500 text-xs ml-2">(Párrafo {q.paragraph_index + 1})</span></p>
