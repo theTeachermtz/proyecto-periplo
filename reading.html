@@ -10,9 +10,16 @@
     
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/default.css">
     <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/index.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/scroll-behaviour.min.js"></script>
     <script>
         window.onload = function() {
-            MobileDragDrop.polyfill({ holdToDrag: 400 }); 
+            MobileDragDrop.polyfill({ 
+                holdToDrag: 300,
+                // Activa el plugin de auto-scroll nativo del polyfill
+                dragImageTranslateOverride: mobileDragDrop.scrollBehaviourDragImageTranslateOverride
+            }); 
+            // Para asegurar fluidez en iOS
+            window.addEventListener('touchmove', function() {}, {passive: false});
         };
     </script>
 
@@ -32,7 +39,7 @@
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800;900&display=swap'); 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; transition: background-color 0.3s; overflow-x: hidden;}
+        html, body { font-family: 'Plus Jakarta Sans', sans-serif; transition: background-color 0.3s; overflow-x: hidden; }
         
         .token-base {
             display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
@@ -71,15 +78,16 @@
             const [loading, setLoading] = useState(true);
             const [activityData, setActivityData] = useState(null);
             const [stories, setStories] = useState([]);
-            const [curIdx, setCurIdx] = useState(-1); // -1 = Menu Lobby
+            const [curIdx, setCurIdx] = useState(-1); 
 
-            // ESTADOS DEL JUEGO (POR HISTORIA)
             const [tokens, setTokens] = useState([]);
             const [dropped, setDropped] = useState({});
             const [result, setResult] = useState(null);
             
             const [isDarkMode, setIsDarkMode] = useState(true);
-            const [fontSize, setFontSize] = useState(20);
+            
+            // FONT SIZE ADAPTATIVO: Si es celular, arranca en 16px. Si es compu, en 20px.
+            const [fontSize, setFontSize] = useState(window.innerWidth < 768 ? 16 : 20);
 
             const [qaMode, setQaMode] = useState(false);
             const [currentQIdx, setCurrentQIdx] = useState(0);
@@ -107,7 +115,6 @@
                         if (savedData.stories) {
                             loadedStories = savedData.stories;
                         } else if (savedData.content) {
-                            // Convertir formato viejo a array de 1 historia
                             loadedStories = [{
                                 title: savedData.title,
                                 text: savedData.content.text,
@@ -118,7 +125,6 @@
                             }];
                         }
 
-                        // Procesar tokens de todas las historias
                         const processed = loadedStories.map(s => {
                             const regex = /([a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+|[^a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ\s]+|\s+)/g;
                             const parts = s.text.match(regex) || [];
@@ -131,8 +137,6 @@
                         });
 
                         setStories(processed);
-                        
-                        // Auto-start si solo hay 1 historia (salta el Lobby)
                         if (processed.length === 1) startStory(0, processed[0]);
                     }
                     setLoading(false);
@@ -140,9 +144,51 @@
                 init();
             }, []);
 
+            // ALGORITMO DE AUTO-SCROLL SEGURO DURANTE EL DRAG
+            useEffect(() => {
+                let scrollInterval = null;
+                const handleDragOverEdge = (e) => {
+                    const threshold = 100; // Si el dedo está a 100px del borde
+                    const speed = 15; // Velocidad de scroll
+                    
+                    // Detectar toque o mouse
+                    const clientY = e.clientY || (e.touches && e.touches.length > 0 ? e.touches[0].clientY : 0);
+                    if (!clientY) return;
+
+                    if (clientY < threshold) {
+                        // Scroll Arriba
+                        if (!scrollInterval) scrollInterval = setInterval(() => window.scrollBy(0, -speed), 20);
+                    } else if (window.innerHeight - clientY < threshold) {
+                        // Scroll Abajo
+                        if (!scrollInterval) scrollInterval = setInterval(() => window.scrollBy(0, speed), 20);
+                    } else {
+                        // Detener scroll si está al centro
+                        if (scrollInterval) { clearInterval(scrollInterval); scrollInterval = null; }
+                    }
+                };
+
+                const handleDragEndEdge = () => {
+                    if (scrollInterval) { clearInterval(scrollInterval); scrollInterval = null; }
+                };
+
+                window.addEventListener('dragover', handleDragOverEdge);
+                window.addEventListener('touchmove', handleDragOverEdge, { passive: true });
+                window.addEventListener('dragend', handleDragEndEdge);
+                window.addEventListener('drop', handleDragEndEdge);
+                window.addEventListener('touchend', handleDragEndEdge);
+                
+                return () => {
+                    window.removeEventListener('dragover', handleDragOverEdge);
+                    window.removeEventListener('touchmove', handleDragOverEdge);
+                    window.removeEventListener('dragend', handleDragEndEdge);
+                    window.removeEventListener('drop', handleDragEndEdge);
+                    window.removeEventListener('touchend', handleDragEndEdge);
+                    if (scrollInterval) clearInterval(scrollInterval);
+                };
+            }, []);
+
             const toggleTheme = () => { setIsDarkMode(!isDarkMode); localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light'); };
 
-            // INICIAR UNA HISTORIA
             const startStory = (index, storyObj = null) => {
                 const s = storyObj || stories[index];
                 setCurIdx(index);
@@ -156,13 +202,12 @@
             };
 
             const backToMenu = () => {
-                if (stories.length === 1) window.location.href = 'index.html'; // Si solo era 1, salir.
+                if (stories.length === 1) window.location.href = 'index.html'; 
                 else setCurIdx(-1);
             };
 
             const handleExit = () => { window.location.href = 'index.html'; };
 
-            // --- DRAG & DROP ---
             const handleDragStart = (e, word) => { e.dataTransfer.setData("text/plain", word); };
             const handleDragOver = (e) => e.preventDefault();
             const handleDrop = (e, index) => {
@@ -179,7 +224,6 @@
                 if (isAllCorrect) confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
             };
 
-            // --- Q/A CONTRARRELOJ ---
             const currentStory = stories[curIdx];
 
             const startChallenge = () => {
@@ -239,7 +283,6 @@
             if (loading) return <div className="h-screen flex items-center justify-center text-slate-400 bg-slate-50 dark:bg-zinc-950"><Loader2 className="animate-spin mr-2"/> Cargando...</div>;
             if (!activityData) return <div className="h-screen flex items-center justify-center text-red-400 dark:bg-zinc-950">Lectura no encontrada</div>;
 
-            // MENU LOBBY RENDER
             if (curIdx === -1) {
                 return (
                     <div className={`min-h-screen font-sans p-6 transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-800'}`}>
@@ -268,7 +311,6 @@
                 );
             }
 
-            // MODO JUEGO
             const wordBank = tokens.filter(t => t.isHidden).map(t => t.text).sort(() => Math.random() - 0.5); 
             const availableWords = wordBank.filter(word => {
                 const totalInText = tokens.filter(t => t.text === word && t.isHidden).length;
@@ -279,22 +321,23 @@
             return (
                 <div className={`min-h-screen font-sans flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-slate-900' : 'bg-slate-100'}`}>
                     
-                    <div className={`px-6 py-4 flex items-center justify-between shrink-0 sticky top-0 z-30 shadow-sm transition-colors ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200 border-b'}`}>
-                        <div className="flex items-center gap-4">
+                    {/* Header */}
+                    <div className={`px-4 md:px-6 py-4 flex items-center justify-between shrink-0 sticky top-0 z-30 shadow-sm transition-colors ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200 border-b'}`}>
+                        <div className="flex items-center gap-3 md:gap-4">
                             <button onClick={backToMenu} className={`p-2 rounded-full transition-colors ${isDarkMode ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`}><ArrowLeft size={20}/></button>
                             <div>
-                                <h1 className={`text-xl font-black leading-none ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{currentStory.title || activityData.title}</h1>
-                                <div className="flex items-center gap-2 mt-1">
+                                <h1 className={`text-lg md:text-xl font-black leading-tight line-clamp-1 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{currentStory.title || activityData.title}</h1>
+                                <div className="hidden md:flex items-center gap-2 mt-1">
                                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${isDarkMode ? 'bg-indigo-900 text-indigo-300' : 'bg-indigo-100 text-indigo-700'}`}>{activityData.genre}</span>
                                 </div>
                             </div>
                         </div>
-                        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
-                            <button onClick={() => setFontSize(s => Math.max(16, s - 2))} className={`p-1.5 rounded hover:bg-opacity-20 ${isDarkMode ? 'text-white hover:bg-white' : 'text-slate-600 hover:bg-slate-300'}`}><ZoomOut size={18}/></button>
-                            <span className={`text-xs font-bold w-10 text-center ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{fontSize}px</span>
-                            <button onClick={() => setFontSize(s => Math.min(40, s + 2))} className={`p-1.5 rounded hover:bg-opacity-20 ${isDarkMode ? 'text-white hover:bg-white' : 'text-slate-600 hover:bg-slate-300'}`}><ZoomIn size={18}/></button>
-                            <div className={`w-px h-4 mx-1 ${isDarkMode ? 'bg-slate-700' : 'bg-slate-300'}`}></div>
-                            <button onClick={toggleTheme} className={`p-1.5 rounded hover:bg-opacity-20 ${isDarkMode ? 'text-yellow-400 hover:bg-white' : 'text-slate-600 hover:bg-slate-300'}`}>{isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}</button>
+                        <div className={`flex items-center gap-1 md:gap-2 px-2 py-1.5 md:px-3 rounded-xl border shrink-0 ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
+                            <button onClick={() => setFontSize(s => Math.max(14, s - 2))} className={`p-1 md:p-1.5 rounded hover:bg-opacity-20 ${isDarkMode ? 'text-white hover:bg-white' : 'text-slate-600 hover:bg-slate-300'}`}><ZoomOut size={18}/></button>
+                            <span className={`text-xs font-bold w-6 md:w-10 text-center ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{fontSize}</span>
+                            <button onClick={() => setFontSize(s => Math.min(40, s + 2))} className={`p-1 md:p-1.5 rounded hover:bg-opacity-20 ${isDarkMode ? 'text-white hover:bg-white' : 'text-slate-600 hover:bg-slate-300'}`}><ZoomIn size={18}/></button>
+                            <div className={`hidden md:block w-px h-4 mx-1 ${isDarkMode ? 'bg-slate-700' : 'bg-slate-300'}`}></div>
+                            <button onClick={toggleTheme} className={`hidden md:block p-1.5 rounded hover:bg-opacity-20 ${isDarkMode ? 'text-yellow-400 hover:bg-white' : 'text-slate-600 hover:bg-slate-300'}`}>{isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}</button>
                         </div>
                     </div>
 
@@ -316,14 +359,12 @@
                                         </div>
                                         <div className="absolute bottom-0 left-0 h-1.5 bg-emerald-500 timer-bar" style={{ animationDuration: '12s', animationPlayState: timeLeft === 0 ? 'paused' : 'running' }}></div>
                                     </div>
-                                    
-                                    <div className="p-8 md:p-12 text-center">
-                                        <h3 className={`text-2xl md:text-3xl font-black mb-8 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>"{currentStory.questions[currentQIdx].q}"</h3>
-                                        
+                                    <div className="p-6 md:p-12 text-center">
+                                        <h3 className={`text-xl md:text-3xl font-black mb-8 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>"{currentStory.questions[currentQIdx].q}"</h3>
                                         {showParagraphHelp ? (
                                             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 text-left">
                                                 <div className="bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-400 text-xs font-black uppercase tracking-widest p-3 rounded-t-xl text-center border-b border-amber-200 dark:border-amber-900/50">¡Tiempo agotado! Encuentra la respuesta aquí:</div>
-                                                <div className={`p-6 md:p-8 rounded-b-xl border border-t-0 leading-relaxed text-lg font-medium shadow-inner ${isDarkMode ? 'bg-slate-900 border-slate-700 text-slate-300' : 'bg-slate-50 border-amber-100 text-slate-700'}`}>
+                                                <div className={`p-4 md:p-8 rounded-b-xl border border-t-0 leading-relaxed text-base md:text-lg font-medium shadow-inner ${isDarkMode ? 'bg-slate-900 border-slate-700 text-slate-300' : 'bg-slate-50 border-amber-100 text-slate-700'}`}>
                                                     {getTargetParagraphSentences().map((sentence, i) => (
                                                         <span key={i} onClick={() => handleSentenceClick(sentence)} className="inline hover:bg-amber-200 dark:hover:bg-indigo-900 cursor-pointer transition-colors rounded px-1 py-0.5 mx-0.5 border border-transparent hover:border-amber-300 dark:hover:border-indigo-700">{sentence}. </span>
                                                     ))}
@@ -331,10 +372,9 @@
                                                 <p className="text-center text-xs text-slate-400 mt-4 uppercase font-bold tracking-widest">Haz clic en la oración correcta</p>
                                             </div>
                                         ) : (
-                                            <div className="h-48 flex items-center justify-center flex-col text-slate-400">
+                                            <div className="h-32 md:h-48 flex items-center justify-center flex-col text-slate-400">
                                                 <Lightbulb size={40} className="mb-4 opacity-30"/>
                                                 <p className="font-bold">Piensa rápido...</p>
-                                                <p className="text-sm">Si no lo sabes, te mostraremos el texto en {timeLeft}s</p>
                                             </div>
                                         )}
                                     </div>
@@ -343,9 +383,12 @@
                         </div>
                     )}
 
-                    <div className={`max-w-7xl mx-auto w-full p-6 grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1 ${qaMode ? 'hidden' : ''}`}>
-                        <div className="lg:col-span-8 space-y-8">
-                            <div className={`rounded-3xl shadow-sm border p-8 md:p-12 leading-loose transition-colors ${isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-700'} font-medium text-justify`} style={{ fontSize: `${fontSize}px` }}>
+                    {/* REDISEÑO ADAPTATIVO: FOTO -> PALABRAS -> LECTURA (En Celular) */}
+                    <div className={`max-w-7xl mx-auto w-full p-4 md:p-6 flex flex-col lg:grid lg:grid-cols-12 gap-6 md:gap-8 flex-1 ${qaMode ? 'hidden' : ''}`}>
+                        
+                        {/* COLUMNA LECTURA (En compu a la Izquierda, en cel hasta Abajo) */}
+                        <div className="order-3 lg:order-1 lg:col-span-8 space-y-6 md:space-y-8">
+                            <div className={`rounded-3xl shadow-sm border p-6 md:p-12 leading-loose transition-colors ${isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-700'} font-medium text-justify`} style={{ fontSize: `${fontSize}px` }}>
                                 {tokens.map((t, i) => {
                                     if (t.isHidden) {
                                         const val = dropped[t.id];
@@ -370,52 +413,56 @@
                             </div>
 
                             {currentStory.fun_fact && (
-                                <div className={`border-l-8 rounded-r-2xl p-6 shadow-sm flex gap-5 items-start ${isDarkMode ? 'bg-amber-900/30 border-amber-600' : 'bg-amber-50 border-amber-400'}`} style={{ fontSize: `${fontSize * 0.8}px` }}>
-                                    <div className={`p-3 rounded-full shadow-sm shrink-0 ${isDarkMode ? 'bg-slate-800 text-amber-400' : 'bg-white text-amber-500'}`}><Lightbulb size={28} strokeWidth={2.5}/></div>
-                                    <div><h3 className={`font-black text-sm uppercase tracking-widest mb-2 ${isDarkMode ? 'text-amber-400' : 'text-amber-800'}`}>Did You Know?</h3><p className={`font-medium leading-relaxed ${isDarkMode ? 'text-amber-100' : 'text-amber-900'}`}>{currentStory.fun_fact}</p></div>
+                                <div className={`border-l-8 rounded-r-2xl p-4 md:p-6 shadow-sm flex gap-4 md:gap-5 items-start ${isDarkMode ? 'bg-amber-900/30 border-amber-600' : 'bg-amber-50 border-amber-400'}`} style={{ fontSize: `${fontSize * 0.8}px` }}>
+                                    <div className={`p-2 md:p-3 rounded-full shadow-sm shrink-0 ${isDarkMode ? 'bg-slate-800 text-amber-400' : 'bg-white text-amber-500'}`}><Lightbulb size={24} strokeWidth={2.5}/></div>
+                                    <div><h3 className={`font-black text-xs md:text-sm uppercase tracking-widest mb-1 md:mb-2 ${isDarkMode ? 'text-amber-400' : 'text-amber-800'}`}>Did You Know?</h3><p className={`font-medium leading-relaxed ${isDarkMode ? 'text-amber-100' : 'text-amber-900'}`}>{currentStory.fun_fact}</p></div>
                                 </div>
                             )}
                         </div>
 
-                        <div className="lg:col-span-4 relative">
-                            <div className="sticky top-24 space-y-6">
-                                <div className={`rounded-2xl shadow-xl border overflow-hidden ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
-                                    <div className="bg-slate-900 p-4 flex items-center justify-between text-white">
-                                        <div className="flex items-center gap-2 font-bold uppercase text-xs tracking-widest"><Puzzle size={16} className="text-emerald-400"/> Word Bank</div>
+                        {/* COLUMNA HERRAMIENTAS (En compu a la Derecha, en cel Arriba) */}
+                        <div className="order-1 lg:order-2 lg:col-span-4 relative flex flex-col lg:block gap-6">
+                            <div className="sticky top-24 flex flex-col gap-6">
+                                
+                                {/* IMAGEN (En celular va primero, en desktop va abajo del Word Bank) */}
+                                {currentStory.image_url && (
+                                    <div className={`order-1 lg:order-2 rounded-2xl overflow-hidden shadow-md border-4 ${isDarkMode ? 'border-slate-700' : 'border-white'}`}>
+                                        <img src={currentStory.image_url} alt="Topic" className="w-full max-h-64 object-cover"/>
+                                    </div>
+                                )}
+
+                                {/* WORD BANK */}
+                                <div className={`order-2 lg:order-1 rounded-2xl shadow-xl border overflow-hidden flex flex-col ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
+                                    <div className="bg-slate-900 p-3 md:p-4 flex items-center justify-between text-white shrink-0">
+                                        <div className="flex items-center gap-2 font-bold uppercase text-[10px] md:text-xs tracking-widest"><Puzzle size={16} className="text-emerald-400"/> Word Bank</div>
                                         <span className="bg-slate-800 px-2 py-1 rounded text-[10px] font-bold text-slate-300">{availableWords.length} left</span>
                                     </div>
                                     
-                                    <div className={`p-6 min-h-[150px] ${isDarkMode ? 'bg-slate-800/50' : 'bg-slate-50'}`} style={{ fontSize: `${Math.max(14, fontSize * 0.8)}px` }}>
+                                    <div className={`p-4 md:p-6 min-h-[120px] md:min-h-[150px] flex-1 ${isDarkMode ? 'bg-slate-800/50' : 'bg-slate-50'}`} style={{ fontSize: `${Math.max(14, fontSize * 0.8)}px` }}>
                                         {availableWords.length === 0 && !result ? (
-                                            <div className="h-full flex flex-col items-center justify-center text-slate-400 py-8"><CheckCircle2 size={32} className="mb-2 opacity-50"/><p className="text-sm font-bold">¡Todo listo!</p><p className="text-xs">Revisa y comprueba</p></div>
+                                            <div className="h-full flex flex-col items-center justify-center text-slate-400 py-4 md:py-8"><CheckCircle2 size={32} className="mb-2 opacity-50"/><p className="text-sm font-bold">¡Todo listo!</p></div>
                                         ) : (
                                             <div className="flex flex-wrap gap-2">
                                                 {availableWords.map((w, i) => (
-                                                    <div key={i} draggable={!result} onDragStart={(e) => handleDragStart(e, w)} className={`border border-b-4 px-3 py-2 rounded-lg font-bold shadow-sm cursor-grab active:cursor-grabbing transition-all ${isDarkMode ? 'bg-slate-700 border-slate-600 border-b-slate-900 text-slate-200 hover:bg-indigo-900' : 'bg-white border-slate-300 border-b-slate-300 text-slate-700 hover:bg-indigo-50'}`}>{w}</div>
+                                                    <div key={i} draggable={!result} onDragStart={(e) => handleDragStart(e, w)} className={`border border-b-4 px-3 py-1.5 md:py-2 rounded-lg font-bold shadow-sm cursor-grab active:cursor-grabbing transition-all ${isDarkMode ? 'bg-slate-700 border-slate-600 border-b-slate-900 text-slate-200 hover:bg-indigo-900' : 'bg-white border-slate-300 border-b-slate-300 text-slate-700 hover:bg-indigo-50'}`}>{w}</div>
                                                 ))}
                                             </div>
                                         )}
                                     </div>
 
-                                    <div className={`p-4 border-t space-y-3 ${isDarkMode ? 'border-slate-700 bg-slate-800' : 'border-slate-200 bg-white'}`}>
+                                    <div className={`p-4 border-t space-y-3 shrink-0 ${isDarkMode ? 'border-slate-700 bg-slate-800' : 'border-slate-200 bg-white'}`}>
                                         {result === 'correct' ? (
                                             <>
-                                                <button onClick={() => startStory(curIdx)} className="w-full bg-green-500 text-white py-3 rounded-xl font-black shadow-lg hover:bg-green-600 hover:-translate-y-1 transition-transform flex items-center justify-center gap-2"><RotateCcw size={20}/> Leer de Nuevo</button>
+                                                <button onClick={() => startStory(curIdx)} className="w-full bg-green-500 text-white py-3 rounded-xl font-black shadow-lg hover:bg-green-600 hover:-translate-y-1 transition-transform flex items-center justify-center gap-2 text-sm md:text-base"><RotateCcw size={20}/> Jugar de Nuevo</button>
                                                 {currentStory.questions && currentStory.questions.length > 0 && (
-                                                    <button onClick={startChallenge} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-black shadow-xl shadow-indigo-500/40 hover:bg-indigo-700 hover:-translate-y-1 transition-transform flex items-center justify-center gap-2 animate-in fade-in zoom-in duration-500"><Swords size={20}/> CHALLENGE: Q&A <ArrowRight size={18}/></button>
+                                                    <button onClick={startChallenge} className="w-full bg-indigo-600 text-white py-3 md:py-4 rounded-xl font-black shadow-xl shadow-indigo-500/40 hover:bg-indigo-700 hover:-translate-y-1 transition-transform flex items-center justify-center gap-2 animate-in fade-in zoom-in duration-500 text-sm md:text-base"><Swords size={20}/> CHALLENGE Q&A <ArrowRight size={18}/></button>
                                                 )}
                                             </>
                                         ) : (
-                                            <button onClick={checkAnswers} disabled={availableWords.length > 0} className="w-full bg-slate-900 text-white py-3 rounded-xl font-black shadow-lg hover:bg-indigo-600 hover:-translate-y-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:bg-slate-900">Comprobar Respuestas</button>
+                                            <button onClick={checkAnswers} disabled={availableWords.length > 0} className="w-full bg-slate-900 text-white py-3 rounded-xl font-black shadow-lg hover:bg-indigo-600 hover:-translate-y-1 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:bg-slate-900 text-sm md:text-base">Comprobar</button>
                                         )}
                                     </div>
                                 </div>
-
-                                {currentStory.image_url && (
-                                    <div className={`rounded-2xl overflow-hidden shadow-md border-4 ${isDarkMode ? 'border-slate-700' : 'border-white'}`}>
-                                        <img src={currentStory.image_url} alt="Topic" className="w-full h-auto object-cover"/>
-                                    </div>
-                                )}
                             </div>
                         </div>
                     </div>
