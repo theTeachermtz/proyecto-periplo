@@ -8,7 +8,11 @@
     
     <link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>tailwind.config = { darkMode: 'class' }; document.documentElement.classList.add('dark');</script>
+    
+    <script>
+        tailwind.config = { darkMode: 'class' }; 
+        document.documentElement.classList.add('dark');
+    </script>
     
     <script type="importmap">
     {
@@ -128,21 +132,22 @@
             const [selectedRight, setSelectedRight] = useState(null);
             const [bitmojiState, setBitmojiState] = useState('idle');
             
-            // Estado visual de penalización
             const [penaltyFlash, setPenaltyFlash] = useState(false);
-
             const [isDarkMode, setIsDarkMode] = useState(true);
 
-            const poolRef = useRef([]);
-            const poolIndexRef = useRef(0);
+            // NUEVAS REFERENCIAS PARA "SHIFTED QUEUES" (Colas Desfasadas)
+            const leftQueueRef = useRef([]);
+            const rightQueueRef = useRef([]);
+            const queueIndexRef = useRef(0);
+            
             const scoreRef = useRef(0);
 
-            // FÓRMULA DE PROGRESIÓN (15 pares base, +5 por estrella, +5 por ronda)
             const getPairsToWin = (roundIdx) => 15 + (studentStats.stars * 5) + (roundIdx * 5);
 
             useEffect(() => {
                 const savedTheme = localStorage.getItem('themePreference');
                 if (savedTheme === 'light') setIsDarkMode(false);
+                else setIsDarkMode(true);
 
                 const init = async () => {
                     const params = new URLSearchParams(window.location.search);
@@ -221,7 +226,6 @@
             const triggerCountdown = (callback) => {
                 setGameState('countdown');
                 setCountdownVal(3);
-                
                 setTimeout(() => setCountdownVal(2), 1000);
                 setTimeout(() => setCountdownVal(1), 2000);
                 setTimeout(() => setCountdownVal('GO!'), 3000);
@@ -231,15 +235,37 @@
                 }, 4000);
             };
 
+            // INICIO DE RONDA Y CREACIÓN DE COLAS DESFASADAS (Shifted Queues)
             const startRound = (roundIdx = currentRoundIdx) => {
-                const shuffledPool = shuffleArray(wordPool);
-                poolRef.current = shuffledPool;
-                const initialWords = shuffledPool.slice(0, 5);
-                poolIndexRef.current = 5; 
-                const rightShuffled = shuffleArray([...initialWords]);
+                // 1. Creamos una alberca masiva de palabras mezcladas para que no se acaben.
+                let massivePool = [];
+                while(massivePool.length < 100) {
+                    massivePool = massivePool.concat(shuffleArray(wordPool));
+                }
 
-                setLeftCol(initialWords.map(w => ({ id: w.id, text: w.es, status: 'idle', animKey: Date.now() + Math.random() })));
-                setRightCol(rightShuffled.map(w => ({ id: w.id, text: w.en, status: 'idle', animKey: Date.now() + Math.random() })));
+                // 2. Extraemos los primeros 5 para poblar el tablero inicial.
+                const initial = massivePool.slice(0, 5);
+                const rest = massivePool.slice(5);
+
+                // 3. LA MAGIA: Creamos la cola desfasada. La Izquierda va en orden (A,B,C,D...).
+                const leftQ = [...rest];
+                const rightQ = [];
+                
+                // 4. La Derecha invierte en bloques de 3 (B,C,A). Así las parejas llegan a destiempo.
+                for (let i = 0; i < rest.length; i += 3) {
+                    const chunk = rest.slice(i, i + 3);
+                    if (chunk.length === 3) rightQ.push(chunk[1], chunk[2], chunk[0]);
+                    else if (chunk.length === 2) rightQ.push(chunk[1], chunk[0]);
+                    else rightQ.push(chunk[0]);
+                }
+
+                leftQueueRef.current = leftQ;
+                rightQueueRef.current = rightQ;
+                queueIndexRef.current = 0;
+
+                // 5. Poblamos el tablero inicial (aquí SÍ hay parejas para empezar a jugar)
+                setLeftCol(initial.map(w => ({ id: w.id, text: w.es, status: 'idle', animKey: Date.now() + Math.random() })));
+                setRightCol(shuffleArray([...initial]).map(w => ({ id: w.id, text: w.en, status: 'idle', animKey: Date.now() + Math.random() })));
                 
                 setScore(0);
                 scoreRef.current = 0;
@@ -256,9 +282,7 @@
 
             const resumeGame = () => {
                 setIsPaused(false);
-                triggerCountdown(() => {
-                    setGameState('playing');
-                });
+                triggerCountdown(() => { setGameState('playing'); });
             };
 
             const resetGame = () => { setCurrentRoundIdx(0); setGameState('menu'); setIsPaused(false); };
@@ -288,14 +312,13 @@
                 if (gameState === 'playing' && score >= getPairsToWin(currentRoundIdx)) {
                     if (currentRoundIdx === 4) {
                         setGameState('game_won');
-                        saveVictoryToFirebase(true); // true = Ganó la estrella
+                        saveVictoryToFirebase(true);
                     } else {
                         setGameState('round_won');
                     }
                 }
             }, [score, gameState, currentRoundIdx]);
 
-            // Guardado Flexible (Sirve para victoria total o para guardar a medio camino)
             const saveVictoryToFirebase = async (isVictory = false) => {
                 if (!isStudentMode || !studentName) return;
                 try {
@@ -304,30 +327,16 @@
                     const totalTime = (studentStats.time || 0) + currentRoundTimeTaken;
                     const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', gameData.id, 'leaderboard', cleanName);
                     
-                    const payload = {
-                        name: studentName,
-                        stars: newStars,
-                        attempts: studentStats.attempts || 1,
-                        time: totalTime,
-                        lastUpdated: serverTimestamp()
-                    };
-                    
+                    const payload = { name: studentName, stars: newStars, attempts: studentStats.attempts || 1, time: totalTime, lastUpdated: serverTimestamp() };
                     await setDoc(docRef, payload, { merge: true });
                     setStudentStats(payload); 
                 } catch (e) { console.error("Error guardando progreso", e); }
             };
 
             const handleSaveAndShowRanking = async () => {
-                await saveVictoryToFirebase(false); // Falso = No le des estrella, solo guarda tiempo e intentos
+                await saveVictoryToFirebase(false); 
                 await fetchLeaderboard();
             };
-
-            const getNextWord = useCallback(() => {
-                const pool = poolRef.current;
-                const word = pool[poolIndexRef.current % pool.length]; 
-                poolIndexRef.current += 1;
-                return word;
-            }, []);
 
             const processMatch = (leftIndex, rightIndex) => {
                 const leftItem = leftCol[leftIndex];
@@ -345,12 +354,15 @@
 
                     setTimeout(() => {
                         if (scoreRef.current <= getPairsToWin(currentRoundIdx)) {
-                            const newWord = getNextWord();
+                            // Extraer la palabra correspondiente de las colas desfasadas
+                            const newLeftWord = leftQueueRef.current[queueIndexRef.current];
+                            const newRightWord = rightQueueRef.current[queueIndexRef.current];
+                            queueIndexRef.current += 1;
+
                             const animId = Date.now() + Math.random();
                             
-                            // Reemplazo limpio directo. (Eliminado el "swap" raro de Alberto)
-                            setLeftCol(prev => { const next = [...prev]; next[leftIndex] = { id: newWord.id, text: newWord.es, status: 'entering', animKey: animId }; return next; });
-                            setRightCol(prev => { const next = [...prev]; next[rightIndex] = { id: newWord.id, text: newWord.en, status: 'entering', animKey: animId + 1 }; return next; });
+                            setLeftCol(prev => { const next = [...prev]; next[leftIndex] = { id: newLeftWord.id, text: newLeftWord.es, status: 'entering', animKey: animId }; return next; });
+                            setRightCol(prev => { const next = [...prev]; next[rightIndex] = { id: newRightWord.id, text: newRightWord.en, status: 'entering', animKey: animId + 1 }; return next; });
 
                             setTimeout(() => {
                                 setLeftCol(p => p.map((item, i) => i === leftIndex ? { ...item, status: 'idle' } : item));
@@ -360,7 +372,6 @@
                         }
                     }, 250);
                 } else {
-                    // ANTI-HACKER PENALTY: Restar 1.5s
                     setTimeLeft(prev => prev > 1.5 ? prev - 1.5 : 0.1);
                     setPenaltyFlash(true);
                     setTimeout(() => setPenaltyFlash(false), 300);
@@ -395,7 +406,6 @@
                 }
             };
 
-            // FIX SCOREBOARD: Seguro contra nulos
             const getSortedLeaderboard = () => {
                 return [...leaderboardData].sort((a, b) => {
                     const aStars = a.stars || 0;
@@ -510,7 +520,7 @@
                                     <Pause size={20}/>
                                 </button>
                             )}
-                            <button onClick={toggleTheme} className="p-2 rounded-full transition-colors hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-600 dark:text-amber-400">
+                            <button onClick={toggleTheme} className="p-2 rounded-full transition-colors hover:bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-amber-400">
                                 {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
                             </button>
                         </div>
