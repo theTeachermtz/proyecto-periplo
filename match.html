@@ -51,8 +51,8 @@
         import React, { useState, useEffect, useRef, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
-        import { ArrowLeft, Loader2, Sun, Moon, Pause, Play, RotateCcw, LogOut, Share2, Check, Star, Trophy, ChevronLeft, ChevronRight, User } from 'lucide-react';
+        import { getFirestore, doc, getDoc, setDoc, collection, getDocs, serverTimestamp } from 'firebase/firestore';
+        import { ArrowLeft, Loader2, Sun, Moon, Pause, Play, RotateCcw, LogOut, Share2, Check, Star, Trophy, ChevronLeft, ChevronRight, User, Save } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -105,30 +105,31 @@
             const [gameData, setGameData] = useState(null);
             const [wordPool, setWordPool] = useState([]);
             
-            const [gameState, setGameState] = useState('login'); // login, menu, countdown, playing, round_won, game_won, game_over
+            const [gameState, setGameState] = useState('login'); 
             const [currentRoundIdx, setCurrentRoundIdx] = useState(0);
             const [timeLeft, setTimeLeft] = useState(0);
             const [score, setScore] = useState(0);
             const [isPaused, setIsPaused] = useState(false);
             const [countdownVal, setCountdownVal] = useState(null);
 
-            // MODO ESTUDIANTE Y SISTEMA DE ESTRELLAS
             const [isStudentMode, setIsStudentMode] = useState(false);
             const [studentName, setStudentName] = useState('');
             const [studentStats, setStudentStats] = useState({ stars: 0, attempts: 1, time: 0 });
             const [currentRoundTimeTaken, setCurrentRoundTimeTaken] = useState(0);
             const [copied, setCopied] = useState(false);
 
-            // SCOREBOARD
             const [showScoreboard, setShowScoreboard] = useState(false);
             const [leaderboardData, setLeaderboardData] = useState([]);
-            const [scoreTab, setScoreTab] = useState(0); // 0: Rapidez, 1: Intentos, 2: True Best
+            const [scoreTab, setScoreTab] = useState(0); 
 
             const [leftCol, setLeftCol] = useState([]);
             const [rightCol, setRightCol] = useState([]);
             const [selectedLeft, setSelectedLeft] = useState(null);
             const [selectedRight, setSelectedRight] = useState(null);
             const [bitmojiState, setBitmojiState] = useState('idle');
+            
+            // Estado visual de penalización
+            const [penaltyFlash, setPenaltyFlash] = useState(false);
 
             const [isDarkMode, setIsDarkMode] = useState(true);
 
@@ -158,13 +159,12 @@
                         setWordPool(data.content.wordPool); 
                     }
 
-                    // Auto-Login si ya había guardado nombre en este dispositivo
                     const savedName = localStorage.getItem('periplo_student_name');
                     if (savedName && mode === 'student') {
                         setStudentName(savedName);
                         await fetchStudentData(savedName, id);
                     } else if (!mode) {
-                        setGameState('menu'); // El profe entra directo al menú
+                        setGameState('menu'); 
                     }
 
                     setLoading(false);
@@ -182,7 +182,7 @@
                     if (snap.exists()) {
                         setStudentStats(snap.data());
                     } else {
-                        setStudentStats({ stars: 0, attempts: 1, time: 0 }); // Jugador nuevo
+                        setStudentStats({ stars: 0, attempts: 1, time: 0 }); 
                     }
                     setGameState('menu');
                 } catch (e) { console.error(e); setGameState('menu'); }
@@ -218,7 +218,6 @@
                 setTimeout(() => setCopied(false), 2000);
             };
 
-            // --- LÓGICA DE FREEZE TIME (COUNTDOWN) ---
             const triggerCountdown = (callback) => {
                 setGameState('countdown');
                 setCountdownVal(3);
@@ -249,7 +248,6 @@
                 setIsPaused(false);
                 setCurrentRoundTimeTaken(0);
 
-                // Disparamos el countdown antes de jugar
                 triggerCountdown(() => {
                     setTimeLeft(ROUNDS_CONFIG[roundIdx].timeSeconds);
                     setGameState('playing');
@@ -265,7 +263,6 @@
 
             const resetGame = () => { setCurrentRoundIdx(0); setGameState('menu'); setIsPaused(false); };
 
-            // --- CRONÓMETRO ---
             useEffect(() => {
                 let timer;
                 if (gameState === 'playing' && !isPaused && timeLeft > 0) {
@@ -274,8 +271,7 @@
                             if (prev <= 0.1) {
                                 clearInterval(timer);
                                 if (scoreRef.current < getPairsToWin(currentRoundIdx)) {
-                                    // Game Over: Incrementar intentos
-                                    setStudentStats(s => ({ ...s, attempts: s.attempts + 1 }));
+                                    setStudentStats(s => ({ ...s, attempts: (s.attempts || 0) + 1 }));
                                     setGameState('game_over');
                                 }
                                 return 0;
@@ -288,37 +284,42 @@
                 return () => clearInterval(timer);
             }, [gameState, isPaused, currentRoundIdx]);
 
-            // --- VICTORIA DE RONDA / JUEGO ---
             useEffect(() => {
                 if (gameState === 'playing' && score >= getPairsToWin(currentRoundIdx)) {
                     if (currentRoundIdx === 4) {
                         setGameState('game_won');
-                        saveVictoryToFirebase();
+                        saveVictoryToFirebase(true); // true = Ganó la estrella
                     } else {
                         setGameState('round_won');
                     }
                 }
             }, [score, gameState, currentRoundIdx]);
 
-            const saveVictoryToFirebase = async () => {
+            // Guardado Flexible (Sirve para victoria total o para guardar a medio camino)
+            const saveVictoryToFirebase = async (isVictory = false) => {
                 if (!isStudentMode || !studentName) return;
                 try {
                     const cleanName = studentName.trim().toLowerCase();
-                    const newStars = studentStats.stars + 1;
-                    const totalTime = studentStats.time + currentRoundTimeTaken;
+                    const newStars = isVictory ? (studentStats.stars || 0) + 1 : (studentStats.stars || 0);
+                    const totalTime = (studentStats.time || 0) + currentRoundTimeTaken;
                     const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', gameData.id, 'leaderboard', cleanName);
                     
                     const payload = {
-                        name: studentName, // Guardar con mayúsculas originales para mostrar
+                        name: studentName,
                         stars: newStars,
-                        attempts: studentStats.attempts, // Solo se resetean intentos por nueva estrella si quieres, pero acumulativo es mejor
+                        attempts: studentStats.attempts || 1,
                         time: totalTime,
                         lastUpdated: serverTimestamp()
                     };
                     
                     await setDoc(docRef, payload, { merge: true });
-                    setStudentStats(payload); // Actualizar UI
+                    setStudentStats(payload); 
                 } catch (e) { console.error("Error guardando progreso", e); }
+            };
+
+            const handleSaveAndShowRanking = async () => {
+                await saveVictoryToFirebase(false); // Falso = No le des estrella, solo guarda tiempo e intentos
+                await fetchLeaderboard();
             };
 
             const getNextWord = useCallback(() => {
@@ -347,32 +348,23 @@
                             const newWord = getNextWord();
                             const animId = Date.now() + Math.random();
                             
+                            // Reemplazo limpio directo. (Eliminado el "swap" raro de Alberto)
                             setLeftCol(prev => { const next = [...prev]; next[leftIndex] = { id: newWord.id, text: newWord.es, status: 'entering', animKey: animId }; return next; });
-                            
-                            // EL FIX ANTI-ALBERTO: Intercambio Dinámico
-                            setRightCol(prev => { 
-                                const next = [...prev]; 
-                                next[rightIndex] = { id: newWord.id, text: newWord.en, status: 'entering', animKey: animId + 1 }; 
-                                
-                                // Buscar otro hueco válido y mezclarlo para romper el spam
-                                const validIndices = [0, 1, 2, 3, 4].filter(i => i !== rightIndex && (next[i].status === 'idle' || next[i].status === 'entering'));
-                                if (validIndices.length > 0) {
-                                    const swapIdx = validIndices[Math.floor(Math.random() * validIndices.length)];
-                                    const temp = next[rightIndex];
-                                    next[rightIndex] = next[swapIdx];
-                                    next[swapIdx] = temp;
-                                }
-                                return next; 
-                            });
+                            setRightCol(prev => { const next = [...prev]; next[rightIndex] = { id: newWord.id, text: newWord.en, status: 'entering', animKey: animId + 1 }; return next; });
 
                             setTimeout(() => {
                                 setLeftCol(p => p.map((item, i) => i === leftIndex ? { ...item, status: 'idle' } : item));
-                                setRightCol(p => p.map((item, i) => item.status === 'entering' ? { ...item, status: 'idle' } : item));
+                                setRightCol(p => p.map((item, i) => i === rightIndex ? { ...item, status: 'idle' } : item));
                                 setBitmojiState(prev => prev === 'happy' ? 'idle' : prev);
                             }, 250);
                         }
                     }, 250);
                 } else {
+                    // ANTI-HACKER PENALTY: Restar 1.5s
+                    setTimeLeft(prev => prev > 1.5 ? prev - 1.5 : 0.1);
+                    setPenaltyFlash(true);
+                    setTimeout(() => setPenaltyFlash(false), 300);
+
                     setLeftCol(prev => prev.map((item, i) => i === leftIndex ? { ...item, status: 'wrong' } : item));
                     setRightCol(prev => prev.map((item, i) => i === rightIndex ? { ...item, status: 'wrong' } : item));
                     setBitmojiState('wrong');
@@ -403,27 +395,31 @@
                 }
             };
 
+            // FIX SCOREBOARD: Seguro contra nulos
             const getSortedLeaderboard = () => {
-                // Siempre primero por mayor cantidad de estrellas
-                const sorted = [...leaderboardData].sort((a, b) => {
-                    if (b.stars !== a.stars) return b.stars - a.stars;
+                return [...leaderboardData].sort((a, b) => {
+                    const aStars = a.stars || 0;
+                    const bStars = b.stars || 0;
+                    if (bStars !== aStars) return bStars - aStars;
                     
-                    if (scoreTab === 0) return a.time - b.time; // Más Rápidos (Menor tiempo)
-                    if (scoreTab === 1) return a.attempts - b.attempts; // Menos Intentos
+                    const aTime = a.time || 0;
+                    const bTime = b.time || 0;
+                    const aAttempts = a.attempts || 1;
+                    const bAttempts = b.attempts || 1;
+
+                    if (scoreTab === 0) return aTime - bTime; 
+                    if (scoreTab === 1) return aAttempts - bAttempts; 
                     
-                    // True Best = (Time * Attempts). Menor es mejor
-                    return (a.time * a.attempts) - (b.time * b.attempts);
+                    return (aTime * aAttempts) - (bTime * bAttempts);
                 });
-                return sorted;
             };
 
             if (loading) return <div className="h-[100dvh] flex items-center justify-center text-slate-400 bg-slate-50 dark:bg-zinc-950"><Loader2 className="animate-spin mr-2"/> Cargando...</div>;
             if (!gameData || wordPool.length < 5) return <div className="h-[100dvh] flex items-center justify-center text-red-400 bg-slate-50 dark:bg-zinc-950">Error: No hay suficientes palabras.</div>;
 
             return (
-                <div className="h-[100dvh] flex flex-col items-center relative overflow-hidden">
+                <div className={`h-[100dvh] flex flex-col items-center relative overflow-hidden transition-colors ${penaltyFlash ? 'bg-red-900/50' : ''}`}>
                     
-                    {/* OVERLAY DE COUNTDOWN (FREEZE TIME) */}
                     {gameState === 'countdown' && (
                         <div className="absolute inset-0 bg-slate-900/80 dark:bg-black/80 z-50 flex items-center justify-center backdrop-blur-md">
                             <div key={countdownVal} className="text-8xl md:text-9xl font-black text-white animate-pop-pulse drop-shadow-[0_0_30px_rgba(255,255,255,0.5)]">
@@ -432,7 +428,6 @@
                         </div>
                     )}
 
-                    {/* OVERLAY DE PAUSA */}
                     {isPaused && gameState !== 'countdown' && (
                         <div className="absolute inset-0 bg-slate-900/90 dark:bg-black/95 z-50 flex flex-col items-center justify-center backdrop-blur-md animate-in">
                             <h2 className="text-4xl md:text-5xl font-black text-white mb-10 tracking-widest uppercase">PAUSA</h2>
@@ -448,7 +443,6 @@
                         </div>
                     )}
 
-                    {/* MODAL DE SCOREBOARD */}
                     {showScoreboard && (
                         <div className="absolute inset-0 bg-slate-900/90 dark:bg-black/95 z-50 flex items-center justify-center p-4 backdrop-blur-md animate-in">
                             <div className="bg-white dark:bg-zinc-900 w-full max-w-lg rounded-[2rem] overflow-hidden shadow-2xl flex flex-col max-h-[80vh]">
@@ -472,13 +466,13 @@
                                                     <div>
                                                         <div className="font-bold text-slate-800 dark:text-zinc-100">{user.name}</div>
                                                         <div className="flex gap-0.5 mt-1">
-                                                            {Array.from({length: Math.max(1, user.stars)}).map((_, i) => <Star key={i} size={12} className={user.stars > 0 ? 'fill-yellow-400 text-yellow-400' : 'text-slate-300 dark:text-zinc-600'} />)}
+                                                            {Array.from({length: Math.max(1, user.stars || 0)}).map((_, i) => <Star key={i} size={12} className={(user.stars || 0) > 0 ? 'fill-yellow-400 text-yellow-400' : 'text-slate-300 dark:text-zinc-600'} />)}
                                                         </div>
                                                     </div>
                                                 </div>
                                                 <div className="text-right">
-                                                    <div className="text-xs font-bold text-slate-500 dark:text-zinc-400">⏱️ {user.time.toFixed(1)}s</div>
-                                                    <div className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase">🎯 {user.attempts} intentos</div>
+                                                    <div className="text-xs font-bold text-slate-500 dark:text-zinc-400">⏱️ {(user.time || 0).toFixed(1)}s</div>
+                                                    <div className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase">🎯 {user.attempts || 1} intentos</div>
                                                 </div>
                                             </div>
                                         ))
@@ -488,7 +482,6 @@
                         </div>
                     )}
 
-                    {/* HEADER PRINCIPAL */}
                     <div className="w-full px-4 md:px-6 py-4 flex items-center justify-between shrink-0 sticky top-0 z-30 shadow-sm transition-colors bg-white dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
                         <div className="flex items-center gap-3 md:gap-4">
                             {!isStudentMode && <button onClick={handleExit} className="p-2 rounded-full transition-colors hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400"><ArrowLeft size={20}/></button>}
@@ -525,7 +518,6 @@
 
                     <div className="w-full max-w-4xl mx-auto flex-1 flex flex-col px-4 py-6 md:py-10 relative">
                         
-                        {/* PANTALLA LOGIN ESTUDIANTE */}
                         {gameState === 'login' && (
                             <div className="flex-1 flex flex-col items-center justify-center text-center animate-pop-in max-w-sm mx-auto w-full">
                                 <div className="mb-8 p-8 bg-white dark:bg-zinc-900 rounded-[2rem] shadow-xl border border-slate-200 dark:border-zinc-800 w-full">
@@ -540,7 +532,6 @@
                             </div>
                         )}
 
-                        {/* PANTALLA MENU PRINCIPAL */}
                         {gameState === 'menu' && (
                             <div className="flex-1 flex flex-col items-center justify-center text-center animate-pop-in max-w-md mx-auto w-full">
                                 <div className="mb-6 p-6 bg-white dark:bg-zinc-900 rounded-[2.5rem] shadow-xl border border-slate-200 dark:border-zinc-800 w-full relative overflow-hidden">
@@ -548,7 +539,6 @@
                                     <h1 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-indigo-500 mb-2 mt-2">Match Madness</h1>
                                     <p className="text-slate-500 dark:text-zinc-400 font-medium text-sm">Empareja palabras a la velocidad de la luz.</p>
                                     
-                                    {/* INFO ESTUDIANTE */}
                                     {isStudentMode && (
                                         <div className="mt-8 pt-6 border-t border-slate-100 dark:border-zinc-800 flex justify-between items-center">
                                             <div className="text-left">
@@ -556,15 +546,15 @@
                                                 <p className="font-bold text-slate-800 dark:text-zinc-200">{studentName}</p>
                                             </div>
                                             <div className="flex items-center gap-1 bg-yellow-50 dark:bg-yellow-900/20 px-3 py-1.5 rounded-lg border border-yellow-200 dark:border-yellow-800/50">
-                                                <Star size={16} className="fill-yellow-500 text-yellow-500"/>
-                                                <span className="font-black text-yellow-700 dark:text-yellow-500">{studentStats.stars}</span>
+                                                <Star size={16} className={(studentStats.stars || 0) > 0 ? "fill-yellow-500 text-yellow-500" : "text-yellow-700"}/>
+                                                <span className="font-black text-yellow-700 dark:text-yellow-500">{studentStats.stars || 0}</span>
                                             </div>
                                         </div>
                                     )}
                                 </div>
                                 <div className="space-y-4 w-full">
                                     <button className="w-full btn-juicy bg-green-500 text-white border-2 border-b-[6px] border-green-700 rounded-2xl py-4 text-xl font-black uppercase tracking-widest" onClick={() => startRound(0)}>
-                                        ¡Jugar Estrella {studentStats.stars + 1}!
+                                        ¡Jugar Estrella {(studentStats.stars || 0) + 1}!
                                     </button>
                                     <button className="w-full btn-juicy bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 border-2 border-b-[6px] border-slate-300 dark:border-zinc-700 rounded-2xl py-4 text-lg font-bold uppercase tracking-widest flex items-center justify-center gap-2" onClick={fetchLeaderboard}>
                                         <Trophy size={20}/> Ver Scoreboard
@@ -573,7 +563,6 @@
                             </div>
                         )}
 
-                        {/* PANTALLA JUEGO */}
                         {(gameState === 'playing' || gameState === 'countdown') && (
                             <div className="flex-1 flex flex-col w-full relative">
                                 <div className="mb-6 max-w-xl mx-auto w-full">
@@ -602,7 +591,6 @@
                             </div>
                         )}
 
-                        {/* PANTALLAS DE VICTORIA / DERROTA */}
                         {(gameState === 'round_won' || gameState === 'game_won' || gameState === 'game_over') && (
                             <div className="flex-1 flex flex-col items-center justify-center text-center animate-pop-in z-10 max-w-md mx-auto w-full">
                                 <div className={`p-8 rounded-[2rem] w-full border-2 border-b-[8px] mb-8 shadow-2xl ${gameState === 'game_over' ? 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800' : gameState === 'game_won' ? 'bg-yellow-400 dark:bg-yellow-500 border-yellow-600 dark:border-yellow-700' : 'bg-green-400 dark:bg-green-500 border-green-600 dark:border-green-700'}`}>
@@ -612,8 +600,23 @@
                                 </div>
                                 <div className="w-full space-y-4">
                                     {gameState === 'round_won' && (<button className="w-full btn-juicy bg-sky-500 text-white border-2 border-b-[6px] border-sky-700 rounded-2xl py-4 text-xl font-black uppercase tracking-widest" onClick={() => startRound(currentRoundIdx + 1)}>Siguiente Ronda</button>)}
-                                    {gameState === 'game_over' && (<button className="w-full btn-juicy bg-sky-500 text-white border-2 border-b-[6px] border-sky-700 rounded-2xl py-4 text-xl font-black uppercase tracking-widest flex items-center justify-center gap-2" onClick={() => startRound(currentRoundIdx)}><RotateCcw size={24}/> Reintentar Ronda</button>)}
-                                    {(gameState === 'game_won') && (<button className="w-full btn-juicy bg-sky-500 text-white border-2 border-b-[6px] border-sky-700 rounded-2xl py-4 text-xl font-black uppercase tracking-widest" onClick={resetGame}>Volver al Menú</button>)}
+                                    
+                                    {gameState === 'game_over' && (
+                                        <>
+                                            <button className="w-full btn-juicy bg-sky-500 text-white border-2 border-b-[6px] border-sky-700 rounded-2xl py-4 text-xl font-black uppercase tracking-widest flex items-center justify-center gap-2" onClick={() => startRound(currentRoundIdx)}><RotateCcw size={24}/> Reintentar Ronda</button>
+                                            {isStudentMode && (
+                                                <button className="w-full btn-juicy bg-slate-800 text-white border-2 border-b-[6px] border-slate-900 rounded-2xl py-4 text-sm font-bold uppercase tracking-widest flex items-center justify-center gap-2 mt-4" onClick={handleSaveAndShowRanking}><Save size={18}/> Guardar Progreso y Ver Ranking</button>
+                                            )}
+                                        </>
+                                    )}
+
+                                    {gameState === 'game_won' && (<button className="w-full btn-juicy bg-sky-500 text-white border-2 border-b-[6px] border-sky-700 rounded-2xl py-4 text-xl font-black uppercase tracking-widest" onClick={resetGame}>Volver al Menú</button>)}
+                                    
+                                    {gameState === 'game_over' && (
+                                        <button className="w-full mt-4 text-slate-400 font-bold uppercase tracking-widest text-sm hover:text-slate-600 transition-colors" onClick={resetGame}>
+                                            {isStudentMode ? 'Volver al Inicio' : 'Salir al Menú'}
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         )}
