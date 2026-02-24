@@ -317,3 +317,394 @@
             };
 
             useEffect(() => {
+                let timer;
+                if (gameState === 'playing' && !isPaused && timeLeft > 0) {
+                    timer = setInterval(() => {
+                        setTimeLeft(prev => {
+                            if (prev <= 0.1) {
+                                clearInterval(timer);
+                                if (scoreRef.current < getPairsToWin(currentRoundIdx)) {
+                                    setStudentStats(s => ({ ...s, attempts: (s.attempts || 0) + 1, round: currentRoundIdx }));
+                                    setGameState('game_over');
+                                }
+                                return 0;
+                            }
+                            return prev - 0.1;
+                        });
+                    }, 100);
+                }
+                return () => clearInterval(timer);
+            }, [gameState, isPaused, currentRoundIdx]);
+
+            const saveProgressToFirebase = async () => {
+                if (!isStudentMode || !studentName) return;
+                try {
+                    const cleanName = studentName.trim().toLowerCase();
+                    const payload = { 
+                        name: studentName, 
+                        stars: studentStats.stars || 0, 
+                        round: studentStats.round || 0,
+                        attempts: studentStats.attempts || 0, 
+                        scorePoints: studentStats.scorePoints || 0, 
+                        lastUpdated: serverTimestamp() 
+                    };
+                    await setDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', gameData.id, 'leaderboard', cleanName), payload, { merge: true });
+                } catch (e) { console.error("Error guardando progreso", e); }
+            };
+
+            const handleSaveAndShowRanking = async () => {
+                await saveProgressToFirebase(); 
+                await fetchLeaderboard();
+            };
+
+            const processMatch = (leftIndex, rightIndex) => {
+                const leftItem = leftCol[leftIndex];
+                const rightItem = rightCol[rightIndex];
+                const isMatch = leftItem.id === rightItem.id;
+
+                if (isMatch) {
+                    setLeftCol(prev => prev.map((item, i) => i === leftIndex ? { ...item, status: 'correct' } : item));
+                    setRightCol(prev => prev.map((item, i) => i === rightIndex ? { ...item, status: 'correct' } : item));
+                    
+                    const newScore = scoreRef.current + 1;
+                    scoreRef.current = newScore;
+                    setScore(newScore);
+                    
+                    if (newScore >= getPairsToWin(currentRoundIdx)) {
+                        setBitmojiState('happy');
+                        const earnedPoints = Math.floor(timeLeft); 
+                        
+                        setTimeout(() => {
+                            if (currentRoundIdx === 4) {
+                                setStudentStats(prev => ({ ...prev, stars: (prev.stars || 0) + 1, round: 0, scorePoints: (prev.scorePoints || 0) + earnedPoints }));
+                                setGameState('game_won');
+                            } else {
+                                setStudentStats(prev => ({ ...prev, round: currentRoundIdx + 1, scorePoints: (prev.scorePoints || 0) + earnedPoints }));
+                                setGameState('round_won');
+                            }
+                        }, 500);
+                    } else {
+                        setBitmojiState('happy');
+                        
+                        setTimeout(() => {
+                            let targetsL = [];
+                            let targetsR = [];
+                            let toSpawn = 0;
+                            let newWords = [];
+
+                            setLeftCol(currLeft => {
+                                const nextL = [...currLeft];
+                                nextL[leftIndex] = { ...nextL[leftIndex], status: 'empty' }; 
+                                
+                                const emptyL = nextL.map((item, i) => item.status === 'empty' ? i : -1).filter(i => i !== -1);
+                                const target = getPairsToWin(currentRoundIdx);
+
+                                if (emptyL.length >= 2 && spawnedPairsRef.current <= target - 2) {
+                                    toSpawn = 2;
+                                } else if (emptyL.length >= 1 && spawnedPairsRef.current === target - 1) {
+                                    toSpawn = 1;
+                                }
+
+                                if (toSpawn > 0) {
+                                    targetsL = emptyL.slice(0, toSpawn);
+                                    for(let i=0; i<toSpawn; i++) newWords.push(getNextWord());
+
+                                    targetsL.forEach((idx, i) => {
+                                        nextL[idx] = { id: newWords[i].id, text: newWords[i].es, status: 'entering', animKey: Date.now() + Math.random() };
+                                    });
+                                    spawnedPairsRef.current += toSpawn;
+                                }
+                                return nextL;
+                            });
+
+                            setRightCol(currRight => {
+                                const nextR = [...currRight];
+                                nextR[rightIndex] = { ...nextR[rightIndex], status: 'empty' };
+
+                                if (toSpawn > 0) {
+                                    const emptyR = nextR.map((item, i) => item.status === 'empty' ? i : -1).filter(i => i !== -1);
+                                    targetsR = shuffleArray(emptyR).slice(0, toSpawn); 
+
+                                    targetsR.forEach((idx, i) => {
+                                        nextR[idx] = { id: newWords[i].id, text: newWords[i].en, status: 'entering', animKey: Date.now() + Math.random() + 1 };
+                                    });
+                                }
+                                return nextR;
+                            });
+
+                            if (toSpawn > 0) {
+                                setTimeout(() => {
+                                    setLeftCol(l => l.map(x => x.status === 'entering' ? { ...x, status: 'idle' } : x));
+                                    setRightCol(r => r.map(x => x.status === 'entering' ? { ...x, status: 'idle' } : x));
+                                }, 200);
+                            }
+                            setBitmojiState('idle');
+
+                        }, 200); 
+                    }
+                } else {
+                    setPenaltyFlash(true);
+                    setTimeout(() => setPenaltyFlash(false), 300);
+
+                    setLeftCol(prev => prev.map((item, i) => i === leftIndex ? { ...item, status: 'wrong' } : item));
+                    setRightCol(prev => prev.map((item, i) => i === rightIndex ? { ...item, status: 'wrong' } : item));
+                    setBitmojiState('wrong');
+
+                    setTimeout(() => {
+                        setLeftCol(prev => prev.map((item, i) => i === leftIndex ? { ...item, status: 'idle' } : item));
+                        setRightCol(prev => prev.map((item, i) => i === rightIndex ? { ...item, status: 'idle' } : item));
+                        setBitmojiState(prev => prev === 'wrong' ? 'idle' : prev);
+                    }, 400); 
+                }
+            };
+
+            const handleWordClick = (side, index) => {
+                if (isPaused || gameState !== 'playing') return; 
+                const column = side === 'left' ? leftCol : rightCol;
+                if (column[index].status === 'correct' || column[index].status === 'wrong' || column[index].status === 'empty') return;
+
+                if (side === 'left') {
+                    if (selectedLeft === index) { setSelectedLeft(null); setLeftCol(prev => prev.map((item, i) => i === index ? { ...item, status: 'idle' } : item)); return; }
+                    setLeftCol(prev => prev.map((item, i) => { if (i === index) return { ...item, status: 'selected' }; if (i === selectedLeft) return { ...item, status: 'idle' }; return item; }));
+                    setSelectedLeft(index);
+                    if (selectedRight !== null) { processMatch(index, selectedRight); setSelectedLeft(null); setSelectedRight(null); }
+                } else {
+                    if (selectedRight === index) { setSelectedRight(null); setRightCol(prev => prev.map((item, i) => i === index ? { ...item, status: 'idle' } : item)); return; }
+                    setRightCol(prev => prev.map((item, i) => { if (i === index) return { ...item, status: 'selected' }; if (i === selectedRight) return { ...item, status: 'idle' }; return item; }));
+                    setSelectedRight(index);
+                    if (selectedLeft !== null) { processMatch(selectedLeft, index); setSelectedLeft(null); setSelectedRight(null); }
+                }
+            };
+
+            const getSortedLeaderboard = () => {
+                return [...leaderboardData].sort((a, b) => {
+                    const aStars = a.stars || 0;
+                    const bStars = b.stars || 0;
+                    if (bStars !== aStars) return bStars - aStars;
+                    
+                    const aRound = a.round || 0;
+                    const bRound = b.round || 0;
+                    if (bRound !== aRound) return bRound - aRound;
+
+                    const aAtt = a.attempts || 0;
+                    const bAtt = b.attempts || 0;
+                    if (aAtt !== bAtt) return aAtt - bAtt; 
+                    
+                    const aPts = a.scorePoints || 0;
+                    const bPts = b.scorePoints || 0;
+                    return bPts - aPts; 
+                });
+            };
+
+            if (loading) return <div className="h-[100dvh] flex items-center justify-center text-slate-400 bg-slate-50 dark:bg-zinc-950 w-full"><Loader2 className="animate-spin mr-2"/> Cargando...</div>;
+            if (!gameData || wordPool.length < 5) return <div className="h-[100dvh] flex items-center justify-center text-red-400 bg-slate-50 dark:bg-zinc-950 w-full">Error: No hay suficientes palabras.</div>;
+
+            return (
+                <div className={`h-[100dvh] w-full flex flex-col relative overflow-hidden transition-colors ${penaltyFlash ? 'bg-red-900/50 dark:bg-red-900/50' : 'bg-slate-50 dark:bg-zinc-950'}`}>
+                    
+                    {/* BARRA SUPERIOR BLINDADA ANTI-DESBORDAMIENTO */}
+                    <div className="w-full px-4 py-3 flex items-center justify-between shrink-0 z-30 border-b border-slate-200 dark:border-zinc-800 shadow-sm bg-white dark:bg-zinc-900">
+                        
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                            {!isStudentMode && (
+                                <button onClick={handleExit} className="p-1.5 rounded-full hover:bg-slate-200 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400 shrink-0">
+                                    <ArrowLeft size={20}/>
+                                </button>
+                            )}
+                            <h1 className="text-lg font-black italic tracking-widest text-slate-800 dark:text-white shrink-0">
+                                PERIPLO <span className="text-yellow-400">⚡</span>
+                            </h1>
+                        </div>
+                        
+                        <div className="flex items-center gap-2 shrink-0">
+                            {isStudentMode && studentName && (
+                                <div className="flex items-center gap-1 bg-indigo-100 dark:bg-indigo-900/40 px-3 py-1.5 rounded-full text-indigo-700 dark:text-indigo-300">
+                                    <User size={14} className="shrink-0"/>
+                                    <span className="text-xs font-bold truncate max-w-[80px] sm:max-w-[120px]">{studentName}</span>
+                                </div>
+                            )}
+
+                            {!isStudentMode && (
+                                <button onClick={handleShare} className="p-2 rounded-full transition-colors hover:bg-slate-200 dark:hover:bg-zinc-800 text-slate-600 dark:text-zinc-300 shrink-0">
+                                    <Share2 size={18}/>
+                                </button>
+                            )}
+
+                            {(gameState === 'playing' || gameState === 'countdown') && (
+                                <button onClick={() => setIsPaused(true)} className="p-2 rounded-full transition-colors hover:bg-slate-200 dark:hover:bg-zinc-800 text-slate-600 dark:text-zinc-300 shrink-0">
+                                    <Pause size={18}/>
+                                </button>
+                            )}
+                            <button onClick={toggleTheme} className="p-2 rounded-full transition-colors hover:bg-slate-200 dark:hover:bg-zinc-800 text-slate-600 dark:text-amber-400 shrink-0">
+                                {isDarkMode ? <Sun size={18}/> : <Moon size={18}/>}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* CONTENIDO CENTRAL */}
+                    <div className="flex-1 w-full max-w-2xl mx-auto flex flex-col justify-center px-4 py-4 relative">
+
+                        {gameState === 'login' && (
+                            <div className="flex flex-col items-center justify-center text-center animate-pop-in w-full">
+                                <div className="p-8 md:p-10 bg-white dark:bg-zinc-900 rounded-[2rem] shadow-xl border border-slate-200 dark:border-zinc-800 w-full">
+                                    <div className="w-20 h-20 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-500 rounded-full flex items-center justify-center mx-auto mb-6"><User size={40}/></div>
+                                    <h2 className="text-3xl font-black text-slate-800 dark:text-white mb-2">Ingresa tu Nombre</h2>
+                                    <p className="text-sm text-slate-500 dark:text-zinc-400 mb-8">Para guardar tu progreso en el Ranking.</p>
+                                    <form onSubmit={handleLogin}>
+                                        <input type="text" required value={studentName} onChange={e=>setStudentName(e.target.value)} placeholder="Ej. Diego" className="w-full text-center text-xl font-bold py-4 px-4 bg-slate-50 dark:bg-zinc-950 border-2 border-slate-200 dark:border-zinc-800 rounded-2xl mb-6 outline-none focus:border-indigo-500 dark:text-white transition-colors" />
+                                        <button type="submit" className="w-full btn-juicy bg-indigo-500 text-white border-2 border-b-[6px] border-indigo-700 rounded-2xl py-4 text-lg font-black uppercase tracking-widest">Entrar</button>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+
+                        {gameState === 'menu' && (
+                            <div className="flex flex-col justify-center text-center animate-pop-in w-full">
+                                <div className="mb-6 p-8 bg-white dark:bg-zinc-900 rounded-[2rem] shadow-xl border border-slate-200 dark:border-zinc-800 w-full relative overflow-hidden">
+                                    <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-sky-400 to-indigo-500"></div>
+                                    
+                                    <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-indigo-500 mb-2 mt-2 leading-tight">Match Madness</h1>
+                                    <h2 className="text-lg font-black text-slate-700 dark:text-zinc-200 mb-4 uppercase tracking-widest">{gameData.title}</h2>
+                                    
+                                    {isStudentMode && (
+                                        <div className="mt-6 pt-6 border-t border-slate-100 dark:border-zinc-800 flex justify-between items-center">
+                                            <div className="flex items-center gap-3 text-left overflow-hidden">
+                                                <button onClick={handleLogout} className="p-2 bg-slate-100 dark:bg-zinc-800 text-slate-500 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-xl transition-all shrink-0" title="Cambiar Jugador"><LogOut size={16}/></button>
+                                                <div className="overflow-hidden">
+                                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Jugador</p>
+                                                    <p className="font-bold text-base text-slate-800 dark:text-zinc-200 truncate">{studentName}</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-col items-end gap-1.5 shrink-0 ml-2">
+                                                <div className="flex items-center gap-1.5 bg-yellow-50 dark:bg-yellow-900/20 px-2 py-1 rounded-lg border border-yellow-200 dark:border-yellow-800/50 text-xs">
+                                                    <Star size={14} className={(studentStats.stars || 0) > 0 ? "fill-yellow-500 text-yellow-500" : "text-yellow-700"}/>
+                                                    <span className="font-black text-yellow-700 dark:text-yellow-500">{studentStats.stars || 0}</span>
+                                                </div>
+                                                <div className="text-[10px] font-black text-sky-500 uppercase tracking-widest bg-sky-50 dark:bg-sky-900/20 px-2 py-0.5 rounded-md border border-sky-200 dark:border-sky-800/50">
+                                                    Ronda {(studentStats.round || 0) + 1}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="space-y-4 w-full">
+                                    <button className="w-full btn-juicy bg-green-500 text-white border-2 border-b-[6px] border-green-700 rounded-2xl py-5 text-xl font-black uppercase tracking-widest" onClick={() => startRound((studentStats.round || 0))}>
+                                        {studentStats.round > 0 ? `Continuar Ronda ${studentStats.round + 1}` : `¡Jugar Estrella ${(studentStats.stars || 0) + 1}!`}
+                                    </button>
+                                    <button className="w-full btn-juicy bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 border-2 border-b-[6px] border-slate-300 dark:border-zinc-700 rounded-2xl py-4 text-lg font-bold uppercase tracking-widest flex items-center justify-center gap-3" onClick={fetchLeaderboard}>
+                                        <Trophy size={20}/> Ver Ranking
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {(gameState === 'playing' || gameState === 'countdown') && (
+                            <div className="flex-1 flex flex-col w-full h-full pb-2">
+                                <div className="mb-6 shrink-0 w-full px-2">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <div className="font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest text-sm">{ROUNDS_CONFIG[currentRoundIdx].title}</div>
+                                        <div className="font-black text-sky-500 text-2xl">{score} <span className="text-slate-300 dark:text-zinc-600 text-lg">/ {getPairsToWin(currentRoundIdx)}</span></div>
+                                    </div>
+                                    <div className="h-4 w-full bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden relative">
+                                        <div className={`absolute top-0 left-0 h-full transition-all duration-100 ease-linear rounded-full ${timeLeft < 10 ? 'bg-red-500' : 'bg-sky-500'}`} style={{ width: `${(timeLeft / ROUNDS_CONFIG[currentRoundIdx].timeSeconds) * 100}%` }}/>
+                                    </div>
+                                </div>
+
+                                {/* TABLERO DUOLINGO-STYLE (Botones originales, Centrados) */}
+                                <div className={`flex-1 grid grid-cols-2 gap-x-12 sm:gap-x-20 gap-y-3 relative w-full transition-opacity ${gameState === 'countdown' ? 'opacity-0' : 'opacity-100'}`}>
+                                    
+                                    {/* EMOJI FLOTANTE CENTRADO 3D */}
+                                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 pointer-events-none flex flex-col items-center justify-center">
+                                        {bitmojiState === 'idle' && <img src="image_c9055d.jpg" alt="Thinking" className="w-14 sm:w-16 rounded-full transition-transform duration-300 shadow-xl border-[3px] border-slate-50 dark:border-zinc-950" onError={(e) => { e.target.onerror = null; e.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🤔</text></svg>'; }} />}
+                                        {bitmojiState === 'happy' && <img src="image_c9025d.png" alt="Correct!" className="w-16 sm:w-20 animate-bounce-small drop-shadow-2xl" onError={(e) => { e.target.onerror = null; e.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🎯</text></svg>'; }} />}
+                                        {bitmojiState === 'wrong' && <img src="image_c9055d.jpg" alt="Wrong" className="w-14 sm:w-16 rounded-full animate-shake shadow-xl border-[3px] border-red-500" style={{ filter: 'grayscale(50%) sepia(100%) hue-rotate(300deg)' }} onError={(e) => { e.target.onerror = null; e.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🤨</text></svg>'; }} />}
+                                    </div>
+
+                                    <div className="flex flex-col gap-3 h-full">
+                                        {leftCol.map((item, index) => (<WordButton key={item.animKey} text={item.text} status={item.status} onClick={() => handleWordClick('left', index)}/>))}
+                                    </div>
+                                    <div className="flex flex-col gap-3 h-full">
+                                        {rightCol.map((item, index) => (<WordButton key={item.animKey} text={item.text} status={item.status} onClick={() => handleWordClick('right', index)}/>))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {(gameState === 'round_won' || gameState === 'game_won' || gameState === 'game_over') && (
+                            <div className="flex-1 flex flex-col items-center justify-center text-center animate-pop-in z-10 w-full">
+                                <div className={`p-8 rounded-[2rem] w-full border-2 border-b-[8px] mb-8 shadow-2xl ${gameState === 'game_over' ? 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800' : gameState === 'game_won' ? 'bg-yellow-400 dark:bg-yellow-500 border-yellow-600 dark:border-yellow-700' : 'bg-green-400 dark:bg-green-500 border-green-600 dark:border-green-700'}`}>
+                                    {gameState === 'round_won' && (<><h2 className="text-3xl font-black text-white mb-2">¡Superado!</h2><p className="text-green-100 font-bold text-lg">¡Qué reflejos!</p></>)}
+                                    {gameState === 'game_won' && (<><h2 className="text-4xl font-black text-white mb-2 drop-shadow-md">¡ESTRELLA!</h2><p className="text-yellow-100 font-bold mb-6">Progreso guardado.</p><div className="text-7xl animate-bounce">⭐</div></>)}
+                                    {gameState === 'game_over' && (<><h2 className="text-3xl font-black text-red-500 mb-2">¡Fallaste!</h2><p className="text-slate-500 dark:text-zinc-400 font-medium text-lg">Hiciste {score} de {getPairsToWin(currentRoundIdx)} pares.</p></>)}
+                                </div>
+                                <div className="w-full space-y-4">
+                                    {gameState === 'round_won' && (<button className="w-full btn-juicy bg-sky-500 text-white border-2 border-b-[6px] border-sky-700 rounded-2xl py-5 text-xl font-black uppercase tracking-widest" onClick={() => startRound(currentRoundIdx + 1)}>Siguiente Ronda</button>)}
+                                    
+                                    {gameState === 'game_over' && (
+                                        <>
+                                            <button className="w-full btn-juicy bg-sky-500 text-white border-2 border-b-[6px] border-sky-700 rounded-2xl py-5 text-xl font-black uppercase tracking-widest flex items-center justify-center gap-3" onClick={() => startRound(currentRoundIdx)}><RotateCcw size={24}/> Reintentar</button>
+                                            {isStudentMode && (
+                                                <button className="w-full btn-juicy bg-slate-800 text-white border-2 border-b-[6px] border-slate-900 rounded-2xl py-4 text-sm font-bold uppercase tracking-widest flex items-center justify-center gap-2 mt-4" onClick={handleSaveAndShowRanking}><Save size={18}/> Ver Ranking</button>
+                                            )}
+                                        </>
+                                    )}
+
+                                    {gameState === 'game_won' && (<button className="w-full btn-juicy bg-sky-500 text-white border-2 border-b-[6px] border-sky-700 rounded-2xl py-5 text-xl font-black uppercase tracking-widest" onClick={resetGame}>Volver al Menú</button>)}
+                                    
+                                    {gameState === 'game_over' && (
+                                        <button className="w-full mt-4 text-slate-400 font-bold uppercase tracking-widest text-sm hover:text-slate-600 transition-colors" onClick={resetGame}>
+                                            {isStudentMode ? 'Volver al Inicio' : 'Salir al Menú'}
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* OVERLAY SCOREBOARD */}
+                        {showScoreboard && (
+                            <div className="fixed inset-0 bg-slate-900/90 dark:bg-black/95 z-50 flex items-center justify-center p-4 backdrop-blur-md animate-in">
+                                <div className="bg-white dark:bg-zinc-900 w-full max-w-lg rounded-[2rem] overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+                                    <div className="p-6 bg-slate-50 dark:bg-zinc-950 border-b border-slate-200 dark:border-zinc-800 flex justify-between items-center">
+                                        <h2 className="text-2xl font-black text-slate-800 dark:text-white flex items-center gap-2"><Trophy className="text-yellow-500" size={24}/> Ranking</h2>
+                                        <button onClick={() => setShowScoreboard(false)} className="p-2 bg-slate-200 dark:bg-zinc-800 rounded-full hover:bg-slate-300 dark:hover:bg-zinc-700 transition-colors text-slate-600 dark:text-zinc-300"><X size={20}/></button>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-4 bg-slate-50 dark:bg-zinc-950 custom-scrollbar space-y-3">
+                                        {leaderboardData.length === 0 ? (
+                                            <p className="text-center text-slate-400 dark:text-zinc-600 py-10 font-bold">Aún no hay registros.</p>
+                                        ) : (
+                                            getSortedLeaderboard().map((user, idx) => (
+                                                <div key={user.id} className="flex items-center justify-between bg-white dark:bg-zinc-800 p-4 rounded-2xl border border-slate-200 dark:border-zinc-700 shadow-sm">
+                                                    <div className="flex items-center gap-3 overflow-hidden">
+                                                        <span className={`font-black text-xl w-6 text-center ${idx === 0 ? 'text-yellow-500' : idx === 1 ? 'text-slate-400' : idx === 2 ? 'text-amber-600' : 'text-slate-300 dark:text-zinc-600'}`}>#{idx+1}</span>
+                                                        <div className="overflow-hidden">
+                                                            <div className="font-bold text-base text-slate-800 dark:text-zinc-100 truncate">{user.name}</div>
+                                                            <div className="flex items-center gap-2 mt-1 text-xs font-bold text-slate-500 dark:text-zinc-400">
+                                                                <span className="flex items-center gap-1 text-yellow-500"><Star size={12} className="fill-yellow-500"/> {user.stars || 0}</span>
+                                                                <span className="text-sky-500 uppercase">Ronda {(user.round || 0) + 1}</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-right flex flex-col items-end gap-1 shrink-0 ml-2">
+                                                        <div className="text-sm font-black text-emerald-500 flex items-center justify-end gap-1"><Flame size={12}/> {user.scorePoints || 0} pts</div>
+                                                        <div className="text-[10px] font-bold text-red-400 uppercase flex items-center justify-end gap-1 bg-red-50 dark:bg-red-900/20 px-2 py-1 rounded-md border border-red-100 dark:border-red-900/50">
+                                                            <Target size={10}/> {user.attempts || 0} fallos
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                    </div>
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<ErrorBoundary><MatchGame /></ErrorBoundary>);
+    </script>
+</body>
+</html>
