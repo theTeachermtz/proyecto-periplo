@@ -27,6 +27,10 @@
         .sticky-col { position: sticky; left: 0; z-index: 20; }
         .sticky-corner { position: sticky; left: 0; top: 0; z-index: 40; }
         
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .dark .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; }
+
         @keyframes led-glow {
             0% { box-shadow: 0 0 4px rgba(16,185,129,0.5), 0 0 8px rgba(16,185,129,0.3); }
             50% { box-shadow: 0 0 10px rgba(16,185,129,1), 0 0 20px rgba(16,185,129,0.8); }
@@ -47,7 +51,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, query } from 'firebase/firestore';
-        import { format, startOfWeek, addDays, isSameDay, addWeeks, isAfter, parseISO } from 'date-fns';
+        import { format, startOfWeek, addDays, isSameDay, addWeeks, isAfter } from 'date-fns';
         import { es } from 'date-fns/locale';
         import { Plus, X, Trash2, Save, Calendar, Copy, Palette, CheckCircle2, Moon, Sun, GripVertical, ArrowLeft, Link as LinkIcon, Video, ChevronLeft, ChevronRight, Repeat } from 'lucide-react';
 
@@ -95,7 +99,6 @@
             const [isDarkMode, setIsDarkMode] = useState(true);
             const [isModalOpen, setIsModalOpen] = useState(false);
             
-            // NAVEGACIÓN Y RELOJ SINCRONIZADOS A MÉXICO
             const [currentDate, setCurrentDate] = useState(getMexicoTime());
             const [now, setNow] = useState(getMexicoTime());
             
@@ -108,7 +111,7 @@
             
             const [formData, setFormData] = useState({
                 title: '', type: 'class', notes: '', meetLink: '', customColor: '', 
-                isRecurring: true // POR DEFECTO LOS DEL PROFE SON RECURRENTES
+                isRecurring: true
             });
 
             useEffect(() => {
@@ -140,7 +143,10 @@
                 localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light');
             };
 
-            const getEventForSlot = (dateStr, dayName, time) => events.find(e => (e.date === dateStr && e.time === time) || (!e.date && e.day === dayName && e.time === time));
+            // 🔥 NUEVO: OBTIENE TODOS LOS EVENTOS (MUESTRA FANTASMAS)
+            const getEventsForSlot = (dateStr, dayName, time) => {
+                return events.filter(e => (e.date === dateStr && e.time === time) || (!e.date && e.day === dayName && e.time === time));
+            };
 
             const handleDragStart = (e, eventId) => {
                 setDraggedEventId(eventId);
@@ -154,9 +160,7 @@
                 const eventToMove = events.find(ev => ev.id === eventId);
                 if (!eventToMove) return;
 
-                const targetEvent = getEventForSlot(targetDate, targetDay, targetTime);
-                if (targetEvent) { alert("⚠️ El espacio ya está ocupado."); setDraggedEventId(null); return; }
-
+                // Al maestro ya no le bloqueamos encimar clases. Él es Dios aquí.
                 try {
                     const isRecurring = !eventToMove.date;
                     await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', eventToMove.id), {
@@ -181,7 +185,7 @@
                 const promises = selectedSlots.map(slot => addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), {
                     title: sourceEvent.title, type: sourceEvent.type, notes: sourceEvent.notes || '',
                     customColor: sourceEvent.customColor || '', meetLink: sourceEvent.meetLink || '',
-                    day: slot.dayName, time: slot.time, date: isRecurring ? null : slot.dateStr
+                    day: slot.dayName, time: slot.time, date: isRecurring ? null : slot.dateStr, student: sourceEvent.student || ''
                 }));
                 await Promise.all(promises);
                 setDuplicationMode({ active: false, sourceEvent: null, selectedSlots: [] });
@@ -196,21 +200,19 @@
                 if (isModalOpen) closeModal();
             };
 
-            const handleSlotClick = (dateStr, dayName, time) => {
-                if (duplicationMode.active) {
-                    const existingEvent = getEventForSlot(dateStr, dayName, time);
-                    if (!existingEvent) toggleDuplicationSlot(dateStr, dayName, time);
+            const handleSlotClick = (event, dateStr, dayName, time) => {
+                if (duplicationMode.active && !event) {
+                    toggleDuplicationSlot(dateStr, dayName, time);
                     return;
                 }
-                const existingEvent = getEventForSlot(dateStr, dayName, time);
                 setCurrentSlot({ dateStr, dayName, time });
                 
-                if (existingEvent) {
-                    setEditingEvent(existingEvent);
+                if (event) {
+                    setEditingEvent(event);
                     setFormData({
-                        title: existingEvent.title || '', type: existingEvent.type || 'class', notes: existingEvent.notes || '',
-                        meetLink: existingEvent.meetLink || '', customColor: existingEvent.customColor || '',
-                        isRecurring: !existingEvent.date 
+                        title: event.title || '', type: event.type || 'class', notes: event.notes || '',
+                        meetLink: event.meetLink || '', customColor: event.customColor || '',
+                        isRecurring: !event.date 
                     });
                 } else {
                     setEditingEvent(null);
@@ -225,7 +227,8 @@
                     title: formData.title.trim(), type: formData.type, notes: formData.notes, meetLink: formData.meetLink,
                     customColor: formData.type === 'class' ? formData.customColor : '',
                     day: currentSlot.dayName, time: currentSlot.time,
-                    date: formData.isRecurring ? null : currentSlot.dateStr
+                    date: formData.isRecurring ? null : currentSlot.dateStr,
+                    student: editingEvent ? editingEvent.student : formData.title.trim() // Si es nuevo asume que el titulo es el nombre
                 };
 
                 try {
@@ -294,45 +297,58 @@
                                                 {weekDays.map(day => {
                                                     const dateStr = format(day, 'yyyy-MM-dd');
                                                     const dayName = format(day, 'EEE', {locale: es}).toUpperCase().replace('.',''); 
-                                                    const event = getEventForSlot(dateStr, dayName, time);
+                                                    
+                                                    // OBTENER TODOS LOS EVENTOS EN ESTE SLOT
+                                                    const slotEvents = getEventsForSlot(dateStr, dayName, time);
                                                     
                                                     const isToday = isSameDay(day, now);
                                                     const isLiveCell = isToday && isCurrentHourRow;
                                                     const currentMinutePercent = (now.getMinutes() / 60) * 100;
                                                     
-                                                    const typeConfig = event ? ACTIVITY_TYPES.find(t => t.id === event.type) : null;
-                                                    let finalColorClasses = 'bg-white dark:bg-zinc-900 border-stone-200 dark:border-zinc-800';
-                                                    if (event) {
-                                                        if (event.customColor) finalColorClasses = event.customColor;
-                                                        else if (typeConfig) finalColorClasses = typeConfig.color;
-                                                    }
-
+                                                    let cellClass = `relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group overflow-hidden ${isToday ? 'bg-teal-50/30 dark:bg-teal-900/5' : ''}`;
+                                                    
                                                     const isSelectedForDuplication = duplicationMode.selectedSlots.some(s => s.dateStr === dateStr && s.time === time);
-                                                    const isDuplicationTarget = duplicationMode.active && !event;
+                                                    const isDuplicationTarget = duplicationMode.active && slotEvents.length === 0;
 
                                                     return (
-                                                        <div id={isLiveCell ? "live-cell" : ""} key={`${dateStr}-${time}`} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={(e) => handleDrop(e, dateStr, dayName, time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={`relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group overflow-hidden ${isToday ? 'bg-teal-50/30 dark:bg-teal-900/5' : ''} ${isDuplicationTarget ? 'cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}`}>
+                                                        <div id={isLiveCell ? "live-cell" : ""} key={`${dateStr}-${time}`} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={(e) => handleDrop(e, dateStr, dayName, time)} className={cellClass + (isDuplicationTarget ? ' cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : '')}>
                                                             {isLiveCell && <div className="led-line" style={{ top: `${currentMinutePercent}%` }}></div>}
                                                             {isSelectedForDuplication && (<div className="absolute inset-0 bg-indigo-500/20 z-10 flex items-center justify-center pointer-events-none animate-pulse"><CheckCircle2 className="w-8 h-8 text-indigo-600 dark:text-indigo-400" /></div>)}
                                                             
-                                                            {event ? (
-                                                                <div draggable={!duplicationMode.active} onDragStart={(e) => handleDragStart(e, event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`h-full w-full rounded-xl p-3 border-2 shadow-sm flex flex-col justify-center relative transition-all transform ${draggedEventId === event.id ? 'opacity-40 scale-95' : 'opacity-100 scale-100 hover:scale-[1.02] hover:shadow-md'} ${finalColorClasses} ${duplicationMode.active ? 'opacity-50 grayscale pointer-events-none' : 'cursor-grab active:cursor-grabbing'}`}>
-                                                                    {!duplicationMode.active && (<div className="absolute right-1 top-1 opacity-0 group-hover:opacity-30"><GripVertical className="w-4 h-4" /></div>)}
-                                                                    {!duplicationMode.active && (
-                                                                        <div className="absolute top-1 right-1 flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity z-20 pointer-events-none group-hover:pointer-events-auto">
-                                                                            <button onClick={(e) => startDuplication(e, event)} className="p-1 bg-indigo-500 text-white rounded-full shadow-md hover:bg-indigo-600 transition-colors" title="Duplicar"><Copy className="w-3 h-3" /></button>
-                                                                            <button onClick={(e) => openDeleteConfirm(e, event)} className="p-1 bg-rose-500 text-white rounded-full shadow-md hover:bg-rose-600 transition-colors" title="Eliminar"><Trash2 className="w-3 h-3" /></button>
+                                                            {slotEvents.length > 0 ? (
+                                                                <div className="absolute inset-0 p-1 flex flex-col gap-1 overflow-y-auto custom-scrollbar">
+                                                                    {/* ALERTA DE FANTASMAS EMPALMADOS */}
+                                                                    {slotEvents.length > 1 && (
+                                                                        <div className="bg-red-500 text-white text-[9px] font-black uppercase text-center rounded py-0.5 shadow-sm animate-pulse shrink-0">
+                                                                            ⚠️ {slotEvents.length} Empalmados
                                                                         </div>
                                                                     )}
-                                                                    <div className="font-black text-sm leading-tight break-words uppercase tracking-tight z-10 flex items-start justify-between gap-1">
-                                                                        <span>{event.title}</span>
-                                                                        {!event.date && <Repeat size={12} className="shrink-0 mt-0.5 opacity-50" title="Evento Fijo (Todas las semanas)"/>}
-                                                                    </div>
-                                                                    {event.meetLink && <div className="flex items-center gap-1 mt-1 text-[10px] font-bold opacity-80"><LinkIcon size={10}/> Link</div>}
-                                                                    {event.notes && <div className="text-[10px] font-bold mt-1 opacity-70 truncate z-10">{event.notes}</div>}
+                                                                    
+                                                                    {slotEvents.map(event => {
+                                                                        const typeConfig = ACTIVITY_TYPES.find(t => t.id === event.type);
+                                                                        let finalColorClasses = event.customColor || (typeConfig ? typeConfig.color : 'bg-white dark:bg-zinc-800');
+                                                                        
+                                                                        return (
+                                                                            <div key={event.id} draggable={!duplicationMode.active} onDragStart={(e) => handleDragStart(e, event.id)} onDragEnd={()=>setDraggedEventId(null)} onClick={(e) => { e.stopPropagation(); handleSlotClick(event, dateStr, dayName, time); }} className={`w-full rounded-xl p-2 border-2 shadow-sm flex flex-col justify-center relative transition-all min-h-[70px] shrink-0 ${draggedEventId === event.id ? 'opacity-40 scale-95' : 'hover:scale-[1.02] hover:shadow-md cursor-grab active:cursor-grabbing'} ${finalColorClasses}`}>
+                                                                                {!duplicationMode.active && (
+                                                                                    <div className="absolute top-1 right-1 flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                                                                                        <button onClick={(e) => startDuplication(e, event)} className="p-1 bg-indigo-500 text-white rounded-full shadow-md hover:bg-indigo-600 transition-colors"><Copy className="w-3 h-3" /></button>
+                                                                                        <button onClick={(e) => openDeleteConfirm(e, event)} className="p-1 bg-rose-500 text-white rounded-full shadow-md hover:bg-rose-600 transition-colors"><Trash2 className="w-3 h-3" /></button>
+                                                                                    </div>
+                                                                                )}
+                                                                                <div className="font-black text-[11px] sm:text-xs leading-tight break-words uppercase tracking-tight z-10 flex items-start justify-between gap-1">
+                                                                                    <span>{event.title}</span>
+                                                                                    {!event.date && <Repeat size={10} className="shrink-0 mt-0.5 opacity-50" title="Evento Fijo (Todas las semanas)"/>}
+                                                                                </div>
+                                                                                {event.notes && <div className="text-[9px] font-bold mt-1 opacity-70 truncate z-10">{event.notes}</div>}
+                                                                            </div>
+                                                                        )
+                                                                    })}
                                                                 </div>
                                                             ) : (
-                                                                <div className={`h-full w-full flex items-center justify-center transition-opacity cursor-pointer ${isDuplicationTarget ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>{isDuplicationTarget ? <div className="w-full h-full border-2 border-dashed border-indigo-300 dark:border-indigo-700 rounded-xl flex items-center justify-center"><span className="text-xs font-bold text-indigo-400">Pegar</span></div> : <Plus className="w-6 h-6 text-stone-300 dark:text-zinc-700" />}</div>
+                                                                <div onClick={() => handleSlotClick(null, dateStr, dayName, time)} className={`h-full w-full flex items-center justify-center transition-opacity cursor-pointer ${isDuplicationTarget ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                                                                    {isDuplicationTarget ? <div className="w-full h-full border-2 border-dashed border-indigo-300 dark:border-indigo-700 rounded-xl flex items-center justify-center"><span className="text-xs font-bold text-indigo-400">Pegar</span></div> : <Plus className="w-6 h-6 text-stone-300 dark:text-zinc-700" />}
+                                                                </div>
                                                             )}
                                                         </div>
                                                     );
@@ -358,7 +374,7 @@
                                 <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-stone-200 dark:border-zinc-700 flex flex-col max-h-[90vh]">
                                     <div className="bg-stone-50 dark:bg-zinc-950 px-6 py-4 border-b border-stone-200 dark:border-zinc-800 flex justify-between items-center shrink-0">
                                         <div><h3 className="text-xl font-black text-stone-900 dark:text-white uppercase">{editingEvent ? 'Editar' : 'Nueva Entrada'}</h3><p className="text-sm font-bold text-stone-500 dark:text-zinc-500">{currentSlot.dayName} {currentSlot.dateStr} • {formatTimeDisplay(currentSlot.time)}</p></div>
-                                        <button onClick={closeModal} className="p-2 rounded-full hover:bg-stone-200 dark:hover:bg-zinc-800 text-stone-500"><X className="w-6 h-6" /></button>
+                                        <button onClick={closeModal} className="p-2 rounded-full hover:bg-stone-200 dark:bg-zinc-800 text-stone-500"><X className="w-6 h-6" /></button>
                                     </div>
                                     <div className="p-6 space-y-5 overflow-y-auto">
                                         <div><label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Título</label><input type="text" value={formData.title} onChange={(e) => setFormData({...formData, title: e.target.value})} className="w-full px-4 py-3 rounded-xl border-2 border-stone-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-teal-500 outline-none font-bold text-lg" placeholder="NOMBRE" autoFocus /></div>
