@@ -46,9 +46,10 @@
             100% { box-shadow: 0 0 4px rgba(16,185,129,0.5), 0 0 8px rgba(16,185,129,0.3); }
         }
         .led-line { 
-            height: 2px; 
+            position: absolute; left: 0; width: 100%; height: 2px; 
             background-color: #10b981; 
             animation: led-glow 1.5s infinite alternate; 
+            z-index: 30; pointer-events: none;
         }
     </style>
 </head>
@@ -69,7 +70,22 @@
 
         const TIMES = ['07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00'];
         const formatTimeDisplay = (time24) => { const h = parseInt(time24.split(':')[0], 10); return `${h % 12 || 12}:00 ${h >= 12 ? 'pm' : 'am'}`; };
-        const normalizeName = (name) => name ? name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "") : "";
+        
+        // NORMALIZACIÓN MEJORADA
+        const normalizeName = (name) => name ? name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/clase de /g, "").trim() : "";
+
+        // ALGORITMO DE MATCHING FLEXIBLE (Isa = Isabel)
+        const checkIsMine = (event, studentName) => {
+            if (!event || !studentName) return false;
+            const sn = normalizeName(studentName);
+            const evStudent = normalizeName(event.student);
+            const evTitle = normalizeName(event.title);
+            
+            if (evStudent === sn && sn !== "") return true;
+            if (evTitle && sn.includes(evTitle)) return true; // Isa está en Isabel
+            if (evTitle && evTitle.includes(sn)) return true; // Isabel está en Isabelita
+            return false;
+        };
 
         const StudentSchedule = () => {
             const [events, setEvents] = useState([]);
@@ -134,8 +150,7 @@
             };
 
             const canBookMore = (targetDateStr) => {
-                const normName = normalizeName(studentName);
-                const myEvents = events.filter(e => e.student && normalizeName(e.student) === normName);
+                const myEvents = events.filter(e => checkIsMine(e, studentName));
                 
                 const hasClassToday = myEvents.some(e => e.date === targetDateStr || (!e.date && e.day === format(parseISO(targetDateStr), 'EEE', {locale:es}).toUpperCase().replace('.','')));
                 if (hasClassToday) { alert("⚠️ Ya tienes una clase para este día. Máximo 1 por día."); return false; }
@@ -164,7 +179,7 @@
                 }
 
                 if (existing) {
-                    const isMine = existing.student && normalizeName(existing.student) === normalizeName(studentName);
+                    const isMine = checkIsMine(existing, studentName);
                     if (isMine) {
                         setVocabNotes(existing.notes_vocab || '');
                         setGrammarNotes(existing.notes_grammar || '');
@@ -200,6 +215,7 @@
 
                 if(confirm(`¿Mover tu clase al ${tDate} a las ${formatTimeDisplay(tTime)}?`)) {
                     try { 
+                        // Mueve y le asigna la fecha especifica
                         await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', id), { date: tDate, day: tDay, time: tTime }); 
                         notifyTeacher(`🔄 ${studentName} arrastró su clase al ${tDate} a las ${tTime}`);
                     } catch(err) { alert(err.message); }
@@ -276,7 +292,6 @@
                             </div>
                         )}
 
-                        {/* CONTENEDOR CON ZOOM (Y RESTRICCIÓN DE TAMAÑO MÍNIMO BLINDADA) */}
                         <div className="flex-1 overflow-auto p-4 custom-scrollbar relative">
                             <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-xl border border-stone-200 dark:border-zinc-800 origin-top-left transition-transform duration-200 w-full min-w-max" style={{ zoom: zoomLevel }}>
                                 <div className="grid grid-cols-[80px_repeat(6,minmax(160px,1fr))] border-b-2 border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950 sticky top-0 z-30 shadow-sm">
@@ -304,7 +319,7 @@
                                                     const dateStr = format(day, 'yyyy-MM-dd');
                                                     const dayName = format(day, 'EEE', {locale: es}).toUpperCase().replace('.',''); 
                                                     const event = getEventForSlot(dateStr, dayName, time);
-                                                    const isMine = event && studentName && normalizeName(event.student) === normalizeName(studentName);
+                                                    const isMine = checkIsMine(event, studentName);
                                                     
                                                     const isToday = isSameDay(day, now);
                                                     const isLiveCell = isToday && isCurrentHourRow;
@@ -341,7 +356,7 @@
 
                                                     return (
                                                         <div id={isLiveCell ? "live-cell" : ""} key={`${dateStr}-${time}`} onDragEnter={e=>e.preventDefault()} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={e=>handleDrop(e,dateStr,dayName,time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={cellClass}>
-                                                            {isLiveCell && <div className="absolute left-0 w-full led-line z-30 pointer-events-none" style={{ top: `${currentMinutePercent}%` }}></div>}
+                                                            {isLiveCell && <div className="led-line" style={{ top: `${currentMinutePercent}%` }}></div>}
                                                             {cellContent}
                                                         </div>
                                                     );
@@ -353,14 +368,12 @@
                             </div>
                         </div>
 
-                        {/* CONTROLES FLOTANTES ZOOM */}
                         <div className="absolute bottom-6 right-6 flex flex-col gap-2 z-40">
                             <button onClick={() => setZoomLevel(z => Math.min(z + 0.1, 1.5))} className="p-3 bg-white dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 shadow-xl rounded-full text-stone-600 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-700 active:scale-95 transition-all"><ZoomIn size={20}/></button>
                             <button onClick={() => setZoomLevel(z => Math.max(z - 0.1, 0.5))} className="p-3 bg-white dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 shadow-xl rounded-full text-stone-600 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-700 active:scale-95 transition-all"><ZoomOut size={20}/></button>
                             <button onClick={scrollToCurrentTime} className="p-3 bg-teal-600 border border-teal-700 shadow-xl rounded-full text-white hover:bg-teal-700 active:scale-95 transition-all mt-2"><LocateFixed size={20}/></button>
                         </div>
 
-                        {/* CLASS HUB MODAL (CUADERNO) */}
                         {classHubModal && (
                             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
                                 <div className="bg-white dark:bg-zinc-900 rounded-[2rem] shadow-2xl w-full max-w-2xl overflow-hidden border border-stone-200 dark:border-zinc-700 flex flex-col max-h-[90vh]">
@@ -403,7 +416,6 @@
                             </div>
                         )}
 
-                        {/* MODAL RESERVA NUEVA */}
                         {bookingModal && (
                             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
                                 <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden p-6 border border-stone-200 dark:border-zinc-700">
