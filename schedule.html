@@ -91,8 +91,18 @@
             return false;
         };
 
+        // Algoritmo Cero Bugs para Fechas Semanales
+        const getWeekBoundaries = (dateStr) => {
+            const date = parseISO(dateStr);
+            const start = startOfWeek(date, { weekStartsOn: 1 });
+            const end = addDays(start, 6);
+            return { start: format(start, 'yyyy-MM-dd'), end: format(end, 'yyyy-MM-dd') };
+        };
+
         const StudentSchedule = () => {
             const [events, setEvents] = useState([]);
+            const [studentsList, setStudentsList] = useState([]); // Base de datos de alumnos (colores)
+            
             // Inicializar con la hora de México
             const [currentDate, setCurrentDate] = useState(getMexicoTime());
             const [now, setNow] = useState(getMexicoTime());
@@ -120,7 +130,6 @@
             };
 
             useEffect(() => {
-                // Actualizar siempre usando la hora de México
                 const timer = setInterval(() => setNow(getMexicoTime()), 60000);
                 
                 const params = new URLSearchParams(window.location.search);
@@ -131,13 +140,20 @@
                     if (savedName) setStudentName(savedName);
                 }
 
-                const q = query(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'));
-                const unsubscribe = onSnapshot(q, (snapshot) => {
+                // Cargar eventos del calendario
+                const qEvents = query(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'));
+                const unsubscribeEvents = onSnapshot(qEvents, (snapshot) => {
                     setEvents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                });
+
+                // Cargar base de datos de estudiantes (para jalar sus colores)
+                const qStudents = query(collection(db, 'artifacts', 'periplo-app-v1', 'students'));
+                const unsubscribeStudents = onSnapshot(qStudents, (snapshot) => {
+                    setStudentsList(snapshot.docs.map(doc => doc.data()));
                 });
                 
                 scrollToCurrentTime();
-                return () => { clearInterval(timer); unsubscribe(); };
+                return () => { clearInterval(timer); unsubscribeEvents(); unsubscribeStudents(); };
             }, []);
 
             const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
@@ -162,12 +178,16 @@
                 const hasClassToday = myEvents.some(e => e.date === targetDateStr || (!e.date && e.day === format(parseISO(targetDateStr), 'EEE', {locale:es}).toUpperCase().replace('.','')));
                 if (hasClassToday) { alert("⚠️ Ya tienes una clase para este día. Máximo 1 por día."); return false; }
 
-                const targetWeekStart = startOfWeek(parseISO(targetDateStr), { weekStartsOn: 1 });
+                // LOGICA DE LÍMITES ARREGLADA (String comparison bypasses timezone issues)
+                const targetWeek = getWeekBoundaries(targetDateStr);
                 let countThisWeek = 0;
+                
                 myEvents.forEach(e => {
-                    if (e.date) {
-                        if (isSameDay(startOfWeek(parseISO(e.date), { weekStartsOn: 1 }), targetWeekStart)) countThisWeek++;
-                    } else countThisWeek++;
+                    if (!e.date) {
+                        countThisWeek++; // Fijo, cuenta para TODAS las semanas
+                    } else {
+                        if (e.date >= targetWeek.start && e.date <= targetWeek.end) countThisWeek++;
+                    }
                 });
 
                 if (countThisWeek >= 3) { alert("⚠️ Límite de 3 clases por semana alcanzado."); return false; }
@@ -206,6 +226,7 @@
                 e.dataTransfer.setData('text/plain', id); 
                 e.dataTransfer.effectAllowed = 'move';
             };
+            
             const handleDrop = async (e, tDate, tDay, tTime) => {
                 e.preventDefault();
                 const id = e.dataTransfer.getData('text/plain');
@@ -222,7 +243,7 @@
 
                 if(confirm(`¿Mover tu clase al ${tDate} a las ${formatTimeDisplay(tTime)}?`)) {
                     try { 
-                        await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', id), { date: tDate, day: tDay, time: tTime }); 
+                        await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', id), { date: tDate, day: tDay, time: tTime }); 
                         notifyTeacher(`🔄 ${studentName} arrastró su clase al ${tDate} a las ${tTime}`);
                     } catch(err) { alert(err.message); }
                 }
@@ -232,9 +253,16 @@
             const bookClass = async (dateStr, dayName, time, name) => {
                 localStorage.setItem('periplo_student_name', name);
                 setStudentName(name);
+                
+                // Buscar color de alumno o dar default
+                const sn = normalizeName(name);
+                const studentRecord = studentsList.find(s => normalizeName(s.name) === sn);
+                const studentColor = studentRecord?.color || 'bg-emerald-200 border-emerald-300 text-emerald-900 dark:bg-emerald-900/50 dark:border-emerald-500 dark:text-emerald-100'; 
+
                 try {
                     await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), {
-                        date: dateStr, day: dayName, time, title: "Clase de " + name.split(' ')[0], student: name, type: 'class', notes: 'Agendado por alumno', customColor: 'bg-emerald-200 border-emerald-300 text-emerald-900', meetLink: '' 
+                        date: dateStr, day: dayName, time, title: "Clase de " + name.split(' ')[0], student: name, type: 'class', notes: 'Agendado por alumno', 
+                        customColor: studentColor, meetLink: '' 
                     });
                     notifyTeacher(`📗 ${name} agendó una clase el ${dateStr} a las ${time}`);
                     setBookingModal(null);
@@ -342,12 +370,15 @@
                                                         }
                                                     } else {
                                                         if (event) {
+                                                            // APLICAR EL COLOR GUARDADO DE ESTE ALUMNO, SI ES SUYO O DEL PROFE
+                                                            let finalColorClasses = event.customColor || 'bg-emerald-100 border-emerald-300 text-emerald-900 dark:bg-emerald-900/40 dark:border-emerald-500';
+                                                            
                                                             if (isMine) {
                                                                 cellClass += " cursor-pointer";
                                                                 cellContent = (
-                                                                    <div draggable="true" onDragStart={e=>handleDragStart(e,event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`draggable-item h-full w-full rounded-xl p-2.5 border-2 shadow-md flex flex-col justify-between bg-emerald-100 border-emerald-300 dark:bg-emerald-900/40 dark:border-emerald-500 hover:scale-[1.02] cursor-grab active:cursor-grabbing ${draggedEventId === event.id ? 'opacity-40' : ''}`}>
-                                                                        <div><div className="text-[10px] font-black text-emerald-800 dark:text-emerald-300 uppercase mb-1 flex items-center gap-1"><BookOpen size={10}/> MI CLASE</div><div className="text-xs md:text-sm font-bold text-emerald-900 dark:text-emerald-100 leading-tight line-clamp-2" title={event.title}>{event.title}</div></div>
-                                                                        <span className="text-[10px] text-emerald-800 dark:text-emerald-400 mt-2 font-bold flex items-center justify-center gap-1 bg-white/40 dark:bg-black/20 w-full py-1 rounded"><PenTool size={10}/> Abrir / Posponer</span>
+                                                                    <div draggable="true" onDragStart={e=>handleDragStart(e,event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`draggable-item h-full w-full rounded-xl p-2.5 border-2 shadow-md flex flex-col justify-between hover:scale-[1.02] cursor-grab active:cursor-grabbing ${draggedEventId === event.id ? 'opacity-40' : ''} ${finalColorClasses}`}>
+                                                                        <div><div className="text-[10px] font-black uppercase mb-1 flex items-center gap-1 opacity-80"><BookOpen size={10}/> MI CLASE</div><div className="text-xs md:text-sm font-bold leading-tight line-clamp-2" title={event.title}>{event.title}</div></div>
+                                                                        <span className="text-[10px] mt-2 font-bold flex items-center justify-center gap-1 bg-white/40 dark:bg-black/20 w-full py-1 rounded opacity-90"><PenTool size={10}/> Abrir / Posponer</span>
                                                                     </div>
                                                                 );
                                                             } else {
