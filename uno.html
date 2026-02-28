@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>UNO Gramatical | Periplo</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+    
+    <link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script>
+        tailwind.config = { darkMode: 'class' }; 
+        document.documentElement.classList.add('dark');
+    </script>
+    
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        html, body { font-family: 'Varela Round', sans-serif; user-select: none; -webkit-user-select: none; touch-action: manipulation; overflow-x: hidden; max-width: 100vw; height: 100dvh; background-color: #09090b; margin: 0; padding: 0; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.5); border-radius: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(71, 85, 105, 0.8); border-radius: 8px; }
+        .animate-spin-slow { animation: spin 8s linear infinite; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+    </style>
+</head>
+<body class="bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 transition-colors duration-300">
+    <div id="root" class="w-full h-full max-w-[100vw] overflow-x-hidden flex flex-col"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
+        
+        import { ArrowLeft, Loader2, Sun, Moon, Pause, Play, RotateCcw, Share2, User, Users, AlertTriangle, CheckCircle, Zap, BookOpen, Home, Dices } from 'lucide-react';
+
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        const ARTICLE_COLORS = { 'el': 'bg-blue-500', 'la': 'bg-red-500', 'los': 'bg-yellow-400', 'las': 'bg-green-500' };
+        const ARTICLE_TEXT = { 'el': 'text-white', 'la': 'text-white', 'los': 'text-gray-900', 'las': 'text-white' };
+
+        const shuffleArray = (array) => {
+            const newArray = [...array];
+            for (let i = newArray.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+            }
+            return newArray;
+        };
+
+        const UnoGame = () => {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [quizId, setQuizId] = useState(null);
+            const [quizData, setQuizData] = useState(null); // El Mazo configurado
+            const [roomData, setRoomData] = useState(null); // El Estado del juego en vivo
+            
+            const [isStudentMode, setIsStudentMode] = useState(false);
+            const [studentName, setStudentName] = useState('');
+            const [isDarkMode, setIsDarkMode] = useState(true);
+            const [localFeedback, setLocalFeedback] = useState({ text: '', type: '', visible: false });
+            const [flashArticle, setFlashArticle] = useState(null);
+
+            // 1. Iniciar App y leer URL
+            useEffect(() => {
+                const savedTheme = localStorage.getItem('themePreference');
+                if (savedTheme === 'light') setIsDarkMode(false);
+
+                const params = new URLSearchParams(window.location.search);
+                const id = params.get('id');
+                const mode = params.get('mode');
+                
+                if (mode === 'student') {
+                    setIsStudentMode(true);
+                    setStudentName(localStorage.getItem('periplo_student_name') || 'Invitado');
+                }
+
+                if (id) {
+                    setQuizId(id);
+                    // Login Anónimo para Firebase Auth (necesario para tracking de jugadores)
+                    signInAnonymously(auth).catch(e => console.error(e));
+                } else {
+                    setLoading(false); // No ID, error
+                }
+
+                const unsubscribe = onAuthStateChanged(auth, u => setUser(u));
+                return () => unsubscribe();
+            }, []);
+
+            // 2. Cargar Mazo (Quiz)
+            useEffect(() => {
+                if (!quizId) return;
+                const fetchQuiz = async () => {
+                    const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId));
+                    if (snap.exists()) {
+                        setQuizData(snap.data());
+                    }
+                    setLoading(false);
+                };
+                fetchQuiz();
+            }, [quizId]);
+
+            // 3. Conectar a Sala Multijugador en Vivo
+            useEffect(() => {
+                if (!quizId || !user) return;
+                const roomRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/rooms', quizId);
+                
+                const unsubscribe = onSnapshot(roomRef, (snapshot) => {
+                    if (snapshot.exists()) {
+                        setRoomData(snapshot.data());
+                    } else {
+                        setRoomData(null); // La sala no ha sido inicializada aún
+                    }
+                });
+                return () => unsubscribe();
+            }, [quizId, user]);
+
+            useEffect(() => { document.documentElement.classList.toggle('dark', isDarkMode); }, [isDarkMode]);
+
+            // Feedback Visual
+            useEffect(() => {
+                if (roomData?.feedbackMessage?.ts) {
+                    setLocalFeedback({ ...roomData.feedbackMessage, visible: true });
+                    const t = setTimeout(() => setLocalFeedback(prev => ({ ...prev, visible: false })), 2500);
+                    return () => clearTimeout(t);
+                }
+            }, [roomData?.feedbackMessage?.ts]);
+
+            // Flash Randomizer Anim
+            useEffect(() => {
+                let interval;
+                if (roomData?.isRandomizing) {
+                    const arts = ['el', 'la', 'los', 'las'];
+                    let i = 0;
+                    interval = setInterval(() => { setFlashArticle(arts[i % 4]); i++; }, 100);
+                } else {
+                    setFlashArticle(null);
+                }
+                return () => clearInterval(interval);
+            }, [roomData?.isRandomizing]);
+
+            // --- LÓGICA DE FIREBASE NETWORK ---
+            const updateGame = async (updates) => {
+                if (!quizId) return;
+                try {
+                    await updateDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/rooms', quizId), updates);
+                } catch (e) { console.error("Error updating", e); }
+            };
+
+            const initializeRoom = async () => {
+                if (!quizId) return;
+                const roomRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/rooms', quizId);
+                await setDoc(roomRef, {
+                    roomId: quizId,
+                    gameState: 'MENU',
+                    players: { s1: null, s2: null, j1: null, j2: null },
+                    deck: [], player1Hand: [], player2Hand: [],
+                    currentArticle: null, tableCard: null, turn: 1,
+                    isRandomizing: false, winner: null, penaltyData: null,
+                    isPaused: false, feedbackMessage: null
+                });
+            };
+
+            const toggleRole = async (roleId) => {
+                if (!roomData || !user) return;
+                const newPlayers = { ...roomData.players };
+                newPlayers[roleId] = newPlayers[roleId] === user.uid ? null : user.uid;
+                await updateGame({ players: newPlayers });
+            };
+
+            const build112Deck = () => {
+                const pool = quizData.content.wordPool;
+                const getCards = (target) => pool.filter(c => c.article === target || (c.validArticles && c.validArticles.includes(target)));
+                const padTo28 = (cards) => {
+                    let result = []; let i = 0;
+                    if(cards.length === 0) return result; // Safety
+                    while(result.length < 28) { result.push(cards[i % cards.length]); i++; }
+                    return result;
+                }
+                const deck = [...padTo28(getCards('el')), ...padTo28(getCards('la')), ...padTo28(getCards('los')), ...padTo28(getCards('las'))];
+                return shuffleArray(deck);
+            };
+
+            const startGame = async () => {
+                if (!roomData || !quizData) return;
+                const gameDeck = build112Deck();
+                await updateGame({
+                    gameState: 'PLAYING', deck: gameDeck.slice(20),
+                    player1Hand: gameDeck.slice(0, 10), player2Hand: gameDeck.slice(10, 20),
+                    currentArticle: null, tableCard: null, turn: 1, isRandomizing: false, winner: null, penaltyData: null, isPaused: false,
+                    feedbackMessage: { text: '¡El juego comienza!', type: 'info', ts: Date.now() }
+                });
+            };
+
+            const isS1 = roomData?.players?.s1 === user?.uid;
+            const isS2 = roomData?.players?.s2 === user?.uid;
+            const isJ1 = roomData?.players?.j1 === user?.uid;
+            const isJ2 = roomData?.players?.j2 === user?.uid;
+            const isSelectorRole = isS1 || isS2;
+
+            const handleRandomize = async () => {
+                if (roomData.gameState !== 'PLAYING' || roomData.penaltyData || !isSelectorRole || roomData.isPaused || roomData.isRandomizing) return;
+                const articles = ['el', 'la', 'los', 'las'];
+                const picked = articles[Math.floor(Math.random() * articles.length)];
+                await updateGame({ isRandomizing: true, currentArticle: null });
+                setTimeout(async () => {
+                    await updateGame({ isRandomizing: false, currentArticle: picked, feedbackMessage: { text: `¡Buscando: ${picked.toUpperCase()}!`, type: 'alert', ts: Date.now() }});
+                }, 2000);
+            };
+
+            const getGrammarExplanation = (wordObj) => {
+                return `La palabra "${wordObj.word}" utiliza el artículo "${wordObj.validArticles ? wordObj.validArticles.join(' / ') : wordObj.article}". ¡Revisa tus reglas gramaticales!`;
+            };
+
+            const handlePlayCard = async (playerNum, cardIndex) => {
+                if (roomData.gameState !== 'PLAYING' || !roomData.currentArticle || roomData.penaltyData || roomData.isPaused || roomData.isRandomizing) return;
+                if (roomData.turn !== playerNum) return;
+                if ((playerNum === 1 && !isJ1) || (playerNum === 2 && !isJ2)) return;
+
+                const hand = playerNum === 1 ? roomData.player1Hand : roomData.player2Hand;
+                const playedCard = hand[cardIndex];
+                if (!playedCard) return;
+
+                const isCorrect = playedCard.article === roomData.currentArticle || (playedCard.validArticles && playedCard.validArticles.includes(roomData.currentArticle));
+                let updates = {};
+
+                if (isCorrect) {
+                    const newHand = [...hand]; newHand.splice(cardIndex, 1);
+                    updates[`player${playerNum}Hand`] = newHand;
+                    updates.tableCard = { ...playedCard, article: roomData.currentArticle };
+                    updates.currentArticle = null; updates.turn = roomData.turn === 1 ? 2 : 1;
+                    updates.feedbackMessage = { text: `¡Bien jugado!`, type: 'success', ts: Date.now() };
+                    if (newHand.length === 0) { updates.winner = `Jugador ${playerNum}`; updates.gameState = 'GAME_OVER'; }
+                    await updateGame(updates);
+                } else {
+                    updates.penaltyData = {
+                        player: playerNum, playedWord: playedCard.word, correctArticle: playedCard.article,
+                        correctArticlesDisplay: playedCard.validArticles ? playedCard.validArticles.join(' O ') : playedCard.article,
+                        wrongArticle: roomData.currentArticle, explanation: getGrammarExplanation(playedCard)
+                    };
+                    await updateGame(updates);
+                }
+            };
+
+            const closePenaltyModal = async () => { await updateGame({ penaltyData: null, turn: roomData.turn === 1 ? 2 : 1, currentArticle: null }); };
+
+            const handleDrawCard = async (playerNum) => {
+                if (roomData.gameState !== 'PLAYING' || roomData.deck.length === 0 || roomData.penaltyData || roomData.isPaused || roomData.isRandomizing) return;
+                if (roomData.turn !== playerNum) return;
+                if ((playerNum === 1 && !isJ1) || (playerNum === 2 && !isJ2)) return;
+
+                const hand = playerNum === 1 ? roomData.player1Hand : roomData.player2Hand;
+                await updateGame({ deck: roomData.deck.slice(1), [`player${playerNum}Hand`]: [...hand, roomData.deck[0]] });
+            };
+
+            // --- RENDERIZADO ---
+            if (loading) return <div className="h-[100dvh] flex items-center justify-center text-slate-400 bg-slate-50 dark:bg-zinc-950 w-full"><Loader2 className="animate-spin mr-2"/> Cargando Mazo...</div>;
+            if (!quizData) return <div className="h-[100dvh] flex items-center justify-center text-red-400 bg-slate-50 dark:bg-zinc-950 w-full font-bold">Error: Juego no encontrado.</div>;
+
+            return (
+                <div className="flex-1 w-full flex flex-col relative h-[100dvh] overflow-hidden">
+                    {/* NAVBAR PERIPLO */}
+                    <div className="w-full px-4 py-3 flex items-center justify-between shrink-0 z-30 border-b border-slate-200 dark:border-zinc-800 shadow-sm bg-white dark:bg-zinc-900">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                            {!isStudentMode && (
+                                <button onClick={() => window.location.href = 'index.html'} className="p-1.5 rounded-full hover:bg-slate-200 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400 shrink-0"><ArrowLeft size={20}/></button>
+                            )}
+                            <h1 className="text-lg font-black italic tracking-widest text-slate-800 dark:text-white shrink-0">PERIPLO <span className="text-yellow-400">⚡</span></h1>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                            {isStudentMode && studentName && (
+                                <div className="flex items-center gap-1 bg-indigo-100 dark:bg-indigo-900/40 px-3 py-1.5 rounded-full text-indigo-700 dark:text-indigo-300">
+                                    <User size={14} className="shrink-0"/> <span className="text-xs font-bold truncate max-w-[120px]">{studentName}</span>
+                                </div>
+                            )}
+                            <button onClick={() => { setIsDarkMode(!isDarkMode); localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light'); }} className="p-2 rounded-full transition-colors hover:bg-slate-200 dark:hover:bg-zinc-800 text-slate-600 dark:text-amber-400 shrink-0">
+                                {isDarkMode ? <Sun size={18}/> : <Moon size={18}/>}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* VISTA 1: CREAR SALA (Si no existe en Firebase) */}
+                    {!roomData && (
+                        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center animate-fade-in">
+                            <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl shadow-xl border border-slate-200 dark:border-zinc-800 max-w-md w-full">
+                                <div className="flex justify-center gap-2 mb-6">
+                                    <span className="bg-blue-500 w-8 h-12 rounded shadow transform -rotate-12 border border-white dark:border-zinc-800"></span>
+                                    <span className="bg-red-500 w-8 h-12 rounded shadow transform -rotate-6 border border-white dark:border-zinc-800"></span>
+                                    <span className="bg-yellow-400 w-8 h-12 rounded shadow transform rotate-6 border border-white dark:border-zinc-800"></span>
+                                    <span className="bg-green-500 w-8 h-12 rounded shadow transform rotate-12 border border-white dark:border-zinc-800"></span>
+                                </div>
+                                <h2 className="text-3xl font-black text-slate-800 dark:text-white mb-2">{quizData.title}</h2>
+                                <p className="text-sm text-slate-500 dark:text-zinc-400 mb-8">Sala inactiva. Ábrela para que los jugadores puedan unirse.</p>
+                                <button onClick={initializeRoom} className="w-full py-4 bg-indigo-500 hover:bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 uppercase tracking-widest border-b-[6px] border-indigo-700">
+                                    <Users size={24}/> Abrir Sala de Juego
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* VISTA 2: LOBBY DE ROLES */}
+                    {roomData && roomData.gameState === 'MENU' && (
+                        <div className="flex-1 flex flex-col items-center justify-center p-4 animate-fade-in relative">
+                            <div className="bg-white dark:bg-zinc-900 p-6 md:p-8 rounded-[2rem] shadow-xl border border-slate-200 dark:border-zinc-800 max-w-lg w-full">
+                                <h3 className="font-black text-slate-800 dark:text-zinc-200 mb-6 text-center text-xl uppercase tracking-widest border-b border-slate-200 dark:border-zinc-800 pb-4">Elige tu Rol</h3>
+                                <div className="grid grid-cols-2 gap-4 mb-8">
+                                    {[
+                                        { id: 's1', label: 'Selector 1', color: 'bg-purple-500' }, { id: 's2', label: 'Selector 2', color: 'bg-orange-500' },
+                                        { id: 'j1', label: 'Jugador 1', color: 'bg-blue-500' }, { id: 'j2', label: 'Jugador 2', color: 'bg-red-500' }
+                                    ].map(r => {
+                                        const occupant = roomData.players[r.id];
+                                        const isMe = occupant === user?.uid;
+                                        const isOccupied = occupant && !isMe;
+                                        return (
+                                            <div key={r.id} className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-3 transition-all ${isMe ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-500' : isOccupied ? 'bg-slate-50 dark:bg-zinc-900/50 border-slate-200 dark:border-zinc-800 opacity-60' : 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700'}`}>
+                                                <div className={`${r.color} p-2.5 rounded-full text-white`}><User size={20}/></div>
+                                                <span className="font-bold text-sm text-center text-slate-700 dark:text-zinc-200">{r.label}</span>
+                                                <button onClick={() => toggleRole(r.id)} disabled={isOccupied} className={`text-xs px-4 py-2 rounded-xl font-bold w-full transition-colors uppercase tracking-wider ${isMe ? 'bg-rose-500 text-white border-b-4 border-rose-700' : isOccupied ? 'bg-slate-200 dark:bg-zinc-800 text-slate-500' : 'bg-emerald-500 text-white border-b-4 border-emerald-700'}`}>
+                                                    {isMe ? 'Dejar' : isOccupied ? 'Lleno' : 'Tomar'}
+                                                </button>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                                <button onClick={startGame} disabled={!isS1} className={`w-full py-4 rounded-2xl font-black text-lg uppercase tracking-widest flex items-center justify-center gap-2 border-b-[6px] transition-all ${isS1 ? 'bg-sky-500 hover:bg-sky-400 text-white border-sky-700 active:scale-95' : 'bg-slate-200 dark:bg-zinc-800 text-slate-400 dark:text-zinc-600 border-slate-300 dark:border-zinc-900 cursor-not-allowed'}`}>
+                                    <Play size={24} fill="currentColor" /> {isS1 ? 'Iniciar Juego' : 'Esperando Selector 1...'}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* VISTA 3: JUEGO EN CURSO */}
+                    {roomData && roomData.gameState !== 'MENU' && (
+                        <div className="flex-1 flex flex-col relative animate-fade-in bg-zinc-900">
+                            {/* MENU DE PAUSA (Igual que en standalone pero adaptado a UI Periplo) */}
+                            {roomData.isPaused && (
+                                <div className="absolute inset-0 z-50 bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-4">
+                                    <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl w-full max-w-sm text-center shadow-2xl">
+                                        <Pause size={48} className="text-slate-400 mx-auto mb-4"/>
+                                        <h2 className="text-3xl font-black mb-6 text-slate-800 dark:text-white">Pausa</h2>
+                                        <div className="space-y-3">
+                                            <button onClick={() => updateGame({ isPaused: false })} className="w-full py-3 bg-indigo-500 text-white rounded-xl font-bold">Reanudar</button>
+                                            {isS1 && <button onClick={startGame} className="w-full py-3 bg-yellow-500 text-white rounded-xl font-bold">Reiniciar</button>}
+                                            <button onClick={() => updateGame({ gameState: 'MENU', isPaused: false })} className="w-full py-3 bg-rose-500 text-white rounded-xl font-bold">Salir al Lobby</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* PANEL SUPERIOR (Ruleta / Selectores) */}
+                            <div className="bg-zinc-800 border-b border-zinc-700 p-3 shadow-md z-10 flex flex-col items-center relative shrink-0">
+                                <button onClick={() => updateGame({ isPaused: true })} className="absolute top-3 right-3 text-zinc-400 hover:text-white p-2 bg-zinc-700/50 rounded-full"><Pause size={16}/></button>
+                                <div className="text-yellow-400 font-black text-xl tracking-widest uppercase mb-3 drop-shadow">
+                                    {roomData.gameState === 'GAME_OVER' ? '¡Partida Terminada!' : `Turno Jugador ${roomData.turn}`}
+                                </div>
+                                <div className="flex gap-2 p-2 bg-zinc-900 rounded-2xl shadow-inner border border-zinc-800">
+                                    {['el', 'la', 'los', 'las'].map((art) => {
+                                        const isHi = roomData.currentArticle === art || flashArticle === art;
+                                        return (
+                                            <div key={art} className={`w-14 h-16 sm:w-16 sm:h-20 rounded-xl font-black text-xl sm:text-2xl uppercase flex items-center justify-center transition-all duration-75 ${isHi ? ARTICLE_COLORS[art] + ' text-white scale-110 shadow-lg ring-2 ring-white z-10' : ARTICLE_COLORS[art] + ' opacity-40 grayscale scale-95'}`}>
+                                                {art}
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                                {isSelectorRole && roomData.gameState === 'PLAYING' && (
+                                    <div className="mt-4 h-10 flex items-center justify-center">
+                                        {!roomData.currentArticle && !roomData.isRandomizing ? (
+                                            <button onClick={handleRandomize} className="px-6 py-2 bg-gradient-to-r from-purple-500 to-indigo-500 rounded-full font-black text-white shadow-lg animate-bounce flex gap-2"><Dices size={20}/> GIRAR</button>
+                                        ) : <span className="text-zinc-500 text-sm font-bold">Esperando jugada...</span>}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* MESA CENTRAL */}
+                            <div className="flex-1 bg-emerald-800 relative flex items-center justify-center shadow-inner overflow-hidden border-y-4 border-emerald-900">
+                                <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'radial-gradient(circle, #fff 10%, transparent 11%)', backgroundSize: '20px 20px' }}></div>
+                                <div className="text-emerald-900/40 font-black text-7xl sm:text-9xl rotate-12 select-none absolute">UNO</div>
+                                
+                                <div className="relative z-10 flex flex-col items-center">
+                                    <div className="absolute -top-16 transition-all duration-300">
+                                        {localFeedback.visible && (
+                                            <div className={`px-4 py-2 rounded-full font-bold text-white shadow-lg flex items-center gap-2 text-sm ${localFeedback.type === 'success' ? 'bg-green-500' : localFeedback.type === 'alert' ? 'bg-blue-500 animate-pulse' : 'bg-slate-800'}`}>
+                                                {localFeedback.text}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="w-32 h-44 sm:w-40 sm:h-56">
+                                        {roomData.tableCard ? (
+                                            <div className={`w-full h-full rounded-2xl shadow-2xl flex flex-col items-center justify-center border-4 transform rotate-[-3deg] animate-pop-in ${ARTICLE_COLORS[roomData.tableCard.article]} border-white bg-white p-2`}>
+                                                <div className={`text-lg sm:text-xl font-black mb-1 uppercase ${ARTICLE_TEXT[roomData.tableCard.article]}`}>{roomData.tableCard.article}</div>
+                                                <div className="bg-white flex-1 w-full rounded-xl flex items-center justify-center shadow-inner p-2">
+                                                    <span className="text-lg sm:text-xl font-extrabold text-slate-800 text-center leading-tight break-words">{roomData.tableCard.word}</span>
+                                                </div>
+                                            </div>
+                                        ) : roomData.currentArticle ? (
+                                            <div className={`w-full h-full rounded-2xl flex items-center justify-center border-4 border-white/20 animate-pulse ${ARTICLE_COLORS[roomData.currentArticle]}`}>
+                                                <span className={`text-5xl font-black uppercase ${ARTICLE_TEXT[roomData.currentArticle]}`}>{roomData.currentArticle}</span>
+                                            </div>
+                                        ) : (
+                                            <div className="w-full h-full rounded-2xl border-4 border-dashed border-emerald-600/50 flex items-center justify-center text-emerald-600 font-bold text-sm">ESPERANDO</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* PANEL INFERIOR (Manos Jugadores) */}
+                            <div className="h-64 sm:h-72 flex bg-zinc-900 border-t border-zinc-800 relative shrink-0">
+                                <div className="absolute left-1/2 top-0 bottom-0 w-1 bg-black z-20"></div>
+                                
+                                {/* JUGADOR 1 */}
+                                <div className={`flex-1 flex flex-col p-2 relative ${roomData.turn !== 1 ? 'opacity-50 grayscale pointer-events-none' : 'ring-inset ring-2 ring-emerald-500'}`}>
+                                    <div className="flex justify-between items-center bg-zinc-950 p-2 rounded-lg mb-2 shrink-0">
+                                        <div className="flex items-center gap-2"><div className="bg-blue-500 p-1 rounded-full text-white"><User size={12}/></div><span className="text-xs font-bold text-white">J1 {isJ1 ? '(Tú)' : ''}</span></div>
+                                        <button onClick={() => handleDrawCard(1)} disabled={!isJ1 || !roomData.currentArticle} className="text-[10px] bg-zinc-800 text-white px-2 py-1 rounded font-bold hover:bg-zinc-700">+1 Mazo</button>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-wrap content-start justify-center gap-2">
+                                        {roomData.player1Hand?.map((c, i) => (
+                                            <button key={i} onClick={() => handlePlayCard(1, i)} disabled={!isJ1 || !roomData.currentArticle} className={`w-[70px] h-[95px] sm:w-[80px] sm:h-[110px] bg-white rounded-lg shadow border-2 border-slate-200 flex items-center justify-center p-1 shrink-0 ${!isJ1 && !isSelectorRole ? 'bg-zinc-800 border-zinc-700' : 'hover:scale-105 hover:border-blue-400'}`}>
+                                                {!isJ1 && !isSelectorRole ? <span className="text-[10px] text-zinc-600 font-black">UNO</span> : <span className="text-xs sm:text-sm font-bold text-slate-800 leading-tight break-words text-center">{c.word}</span>}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* JUGADOR 2 */}
+                                <div className={`flex-1 flex flex-col p-2 relative ${roomData.turn !== 2 ? 'opacity-50 grayscale pointer-events-none' : 'ring-inset ring-2 ring-emerald-500'}`}>
+                                    <div className="flex justify-between items-center bg-zinc-950 p-2 rounded-lg mb-2 shrink-0">
+                                        <button onClick={() => handleDrawCard(2)} disabled={!isJ2 || !roomData.currentArticle} className="text-[10px] bg-zinc-800 text-white px-2 py-1 rounded font-bold hover:bg-zinc-700">+1 Mazo</button>
+                                        <div className="flex items-center gap-2"><span className="text-xs font-bold text-white">J2 {isJ2 ? '(Tú)' : ''}</span><div className="bg-red-500 p-1 rounded-full text-white"><User size={12}/></div></div>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-wrap content-start justify-center gap-2">
+                                        {roomData.player2Hand?.map((c, i) => (
+                                            <button key={i} onClick={() => handlePlayCard(2, i)} disabled={!isJ2 || !roomData.currentArticle} className={`w-[70px] h-[95px] sm:w-[80px] sm:h-[110px] bg-white rounded-lg shadow border-2 border-slate-200 flex items-center justify-center p-1 shrink-0 ${!isJ2 && !isSelectorRole ? 'bg-zinc-800 border-zinc-700' : 'hover:scale-105 hover:border-red-400'}`}>
+                                                {!isJ2 && !isSelectorRole ? <span className="text-[10px] text-zinc-600 font-black">UNO</span> : <span className="text-xs sm:text-sm font-bold text-slate-800 leading-tight break-words text-center">{c.word}</span>}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* PENALTY MODAL */}
+                            {roomData.penaltyData && (
+                                <div className="absolute inset-0 z-50 bg-black/90 flex items-center justify-center p-4">
+                                    <div className="bg-zinc-900 p-6 rounded-3xl border-4 border-rose-500 max-w-sm w-full text-center">
+                                        <div className="bg-rose-500/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"><AlertTriangle className="text-rose-500" size={32}/></div>
+                                        <h2 className="text-2xl font-black text-white mb-4">¡Incorrecto Jugador {roomData.penaltyData.player}!</h2>
+                                        <div className="bg-zinc-800 p-4 rounded-xl mb-6 border border-zinc-700">
+                                            <p className="text-zinc-400 text-sm mb-2">La palabra era:</p>
+                                            <div className="text-xl font-black text-white bg-zinc-700 py-2 rounded-lg break-words mb-2">{roomData.penaltyData.playedWord}</div>
+                                            <p className="text-emerald-400 font-bold uppercase">{roomData.penaltyData.correctArticlesDisplay}</p>
+                                        </div>
+                                        <button onClick={closePenaltyModal} className="w-full py-4 bg-rose-500 text-white rounded-xl font-black uppercase">Aceptar y Pasar Turno</button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* GAME OVER MODAL */}
+                            {roomData.gameState === 'GAME_OVER' && (
+                                <div className="absolute inset-0 z-50 bg-black/95 flex items-center justify-center p-4">
+                                    <div className="bg-zinc-900 p-8 rounded-3xl border-4 border-yellow-500 text-center max-w-sm w-full">
+                                        <Trophy size={64} className="text-yellow-500 mx-auto mb-4"/>
+                                        <h2 className="text-4xl font-black text-white mb-2 uppercase">¡Fin!</h2>
+                                        <p className="text-xl text-zinc-300 mb-8">Ganador: <span className="text-yellow-400 font-black">{roomData.winner}</span></p>
+                                        {isS1 ? (
+                                            <button onClick={startGame} className="w-full py-4 bg-yellow-500 text-zinc-900 rounded-xl font-black uppercase flex justify-center gap-2"><RotateCcw/> Jugar de nuevo</button>
+                                        ) : <p className="text-zinc-500 font-bold">Esperando al Selector 1...</p>}
+                                        <button onClick={() => updateGame({ gameState: 'MENU' })} className="w-full mt-4 text-zinc-500 font-bold hover:text-white">Volver al Lobby</button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<UnoGame />);
+    </script>
+</body>
+</html>
