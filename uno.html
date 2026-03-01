@@ -49,7 +49,7 @@
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
         
-        import { ArrowLeft, Loader2, Sun, Moon, Pause, Play, RotateCcw, Share2, User, Users, AlertTriangle, BookOpen, ArrowRight, Dices, RefreshCw } from 'lucide-react';
+        import { ArrowLeft, Sun, Moon, Pause, Play, RotateCcw, Share2, User, Users, AlertTriangle, BookOpen, ArrowRight, Dices, RefreshCw, Link as LinkIcon } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -119,15 +119,25 @@
             const [joinInput, setJoinInput] = useState('');
             const [roomData, setRoomData] = useState(null);
             
+            const [isStudentMode, setIsStudentMode] = useState(false);
+            const [studentName, setStudentName] = useState('');
+
             const [isDarkMode, setIsDarkMode] = useState(true);
             const [localFeedback, setLocalFeedback] = useState({ text: '', type: '', visible: false });
             const [flashArticle, setFlashArticle] = useState(null);
-            
             const [pendingWildCard, setPendingWildCard] = useState(null); 
 
             useEffect(() => {
                 const savedTheme = localStorage.getItem('themePreference');
                 if (savedTheme === 'light') setIsDarkMode(false);
+
+                const params = new URLSearchParams(window.location.search);
+                if (params.get('mode') === 'student') {
+                    setIsStudentMode(true);
+                    setStudentName(localStorage.getItem('periplo_student_name') || '');
+                }
+                const urlCode = params.get('code');
+                if (urlCode) setJoinInput(urlCode.toUpperCase());
 
                 signInAnonymously(auth).catch(e => console.error(e));
                 const unsubscribe = onAuthStateChanged(auth, u => setUser(u));
@@ -136,7 +146,8 @@
 
             useEffect(() => {
                 if (!roomId || !user) return;
-                const roomRef = doc(db, 'artifacts/periplo-app-v1/public/rooms', roomId);
+                // Ruta limpia y segura en Firestore
+                const roomRef = doc(db, 'artifacts/periplo-app-v1/rooms', roomId);
                 
                 const unsubscribe = onSnapshot(roomRef, (snapshot) => {
                     if (snapshot.exists()) {
@@ -174,17 +185,30 @@
 
             const updateGame = async (updates) => {
                 if (!roomId) return;
-                try { await updateDoc(doc(db, 'artifacts/periplo-app-v1/public/rooms', roomId), updates); } 
+                try { await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomId), updates); } 
                 catch (e) { console.error("Error updating", e); }
             };
 
             const handleCreateRoom = async () => {
-                if (!user) return;
+                let currentUser = user;
+                if (!currentUser) {
+                    try {
+                        const cred = await signInAnonymously(auth);
+                        currentUser = cred.user;
+                    } catch (e) {
+                        alert("Conectando al servidor, intenta de nuevo en un segundo.");
+                        return;
+                    }
+                }
                 const code = Math.random().toString(36).substring(2, 6).toUpperCase().padEnd(4, 'X');
-                const roomRef = doc(db, 'artifacts/periplo-app-v1/public/rooms', code);
+                const roomRef = doc(db, 'artifacts/periplo-app-v1/rooms', code);
                 await setDoc(roomRef, {
                     roomId: code, gameState: 'MENU',
-                    players: { s1: user.uid, s2: null, j1: null, j2: null },
+                    // Ahora guardamos el nombre del jugador en cada rol
+                    players: { 
+                        s1: { uid: currentUser.uid, name: 'Maestro' }, 
+                        s2: null, j1: null, j2: null 
+                    },
                     deck: [], player1Hand: [], player2Hand: [],
                     currentArticle: null, tableCard: null, turn: 1,
                     isRandomizing: false, winner: null, penaltyData: null,
@@ -193,11 +217,33 @@
                 setRoomId(code);
             };
 
+            const handleJoinClick = () => {
+                if (!joinInput) return;
+                if (isStudentMode && !studentName.trim()) {
+                    alert("Por favor, ingresa tu nombre para entrar.");
+                    return;
+                }
+                setRoomId(joinInput);
+            };
+
             const toggleRole = async (roleId) => {
                 if (!roomData || !user) return;
                 const newPlayers = { ...roomData.players };
-                newPlayers[roleId] = newPlayers[roleId] === user.uid ? null : user.uid;
+                const currentOccupant = newPlayers[roleId];
+                
+                if (currentOccupant && currentOccupant.uid === user.uid) {
+                    newPlayers[roleId] = null; // Sale del rol
+                } else if (!currentOccupant) {
+                    // Entra al rol, guarda su UID y su Nombre
+                    newPlayers[roleId] = { uid: user.uid, name: isStudentMode ? studentName : 'Maestro' };
+                }
                 await updateGame({ players: newPlayers });
+            };
+
+            const copyStudentLink = () => {
+                const link = `${window.location.origin}${window.location.pathname}?mode=student&code=${roomId}`;
+                navigator.clipboard.writeText(link);
+                setLocalFeedback({ text: '¡Link Copiado!', type: 'success', visible: true, ts: Date.now() });
             };
 
             const startGame = async () => {
@@ -211,10 +257,11 @@
                 });
             };
 
-            const isS1 = roomData?.players?.s1 === user?.uid;
-            const isS2 = roomData?.players?.s2 === user?.uid;
-            const isJ1 = roomData?.players?.j1 === user?.uid;
-            const isJ2 = roomData?.players?.j2 === user?.uid;
+            // Verificadores de Roles usando el nuevo sistema de objetos
+            const isS1 = roomData?.players?.s1?.uid === user?.uid;
+            const isS2 = roomData?.players?.s2?.uid === user?.uid;
+            const isJ1 = roomData?.players?.j1?.uid === user?.uid;
+            const isJ2 = roomData?.players?.j2?.uid === user?.uid;
             const isSelectorRole = isS1 || isS2;
 
             const handleRandomize = async () => {
@@ -299,7 +346,7 @@
                 updates.turn = nextTurn;
 
                 if (hand.length === 0 && card.action !== 'swap') { 
-                    updates.winner = `Jugador ${playerNum}`; 
+                    updates.winner = roomData.players[`j${playerNum}`]?.name || `Jugador ${playerNum}`; 
                     updates.gameState = 'GAME_OVER'; 
                 }
 
@@ -347,9 +394,19 @@
             };
 
             // --- VISTAS ---
+            
+            // PANTALLA DE INICIO (Crear o Unirse)
             if (!roomId) return (
                 <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 flex flex-col items-center justify-center p-6 text-center animate-fade-in relative overflow-hidden">
-                    <button onClick={() => window.location.href='index.html'} className="absolute top-4 left-4 p-2 bg-slate-200 dark:bg-zinc-800 rounded-full"><ArrowLeft size={20}/></button>
+                    {!isStudentMode && (
+                        <button onClick={() => window.location.href='index.html'} className="absolute top-4 left-4 p-2 bg-slate-200 dark:bg-zinc-800 rounded-full"><ArrowLeft size={20}/></button>
+                    )}
+                    
+                    {/* Alerta flotante */}
+                    <div className={`absolute top-4 transition-all duration-300 ${localFeedback.visible ? 'translate-y-0 opacity-100' : '-translate-y-10 opacity-0'}`}>
+                        <div className="px-6 py-2 rounded-full font-bold text-white shadow-lg bg-green-500 flex gap-2"><BookOpen size={20}/> {localFeedback.text}</div>
+                    </div>
+
                     <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl shadow-2xl border border-slate-200 dark:border-zinc-800 max-w-md w-full relative z-10">
                         <div className="flex justify-center gap-2 mb-6">
                             <span className="bg-blue-500 w-10 h-14 rounded shadow transform -rotate-12 border-2 border-white dark:border-zinc-800"></span>
@@ -358,59 +415,87 @@
                             <span className="bg-green-500 w-10 h-14 rounded shadow transform rotate-12 border-2 border-white dark:border-zinc-800"></span>
                         </div>
                         <h1 className="text-4xl font-black text-slate-800 dark:text-white mb-2">UNO Gramatical</h1>
-                        <p className="text-sm text-slate-500 dark:text-zinc-400 mb-8 font-medium">Juego Universal de 112 Cartas</p>
+                        <p className="text-sm text-slate-500 dark:text-zinc-400 mb-8 font-medium">{isStudentMode ? 'Modo Alumno' : 'Juego Universal Multijugador'}</p>
 
-                        <div className="space-y-4">
-                            <button onClick={handleCreateRoom} className="w-full py-4 bg-indigo-500 hover:bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-md transition-transform active:scale-95 flex items-center justify-center gap-2 border-b-[6px] border-indigo-700 uppercase tracking-widest"><Users size={24} /> Crear Sala</button>
-                            <div className="flex items-center gap-2 py-2">
-                                <div className="flex-1 h-px bg-slate-200 dark:bg-zinc-800"></div>
-                                <span className="text-xs font-bold text-slate-400">O ÚNETE A UNA</span>
-                                <div className="flex-1 h-px bg-slate-200 dark:bg-zinc-800"></div>
-                            </div>
-                            <div className="flex gap-2">
-                                <input type="text" value={joinInput} onChange={(e) => setJoinInput(e.target.value.toUpperCase())} placeholder="CÓDIGO" maxLength={4} className="flex-1 bg-slate-100 dark:bg-zinc-800 border-2 border-slate-200 dark:border-zinc-700 rounded-2xl px-4 py-3 text-center text-xl font-black dark:text-white uppercase outline-none focus:border-indigo-500"/>
-                                <button onClick={() => setRoomId(joinInput)} disabled={joinInput.length < 4} className="bg-slate-800 text-white px-6 rounded-2xl font-black border-b-[6px] border-slate-900 disabled:opacity-50"><ArrowRight size={24}/></button>
+                        <div className="space-y-6">
+                            {!isStudentMode && (
+                                <button onClick={handleCreateRoom} className="w-full py-4 bg-indigo-500 hover:bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-md transition-transform active:scale-95 flex items-center justify-center gap-2 border-b-[6px] border-indigo-700 uppercase tracking-widest"><Users size={24} /> Crear Sala</button>
+                            )}
+                            
+                            <div className="bg-slate-100 dark:bg-zinc-800/50 p-4 rounded-2xl border border-slate-200 dark:border-zinc-700 flex flex-col gap-3">
+                                <span className="text-xs font-black text-slate-400 tracking-widest uppercase mb-1">Únete a una Sala</span>
+                                
+                                {isStudentMode && (
+                                    <input type="text" value={studentName} onChange={(e) => { setStudentName(e.target.value); localStorage.setItem('periplo_student_name', e.target.value); }} placeholder="TU NOMBRE" className="w-full bg-white dark:bg-zinc-900 border-2 border-slate-200 dark:border-zinc-700 rounded-xl px-4 py-3 text-center text-lg font-bold dark:text-white outline-none focus:border-indigo-500 transition-colors"/>
+                                )}
+                                
+                                <div className="flex gap-2">
+                                    <input type="text" value={joinInput} onChange={(e) => setJoinInput(e.target.value.toUpperCase())} placeholder="CÓDIGO" maxLength={4} className="flex-1 bg-white dark:bg-zinc-900 border-2 border-slate-200 dark:border-zinc-700 rounded-xl px-4 py-3 text-center text-xl font-black dark:text-white uppercase outline-none focus:border-indigo-500 transition-colors"/>
+                                    <button onClick={handleJoinClick} disabled={joinInput.length < 4 || (isStudentMode && !studentName.trim())} className="bg-slate-800 hover:bg-slate-700 text-white px-6 rounded-xl font-black disabled:opacity-50 transition-colors"><ArrowRight size={24}/></button>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
             );
 
+            // PANTALLA DE LOBBY (Eligen su Jugador)
             if (roomData?.gameState === 'MENU') return (
                 <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-slate-50 dark:bg-zinc-950 animate-fade-in relative">
+                    
+                    {/* Alerta flotante para el Link Copiado */}
+                    <div className={`absolute top-4 z-50 transition-all duration-300 ${localFeedback.visible ? 'translate-y-0 opacity-100' : '-translate-y-10 opacity-0'}`}>
+                        <div className="px-6 py-2 rounded-full font-bold text-white shadow-lg bg-green-500 flex gap-2 items-center"><LinkIcon size={16}/> {localFeedback.text}</div>
+                    </div>
+
                     <button onClick={() => { setRoomId(''); setRoomData(null); }} className="absolute top-4 left-4 p-2 bg-slate-200 dark:bg-zinc-800 rounded-full"><ArrowLeft size={20}/></button>
-                    <div className="bg-white dark:bg-zinc-900 p-8 rounded-[2rem] shadow-2xl border border-slate-200 dark:border-zinc-800 max-w-lg w-full">
+                    
+                    <div className="bg-white dark:bg-zinc-900 p-6 md:p-8 rounded-[2rem] shadow-2xl border border-slate-200 dark:border-zinc-800 max-w-lg w-full mt-8">
                         <div className="text-center mb-8">
                             <h2 className="text-xs font-bold text-slate-400 tracking-widest uppercase mb-2">Código de Sala</h2>
                             <div className="text-5xl font-black text-slate-800 dark:text-white tracking-[0.2em] bg-slate-100 dark:bg-zinc-800 py-4 rounded-2xl border border-slate-200 dark:border-zinc-700 mx-auto w-max px-10 shadow-inner">{roomId}</div>
+                            
+                            {/* BOTÓN PARA COPIAR LINK DE ALUMNOS (Solo para maestros) */}
+                            {!isStudentMode && (
+                                <button onClick={copyStudentLink} className="mt-4 px-6 py-2 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-indigo-600 dark:text-indigo-400 rounded-full font-bold text-sm flex items-center justify-center mx-auto gap-2 border border-slate-200 dark:border-zinc-700 transition-colors">
+                                    <Share2 size={16}/> Copiar Link de Invitación
+                                </button>
+                            )}
                         </div>
-                        <h3 className="font-black text-slate-800 dark:text-zinc-200 mb-4 text-center border-b border-slate-200 dark:border-zinc-800 pb-2 uppercase">Roles</h3>
+
+                        <h3 className="font-black text-slate-800 dark:text-zinc-200 mb-4 text-center border-b border-slate-200 dark:border-zinc-800 pb-2 uppercase">Roles de Juego</h3>
+                        
                         <div className="grid grid-cols-2 gap-3 mb-8">
                             {[
                                 { id: 's1', label: 'Maestro 1', color: 'bg-purple-500' }, { id: 's2', label: 'Maestro 2', color: 'bg-orange-500' },
                                 { id: 'j1', label: 'Jugador 1', color: 'bg-blue-500' }, { id: 'j2', label: 'Jugador 2', color: 'bg-red-500' }
                             ].map(r => {
                                 const occupant = roomData.players[r.id];
-                                const isMe = occupant === user?.uid;
-                                const isOccupied = occupant && !isMe;
+                                const isMe = occupant?.uid === user?.uid;
+                                const isOccupied = !!occupant && !isMe;
+                                const displayName = occupant ? occupant.name : r.label; // Muestra el nombre real
+                                
                                 return (
-                                    <div key={r.id} className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all ${isMe ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-500' : isOccupied ? 'bg-slate-50 dark:bg-zinc-900/50 border-slate-200 dark:border-zinc-800 opacity-60' : 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700'}`}>
+                                    <div key={r.id} className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all ${isMe ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-500' : isOccupied ? 'bg-slate-50 dark:bg-zinc-900/50 border-slate-200 dark:border-zinc-800 opacity-80' : 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700'}`}>
                                         <div className={`${r.color} p-2 rounded-full text-white`}><User size={16}/></div>
-                                        <span className="font-bold text-xs text-slate-700 dark:text-zinc-200">{r.label}</span>
-                                        <button onClick={() => toggleRole(r.id)} disabled={isOccupied} className={`text-[10px] px-3 py-1.5 rounded-lg font-black w-full uppercase transition-colors ${isMe ? 'bg-rose-500 text-white' : isOccupied ? 'bg-slate-200 dark:bg-zinc-800 text-slate-500' : 'bg-emerald-500 text-white'}`}>
-                                            {isMe ? 'Dejar' : isOccupied ? 'Lleno' : 'Tomar'}
+                                        <span className={`font-black text-xs truncate w-full text-center ${isOccupied || isMe ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-zinc-500'}`}>
+                                            {displayName}
+                                        </span>
+                                        <button onClick={() => toggleRole(r.id)} disabled={isOccupied} className={`text-[10px] px-3 py-1.5 rounded-lg font-black w-full uppercase transition-colors ${isMe ? 'bg-rose-500 text-white' : isOccupied ? 'bg-slate-200 dark:bg-zinc-800 text-slate-400' : 'bg-emerald-500 text-white'}`}>
+                                            {isMe ? 'Dejar' : isOccupied ? 'Ocupado' : 'Tomar'}
                                         </button>
                                     </div>
                                 )
                             })}
                         </div>
                         <button onClick={startGame} disabled={!isS1} className={`w-full py-4 rounded-2xl font-black text-lg uppercase tracking-widest flex items-center justify-center gap-2 border-b-[6px] transition-all ${isS1 ? 'bg-sky-500 hover:bg-sky-400 text-white border-sky-700 active:scale-95' : 'bg-slate-200 dark:bg-zinc-800 text-slate-400 dark:text-zinc-600 border-slate-300 dark:border-zinc-900 cursor-not-allowed'}`}>
-                            <Play size={24} fill="currentColor" /> {isS1 ? 'Iniciar Juego' : 'Esperando Maestro 1...'}
+                            <Play size={24} fill="currentColor" /> {isS1 ? 'Empezar Partida' : 'Esperando Maestro 1...'}
                         </button>
                     </div>
                 </div>
             );
 
+            // VISTA 3: EL JUEGO (El tablero se queda intacto como en la versión anterior)
             return (
                 <div className="flex-1 w-full flex flex-col relative h-[100dvh] overflow-hidden bg-zinc-950">
                     
@@ -505,7 +590,7 @@
                         
                         <div className={`flex-1 flex flex-col p-2 relative ${roomData.turn !== 1 ? 'opacity-50 grayscale pointer-events-none' : 'ring-inset ring-2 ring-emerald-500'}`}>
                             <div className="flex justify-between items-center bg-zinc-950 p-2 rounded-lg mb-2 shrink-0">
-                                <div className="flex items-center gap-2"><div className="bg-blue-500 p-1 rounded-full text-white"><User size={12}/></div><span className="text-xs font-bold text-white">J1 {isJ1 ? '(Tú)' : ''}</span></div>
+                                <div className="flex items-center gap-2"><div className="bg-blue-500 p-1 rounded-full text-white"><User size={12}/></div><span className="text-xs font-bold text-white truncate max-w-[80px]">{roomData.players?.j1?.name || 'J1'} {isJ1 ? '(Tú)' : ''}</span></div>
                                 <button onClick={() => handleDrawCard(1)} disabled={!isJ1 || !roomData.currentArticle} className="text-[10px] bg-zinc-800 text-white px-2 py-1 rounded font-bold hover:bg-zinc-700 uppercase">+ Robar</button>
                             </div>
                             <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-wrap content-start justify-center gap-2">
@@ -516,7 +601,7 @@
                         <div className={`flex-1 flex flex-col p-2 relative ${roomData.turn !== 2 ? 'opacity-50 grayscale pointer-events-none' : 'ring-inset ring-2 ring-emerald-500'}`}>
                             <div className="flex justify-between items-center bg-zinc-950 p-2 rounded-lg mb-2 shrink-0">
                                 <button onClick={() => handleDrawCard(2)} disabled={!isJ2 || !roomData.currentArticle} className="text-[10px] bg-zinc-800 text-white px-2 py-1 rounded font-bold hover:bg-zinc-700 uppercase">+ Robar</button>
-                                <div className="flex items-center gap-2"><span className="text-xs font-bold text-white">J2 {isJ2 ? '(Tú)' : ''}</span><div className="bg-red-500 p-1 rounded-full text-white"><User size={12}/></div></div>
+                                <div className="flex items-center gap-2"><span className="text-xs font-bold text-white truncate max-w-[80px]">{roomData.players?.j2?.name || 'J2'} {isJ2 ? '(Tú)' : ''}</span><div className="bg-red-500 p-1 rounded-full text-white"><User size={12}/></div></div>
                             </div>
                             <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-wrap content-start justify-center gap-2" dir="rtl">
                                 <div className="flex flex-wrap content-start justify-center gap-2" dir="ltr">
@@ -530,7 +615,7 @@
                         <div className="absolute inset-0 z-50 bg-black/90 flex items-center justify-center p-4 animate-fade-in">
                             <div className="bg-zinc-900 p-6 sm:p-8 rounded-3xl border-4 border-rose-500 max-w-sm w-full text-center shadow-2xl">
                                 <div className="bg-rose-500/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"><AlertTriangle className="text-rose-500" size={32}/></div>
-                                <h2 className="text-2xl font-black text-white mb-4 uppercase">¡Incorrecto Jugador {roomData.penaltyData.player}!</h2>
+                                <h2 className="text-2xl font-black text-white mb-4 uppercase">¡Incorrecto {roomData.players[`j${roomData.penaltyData.player}`]?.name || `Jugador ${roomData.penaltyData.player}`}!</h2>
                                 <div className="bg-zinc-800 p-4 rounded-xl mb-6 border border-zinc-700 text-left">
                                     <p className="text-emerald-400 font-bold mb-2 flex items-center gap-2"><BookOpen size={16}/> Regla Gramatical:</p>
                                     <p className="text-zinc-300 text-sm leading-relaxed">{roomData.penaltyData.explanation}</p>
