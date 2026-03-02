@@ -45,8 +45,8 @@
         import React, { useState, useEffect, Component, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-        import { Plus, Folder, X, LayoutGrid, Puzzle, Grid, ArrowLeft, Trash2, Copy, Edit2, AlertTriangle, Map as MapIcon, Gamepad2, BookOpen, Calendar, Users, Sun, Moon, Zap, Dices, RotateCcw } from 'lucide-react';
+        import { getFirestore, collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, deleteDoc, updateDoc, getDocs } from 'firebase/firestore';
+        import { Plus, Folder, X, LayoutGrid, Puzzle, Grid, ArrowLeft, Trash2, Copy, Edit2, AlertTriangle, Map as MapIcon, Gamepad2, BookOpen, Calendar, Users, Sun, Moon, Zap, Dices, RotateCcw, LifeBuoy } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -105,6 +105,7 @@
 
             const [undoAction, setUndoAction] = useState(null);
             const undoTimeoutRef = useRef(null);
+            const [isRescuing, setIsRescuing] = useState(false);
 
             useEffect(() => {
                 const savedTheme = localStorage.getItem('themePreference');
@@ -121,15 +122,12 @@
                 else document.documentElement.classList.remove('dark');
             }, [isDarkMode]);
 
-            // FIX SALVAVIDAS: Filtrar del lado del cliente para no ocultar archivos viejos sin la etiqueta isDeleted
             useEffect(() => {
                 const currentPath = path.join('/');
                 
-                // Traemos TODOS los archivos de la ruta actual
                 const qF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('parentPath', '==', currentPath));
                 const unsubF = onSnapshot(qF, (s) => {
                     const allFolders = s.docs.map(d => ({id: d.id, ...d.data()}));
-                    // Filtramos en JS: Solo ocultamos si isDeleted es explícitamente TRUE. Si es undefined (viejos), se muestran.
                     setUserFolders(allFolders.filter(f => f.isDeleted !== true));
                 });
                 
@@ -139,7 +137,6 @@
                     setUserQuizzes(allQuizzes.filter(q => q.isDeleted !== true));
                 });
 
-                // Papelera: Aquí sí buscamos explícitamente los que tienen isDeleted == true
                 const qTrashF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('isDeleted', '==', true));
                 const unsubTrashF = onSnapshot(qTrashF, (s) => setTrashItems(prev => ({...prev, folders: s.docs.map(d => ({id: d.id, ...d.data()}))})));
 
@@ -227,7 +224,8 @@
                 });
             };
 
-            const handleDropOnTarget = async (e, newParentPath) => {
+            // FIX: PREVENIR INCEPTION (No dejar soltar una carpeta en sí misma)
+            const handleDropOnTarget = async (e, newParentPath, targetId = null) => {
                 e.preventDefault();
                 e.currentTarget.classList.remove('drag-over-breadcrumb');
                 const itemId = e.dataTransfer.getData('itemId');
@@ -235,6 +233,9 @@
                 const oldParentPath = path.join('/');
 
                 if (!itemId || newParentPath === oldParentPath) return;
+                
+                // Previene meter la carpeta dentro de sí misma
+                if (itemType === 'folder' && itemId === targetId) return;
                 
                 try { 
                     if (itemType === 'quiz') {
@@ -260,6 +261,40 @@
                 if(confirm("¿Eliminar PERMANENTEMENTE? Esto no se puede deshacer.")) {
                     const colName = type === 'folder' ? 'folders' : 'quizzes';
                     await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, colName, id));
+                }
+            };
+
+            // LA AMBULANCIA: Rescata cualquier carpeta atrapada en el Inception Bug
+            const rescueAllFiles = async () => {
+                if(!confirm("Esto enviará TODAS tus carpetas y actividades a la pantalla de INICIO (se saldrán de las subcarpetas). ¿Estás seguro?")) return;
+                setIsRescuing(true);
+                try {
+                    const qF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'));
+                    const snapF = await getDocs(qF);
+                    const updatePromises = [];
+                    
+                    snapF.forEach(d => {
+                        if (d.data().isDeleted !== true && d.data().parentPath !== "") {
+                            updatePromises.push(updateDoc(d.ref, { parentPath: "" }));
+                        }
+                    });
+
+                    const qQ = query(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'));
+                    const snapQ = await getDocs(qQ);
+                    snapQ.forEach(d => {
+                        if (d.data().isDeleted !== true && d.data().parentPath !== "") {
+                            updatePromises.push(updateDoc(d.ref, { parentPath: "" }));
+                        }
+                    });
+
+                    await Promise.all(updatePromises);
+                    setModals({...modals, trash: false});
+                    navigateTo([]);
+                    alert("¡Rescate completo! Todos tus archivos han vuelto a la página de INICIO.");
+                } catch (e) {
+                    alert("Error en el rescate: " + e.message);
+                } finally {
+                    setIsRescuing(false);
                 }
             };
 
@@ -304,6 +339,7 @@
                 <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 transition-colors duration-300">
                     <div className="max-w-7xl mx-auto p-4 md:p-6 fade-in relative">
                         
+                        {/* NOTIFICACIÓN UNDO FLOTANTE */}
                         {undoAction && (
                             <div className="fixed bottom-6 right-6 bg-slate-900 dark:bg-zinc-800 text-white p-4 rounded-xl shadow-2xl z-50 flex items-center gap-4 animate-in slide-in-from-bottom-10 fade-in duration-300 border border-slate-700 dark:border-zinc-700">
                                 <span className="font-bold text-sm">{undoAction.message}</span>
@@ -376,7 +412,7 @@
                                     draggable
                                     onDragStart={e => handleDragStart(e, f.id, 'folder')}
                                     onDragOver={e => e.preventDefault()}
-                                    onDrop={e => handleDropOnTarget(e, path.length > 0 ? `${path.join('/')}/${f.name}` : f.name)}
+                                    onDrop={e => handleDropOnTarget(e, path.length > 0 ? `${path.join('/')}/${f.name}` : f.name, f.id)}
                                     className={`relative h-24 sm:h-auto sm:aspect-[4/3] ${f.colorClass || FOLDER_PALETTE[0]} border border-transparent rounded-3xl flex flex-row sm:flex-col items-center justify-start sm:justify-center gap-4 sm:gap-3 px-6 sm:px-0 shadow-sm hover:scale-[1.02] hover:shadow-lg transition-all group cursor-pointer`}
                                 >
                                     <div className="absolute top-2 right-2 flex gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity z-10">
@@ -476,6 +512,18 @@
                                         </div>
                                         <button onClick={() => setModals({...modals, trash: false})} className="w-10 h-10 rounded-full bg-slate-50 dark:bg-zinc-800 hover:bg-slate-100 hover:text-slate-700 flex items-center justify-center transition-all text-slate-500 dark:text-zinc-400"><X size={20}/></button>
                                     </div>
+
+                                    {/* LA AMBULANCIA: RESCATE DE INCEPTION */}
+                                    <div className="bg-indigo-50 dark:bg-indigo-900/30 border-b border-indigo-200 dark:border-indigo-800 p-4 flex justify-between items-center shrink-0">
+                                        <div>
+                                            <h4 className="font-bold text-indigo-800 dark:text-indigo-300 text-sm flex items-center gap-1"><AlertTriangle size={16}/> ¿Perdiste una carpeta?</h4>
+                                            <p className="text-xs text-indigo-600 dark:text-indigo-400">Si moviste algo por error, este botón devuelve TODO al inicio.</p>
+                                        </div>
+                                        <button onClick={rescueAllFiles} disabled={isRescuing} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 shadow-md transition-colors whitespace-nowrap">
+                                            {isRescuing ? <Loader2 size={16} className="animate-spin"/> : <LifeBuoy size={16}/>} Rescatar Todo
+                                        </button>
+                                    </div>
+
                                     <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-50/50 dark:bg-zinc-950/50 space-y-2">
                                         {trashItems.folders.length === 0 && trashItems.quizzes.length === 0 && (
                                             <div className="text-center py-12 text-slate-400">
