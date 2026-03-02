@@ -42,11 +42,11 @@
     <div id="root"></div>
     
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, Component } from 'react';
+        import React, { useState, useEffect, Component, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-        import { Plus, Folder, X, LayoutGrid, Puzzle, Grid, ArrowLeft, Trash2, Copy, Edit2, AlertTriangle, Map as MapIcon, Gamepad2, BookOpen, Calendar, Users, Sun, Moon, Zap, Dices } from 'lucide-react';
+        import { Plus, Folder, X, LayoutGrid, Puzzle, Grid, ArrowLeft, Trash2, Copy, Edit2, AlertTriangle, Map as MapIcon, Gamepad2, BookOpen, Calendar, Users, Sun, Moon, Zap, Dices, RotateCcw } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -97,10 +97,15 @@
             const [path, setPath] = useState([]);
             const [userFolders, setUserFolders] = useState([]);
             const [userQuizzes, setUserQuizzes] = useState([]);
-            const [modals, setModals] = useState({ folder: false, activity: false });
+            const [trashItems, setTrashItems] = useState({ folders: [], quizzes: [] }); // NUEVO: Estado Papelera
+            const [modals, setModals] = useState({ folder: false, activity: false, trash: false });
             const [editingFolder, setEditingFolder] = useState(null);
             const [folderForm, setFolderForm] = useState({ name: '', colorClass: FOLDER_PALETTE[0] });
             const [isDarkMode, setIsDarkMode] = useState(true);
+
+            // NUEVO: SISTEMA DE DESHACER (UNDO)
+            const [undoAction, setUndoAction] = useState(null);
+            const undoTimeoutRef = useRef(null);
 
             useEffect(() => {
                 const savedTheme = localStorage.getItem('themePreference');
@@ -117,14 +122,43 @@
                 else document.documentElement.classList.remove('dark');
             }, [isDarkMode]);
 
+            // LISTENER PRINCIPAL Y DE PAPELERA
             useEffect(() => {
                 const currentPath = path.join('/');
-                const qF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('parentPath', '==', currentPath));
+                
+                // Activos
+                const qF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('parentPath', '==', currentPath), where('isDeleted', '==', false));
                 const unsubF = onSnapshot(qF, (s) => setUserFolders(s.docs.map(d => ({id: d.id, ...d.data()}))));
-                const qQ = query(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'), where('parentPath', '==', currentPath));
+                
+                const qQ = query(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'), where('parentPath', '==', currentPath), where('isDeleted', '==', false));
                 const unsubQ = onSnapshot(qQ, (s) => setUserQuizzes(s.docs.map(d => ({id: d.id, ...d.data()}))));
-                return () => { unsubF(); unsubQ(); };
+
+                // Borrados (Papelera)
+                const qTrashF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('isDeleted', '==', true));
+                const unsubTrashF = onSnapshot(qTrashF, (s) => setTrashItems(prev => ({...prev, folders: s.docs.map(d => ({id: d.id, ...d.data()}))})));
+
+                const qTrashQ = query(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'), where('isDeleted', '==', true));
+                const unsubTrashQ = onSnapshot(qTrashQ, (s) => setTrashItems(prev => ({...prev, quizzes: s.docs.map(d => ({id: d.id, ...d.data()}))})));
+
+                return () => { unsubF(); unsubQ(); unsubTrashF(); unsubTrashQ(); };
             }, [path]);
+
+            // FUNCIÓN PARA MOSTRAR EL POPUP DE UNDO
+            const triggerUndo = (message, actionFn) => {
+                setUndoAction({ message, actionFn });
+                if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
+                undoTimeoutRef.current = setTimeout(() => {
+                    setUndoAction(null);
+                }, 5000); // Desaparece en 5 segundos
+            };
+
+            const executeUndo = () => {
+                if (undoAction && undoAction.actionFn) {
+                    undoAction.actionFn();
+                    setUndoAction(null);
+                    if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
+                }
+            };
 
             const toggleTheme = () => { 
                 setIsDarkMode(!isDarkMode); 
@@ -155,7 +189,7 @@
                     if (editingFolder) {
                         await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'folders', editingFolder.id), { name: folderForm.name.trim(), colorClass: folderForm.colorClass });
                     } else {
-                        await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), { name: folderForm.name.trim(), colorClass: folderForm.colorClass, parentPath: path.join('/'), createdAt: serverTimestamp() });
+                        await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), { name: folderForm.name.trim(), colorClass: folderForm.colorClass, parentPath: path.join('/'), createdAt: serverTimestamp(), isDeleted: false });
                     }
                     setModals({...modals, folder: false});
                 } catch(e) { alert(e.message); }
@@ -164,13 +198,67 @@
             const duplicateFolder = async (e, folder) => {
                 e.preventDefault(); e.stopPropagation();
                 try {
-                    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), { name: `${folder.name} (Copia)`, colorClass: folder.colorClass, parentPath: folder.parentPath, createdAt: serverTimestamp() });
+                    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), { name: `${folder.name} (Copia)`, colorClass: folder.colorClass, parentPath: folder.parentPath, createdAt: serverTimestamp(), isDeleted: false });
                 } catch(err) { alert(err.message); }
             };
 
-            const deleteFolder = async (e, id) => {
+            // MODIFICADO PARA ENVIAR A PAPELERA (Soft Delete) CON UNDO
+            const deleteFolder = async (e, folder) => {
                 e.preventDefault(); e.stopPropagation();
-                if(confirm("¿Eliminar carpeta?")) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'folders', id));
+                const folderRef = doc(db, 'artifacts', appId, 'users', user.uid, 'folders', folder.id);
+                await updateDoc(folderRef, { isDeleted: true });
+                
+                triggerUndo(`Carpeta "${folder.name}" enviada a papelera`, async () => {
+                    await updateDoc(folderRef, { isDeleted: false });
+                });
+            };
+
+            const handleDeleteActivity = async (e, quiz) => {
+                e.preventDefault(); e.stopPropagation();
+                const quizRef = doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', quiz.id);
+                await updateDoc(quizRef, { isDeleted: true });
+
+                triggerUndo(`Actividad "${quiz.title}" enviada a papelera`, async () => {
+                    await updateDoc(quizRef, { isDeleted: false });
+                });
+            };
+
+            // MODIFICADO PARA SOPORTAR UNDO EN DRAG & DROP
+            const handleDropOnTarget = async (e, newParentPath) => {
+                e.preventDefault();
+                e.currentTarget.classList.remove('drag-over-breadcrumb');
+                const itemId = e.dataTransfer.getData('itemId');
+                const itemType = e.dataTransfer.getData('itemType');
+                const oldParentPath = path.join('/');
+
+                if (!itemId || newParentPath === oldParentPath) return;
+                
+                try { 
+                    if (itemType === 'quiz') {
+                        const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', itemId);
+                        await updateDoc(ref, { parentPath: newParentPath }); 
+                        triggerUndo(`Actividad movida`, async () => { await updateDoc(ref, { parentPath: oldParentPath }); });
+                    } 
+                    else if (itemType === 'folder') {
+                        const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'folders', itemId);
+                        await updateDoc(ref, { parentPath: newParentPath });
+                        triggerUndo(`Carpeta movida`, async () => { await updateDoc(ref, { parentPath: oldParentPath }); });
+                    }
+                } 
+                catch (err) { alert(err.message); }
+            };
+
+            // --- FUNCIONES DE LA PAPELERA ---
+            const restoreItem = async (id, type) => {
+                const colName = type === 'folder' ? 'folders' : 'quizzes';
+                await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, colName, id), { isDeleted: false });
+            };
+
+            const permanentDelete = async (id, type) => {
+                if(confirm("¿Eliminar PERMANENTEMENTE? Esto no se puede deshacer.")) {
+                    const colName = type === 'folder' ? 'folders' : 'quizzes';
+                    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, colName, id));
+                }
             };
 
             const handleActivityClick = (e, gameType) => {
@@ -208,30 +296,22 @@
                 else alert("Editor no disponible en esta versión para este juego.");
             };
 
-            const handleDeleteActivity = async (e, id) => {
-                e.preventDefault(); e.stopPropagation();
-                if(confirm("¿Estás seguro de eliminar esta actividad?")) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', id));
-            };
-
             const handleDragStart = (e, id, type) => { e.dataTransfer.setData('itemId', id); e.dataTransfer.setData('itemType', type); };
-
-            const handleDropOnTarget = async (e, newParentPath) => {
-                e.preventDefault();
-                e.currentTarget.classList.remove('drag-over-breadcrumb');
-                const itemId = e.dataTransfer.getData('itemId');
-                const itemType = e.dataTransfer.getData('itemType');
-                if (!itemId) return;
-                try { 
-                    if (itemType === 'quiz') await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', itemId), { parentPath: newParentPath }); 
-                    else if (itemType === 'folder') await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'folders', itemId), { parentPath: newParentPath });
-                } 
-                catch (err) { alert(err.message); }
-            };
 
             return (
                 <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 transition-colors duration-300">
-                    <div className="max-w-7xl mx-auto p-4 md:p-6 fade-in">
+                    <div className="max-w-7xl mx-auto p-4 md:p-6 fade-in relative">
                         
+                        {/* NOTIFICACIÓN UNDO FLOTANTE */}
+                        {undoAction && (
+                            <div className="fixed bottom-6 right-6 bg-slate-900 dark:bg-zinc-800 text-white p-4 rounded-xl shadow-2xl z-50 flex items-center gap-4 animate-in slide-in-from-bottom-10 fade-in duration-300 border border-slate-700 dark:border-zinc-700">
+                                <span className="font-bold text-sm">{undoAction.message}</span>
+                                <button onClick={executeUndo} className="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-lg font-black text-xs uppercase tracking-widest flex items-center gap-2 transition-colors">
+                                    <RotateCcw size={14}/> Deshacer
+                                </button>
+                            </div>
+                        )}
+
                         <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl shadow-sm border border-slate-200 dark:border-zinc-800 mb-6 flex flex-col md:flex-row gap-4 justify-between items-center relative z-20 transition-colors w-full">
                             <div className="flex items-center justify-between w-full md:w-auto">
                                 <div className="flex items-center gap-3">
@@ -247,6 +327,9 @@
                                 <a href="students.html" className="justify-center bg-white dark:bg-zinc-800 border-2 border-indigo-100 dark:border-zinc-700 text-indigo-600 dark:text-indigo-400 px-3 py-2.5 rounded-xl font-bold flex gap-2 text-xs md:text-sm items-center hover:bg-indigo-50 dark:hover:bg-zinc-700"><Users size={16}/> Alumnos</a>
                                 <a href="dashboard-schedule.html" className="justify-center bg-emerald-500 hover:bg-emerald-600 dark:bg-emerald-600 dark:hover:bg-emerald-500 text-white px-3 py-2.5 rounded-xl font-bold flex gap-2 text-xs md:text-sm items-center shadow-md shadow-emerald-200 dark:shadow-emerald-900/20"><Calendar size={16}/> Agenda</a>
                                 <div className="hidden md:block w-px h-8 bg-slate-200 dark:bg-zinc-800 mx-1"></div>
+                                <button onClick={() => setModals({...modals, trash: true})} className="justify-center bg-slate-50 dark:bg-zinc-800 text-rose-500 dark:text-rose-400 px-3 py-2.5 rounded-xl font-bold flex gap-2 hover:bg-rose-50 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 transition-all text-xs md:text-sm items-center relative">
+                                    <Trash2 size={16}/> {(trashItems.folders.length > 0 || trashItems.quizzes.length > 0) && <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-ping"></span>}
+                                </button>
                                 <button onClick={() => openFolderModal()} className="justify-center bg-slate-50 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300 px-3 py-2.5 rounded-xl font-bold flex gap-2 hover:bg-slate-100 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 transition-all text-xs md:text-sm items-center"><Plus size={16}/> Carpeta</button>
                                 <button onClick={() => setModals({...modals, activity: true})} className="justify-center bg-indigo-600 dark:bg-indigo-500 text-white px-3 py-2.5 md:px-5 rounded-xl font-bold flex gap-2 hover:bg-indigo-700 dark:hover:bg-indigo-600 shadow-lg shadow-indigo-200 dark:shadow-none transition-all text-xs md:text-sm items-center"><Plus size={16}/> Actividad</button>
                                 <button onClick={toggleTheme} className="hidden md:block p-2 ml-2 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-amber-400 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors">
@@ -298,7 +381,7 @@
                                     <div className="absolute top-2 right-2 flex gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity z-10">
                                         <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); openFolderModal(f); }} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-white dark:hover:bg-black/50 transition-colors"><Edit2 size={12}/></button>
                                         <button onClick={(e) => duplicateFolder(e, f)} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-white dark:hover:bg-black/50 transition-colors"><Copy size={12}/></button>
-                                        <button onClick={(e) => deleteFolder(e, f.id)} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-rose-500 hover:text-white transition-colors"><Trash2 size={12}/></button>
+                                        <button onClick={(e) => deleteFolder(e, f)} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-rose-500 hover:text-white transition-colors"><Trash2 size={12}/></button>
                                     </div>
                                     <Folder size={36} className="opacity-80 shrink-0"/>
                                     <span className="font-black text-[14px] sm:text-[12px] text-left sm:text-center pr-12 sm:pr-4 sm:px-4 uppercase tracking-wide truncate w-full">{f.name}</span>
@@ -317,7 +400,7 @@
                                     >
                                         <div className="absolute top-2 right-2 flex gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity z-10">
                                             <button onClick={(e) => handleEditActivity(e, q)} className="p-1.5 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 shadow-sm transition-colors"><Edit2 size={14}/></button>
-                                            <button onClick={(e) => handleDeleteActivity(e, q.id)} className="p-1.5 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-red-600 dark:hover:text-red-400 shadow-sm transition-colors"><Trash2 size={14}/></button>
+                                            <button onClick={(e) => handleDeleteActivity(e, q)} className="p-1.5 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-red-600 dark:hover:text-red-400 shadow-sm transition-colors"><Trash2 size={14}/></button>
                                         </div>
                                         <div className={`w-28 sm:w-full sm:h-1/2 ${info.color} flex items-center justify-center text-white shrink-0`}><info.icon size={28} /></div>
                                         <div className="p-4 sm:p-4 flex-1 flex flex-col justify-center sm:justify-between text-slate-700 dark:text-zinc-200 overflow-hidden w-full">
@@ -329,8 +412,9 @@
                             })}
                         </div>
 
+                        {/* MODAL: CARPETA */}
                         {modals.folder && (
-                            <div className="fixed inset-0 bg-slate-900/60 dark:bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="fixed inset-0 bg-slate-900/60 dark:bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
                                 <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl w-full max-w-sm shadow-2xl animate-in zoom-in-95 border border-transparent dark:border-zinc-800">
                                     <h3 className="font-black text-xl mb-4">{editingFolder ? 'Editar Carpeta' : 'Nueva Carpeta'}</h3>
                                     <input value={folderForm.name} onChange={e => setFolderForm({...folderForm, name: e.target.value})} placeholder="Nombre..." className="w-full p-4 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-2xl mb-4 font-bold outline-none focus:border-indigo-500 dark:focus:border-indigo-500 dark:text-white" autoFocus/>
@@ -344,8 +428,9 @@
                             </div>
                         )}
 
+                        {/* MODAL: ELEGIR ACTIVIDAD */}
                         {modals.activity && (
-                            <div className="fixed inset-0 bg-slate-900/80 dark:bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in">
+                            <div className="fixed inset-0 bg-slate-900/80 dark:bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in">
                                 <div className="bg-white dark:bg-zinc-900 rounded-[2rem] w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl border border-transparent dark:border-zinc-800">
                                     <div className="p-6 border-b border-slate-100 dark:border-zinc-800 flex justify-between items-center bg-white dark:bg-zinc-900 sticky top-0 z-10 shrink-0">
                                         <div><h3 className="font-black text-2xl text-slate-800 dark:text-white tracking-tight">Crea o Selecciona</h3><p className="text-slate-400 dark:text-zinc-400 text-xs font-bold uppercase tracking-widest mt-1">Elige el motor para tu actividad</p></div>
@@ -374,6 +459,59 @@
                                                 ))}
                                             </div>
                                         </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* MODAL: PAPELERA DE RECICLAJE */}
+                        {modals.trash && (
+                            <div className="fixed inset-0 bg-slate-900/80 dark:bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in">
+                                <div className="bg-white dark:bg-zinc-900 rounded-[2rem] w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl border border-transparent dark:border-zinc-800">
+                                    <div className="p-6 border-b border-slate-100 dark:border-zinc-800 flex justify-between items-center bg-white dark:bg-zinc-900 sticky top-0 z-10 shrink-0">
+                                        <div className="flex items-center gap-3">
+                                            <div className="bg-rose-100 dark:bg-rose-900/30 text-rose-500 p-3 rounded-xl"><Trash2 size={24}/></div>
+                                            <div><h3 className="font-black text-xl text-slate-800 dark:text-white tracking-tight">Papelera</h3><p className="text-slate-400 dark:text-zinc-400 text-xs font-bold uppercase tracking-widest mt-1">Archivos eliminados</p></div>
+                                        </div>
+                                        <button onClick={() => setModals({...modals, trash: false})} className="w-10 h-10 rounded-full bg-slate-50 dark:bg-zinc-800 hover:bg-slate-100 hover:text-slate-700 flex items-center justify-center transition-all text-slate-500 dark:text-zinc-400"><X size={20}/></button>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-50/50 dark:bg-zinc-950/50 space-y-2">
+                                        {trashItems.folders.length === 0 && trashItems.quizzes.length === 0 && (
+                                            <div className="text-center py-12 text-slate-400">
+                                                <CheckCircle2 size={48} className="mx-auto mb-4 opacity-20"/>
+                                                <p className="font-bold">La papelera está vacía</p>
+                                            </div>
+                                        )}
+                                        {trashItems.folders.map(f => (
+                                            <div key={f.id} className="bg-white dark:bg-zinc-800 p-4 rounded-xl border border-slate-200 dark:border-zinc-700 flex justify-between items-center shadow-sm">
+                                                <div className="flex items-center gap-3">
+                                                    <Folder className="text-slate-400"/>
+                                                    <div>
+                                                        <div className="font-bold text-sm text-slate-700 dark:text-zinc-200">{f.name}</div>
+                                                        <div className="text-xs text-slate-400">Carpeta</div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => restoreItem(f.id, 'folder')} className="bg-emerald-100 text-emerald-600 hover:bg-emerald-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">Restaurar</button>
+                                                    <button onClick={() => permanentDelete(f.id, 'folder')} className="bg-rose-100 text-rose-600 hover:bg-rose-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">Destruir</button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {trashItems.quizzes.map(q => (
+                                            <div key={q.id} className="bg-white dark:bg-zinc-800 p-4 rounded-xl border border-slate-200 dark:border-zinc-700 flex justify-between items-center shadow-sm">
+                                                <div className="flex items-center gap-3">
+                                                    <LayoutGrid className="text-slate-400"/>
+                                                    <div>
+                                                        <div className="font-bold text-sm text-slate-700 dark:text-zinc-200">{q.title}</div>
+                                                        <div className="text-xs text-slate-400">Actividad: {q.type}</div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => restoreItem(q.id, 'quiz')} className="bg-emerald-100 text-emerald-600 hover:bg-emerald-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">Restaurar</button>
+                                                    <button onClick={() => permanentDelete(q.id, 'quiz')} className="bg-rose-100 text-rose-600 hover:bg-rose-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">Destruir</button>
+                                                </div>
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
                             </div>
