@@ -36,18 +36,20 @@
         .fade-in { animation: fadeIn 0.3s ease-in; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .drag-over-breadcrumb { background-color: rgba(99, 102, 241, 0.2); border-radius: 0.5rem; padding: 0 0.5rem; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .dark .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; }
     </style>
 </head>
 <body>
     <div id="root"></div>
     
     <script type="text/babel" data-type="module">
-        // Importación a prueba de balas (sin CheckCircle2)
         import React, { useState, useEffect, Component, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, deleteDoc, updateDoc, getDocs } from 'firebase/firestore';
-        import { Plus, Folder, X, LayoutGrid, Puzzle, Grid, ArrowLeft, Trash2, Copy, Edit2, AlertTriangle, Map as MapIcon, Gamepad2, BookOpen, Calendar, Users, Sun, Moon, Zap, Dices, RotateCcw, LifeBuoy } from 'lucide-react';
+        import { Plus, Folder, X, LayoutGrid, Puzzle, Grid, ArrowLeft, Trash2, Copy, Edit2, AlertTriangle, Map as MapIcon, Gamepad2, BookOpen, Calendar, Users, Sun, Moon, Zap, Dices, RotateCcw, LifeBuoy, CheckSquare, Check, FolderInput, ChevronRight } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -61,7 +63,7 @@
                 if (this.state.hasError) return (
                     <div className="h-screen flex flex-col items-center justify-center p-8 text-center bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100">
                         <AlertTriangle size={48} className="text-rose-500 mb-4"/>
-                        <h2 className="text-xl font-bold mb-2">Algo salió mal</h2>
+                        <h2 className="text-xl font-bold mb-2">Algo salió mal visualmente</h2>
                         <button onClick={() => window.location.reload()} className="bg-slate-900 dark:bg-white text-white dark:text-zinc-900 px-6 py-3 rounded-xl font-bold">Recargar</button>
                     </div>
                 );
@@ -104,6 +106,13 @@
             const [folderForm, setFolderForm] = useState({ name: '', colorClass: FOLDER_PALETTE[0] });
             const [isDarkMode, setIsDarkMode] = useState(true);
 
+            // SISTEMA MULTI-SELECCIÓN Y MOVER
+            const [selectedItems, setSelectedItems] = useState([]);
+            const [isSelecting, setIsSelecting] = useState(false);
+            const [moveModalOpen, setMoveModalOpen] = useState(false);
+            const [moveTarget, setMoveTarget] = useState([]); // El path donde estamos navegando en el modal
+            const [moveModalFolders, setMoveModalFolders] = useState([]); // Las carpetas dentro del modal de mover
+
             const [undoAction, setUndoAction] = useState(null);
             const undoTimeoutRef = useRef(null);
             const [isRescuing, setIsRescuing] = useState(false);
@@ -123,19 +132,17 @@
                 else document.documentElement.classList.remove('dark');
             }, [isDarkMode]);
 
+            // CARGAR DATOS PRINCIPALES
             useEffect(() => {
                 const currentPath = path.join('/');
-                
                 const qF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('parentPath', '==', currentPath));
                 const unsubF = onSnapshot(qF, (s) => {
-                    const allFolders = s.docs.map(d => ({id: d.id, ...d.data()}));
-                    setUserFolders(allFolders.filter(f => f.isDeleted !== true));
+                    setUserFolders(s.docs.map(d => ({id: d.id, ...d.data()})).filter(f => f.isDeleted !== true));
                 });
                 
                 const qQ = query(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'), where('parentPath', '==', currentPath));
                 const unsubQ = onSnapshot(qQ, (s) => {
-                    const allQuizzes = s.docs.map(d => ({id: d.id, ...d.data()}));
-                    setUserQuizzes(allQuizzes.filter(q => q.isDeleted !== true));
+                    setUserQuizzes(s.docs.map(d => ({id: d.id, ...d.data()})).filter(q => q.isDeleted !== true));
                 });
 
                 const qTrashF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('isDeleted', '==', true));
@@ -147,29 +154,177 @@
                 return () => { unsubF(); unsubQ(); unsubTrashF(); unsubTrashQ(); };
             }, [path]);
 
+            // CARGAR CARPETAS PARA EL MODAL DE "MOVER A..."
+            useEffect(() => {
+                if (!moveModalOpen) return;
+                const currentMovePath = moveTarget.join('/');
+                const qF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('parentPath', '==', currentMovePath));
+                const unsubF = onSnapshot(qF, (s) => {
+                    setMoveModalFolders(s.docs.map(d => ({id: d.id, ...d.data()})).filter(f => f.isDeleted !== true));
+                });
+                return () => unsubF();
+            }, [moveTarget, moveModalOpen]);
+
+            // MEJORA DEL AUTO-SCROLL (Más sensible y rápido)
+            useEffect(() => {
+                let scrollInterval = null;
+                const handleDragOverEdge = (e) => {
+                    const threshold = 150; // Aumentado a 150px
+                    const speed = 25; // Más rápido
+                    const clientY = e.clientY || (e.touches && e.touches.length > 0 ? e.touches[0].clientY : 0);
+                    if (!clientY) return;
+
+                    if (clientY < threshold) {
+                        if (!scrollInterval) scrollInterval = setInterval(() => window.scrollBy(0, -speed), 20);
+                    } else if (window.innerHeight - clientY < threshold) {
+                        if (!scrollInterval) scrollInterval = setInterval(() => window.scrollBy(0, speed), 20);
+                    } else {
+                        if (scrollInterval) { clearInterval(scrollInterval); scrollInterval = null; }
+                    }
+                };
+
+                const handleDragEndEdge = () => { if (scrollInterval) { clearInterval(scrollInterval); scrollInterval = null; } };
+
+                window.addEventListener('dragover', handleDragOverEdge);
+                window.addEventListener('touchmove', handleDragOverEdge, { passive: true });
+                window.addEventListener('dragend', handleDragEndEdge);
+                window.addEventListener('drop', handleDragEndEdge);
+                window.addEventListener('touchend', handleDragEndEdge);
+                
+                return () => {
+                    window.removeEventListener('dragover', handleDragOverEdge);
+                    window.removeEventListener('touchmove', handleDragOverEdge);
+                    window.removeEventListener('dragend', handleDragEndEdge);
+                    window.removeEventListener('drop', handleDragEndEdge);
+                    window.removeEventListener('touchend', handleDragEndEdge);
+                    if (scrollInterval) clearInterval(scrollInterval);
+                };
+            }, []);
+
+            // --- LÓGICA DE SELECCIÓN Y DRAG MÚLTIPLE ---
+            const toggleSelect = (e, item, type) => {
+                e.stopPropagation(); e.preventDefault();
+                const exists = selectedItems.find(i => i.id === item.id);
+                if (exists) setSelectedItems(selectedItems.filter(i => i.id !== item.id));
+                else setSelectedItems([...selectedItems, {id: item.id, type, name: item.name || item.title}]);
+            };
+
+            const handleDragStart = (e, id, type) => { 
+                // Si arrastramos algo seleccionado, nos llevamos TODOS los seleccionados
+                let payload = [{id, type}];
+                if (selectedItems.find(i => i.id === id)) {
+                    payload = selectedItems;
+                }
+                e.dataTransfer.setData('payload', JSON.stringify(payload)); 
+            };
+
+            const handleDropOnTarget = async (e, newParentPath, targetId = null) => {
+                e.preventDefault();
+                e.currentTarget.classList.remove('drag-over-breadcrumb');
+                const payloadStr = e.dataTransfer.getData('payload');
+                if (!payloadStr) return;
+                
+                const payload = JSON.parse(payloadStr);
+                const oldParentPath = path.join('/');
+
+                if (newParentPath === oldParentPath) return;
+                
+                // Previene Inception: No puedes meter una carpeta dentro de sí misma o de su propia selección
+                if (payload.some(item => item.type === 'folder' && item.id === targetId)) return;
+                
+                try { 
+                    const updatePromises = payload.map(item => {
+                        const ref = doc(db, 'artifacts', appId, 'users', user.uid, item.type === 'folder' ? 'folders' : 'quizzes', item.id);
+                        return updateDoc(ref, { parentPath: newParentPath });
+                    });
+                    await Promise.all(updatePromises);
+                    
+                    triggerUndo(`${payload.length} elemento(s) movido(s)`, async () => { 
+                        const undoPromises = payload.map(item => {
+                            const ref = doc(db, 'artifacts', appId, 'users', user.uid, item.type === 'folder' ? 'folders' : 'quizzes', item.id);
+                            return updateDoc(ref, { parentPath: oldParentPath });
+                        });
+                        await Promise.all(undoPromises);
+                    });
+                    setSelectedItems([]);
+                    setIsSelecting(false);
+                } 
+                catch (err) { alert(err.message); }
+            };
+
+            // ACCIONES MASIVAS DE BARRA FLOTANTE
+            const handleDeleteSelected = async () => {
+                if(!confirm(`¿Enviar ${selectedItems.length} elemento(s) a la papelera?`)) return;
+                try {
+                    const updatePromises = selectedItems.map(item => {
+                        const ref = doc(db, 'artifacts', appId, 'users', user.uid, item.type === 'folder' ? 'folders' : 'quizzes', item.id);
+                        return updateDoc(ref, { isDeleted: true });
+                    });
+                    await Promise.all(updatePromises);
+                    
+                    triggerUndo(`${selectedItems.length} elemento(s) a papelera`, async () => {
+                        const undoPromises = selectedItems.map(item => {
+                            const ref = doc(db, 'artifacts', appId, 'users', user.uid, item.type === 'folder' ? 'folders' : 'quizzes', item.id);
+                            return updateDoc(ref, { isDeleted: false });
+                        });
+                        await Promise.all(undoPromises);
+                    });
+                    setSelectedItems([]);
+                    setIsSelecting(false);
+                } catch(err) { alert(err.message); }
+            };
+
+            const openMoveModal = () => {
+                setMoveTarget([...path]); // Inicializa en la ruta actual
+                setMoveModalOpen(true);
+            };
+
+            const executeMoveModal = async () => {
+                const newParentPath = moveTarget.join('/');
+                const oldParentPath = path.join('/');
+                
+                if (newParentPath === oldParentPath) {
+                    setMoveModalOpen(false); return;
+                }
+
+                try {
+                    const updatePromises = selectedItems.map(item => {
+                        const ref = doc(db, 'artifacts', appId, 'users', user.uid, item.type === 'folder' ? 'folders' : 'quizzes', item.id);
+                        return updateDoc(ref, { parentPath: newParentPath });
+                    });
+                    await Promise.all(updatePromises);
+                    
+                    triggerUndo(`${selectedItems.length} elemento(s) movido(s)`, async () => {
+                        const undoPromises = selectedItems.map(item => {
+                            const ref = doc(db, 'artifacts', appId, 'users', user.uid, item.type === 'folder' ? 'folders' : 'quizzes', item.id);
+                            return updateDoc(ref, { parentPath: oldParentPath });
+                        });
+                        await Promise.all(undoPromises);
+                    });
+                    
+                    setSelectedItems([]);
+                    setIsSelecting(false);
+                    setMoveModalOpen(false);
+                } catch(err) { alert(err.message); }
+            };
+
+            // Helpers y otros
             const triggerUndo = (message, actionFn) => {
                 setUndoAction({ message, actionFn });
                 if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
-                undoTimeoutRef.current = setTimeout(() => {
-                    setUndoAction(null);
-                }, 5000); 
+                undoTimeoutRef.current = setTimeout(() => { setUndoAction(null); }, 5000); 
             };
 
             const executeUndo = () => {
                 if (undoAction && undoAction.actionFn) {
-                    undoAction.actionFn();
-                    setUndoAction(null);
+                    undoAction.actionFn(); setUndoAction(null);
                     if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
                 }
             };
 
-            const toggleTheme = () => { 
-                setIsDarkMode(!isDarkMode); 
-                localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light'); 
-            };
-
             const navigateTo = (newPath) => {
                 setPath(newPath);
+                setSelectedItems([]); // Limpiar selección al cambiar de carpeta
                 const url = new URL(window.location);
                 if (newPath.length > 0) url.searchParams.set('folder', newPath.join('/')); else url.searchParams.delete('folder');
                 window.history.pushState({}, '', url);
@@ -198,104 +353,6 @@
                 } catch(e) { alert(e.message); }
             };
 
-            const duplicateFolder = async (e, folder) => {
-                e.preventDefault(); e.stopPropagation();
-                try {
-                    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), { name: `${folder.name} (Copia)`, colorClass: folder.colorClass, parentPath: folder.parentPath, createdAt: serverTimestamp(), isDeleted: false });
-                } catch(err) { alert(err.message); }
-            };
-
-            const deleteFolder = async (e, folder) => {
-                e.preventDefault(); e.stopPropagation();
-                const folderRef = doc(db, 'artifacts', appId, 'users', user.uid, 'folders', folder.id);
-                await updateDoc(folderRef, { isDeleted: true });
-                
-                triggerUndo(`Carpeta "${folder.name}" enviada a papelera`, async () => {
-                    await updateDoc(folderRef, { isDeleted: false });
-                });
-            };
-
-            const handleDeleteActivity = async (e, quiz) => {
-                e.preventDefault(); e.stopPropagation();
-                const quizRef = doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', quiz.id);
-                await updateDoc(quizRef, { isDeleted: true });
-
-                triggerUndo(`Actividad "${quiz.title}" enviada a papelera`, async () => {
-                    await updateDoc(quizRef, { isDeleted: false });
-                });
-            };
-
-            const handleDropOnTarget = async (e, newParentPath, targetId = null) => {
-                e.preventDefault();
-                e.currentTarget.classList.remove('drag-over-breadcrumb');
-                const itemId = e.dataTransfer.getData('itemId');
-                const itemType = e.dataTransfer.getData('itemType');
-                const oldParentPath = path.join('/');
-
-                if (!itemId || newParentPath === oldParentPath) return;
-                
-                if (itemType === 'folder' && itemId === targetId) return;
-                
-                try { 
-                    if (itemType === 'quiz') {
-                        const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'quizzes', itemId);
-                        await updateDoc(ref, { parentPath: newParentPath }); 
-                        triggerUndo(`Actividad movida`, async () => { await updateDoc(ref, { parentPath: oldParentPath }); });
-                    } 
-                    else if (itemType === 'folder') {
-                        const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'folders', itemId);
-                        await updateDoc(ref, { parentPath: newParentPath });
-                        triggerUndo(`Carpeta movida`, async () => { await updateDoc(ref, { parentPath: oldParentPath }); });
-                    }
-                } 
-                catch (err) { alert(err.message); }
-            };
-
-            const restoreItem = async (id, type) => {
-                const colName = type === 'folder' ? 'folders' : 'quizzes';
-                await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, colName, id), { isDeleted: false });
-            };
-
-            const permanentDelete = async (id, type) => {
-                if(confirm("¿Eliminar PERMANENTEMENTE? Esto no se puede deshacer.")) {
-                    const colName = type === 'folder' ? 'folders' : 'quizzes';
-                    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, colName, id));
-                }
-            };
-
-            const rescueAllFiles = async () => {
-                if(!confirm("Esto enviará TODAS tus carpetas y actividades a la pantalla de INICIO (se saldrán de las subcarpetas donde estén escondidas). ¿Estás seguro?")) return;
-                setIsRescuing(true);
-                try {
-                    const qF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'));
-                    const snapF = await getDocs(qF);
-                    const updatePromises = [];
-                    
-                    snapF.forEach(d => {
-                        if (d.data().isDeleted !== true && d.data().parentPath !== "") {
-                            updatePromises.push(updateDoc(d.ref, { parentPath: "" }));
-                        }
-                    });
-
-                    const qQ = query(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'));
-                    const snapQ = await getDocs(qQ);
-                    snapQ.forEach(d => {
-                        if (d.data().isDeleted !== true && d.data().parentPath !== "") {
-                            updatePromises.push(updateDoc(d.ref, { parentPath: "" }));
-                        }
-                    });
-
-                    await Promise.all(updatePromises);
-                    setModals({...modals, trash: false});
-                    navigateTo([]);
-                    alert("¡Rescate completo! Todos tus archivos han vuelto a la página de INICIO.");
-                } catch (e) {
-                    alert("Error en el rescate: " + e.message);
-                } finally {
-                    setIsRescuing(false);
-                }
-            };
-
             const handleActivityClick = (e, gameType) => {
                 e.preventDefault();
                 const encodedFolder = encodeURIComponent(path.join('/'));
@@ -314,31 +371,42 @@
                 return `activity.html?id=${q.id}`;
             };
 
-            const handleCardClick = (e, q) => {
-                if (e.target.closest('button')) return; 
+            const handleFolderClick = (e, f) => {
+                if (e.button !== 0 || e.ctrlKey || e.metaKey) return;
+                if (isSelecting || selectedItems.length > 0) { toggleSelect(e, f, 'folder'); return; }
+                navigateTo([...path, f.name]);
+            };
+
+            const handleQuizClick = (e, q) => {
+                if (e.target.closest('button') || e.target.closest('.select-box')) return; 
+                if (isSelecting || selectedItems.length > 0) { toggleSelect(e, q, 'quiz'); return; }
+                
                 const link = getPlayLink(q);
                 if (e.button === 1 || e.ctrlKey || e.metaKey) window.open(link, '_blank');
                 else if (e.button === 0) window.location.href = link;
             };
 
-            const handleEditActivity = (e, q) => {
-                e.preventDefault(); e.stopPropagation();
-                const encodedFolder = encodeURIComponent(path.join('/'));
-                if (q.type === 'CONNECT4') window.location.href = `dashboard-connect4.html?edit=${q.id}&folder=${encodedFolder}`;
-                else if (q.type === 'READING') window.location.href = `dashboard-reading.html?edit=${q.id}&folder=${encodedFolder}`;
-                else if (q.type === 'MATCH') window.location.href = `dashboard-match.html?edit=${q.id}&folder=${encodedFolder}`;
-                else if (q.type === 'UNO') window.location.href = `dashboard-uno.html?edit=${q.id}&folder=${encodedFolder}`;
-                else alert("Editor no disponible en esta versión para este juego.");
+            // COMPONENTE CHECKBOX PARA ITEMS
+            const SelectOverlay = ({ item, type }) => {
+                const isSelected = selectedItems.some(i => i.id === item.id);
+                const show = isSelecting || selectedItems.length > 0 || isSelected;
+                return (
+                    <div 
+                        onClick={(e) => toggleSelect(e, item, type)} 
+                        className={`absolute top-2 left-2 w-5 h-5 sm:w-6 sm:h-6 rounded bg-white dark:bg-zinc-800 border-2 z-20 flex items-center justify-center transition-all select-box ${isSelected ? 'border-indigo-500 bg-indigo-500 text-white opacity-100 scale-110' : 'border-slate-300 dark:border-zinc-600 text-transparent opacity-0 group-hover:opacity-100 hover:border-indigo-400'} ${show && !isSelected ? 'opacity-100' : ''}`}
+                    >
+                        <Check size={14} strokeWidth={4}/>
+                    </div>
+                );
             };
 
-            const handleDragStart = (e, id, type) => { e.dataTransfer.setData('itemId', id); e.dataTransfer.setData('itemType', type); };
-
             return (
-                <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 transition-colors duration-300">
+                <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 transition-colors duration-300 pb-24">
                     <div className="max-w-7xl mx-auto p-4 md:p-6 fade-in relative">
                         
+                        {/* ALERTAS FLOTANTES */}
                         {undoAction && (
-                            <div className="fixed bottom-6 right-6 bg-slate-900 dark:bg-zinc-800 text-white p-4 rounded-xl shadow-2xl z-50 flex items-center gap-4 animate-in slide-in-from-bottom-10 fade-in duration-300 border border-slate-700 dark:border-zinc-700">
+                            <div className="fixed bottom-24 right-6 bg-slate-900 dark:bg-zinc-800 text-white p-4 rounded-xl shadow-2xl z-50 flex items-center gap-4 animate-in slide-in-from-bottom-10 fade-in duration-300 border border-slate-700 dark:border-zinc-700">
                                 <span className="font-bold text-sm">{undoAction.message}</span>
                                 <button onClick={executeUndo} className="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-lg font-black text-xs uppercase tracking-widest flex items-center gap-2 transition-colors">
                                     <RotateCcw size={14}/> Deshacer
@@ -346,21 +414,38 @@
                             </div>
                         )}
 
+                        {/* BARRA INFERIOR MULTI-SELECCIÓN */}
+                        {(selectedItems.length > 0 || isSelecting) && (
+                            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 dark:bg-zinc-800 text-white px-4 md:px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 md:gap-4 z-50 animate-in slide-in-from-bottom-10 fade-in duration-300 border border-slate-700 dark:border-zinc-700 w-11/12 md:w-auto overflow-x-auto">
+                                <span className="font-black text-sm md:text-base whitespace-nowrap bg-slate-800 dark:bg-zinc-900 px-3 py-1 rounded-full">{selectedItems.length} seleccionados</span>
+                                <div className="w-px h-6 bg-slate-700 mx-1 shrink-0"></div>
+                                <button onClick={openMoveModal} disabled={selectedItems.length===0} className="hover:text-indigo-400 disabled:opacity-50 flex items-center gap-1.5 text-sm font-bold transition-colors whitespace-nowrap"><FolderInput size={18}/> <span className="hidden sm:inline">Mover a...</span></button>
+                                <button onClick={handleDeleteSelected} disabled={selectedItems.length===0} className="hover:text-rose-400 disabled:opacity-50 flex items-center gap-1.5 text-sm font-bold transition-colors whitespace-nowrap"><Trash2 size={18}/> <span className="hidden sm:inline">Borrar</span></button>
+                                <div className="w-px h-6 bg-slate-700 mx-1 shrink-0"></div>
+                                <button onClick={() => {setSelectedItems([]); setIsSelecting(false);}} className="hover:bg-slate-700 p-1.5 rounded-full transition-colors shrink-0"><X size={20}/></button>
+                            </div>
+                        )}
+
+                        {/* HEADER PRINCIPAL */}
                         <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl shadow-sm border border-slate-200 dark:border-zinc-800 mb-6 flex flex-col md:flex-row gap-4 justify-between items-center relative z-20 transition-colors w-full">
                             <div className="flex items-center justify-between w-full md:w-auto">
                                 <div className="flex items-center gap-3">
                                     {path.length > 0 && <button onClick={() => navigateTo(path.slice(0, -1))} className="p-2 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-xl text-slate-400 dark:text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-all"><ArrowLeft size={20}/></button>}
-                                    <h1 className="text-xl font-black flex items-center gap-2 tracking-tight text-indigo-600 dark:text-indigo-400 uppercase italic">PERIPLO <span className="text-[10px] not-italic bg-indigo-100 dark:bg-indigo-900/50 dark:border-indigo-700 px-2 rounded-full border border-indigo-200">v20.0</span></h1>
+                                    <h1 className="text-xl font-black flex items-center gap-2 tracking-tight text-indigo-600 dark:text-indigo-400 uppercase italic">PERIPLO <span className="text-[10px] not-italic bg-indigo-100 dark:bg-indigo-900/50 dark:border-indigo-700 px-2 rounded-full border border-indigo-200">v20.1</span></h1>
                                 </div>
                                 <button onClick={toggleTheme} className="p-2 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-amber-400 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors md:hidden">
                                     {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
                                 </button>
                             </div>
                             
-                            <div className="grid grid-cols-2 md:flex md:flex-row md:items-center md:justify-end gap-2 w-full md:w-auto">
-                                <a href="students.html" className="justify-center bg-white dark:bg-zinc-800 border-2 border-indigo-100 dark:border-zinc-700 text-indigo-600 dark:text-indigo-400 px-3 py-2.5 rounded-xl font-bold flex gap-2 text-xs md:text-sm items-center hover:bg-indigo-50 dark:hover:bg-zinc-700"><Users size={16}/> Alumnos</a>
-                                <a href="dashboard-schedule.html" className="justify-center bg-emerald-500 hover:bg-emerald-600 dark:bg-emerald-600 dark:hover:bg-emerald-500 text-white px-3 py-2.5 rounded-xl font-bold flex gap-2 text-xs md:text-sm items-center shadow-md shadow-emerald-200 dark:shadow-emerald-900/20"><Calendar size={16}/> Agenda</a>
+                            <div className="grid grid-cols-3 md:flex md:flex-row md:items-center md:justify-end gap-2 w-full md:w-auto">
+                                {/* BOTÓN DE SELECCIONAR AÑADIDO A LA BARRA */}
+                                <button onClick={() => setIsSelecting(!isSelecting)} className={`justify-center px-3 py-2.5 rounded-xl font-bold flex gap-2 text-xs md:text-sm items-center transition-colors col-span-3 md:col-span-1 border ${isSelecting || selectedItems.length > 0 ? 'bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-900/50 dark:text-indigo-300 dark:border-indigo-700 shadow-inner' : 'bg-slate-50 dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700'}`}>
+                                    <CheckSquare size={16}/> <span className="md:hidden lg:inline">{isSelecting || selectedItems.length > 0 ? 'Seleccionando...' : 'Seleccionar'}</span>
+                                </button>
+                                
                                 <div className="hidden md:block w-px h-8 bg-slate-200 dark:bg-zinc-800 mx-1"></div>
+
                                 <button onClick={() => setModals({...modals, trash: true})} className="justify-center bg-slate-50 dark:bg-zinc-800 text-rose-500 dark:text-rose-400 px-3 py-2.5 rounded-xl font-bold flex gap-2 hover:bg-rose-50 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 transition-all text-xs md:text-sm items-center relative">
                                     <Trash2 size={16}/> {(trashItems.folders.length > 0 || trashItems.quizzes.length > 0) && <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-ping"></span>}
                                 </button>
@@ -372,13 +457,14 @@
                             </div>
                         </div>
 
+                        {/* BREADCRUMBS */}
                         <div className="flex gap-2 mb-6 text-xs font-bold text-slate-400 dark:text-zinc-500 overflow-x-auto pb-2 uppercase tracking-widest items-center">
                             <span 
                                 onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drag-over-breadcrumb'); }}
                                 onDragLeave={e => e.currentTarget.classList.remove('drag-over-breadcrumb')}
                                 onDrop={e => handleDropOnTarget(e, "")}
                                 onClick={() => navigateTo([])} 
-                                className={`cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors py-1 ${path.length===0?"text-indigo-600 dark:text-indigo-400":""}`}
+                                className={`cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors py-1 px-2 rounded-md ${path.length===0?"bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400":""}`}
                             >
                                 INICIO
                             </span>
@@ -392,7 +478,7 @@
                                             onDragLeave={e => e.currentTarget.classList.remove('drag-over-breadcrumb')}
                                             onDrop={e => handleDropOnTarget(e, targetPath)}
                                             onClick={() => navigateTo(path.slice(0, i+1))} 
-                                            className="cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors text-slate-600 dark:text-zinc-300 py-1"
+                                            className={`cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors py-1 px-2 rounded-md ${i === path.length-1 ? "bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400" : "text-slate-600 dark:text-zinc-300"}`}
                                         >
                                             {f}
                                         </span>
@@ -401,24 +487,30 @@
                             })}
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-5">
+                        {/* GRID AJUSTADA A TAMAÑO MEDIUM (Más columnas = tarjetas más pequeñas) */}
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3 md:gap-4">
                             {userFolders.map((f) => (
                                 <div 
                                     key={f.id} 
-                                    onClick={(e) => { if(e.button === 0 && !e.ctrlKey && !e.metaKey) { navigateTo([...path, f.name]); } }}
-                                    draggable
+                                    onClick={(e) => handleFolderClick(e, f)}
+                                    draggable={!isSelecting && selectedItems.length === 0}
                                     onDragStart={e => handleDragStart(e, f.id, 'folder')}
                                     onDragOver={e => e.preventDefault()}
                                     onDrop={e => handleDropOnTarget(e, path.length > 0 ? `${path.join('/')}/${f.name}` : f.name, f.id)}
-                                    className={`relative h-24 sm:h-auto sm:aspect-[4/3] ${f.colorClass || FOLDER_PALETTE[0]} border border-transparent rounded-3xl flex flex-row sm:flex-col items-center justify-start sm:justify-center gap-4 sm:gap-3 px-6 sm:px-0 shadow-sm hover:scale-[1.02] hover:shadow-lg transition-all group cursor-pointer`}
+                                    className={`relative h-24 sm:h-auto sm:aspect-[4/3] ${f.colorClass || FOLDER_PALETTE[0]} ${selectedItems.find(i=>i.id===f.id)?'ring-4 ring-indigo-500 scale-95':''} border border-transparent rounded-[1.5rem] flex flex-col items-center justify-center gap-2 shadow-sm hover:scale-105 hover:shadow-md transition-all group cursor-pointer`}
                                 >
-                                    <div className="absolute top-2 right-2 flex gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                                        <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); openFolderModal(f); }} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-white dark:hover:bg-black/50 transition-colors"><Edit2 size={12}/></button>
-                                        <button onClick={(e) => duplicateFolder(e, f)} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-white dark:hover:bg-black/50 transition-colors"><Copy size={12}/></button>
-                                        <button onClick={(e) => deleteFolder(e, f)} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-full hover:bg-rose-500 hover:text-white transition-colors"><Trash2 size={12}/></button>
-                                    </div>
-                                    <Folder size={36} className="opacity-80 shrink-0"/>
-                                    <span className="font-black text-[14px] sm:text-[12px] text-left sm:text-center pr-12 sm:pr-4 sm:px-4 uppercase tracking-wide truncate w-full">{f.name}</span>
+                                    <SelectOverlay item={f} type="folder" />
+                                    
+                                    {/* Botones de acción solo visibles si no estamos seleccionando */}
+                                    {!isSelecting && selectedItems.length === 0 && (
+                                        <div className="absolute top-2 right-2 flex flex-col md:flex-row gap-1 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                                            <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); openFolderModal(f); }} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-md hover:bg-white dark:hover:bg-black/50 transition-colors"><Edit2 size={12}/></button>
+                                            <button onClick={(e) => deleteFolder(e, f)} className="p-1.5 bg-white/50 dark:bg-black/30 backdrop-blur rounded-md hover:bg-rose-500 hover:text-white transition-colors"><Trash2 size={12}/></button>
+                                        </div>
+                                    )}
+
+                                    <Folder size={32} className="opacity-80 shrink-0"/>
+                                    <span className="font-black text-xs text-center px-2 uppercase tracking-wide truncate w-full">{f.name}</span>
                                 </div>
                             ))}
 
@@ -427,26 +519,73 @@
                                 return (
                                     <div 
                                         key={q.id} 
-                                        onMouseUp={(e) => handleCardClick(e, q)}
-                                        draggable
+                                        onMouseUp={(e) => handleQuizClick(e, q)}
+                                        draggable={!isSelecting && selectedItems.length === 0}
                                         onDragStart={e => handleDragStart(e, q.id, 'quiz')}
-                                        className="h-28 sm:h-auto sm:aspect-[4/3] bg-white dark:bg-zinc-900 rounded-3xl shadow-sm border border-slate-200 dark:border-zinc-800 flex flex-row sm:flex-col overflow-hidden group hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer relative"
+                                        className={`h-28 sm:h-auto sm:aspect-[4/3] bg-white dark:bg-zinc-900 rounded-[1.5rem] shadow-sm border border-slate-200 dark:border-zinc-800 flex flex-col overflow-hidden group hover:shadow-md hover:-translate-y-1 transition-all cursor-pointer relative ${selectedItems.find(i=>i.id===q.id)?'ring-4 ring-indigo-500 scale-95':''}`}
                                     >
-                                        <div className="absolute top-2 right-2 flex gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                                            <button onClick={(e) => handleEditActivity(e, q)} className="p-1.5 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 shadow-sm transition-colors"><Edit2 size={14}/></button>
-                                            <button onClick={(e) => handleDeleteActivity(e, q)} className="p-1.5 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-full text-slate-400 hover:text-red-600 dark:hover:text-red-400 shadow-sm transition-colors"><Trash2 size={14}/></button>
-                                        </div>
-                                        <div className={`w-28 sm:w-full sm:h-1/2 ${info.color} flex items-center justify-center text-white shrink-0`}><info.icon size={28} /></div>
-                                        <div className="p-4 sm:p-4 flex-1 flex flex-col justify-center sm:justify-between text-slate-700 dark:text-zinc-200 overflow-hidden w-full">
-                                            <div className="font-bold text-sm sm:text-sm leading-tight pr-12 sm:pr-0 truncate sm:whitespace-normal sm:line-clamp-2">{q.title}</div>
-                                            <div className="text-[10px] sm:text-[9px] text-slate-400 dark:text-zinc-500 font-black uppercase tracking-widest mt-1 sm:mt-0">{info.name}</div>
+                                        <SelectOverlay item={q} type="quiz" />
+
+                                        {!isSelecting && selectedItems.length === 0 && (
+                                            <div className="absolute top-2 right-2 flex flex-col md:flex-row gap-1 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                                                <button onClick={(e) => handleEditActivity(e, q)} className="p-1.5 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-md text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 shadow-sm transition-colors"><Edit2 size={12}/></button>
+                                                <button onClick={(e) => handleDeleteActivity(e, q)} className="p-1.5 bg-white/90 dark:bg-zinc-800/90 backdrop-blur rounded-md text-slate-400 hover:text-red-600 dark:hover:text-red-400 shadow-sm transition-colors"><Trash2 size={12}/></button>
+                                            </div>
+                                        )}
+
+                                        <div className={`w-full h-12 sm:h-2/5 ${info.color} flex items-center justify-center text-white shrink-0`}><info.icon size={20} /></div>
+                                        <div className="p-3 flex-1 flex flex-col justify-center text-slate-700 dark:text-zinc-200 overflow-hidden w-full text-center">
+                                            <div className="font-bold text-xs leading-tight truncate px-1">{q.title}</div>
+                                            <div className="text-[9px] text-slate-400 dark:text-zinc-500 font-black uppercase tracking-widest mt-1 truncate">{info.name}</div>
                                         </div>
                                     </div>
                                 );
                             })}
                         </div>
 
-                        {/* MODAL: CARPETA */}
+                        {/* MODAL: MOVER A... */}
+                        {moveModalOpen && (
+                            <div className="fixed inset-0 bg-slate-900/80 dark:bg-black/80 z-[70] flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+                                <div className="bg-white dark:bg-zinc-900 p-6 rounded-[2rem] w-full max-w-md shadow-2xl border border-transparent dark:border-zinc-800 flex flex-col max-h-[80vh]">
+                                    <div className="flex justify-between items-center mb-4 shrink-0">
+                                        <h3 className="font-black text-xl text-slate-800 dark:text-white flex items-center gap-2"><FolderInput size={24} className="text-indigo-500"/> Mover a...</h3>
+                                        <button onClick={() => setMoveModalOpen(false)} className="p-2 rounded-full bg-slate-50 dark:bg-zinc-800 hover:bg-slate-100 text-slate-500"><X size={20}/></button>
+                                    </div>
+                                    
+                                    <div className="bg-slate-50 dark:bg-zinc-950 p-2 rounded-xl mb-4 flex items-center gap-2 text-xs font-bold text-slate-500 overflow-x-auto shrink-0">
+                                        <button onClick={() => setMoveTarget([])} className="hover:text-indigo-500 py-1 px-2 rounded hover:bg-white dark:hover:bg-zinc-800 transition-colors">INICIO</button>
+                                        {moveTarget.map((f, i) => (
+                                            <React.Fragment key={i}>
+                                                <ChevronRight size={14} className="opacity-50 shrink-0"/>
+                                                <button onClick={() => setMoveTarget(moveTarget.slice(0, i+1))} className="hover:text-indigo-500 py-1 px-2 rounded hover:bg-white dark:hover:bg-zinc-800 transition-colors whitespace-nowrap">{f}</button>
+                                            </React.Fragment>
+                                        ))}
+                                    </div>
+
+                                    <div className="flex-1 overflow-y-auto custom-scrollbar border border-slate-100 dark:border-zinc-800 rounded-xl mb-4 p-2">
+                                        {moveModalFolders.length === 0 && <div className="p-4 text-center text-sm text-slate-400 font-bold italic">No hay carpetas aquí.</div>}
+                                        {moveModalFolders.map(f => {
+                                            // Prevenir meter una carpeta dentro de sí misma en el modal
+                                            if (selectedItems.some(sel => sel.type === 'folder' && sel.id === f.id)) return null;
+                                            
+                                            return (
+                                                <button key={f.id} onClick={() => setMoveTarget([...moveTarget, f.name])} className="w-full flex items-center justify-between p-3 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded-lg transition-colors group border-b border-transparent hover:border-slate-100 dark:hover:border-zinc-700">
+                                                    <div className="flex items-center gap-3"><Folder size={20} className="text-indigo-400 group-hover:text-indigo-500"/><span className="font-bold text-sm text-slate-700 dark:text-zinc-200 text-left">{f.name}</span></div>
+                                                    <ChevronRight size={16} className="text-slate-300 group-hover:text-indigo-400"/>
+                                                </button>
+                                            )
+                                        })}
+                                    </div>
+
+                                    <div className="shrink-0 flex gap-2 pt-2">
+                                        <button onClick={() => setMoveModalOpen(false)} className="flex-1 py-3 text-slate-500 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 rounded-xl font-bold transition-colors">Cancelar</button>
+                                        <button onClick={executeMoveModal} disabled={moveTarget.join('/') === path.join('/')} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Mover Aquí</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* MODAL: CARPETA (CREAR/EDITAR) */}
                         {modals.folder && (
                             <div className="fixed inset-0 bg-slate-900/60 dark:bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
                                 <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl w-full max-w-sm shadow-2xl animate-in zoom-in-95 border border-transparent dark:border-zinc-800">
@@ -457,7 +596,7 @@
                                             <button key={c} onClick={() => setFolderForm({...folderForm, colorClass: c})} className={`w-8 h-8 rounded-full border-2 transition-transform ${c.split(' ')[0]} ${folderForm.colorClass === c ? 'scale-125 border-stone-800 dark:border-white' : 'border-transparent'}`}></button>
                                         ))}
                                     </div>
-                                    <div className="flex gap-2"><button onClick={() => setModals({...modals, folder: false})} className="flex-1 py-3 text-slate-400 dark:text-zinc-400 hover:bg-slate-50 dark:bg-zinc-800 rounded-xl font-bold transition-colors">Cancelar</button><button onClick={saveFolder} className="flex-1 py-3 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold transition-colors">Guardar</button></div>
+                                    <div className="flex gap-2"><button onClick={() => setModals({...modals, folder: false})} className="flex-1 py-3 text-slate-400 dark:text-zinc-400 hover:bg-slate-50 dark:hover:bg-zinc-800 rounded-xl font-bold transition-colors">Cancelar</button><button onClick={saveFolder} className="flex-1 py-3 bg-indigo-600 dark:bg-indigo-500 text-white rounded-xl font-bold transition-colors">Guardar</button></div>
                                 </div>
                             </div>
                         )}
@@ -510,7 +649,7 @@
                                         <button onClick={() => setModals({...modals, trash: false})} className="w-10 h-10 rounded-full bg-slate-50 dark:bg-zinc-800 hover:bg-slate-100 hover:text-slate-700 flex items-center justify-center transition-all text-slate-500 dark:text-zinc-400"><X size={20}/></button>
                                     </div>
 
-                                    {/* LA AMBULANCIA: RESCATE DE INCEPTION */}
+                                    {/* LA AMBULANCIA */}
                                     <div className="bg-indigo-50 dark:bg-indigo-900/30 border-b border-indigo-200 dark:border-indigo-800 p-4 flex justify-between items-center shrink-0">
                                         <div>
                                             <h4 className="font-bold text-indigo-800 dark:text-indigo-300 text-sm flex items-center gap-1"><AlertTriangle size={16}/> ¿Perdiste una carpeta?</h4>
