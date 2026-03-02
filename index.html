@@ -97,13 +97,12 @@
             const [path, setPath] = useState([]);
             const [userFolders, setUserFolders] = useState([]);
             const [userQuizzes, setUserQuizzes] = useState([]);
-            const [trashItems, setTrashItems] = useState({ folders: [], quizzes: [] }); // NUEVO: Estado Papelera
+            const [trashItems, setTrashItems] = useState({ folders: [], quizzes: [] }); 
             const [modals, setModals] = useState({ folder: false, activity: false, trash: false });
             const [editingFolder, setEditingFolder] = useState(null);
             const [folderForm, setFolderForm] = useState({ name: '', colorClass: FOLDER_PALETTE[0] });
             const [isDarkMode, setIsDarkMode] = useState(true);
 
-            // NUEVO: SISTEMA DE DESHACER (UNDO)
             const [undoAction, setUndoAction] = useState(null);
             const undoTimeoutRef = useRef(null);
 
@@ -122,18 +121,25 @@
                 else document.documentElement.classList.remove('dark');
             }, [isDarkMode]);
 
-            // LISTENER PRINCIPAL Y DE PAPELERA
+            // FIX SALVAVIDAS: Filtrar del lado del cliente para no ocultar archivos viejos sin la etiqueta isDeleted
             useEffect(() => {
                 const currentPath = path.join('/');
                 
-                // Activos
-                const qF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('parentPath', '==', currentPath), where('isDeleted', '==', false));
-                const unsubF = onSnapshot(qF, (s) => setUserFolders(s.docs.map(d => ({id: d.id, ...d.data()}))));
+                // Traemos TODOS los archivos de la ruta actual
+                const qF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('parentPath', '==', currentPath));
+                const unsubF = onSnapshot(qF, (s) => {
+                    const allFolders = s.docs.map(d => ({id: d.id, ...d.data()}));
+                    // Filtramos en JS: Solo ocultamos si isDeleted es explícitamente TRUE. Si es undefined (viejos), se muestran.
+                    setUserFolders(allFolders.filter(f => f.isDeleted !== true));
+                });
                 
-                const qQ = query(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'), where('parentPath', '==', currentPath), where('isDeleted', '==', false));
-                const unsubQ = onSnapshot(qQ, (s) => setUserQuizzes(s.docs.map(d => ({id: d.id, ...d.data()}))));
+                const qQ = query(collection(db, 'artifacts', appId, 'users', user.uid, 'quizzes'), where('parentPath', '==', currentPath));
+                const unsubQ = onSnapshot(qQ, (s) => {
+                    const allQuizzes = s.docs.map(d => ({id: d.id, ...d.data()}));
+                    setUserQuizzes(allQuizzes.filter(q => q.isDeleted !== true));
+                });
 
-                // Borrados (Papelera)
+                // Papelera: Aquí sí buscamos explícitamente los que tienen isDeleted == true
                 const qTrashF = query(collection(db, 'artifacts', appId, 'users', user.uid, 'folders'), where('isDeleted', '==', true));
                 const unsubTrashF = onSnapshot(qTrashF, (s) => setTrashItems(prev => ({...prev, folders: s.docs.map(d => ({id: d.id, ...d.data()}))})));
 
@@ -143,13 +149,12 @@
                 return () => { unsubF(); unsubQ(); unsubTrashF(); unsubTrashQ(); };
             }, [path]);
 
-            // FUNCIÓN PARA MOSTRAR EL POPUP DE UNDO
             const triggerUndo = (message, actionFn) => {
                 setUndoAction({ message, actionFn });
                 if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
                 undoTimeoutRef.current = setTimeout(() => {
                     setUndoAction(null);
-                }, 5000); // Desaparece en 5 segundos
+                }, 5000); 
             };
 
             const executeUndo = () => {
@@ -202,7 +207,6 @@
                 } catch(err) { alert(err.message); }
             };
 
-            // MODIFICADO PARA ENVIAR A PAPELERA (Soft Delete) CON UNDO
             const deleteFolder = async (e, folder) => {
                 e.preventDefault(); e.stopPropagation();
                 const folderRef = doc(db, 'artifacts', appId, 'users', user.uid, 'folders', folder.id);
@@ -223,7 +227,6 @@
                 });
             };
 
-            // MODIFICADO PARA SOPORTAR UNDO EN DRAG & DROP
             const handleDropOnTarget = async (e, newParentPath) => {
                 e.preventDefault();
                 e.currentTarget.classList.remove('drag-over-breadcrumb');
@@ -248,7 +251,6 @@
                 catch (err) { alert(err.message); }
             };
 
-            // --- FUNCIONES DE LA PAPELERA ---
             const restoreItem = async (id, type) => {
                 const colName = type === 'folder' ? 'folders' : 'quizzes';
                 await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, colName, id), { isDeleted: false });
@@ -302,7 +304,6 @@
                 <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 transition-colors duration-300">
                     <div className="max-w-7xl mx-auto p-4 md:p-6 fade-in relative">
                         
-                        {/* NOTIFICACIÓN UNDO FLOTANTE */}
                         {undoAction && (
                             <div className="fixed bottom-6 right-6 bg-slate-900 dark:bg-zinc-800 text-white p-4 rounded-xl shadow-2xl z-50 flex items-center gap-4 animate-in slide-in-from-bottom-10 fade-in duration-300 border border-slate-700 dark:border-zinc-700">
                                 <span className="font-bold text-sm">{undoAction.message}</span>
