@@ -35,7 +35,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
-        import { Dices, Save, ArrowLeft, Loader2, Sun, Moon, Sparkles, KeyRound } from 'lucide-react';
+        import { Dices, Save, ArrowLeft, Loader2, Sun, Moon, Sparkles, KeyRound, RefreshCw, Wand2 } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -48,7 +48,9 @@
             
             const [apiKey, setApiKey] = useState("");
             const [showApiInput, setShowApiInput] = useState(false);
-            const [isGenerating, setIsGenerating] = useState(false);
+            
+            const [isGeneratingAll, setIsGeneratingAll] = useState(false);
+            const [generatingIndex, setGeneratingIndex] = useState(null); // Para saber qué cuadro carga
             
             const [isSaving, setIsSaving] = useState(false);
             const [editingId, setEditingId] = useState(null);
@@ -80,13 +82,14 @@
 
             useEffect(() => { document.documentElement.classList.toggle('dark', isDarkMode); }, [isDarkMode]);
 
-            const generateWithAI = async () => {
+            // GENERAR TODO
+            const generateAllWithAI = async () => {
                 if (!apiKey) { alert("Necesitas guardar tu API Key de Gemini primero."); setShowApiInput(true); return; }
-                if (categories.some(c => c.trim() === "")) { alert("Por favor, llena los 4 nombres de las categorías primero."); return; }
+                if (categories.some(c => c.trim() === "")) { alert("Por favor, ponle nombre a las 4 categorías primero."); return; }
 
-                setIsGenerating(true);
+                setIsGeneratingAll(true);
                 try {
-                    const prompt = `Genera 4 listas de palabras en formato JSON. Las categorías son: "${categories[0]}", "${categories[1]}", "${categories[2]}", "${categories[3]}". Cada lista debe tener exactamente 19 palabras que pertenezcan a esa categoría. No repitas palabras entre listas. Responde ÚNICAMENTE con un objeto JSON con esta estructura: { "0": ["word1", "word2"...], "1": ["word1"...], "2": ["word1"...], "3": ["word1"...] } sin usar markdown ni comillas invertidas.`;
+                    const prompt = `Genera 4 listas de palabras. Las categorías son: "${categories[0]}", "${categories[1]}", "${categories[2]}", "${categories[3]}". Cada lista debe tener exactamente 19 palabras. No repitas palabras entre listas. Responde ÚNICAMENTE con un objeto JSON válido con esta estructura exacta: { "0": ["w1", "w2"], "1": ["w1", "w2"], "2": ["w1", "w2"], "3": ["w1", "w2"] } sin formato markdown ni explicaciones.`;
 
                     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
                         method: 'POST',
@@ -96,33 +99,69 @@
 
                     const data = await response.json();
                     let resultText = data.candidates[0].content.parts[0].text;
-                    resultText = resultText.replace(/```json/g, '').replace(/```/g, ''); // Limpiar markdown
+                    resultText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
                     const parsedData = JSON.parse(resultText);
 
                     setWords([parsedData["0"], parsedData["1"], parsedData["2"], parsedData["3"]]);
                 } catch (error) {
-                    alert("Error generando con la IA. Revisa tu API Key o intenta de nuevo.");
+                    alert("Error generando con la IA. Intenta de nuevo.");
                     console.error(error);
                 } finally {
-                    setIsGenerating(false);
+                    setIsGeneratingAll(false);
                 }
             };
 
+            // GENERAR UNO SOLO
+            const generateSingleCategory = async (index) => {
+                if (!apiKey) { alert("Necesitas guardar tu API Key de Gemini primero."); setShowApiInput(true); return; }
+                if (!categories[index].trim()) { alert("Ponle nombre a esta categoría primero."); return; }
+
+                setGeneratingIndex(index);
+                try {
+                    const prompt = `Genera una lista de exactamente 19 palabras para la categoría "${categories[index]}". Asegúrate de que encajen en el tema. Responde ÚNICAMENTE con un array JSON válido de strings, por ejemplo: ["palabra1", "palabra2", "palabra3"] sin formato markdown ni texto extra.`;
+
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    });
+
+                    const data = await response.json();
+                    let resultText = data.candidates[0].content.parts[0].text;
+                    resultText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
+                    const parsedData = JSON.parse(resultText);
+
+                    const newWords = [...words];
+                    newWords[index] = parsedData;
+                    setWords(newWords);
+                } catch (error) {
+                    alert("Error recargando la categoría. Intenta de nuevo.");
+                    console.error(error);
+                } finally {
+                    setGeneratingIndex(null);
+                }
+            };
+
+            // Cambiado a salto de línea
             const handleWordsChange = (index, value) => {
                 const newWords = [...words];
-                newWords[index] = value.split(',').map(w => w.trim()).filter(w => w);
+                newWords[index] = value.split('\n'); 
                 setWords(newWords);
             };
 
             const saveToFirebase = async () => {
                 if (!gameTitle) return alert("Ponle un título al juego");
                 if (categories.some(c => c.trim() === "")) return alert("Nombra las 4 categorías.");
-                if (words.some(w => w.length < 15)) return alert("Te recomiendo tener al menos 15 palabras por categoría para armar el mazo completo.");
+                
+                // Limpieza de espacios vacíos al guardar
+                const cleanedWords = words.map(list => list.map(w => w.trim()).filter(w => w !== ""));
+                
+                if (cleanedWords.some(w => w.length < 15)) return alert("Te recomiendo tener al menos 15 palabras por categoría para armar el mazo completo.");
                 
                 setIsSaving(true);
                 try {
                     const content = { 
-                        categories: categories.map((name, i) => ({ id: i, name, words: words[i] })) 
+                        categories: categories.map((name, i) => ({ id: i, name, words: cleanedWords[i] })) 
                     };
                     
                     const params = new URLSearchParams(window.location.search);
@@ -158,32 +197,48 @@
                         {showApiInput && (
                             <div className="bg-indigo-50 dark:bg-indigo-900/30 p-4 rounded-2xl mb-6 flex gap-4 items-center border border-indigo-200 dark:border-indigo-800">
                                 <KeyRound className="text-indigo-500"/>
-                                <input type="password" value={apiKey} onChange={e => { setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value); }} placeholder="Pega tu API Key de Gemini aquí..." className="flex-1 bg-white dark:bg-zinc-900 p-2 rounded-lg border border-slate-300 dark:border-zinc-700 outline-none focus:border-indigo-500"/>
+                                <input type="password" value={apiKey} onChange={e => { setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value); }} placeholder="Pega tu API Key de Gemini aquí..." className="flex-1 bg-white dark:bg-zinc-900 p-2 rounded-lg border border-slate-300 dark:border-zinc-700 outline-none focus:border-indigo-500 dark:text-white"/>
                             </div>
                         )}
 
-                        <input value={gameTitle} onChange={e => setGameTitle(e.target.value)} className="text-4xl font-black w-full border-b-4 border-slate-300 dark:border-zinc-800 pb-2 mb-8 bg-transparent outline-none focus:border-indigo-500" placeholder="Nombre del Mazo (ej. Parts of Speech)..."/>
+                        <input value={gameTitle} onChange={e => setGameTitle(e.target.value)} className="text-4xl font-black w-full border-b-4 border-slate-300 dark:border-zinc-800 pb-2 mb-8 bg-transparent outline-none focus:border-indigo-500 dark:text-white" placeholder="Nombre del Mazo (ej. Parts of Speech)..."/>
                         
                         <div className="flex justify-between items-center mb-6">
                             <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2"><Sparkles className="text-yellow-500"/> Las 4 Categorías (Colores)</h2>
-                            <button onClick={generateWithAI} disabled={isGenerating} className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-2xl font-black flex items-center gap-2 shadow-lg transition active:scale-95 disabled:opacity-50">
-                                {isGenerating ? <Loader2 className="animate-spin"/> : <Sparkles/>} Autocompletar con IA
+                            <button onClick={generateAllWithAI} disabled={isGeneratingAll || generatingIndex !== null} className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-2xl font-black flex items-center gap-2 shadow-lg transition active:scale-95 disabled:opacity-50">
+                                {isGeneratingAll ? <Loader2 className="animate-spin"/> : <Sparkles/>} Autocompletar Todo
                             </button>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-12">
                             {[
                                 { color: 'blue', border: 'border-blue-500', bg: 'bg-blue-50 dark:bg-blue-900/10' },
                                 { color: 'red', border: 'border-red-500', bg: 'bg-red-50 dark:bg-red-900/10' },
                                 { color: 'yellow', border: 'border-yellow-400', bg: 'bg-yellow-50 dark:bg-yellow-900/10' },
                                 { color: 'green', border: 'border-green-500', bg: 'bg-green-50 dark:bg-green-900/10' }
-                            ].map((c, i) => (
-                                <div key={i} className={`p-5 rounded-3xl border-2 ${c.border} ${c.bg} shadow-sm`}>
-                                    <input value={categories[i]} onChange={e => { const nc = [...categories]; nc[i] = e.target.value; setCategories(nc); }} placeholder={`Categoría ${i+1} (ej. Noun)`} className="w-full text-xl font-black bg-white dark:bg-zinc-900 p-3 rounded-xl mb-3 outline-none border border-slate-200 dark:border-zinc-700"/>
-                                    <p className="text-xs text-slate-500 dark:text-zinc-400 mb-2 font-bold px-1">Palabras separadas por coma ({words[i].length}/19):</p>
-                                    <textarea value={words[i].join(', ')} onChange={e => handleWordsChange(i, e.target.value)} className="w-full h-32 bg-white dark:bg-zinc-900 p-3 rounded-xl text-sm outline-none border border-slate-200 dark:border-zinc-700 resize-none custom-scrollbar" placeholder="apple, car, dog..."></textarea>
-                                </div>
-                            ))}
+                            ].map((c, i) => {
+                                const validWordsCount = words[i].filter(w => w.trim() !== '').length;
+                                return (
+                                    <div key={i} className={`p-5 rounded-3xl border-2 ${c.border} ${c.bg} shadow-sm relative`}>
+                                        <div className="flex gap-2">
+                                            <input value={categories[i]} onChange={e => { const nc = [...categories]; nc[i] = e.target.value; setCategories(nc); }} placeholder={`Categoría ${i+1} (Azul)`} className="flex-1 text-xl font-black bg-white dark:bg-zinc-900 dark:text-white p-3 rounded-xl mb-3 outline-none border border-slate-200 dark:border-zinc-700 focus:border-indigo-500 placeholder-slate-400"/>
+                                            <button onClick={() => generateSingleCategory(i)} disabled={generatingIndex !== null || isGeneratingAll} className="h-12 w-12 flex items-center justify-center bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-900/50 dark:hover:bg-indigo-800 text-indigo-600 dark:text-indigo-300 rounded-xl transition-colors shrink-0 disabled:opacity-50" title="Regenerar solo esta caja">
+                                                {generatingIndex === i ? <Loader2 size={20} className="animate-spin"/> : <Wand2 size={20}/>}
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-slate-500 dark:text-zinc-400 mb-2 font-bold px-1 flex justify-between">
+                                            <span>Una palabra por línea:</span>
+                                            <span className={validWordsCount < 15 ? 'text-rose-500' : 'text-emerald-500'}>{validWordsCount}/19 palabras</span>
+                                        </p>
+                                        <textarea 
+                                            value={words[i].join('\n')} 
+                                            onChange={e => handleWordsChange(i, e.target.value)} 
+                                            className="w-full h-48 bg-white dark:bg-zinc-900 dark:text-white p-3 rounded-xl text-sm outline-none border border-slate-200 dark:border-zinc-700 resize-none custom-scrollbar placeholder-slate-400" 
+                                            placeholder="palabra 1&#10;palabra 2&#10;palabra 3..."
+                                        ></textarea>
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
                 </div>
