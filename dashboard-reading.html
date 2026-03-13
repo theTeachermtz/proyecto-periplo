@@ -108,18 +108,16 @@
                     
                     INSTRUCCIONES ESTRUCTURALES:
                     1. 'title': Un título creativo.
-                    2. 'text': El cuerpo del texto. (Asegúrate de separar bien en párrafos).
+                    2. 'text': El cuerpo del texto. Asegúrate de separar bien en párrafos. DENTRO de este texto, envuelve entre corchetes [ ] unas 10 a 15 palabras o frases clave que el alumno deberá adivinar. Puedes usar frases completas o phrasal verbs (Ejemplo: "He had to [wake up] early").
                     3. 'fun_fact': Un dato curioso o de cultura general relacionado al texto (puede tener de 2 a 3 oraciones, no seas tan breve).
-                    4. 'blanks': Un array de números enteros que representan los índices de las palabras en el texto que se ocultarán para el ejercicio de drag and drop. Escoge unas 10 a 15 palabras clave importantes.
-                    5. 'questions': Genera de 2 a 4 preguntas de comprensión lectora. Para cada pregunta, indica el 'paragraph_index' (0, 1, 2...) donde se encuentra la respuesta.
+                    4. 'questions': Genera de 2 a 4 preguntas de comprensión lectora. Para cada pregunta, indica el 'paragraph_index' (0, 1, 2...) donde se encuentra la respuesta.
 
                     Responde ÚNICAMENTE con un JSON válido usando esta estructura exacta:
                     {
                         "title": "...",
-                        "text": "...",
+                        "text": "Texto con los [huecos] integrados directamente aquí...",
                         "fun_fact": "...",
                         "image_url": "",
-                        "blanks": [5, 12, 25...],
                         "questions": [
                             {"q": "Pregunta 1?", "a": "Respuesta corta", "paragraph_index": 0}
                         ]
@@ -134,6 +132,9 @@
                     let resultText = data.candidates[0].content.parts[0].text;
                     resultText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
                     const parsedData = JSON.parse(resultText);
+
+                    // Nos aseguramos de que no haya un array de blanks viejo fastidiando
+                    parsedData.blanks = []; 
 
                     setStories([...stories, parsedData]);
                     if (!title) setTitle(topic); 
@@ -182,46 +183,64 @@
                 finally { setIsSaving(false); }
             };
 
+            // SELECTOR INTERACTIVO CON SOPORTE PARA [PHRASAL VERBS]
             const renderInteractiveBlankSelector = () => {
                 const currentStory = stories[editingStoryIdx];
                 if (!currentStory || !currentStory.text) return null;
                 
-                const regex = /([a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+|[^a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ\s]+|\s+)/g;
+                // Regex avanzado: Separa corchetes enteros `[wake up]`, palabras o puntuación.
+                const regex = /(\[[^\]]+\]|[a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+|[^a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ\s\[\]]+|\s+)/g;
                 const parts = currentStory.text.match(regex) || [];
+                const legacyBlanks = currentStory.blanks || [];
                 
-                const toggleBlank = (idx, isWord) => {
-                    if (!isWord) return; 
+                const tokens = parts.map((part, index) => {
+                    let isBracketed = part.startsWith('[') && part.endsWith(']');
+                    let cleanText = isBracketed ? part.slice(1, -1) : part;
+                    let isWord = isBracketed || /^[a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+$/.test(cleanText);
+                    let isHidden = (isBracketed || legacyBlanks.includes(index)) && isWord;
+                    return { id: index, text: cleanText, original: part, isWord, isHidden, isBracketed };
+                });
+
+                const toggleBlank = (idx, token) => {
+                    if (!token.isWord) return; 
+                    
                     const ns = [...stories];
-                    const blanks = ns[editingStoryIdx].blanks || [];
-                    if (blanks.includes(idx)) {
-                        ns[editingStoryIdx].blanks = blanks.filter(b => b !== idx);
+                    let currentTokens = [...tokens];
+                    
+                    if (token.isHidden) {
+                        currentTokens[idx].original = token.text; // Quita los corchetes
                     } else {
-                        ns[editingStoryIdx].blanks = [...blanks, idx];
+                        currentTokens[idx].original = `[${token.text}]`; // Pone los corchetes
                     }
+                    
+                    // Reconstruye el texto real a partir de los clicks
+                    ns[editingStoryIdx].text = currentTokens.map(t => t.original).join('');
+                    ns[editingStoryIdx].blanks = []; // Limpia blanks viejos para evitar conflictos
                     setStories(ns);
                 };
+
+                const activeCount = tokens.filter(t => t.isHidden).length;
 
                 return (
                     <div className="mb-8">
                         <label className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 flex justify-between items-center">
                             <span>Selector de Palabras (Word Bank)</span>
-                            <span className="text-indigo-500 font-black bg-indigo-100 dark:bg-indigo-900/50 px-2 py-1 rounded-md">{currentStory.blanks?.length || 0} seleccionadas</span>
+                            <span className="text-indigo-500 font-black bg-indigo-100 dark:bg-indigo-900/50 px-2 py-1 rounded-md">{activeCount} seleccionadas</span>
                         </label>
-                        <p className="text-xs text-slate-500 mb-3">Haz clic en las palabras del texto para ocultarlas y convertirlas en los huecos que los alumnos arrastrarán.</p>
+                        <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+                            Haz clic en las palabras para ocultarlas. Si quieres agrupar frases completas (ej. <strong>phrasal verbs</strong> como <em>wake up</em>), escríbelas entre corchetes <strong>[wake up]</strong> directamente en la caja de texto arriba.
+                        </p>
                         <div className="p-4 md:p-6 bg-slate-100 dark:bg-zinc-950 rounded-2xl leading-loose text-base md:text-lg font-medium border border-slate-200 dark:border-zinc-800 shadow-inner h-64 overflow-y-auto custom-scrollbar">
-                            {parts.map((part, index) => {
-                                const isWord = /^[a-zA-Z0-9'áéíóúñÁÉÍÓÚÑ]+$/.test(part);
-                                const isBlank = (currentStory.blanks || []).includes(index);
-                                
-                                if (!isWord) return <span key={index}>{part.match(/\n/) ? <br/> : part}</span>;
+                            {tokens.map((token, index) => {
+                                if (!token.isWord) return <span key={index}>{token.original.match(/\n/) ? <br/> : token.original}</span>;
                                 
                                 return (
                                     <span 
                                         key={index} 
-                                        onClick={() => toggleBlank(index, isWord)}
-                                        className={`cursor-pointer px-1 rounded transition-all select-none ${isBlank ? 'bg-indigo-500 text-white font-bold shadow-md transform scale-105 inline-block mx-0.5' : 'hover:bg-indigo-200 dark:hover:bg-indigo-900 text-slate-700 dark:text-zinc-300 mx-0.5'}`}
+                                        onClick={() => toggleBlank(index, token)}
+                                        className={`cursor-pointer px-1 rounded transition-all select-none ${token.isHidden ? 'bg-indigo-500 text-white font-bold shadow-md transform scale-105 inline-block mx-0.5' : 'hover:bg-indigo-200 dark:hover:bg-indigo-900 text-slate-700 dark:text-zinc-300 mx-0.5'}`}
                                     >
-                                        {part}
+                                        {token.text}
                                     </span>
                                 );
                             })}
@@ -349,10 +368,11 @@
                                     </div>
 
                                     <div className="mb-8">
-                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1 block">Cuerpo del Texto</label>
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1 block">Cuerpo del Texto (Usa [corchetes] para agrupar frases)</label>
                                         <textarea value={stories[editingStoryIdx].text} onChange={e => updateStory('text', e.target.value)} className="w-full h-48 bg-slate-50 dark:bg-zinc-950 p-4 rounded-xl outline-none border border-slate-200 dark:border-zinc-800 focus:border-indigo-500 resize-y leading-relaxed font-medium"></textarea>
                                     </div>
 
+                                    {/* EL COMPONENTE MAGICO DE LOS HUECOS */}
                                     {renderInteractiveBlankSelector()}
 
                                     <div className="mb-8 p-4 bg-amber-50 dark:bg-amber-900/10 border-l-4 border-amber-400 rounded-r-xl">
