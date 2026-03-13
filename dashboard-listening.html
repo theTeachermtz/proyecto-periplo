@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard Listening | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>tailwind.config = { darkMode: 'class' }; document.documentElement.classList.add('dark');</script>
     <script type="importmap">
     {
       "imports": {
@@ -18,12 +17,8 @@
     }
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;900&display=swap'); 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; }
-    </style>
 </head>
-<body class="bg-zinc-950 text-zinc-100 min-h-screen p-8 flex items-center justify-center">
+<body class="bg-zinc-950 text-zinc-100 min-h-screen p-8 flex items-center justify-center font-sans">
     <div id="root" class="w-full max-w-3xl"></div>
 
     <script type="text/babel" data-type="module">
@@ -31,7 +26,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
-        import { Youtube, FileText, Play, Loader2 } from 'lucide-react';
+        import { Youtube, Sparkles, Loader2, KeyRound } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -43,48 +38,94 @@
         };
 
         const SimpleDashboard = () => {
+            const [apiKey, setApiKey] = useState("");
             const [title, setTitle] = useState("");
             const [videoUrl, setVideoUrl] = useState("");
             const [transcript, setTranscript] = useState("");
-            const [isSaving, setIsSaving] = useState(false);
+            const [isGenerating, setIsGenerating] = useState(false);
+
+            useEffect(() => {
+                const savedKey = localStorage.getItem('gemini_api_key');
+                if (savedKey) setApiKey(savedKey);
+            }, []);
 
             const videoId = extractYouTubeId(videoUrl);
 
-            const handleCreateAndRedirect = async () => {
-                if (!title) return alert("Ponle un título wey.");
-                if (!videoId) return alert("Ese URL de YouTube no es válido.");
-                if (!transcript) return alert("Pega el transcript de YouTube.");
+            const handleProcessAndCreate = async () => {
+                if (!apiKey) return alert("Necesitas tu API Key de Gemini.");
+                if (!title || !videoId || !transcript) return alert("Llena todos los campos wey.");
 
-                setIsSaving(true);
+                setIsGenerating(true);
                 try {
+                    // Prompt estricto para que la IA limpie la basura visual y deje solo el tiempo real y el texto
+                    const prompt = `
+                    Actúa como un procesador de datos. Te daré un transcript copiado directamente de YouTube que está sucio. 
+                    Contiene marcadores de capítulos (ej. "Capítulo 2:") y tiempos con texto redundante (ej. "0:011 segundo" o "1:031 minuto y 3 segundos").
+                    
+                    TU TAREA:
+                    1. Ignora los nombres de los capítulos y la basura visual.
+                    2. Extrae el segundo exacto donde empieza cada frase (ej. "1:03..." -> 63 segundos).
+                    3. Extrae el texto hablado correspondiente a ese tiempo.
+                    
+                    TRANSCRIPT SUCIO:
+                    ${transcript}
+
+                    RESPONDE ÚNICAMENTE CON UN ARREGLO JSON VÁLIDO CON ESTA ESTRUCTURA EXACTA:
+                    [
+                        { "start": 0, "text": "Welcome to the Philippines everybody." },
+                        { "start": 1, "text": "It's about my 10th time in this country..." },
+                        { "start": 63, "text": "Uh, the best part here in the Philippines is..." }
+                    ]
+                    `;
+
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    });
+
+                    const data = await response.json();
+                    let resultText = data.candidates[0].content.parts[0].text;
+                    resultText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
+                    const cleanTranscriptArray = JSON.parse(resultText);
+
+                    // Calculamos el tiempo de "fin" para cada clip
+                    for (let i = 0; i < cleanTranscriptArray.length; i++) {
+                        cleanTranscriptArray[i].end = cleanTranscriptArray[i + 1] ? cleanTranscriptArray[i + 1].start : cleanTranscriptArray[i].start + 5; 
+                    }
+
+                    // Guardamos en Firebase el JSON ya procesado e inmaculado
                     const payload = {
                         title: title,
                         type: 'LISTENING_KARAOKE',
                         videoId: videoId,
-                        rawTranscript: transcript, // Guardamos el texto tal cual
+                        parsedTranscript: cleanTranscriptArray, // YA NO GUARDAMOS EL SUCIO
                         createdAt: serverTimestamp()
                     };
 
                     const docRef = await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), payload);
-                    
-                    // Magia: Te redirige automáticamente a la pantalla del alumno con el ID recién creado
                     window.location.href = `listening.html?id=${docRef.id}`;
                 } catch (e) { 
-                    alert("Error guardando: " + e.message); 
-                    setIsSaving(false);
+                    alert("Error con la IA o guardando: Verifica que tu API key sea válida y el texto no sea excesivamente largo. Detalle: " + e.message); 
+                } finally {
+                    setIsGenerating(false);
                 }
             };
 
             return (
                 <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl shadow-2xl">
                     <h1 className="text-3xl font-black text-rose-500 mb-8 text-center flex items-center justify-center gap-3">
-                        <Youtube size={36}/> Creador de Karaoke
+                        <Youtube size={36}/> AI Karaoke Builder
                     </h1>
+
+                    <div className="bg-zinc-950/50 p-4 rounded-xl mb-6 flex gap-3 items-center border border-zinc-800">
+                        <KeyRound className="text-zinc-500" size={20}/>
+                        <input type="password" value={apiKey} onChange={e => { setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value); }} placeholder="Tu API Key de Gemini..." className="flex-1 bg-transparent outline-none text-sm"/>
+                    </div>
 
                     <div className="space-y-6">
                         <div>
                             <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Título de la Actividad</label>
-                            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej: Entrevista a Elon Musk" className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 text-lg font-bold"/>
+                            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej: Luke Damant in Philippines" className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 text-lg font-bold"/>
                         </div>
 
                         <div>
@@ -93,14 +134,12 @@
                         </div>
 
                         <div>
-                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2 flex justify-between">
-                                <span>Transcript (Copia y pega con los tiempos)</span>
-                            </label>
-                            <textarea value={transcript} onChange={e => setTranscript(e.target.value)} placeholder="0:00&#10;Hola a todos&#10;0:02&#10;Bienvenidos al canal..." className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 h-64 resize-y font-mono text-sm text-zinc-400"></textarea>
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Transcript Sucio (Pégalo tal cual)</label>
+                            <textarea value={transcript} onChange={e => setTranscript(e.target.value)} placeholder="Welcome to the Philippines...&#10;0:011 segundoIt's about my 10th time..." className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 h-48 resize-y font-mono text-sm text-zinc-400"></textarea>
                         </div>
 
-                        <button onClick={handleCreateAndRedirect} disabled={isSaving || !videoId || !transcript || !title} className="w-full bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white py-4 rounded-xl font-black shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 text-xl mt-4">
-                            {isSaving ? <Loader2 className="animate-spin"/> : <Play/>} Crear y Ver Actividad
+                        <button onClick={handleProcessAndCreate} disabled={isGenerating || !videoId || !transcript || !title} className="w-full bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white py-4 rounded-xl font-black shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 text-xl mt-4">
+                            {isGenerating ? <><Loader2 className="animate-spin"/> Limpiando texto con IA...</> : <><Sparkles/> Procesar y Crear Karaoke</>}
                         </button>
                     </div>
                 </div>
