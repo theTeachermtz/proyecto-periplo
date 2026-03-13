@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Listening Builder IA | Periplo</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎧</text></svg>">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' }; document.documentElement.classList.add('dark');</script>
+    
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap'); 
+        body { font-family: 'Plus Jakarta Sans', sans-serif; height: 100dvh; overflow: hidden; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .dark .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; }
+    </style>
+</head>
+<body class="bg-slate-50 dark:bg-zinc-950 transition-colors duration-300">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
+        import { Headphones, Save, ArrowLeft, Loader2, KeyRound, Sparkles, Trash2, Plus, Youtube, Clock, HelpCircle, Target } from 'lucide-react';
+
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // Helper para extraer el ID de YouTube
+        const extractYouTubeId = (url) => {
+            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+            const match = url.match(regExp);
+            return (match && match[2].length === 11) ? match[2] : null;
+        };
+
+        const Dashboard = () => {
+            const [apiKey, setApiKey] = useState("");
+            const [showApiInput, setShowApiInput] = useState(false);
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [isSaving, setIsSaving] = useState(false);
+            const [editingId, setEditingId] = useState(null);
+
+            const [title, setTitle] = useState("");
+            const [videoUrl, setVideoUrl] = useState("");
+            const [videoId, setVideoId] = useState("");
+            const [transcript, setTranscript] = useState("");
+            const [targetWords, setTargetWords] = useState("");
+
+            // Estructura de la actividad de Listening
+            const [clips, setClips] = useState([]);
+            const [questions, setQuestions] = useState([]);
+
+            useEffect(() => {
+                const savedKey = localStorage.getItem('gemini_api_key');
+                if (savedKey) setApiKey(savedKey);
+
+                const params = new URLSearchParams(window.location.search);
+                const editId = params.get('edit');
+                if (editId) {
+                    getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editId)).then(docSnap => {
+                        if (docSnap.exists()) {
+                            const data = docSnap.data();
+                            setTitle(data.title);
+                            setVideoId(data.videoId || "");
+                            setVideoUrl(`https://www.youtube.com/watch?v=${data.videoId}`);
+                            setClips(data.clips || []);
+                            setQuestions(data.questions || []);
+                            setEditingId(editId);
+                        }
+                    });
+                }
+            }, []);
+
+            // Actualiza el ID del video automáticamente cuando pegas la URL
+            useEffect(() => {
+                const id = extractYouTubeId(videoUrl);
+                if (id) setVideoId(id);
+            }, [videoUrl]);
+
+            const generateWorkshopWithAI = async () => {
+                if (!apiKey) { alert("Necesitas tu API Key de Gemini."); setShowApiInput(true); return; }
+                if (!videoId) { alert("Pega un URL de YouTube válido primero."); return; }
+                if (!transcript) { alert("Pega el transcript (con tiempos) que copiaste de YouTube."); return; }
+
+                setIsGenerating(true);
+                try {
+                    const prompt = `
+                    Actúa como un creador de material didáctico avanzado. 
+                    Voy a darte el transcript de un video de YouTube que incluye las marcas de tiempo (timestamps).
+                    
+                    TUS TAREAS:
+                    1. Extrae de 5 a 8 palabras o frases clave importantes del vocabulario. Para cada palabra, encuentra su marca de tiempo en el transcript, calcula el segundo exacto (ej. "01:15" -> 75 segundos), anota la oración original donde se dice y crea una definición simple para un estudiante B1/B2.
+                    2. Genera de 3 a 5 preguntas de opción múltiple sobre el contenido del video. Anota el segundo exacto ('startSeconds') donde se menciona la respuesta para que el alumno pueda volver a escuchar esa parte.
+                    
+                    Palabras clave sugeridas por el maestro (opcional): ${targetWords}
+                    
+                    TRANSCRIPT ORIGINAL:
+                    ${transcript}
+
+                    RESPONDE ÚNICAMENTE CON UN JSON VÁLIDO USANDO ESTA ESTRUCTURA EXACTA:
+                    {
+                        "clips": [
+                            {
+                                "word": "compulsive", 
+                                "startSeconds": 45, 
+                                "context": "we make compulsive purchases when we are sad",
+                                "definition": "Doing something a lot and being unable to stop doing it"
+                            }
+                        ],
+                        "questions": [
+                            {
+                                "q": "Why do people buy things they don't need?",
+                                "options": ["Dopamine rush", "Boredom", "Hunger", "Peer pressure"],
+                                "correctIndex": 0,
+                                "startSeconds": 60
+                            }
+                        ]
+                    }`;
+
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    });
+
+                    const data = await response.json();
+                    let resultText = data.candidates[0].content.parts[0].text;
+                    resultText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
+                    const parsedData = JSON.parse(resultText);
+
+                    setClips(parsedData.clips || []);
+                    setQuestions(parsedData.questions || []);
+                    
+                    if (!title) setTitle("Listening Workshop"); 
+                } catch (error) {
+                    alert("Error con la IA. Asegúrate de pegar el transcript correctamente.");
+                    console.error(error);
+                } finally {
+                    setIsGenerating(false);
+                }
+            };
+
+            const saveToFirebase = async () => {
+                if (!title) return alert("El título general es obligatorio.");
+                if (!videoId) return alert("Se necesita un ID de video válido.");
+                if (clips.length === 0 && questions.length === 0) return alert("Genera contenido con la IA antes de guardar.");
+                
+                setIsSaving(true);
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    const parentPath = params.get('folder') ? decodeURIComponent(params.get('folder')) : '';
+
+                    const payload = {
+                        title: title,
+                        type: 'LISTENING',
+                        videoId: videoId,
+                        clips: clips,
+                        questions: questions,
+                        updatedAt: serverTimestamp()
+                    };
+
+                    if (editingId) {
+                        await updateDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editingId), payload);
+                    } else {
+                        payload.createdAt = serverTimestamp();
+                        payload.parentPath = parentPath;
+                        await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), payload);
+                    }
+                    window.location.href = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html'; 
+                } catch (e) { alert("Error guardando: " + e.message); }
+                finally { setIsSaving(false); }
+            };
+
+            const updateClip = (index, field, value) => {
+                const newClips = [...clips];
+                newClips[index][field] = value;
+                setClips(newClips);
+            };
+
+            const updateQuestion = (index, field, value) => {
+                const newQs = [...questions];
+                newQs[index][field] = value;
+                setQuestions(newQs);
+            };
+
+            const formatTime = (seconds) => {
+                const m = Math.floor(seconds / 60);
+                const s = seconds % 60;
+                return `${m}:${s < 10 ? '0' : ''}${s}`;
+            };
+
+            return (
+                <div className="h-[100dvh] flex flex-col bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100">
+                    {/* Header */}
+                    <div className="bg-white dark:bg-zinc-900 px-6 py-4 flex justify-between items-center shadow-sm z-10 border-b border-slate-200 dark:border-zinc-800 shrink-0">
+                        <div className="flex items-center gap-4">
+                            <button onClick={() => window.location.href='index.html'} className="p-2 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 rounded-xl transition"><ArrowLeft size={20}/></button>
+                            <h1 className="text-xl font-black flex items-center gap-2 text-rose-600 dark:text-rose-500"><Headphones/> Listening Builder (YouGlish Engine)</h1>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <button onClick={() => setShowApiInput(!showApiInput)} className="text-slate-400 hover:text-rose-500 transition"><KeyRound size={20}/></button>
+                            <button onClick={saveToFirebase} disabled={isSaving || !videoId} className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white px-6 py-2 rounded-xl font-bold flex gap-2 shadow-lg transition-transform active:scale-95">
+                                {isSaving ? <Loader2 className="animate-spin"/> : <Save/>} Guardar Taller
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
+                        
+                        {/* PANEL IZQUIERDO: IA GENERADOR */}
+                        <div className="w-full lg:w-1/3 bg-white dark:bg-zinc-900 border-r border-slate-200 dark:border-zinc-800 p-6 flex flex-col overflow-y-auto custom-scrollbar">
+                            <h2 className="font-black text-lg mb-6 flex items-center gap-2"><Sparkles className="text-amber-500"/> Asistente IA YouGlish</h2>
+                            
+                            {showApiInput && (
+                                <div className="bg-indigo-50 dark:bg-indigo-900/30 p-4 rounded-xl mb-6 flex gap-3 items-center border border-indigo-200 dark:border-indigo-800">
+                                    <input type="password" id="geminiKey" name="geminiKey" autoComplete="off" value={apiKey} onChange={e => { setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value); }} placeholder="Tu API Key de Gemini..." className="flex-1 bg-white dark:bg-zinc-950 p-2 rounded outline-none text-sm"/>
+                                </div>
+                            )}
+
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1 block">URL del Video (YouTube)</label>
+                                    <div className="flex items-center gap-2 bg-slate-50 dark:bg-zinc-950 p-2 rounded-xl border border-slate-200 dark:border-zinc-800 focus-within:border-rose-500">
+                                        <Youtube className="text-rose-500 ml-2"/>
+                                        <input id="ytUrl" name="ytUrl" autoComplete="off" value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="https://www.youtube.com/watch?v=..." className="w-full bg-transparent p-2 outline-none font-medium"/>
+                                    </div>
+                                    {videoId && <p className="text-xs text-emerald-500 font-bold mt-2">ID Detectado: {videoId}</p>}
+                                </div>
+
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1 block">Transcript (Copia y pega de YouTube)</label>
+                                    <p className="text-[10px] text-slate-400 mb-2">Asegúrate de incluir los tiempos (ej. 01:15) para que la IA sepa exactamente dónde saltar.</p>
+                                    <textarea id="ytTranscript" name="ytTranscript" autoComplete="off" value={transcript} onChange={e => setTranscript(e.target.value)} placeholder="0:00 - Welcome back to the channel...&#10;0:05 - Today we are talking about..." className="w-full bg-slate-50 dark:bg-zinc-950 p-3 rounded-xl outline-none border border-slate-200 dark:border-zinc-800 focus:border-rose-500 h-48 resize-y custom-scrollbar text-sm"></textarea>
+                                </div>
+
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1 block">Palabras Clave (Opcional)</label>
+                                    <input id="targetWords" name="targetWords" autoComplete="off" value={targetWords} onChange={e => setTargetWords(e.target.value)} placeholder="Ej: spend, dopamine, trigger..." className="w-full bg-slate-50 dark:bg-zinc-950 p-3 rounded-xl outline-none border border-slate-200 dark:border-zinc-800"/>
+                                </div>
+
+                                <button onClick={generateWorkshopWithAI} disabled={isGenerating || !videoId || !transcript} className="w-full bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white py-4 rounded-xl font-black shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 mt-4">
+                                    {isGenerating ? <Loader2 className="animate-spin"/> : <Sparkles/>} Extraer Tiempos y Clips
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* PANEL DERECHO: EDITOR DEL TALLER */}
+                        <div className="flex-1 bg-slate-50 dark:bg-zinc-950 p-6 md:p-10 overflow-y-auto custom-scrollbar">
+                            <input id="workshopTitle" name="workshopTitle" autoComplete="off" value={title} onChange={e => setTitle(e.target.value)} className="text-3xl md:text-5xl font-black w-full border-b-4 border-slate-200 dark:border-zinc-800 pb-2 mb-8 bg-transparent outline-none focus:border-rose-500" placeholder="Nombre del Taller de Listening..."/>
+
+                            {!videoId && (
+                                <div className="h-64 flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-200 dark:border-zinc-800 rounded-3xl">
+                                    <Youtube size={48} className="mb-4 opacity-50"/>
+                                    <p className="font-bold text-lg">Pega el enlace de YouTube en el panel izquierdo</p>
+                                </div>
+                            )}
+
+                            {videoId && (
+                                <div className="space-y-8 animate-in fade-in">
+                                    {/* PREVIEW DEL VIDEO */}
+                                    <div className="bg-black rounded-3xl overflow-hidden shadow-2xl aspect-video w-full max-w-3xl mx-auto border border-zinc-800 relative">
+                                        <iframe className="w-full h-full" src={`https://www.youtube.com/embed/${videoId}`} title="YouTube video player" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen></iframe>
+                                    </div>
+
+                                    {/* SECCIÓN 1: VOCABULARIO (CLIPS TIPO YOUGLISH) */}
+                                    <div className="bg-white dark:bg-zinc-900 rounded-[2rem] shadow-xl p-8 border border-slate-100 dark:border-zinc-800">
+                                        <div className="flex justify-between items-center mb-6 border-b border-slate-100 dark:border-zinc-800 pb-4">
+                                            <h3 className="font-black text-xl flex items-center gap-2 text-rose-600 dark:text-rose-400"><Target size={24}/> Clips de Vocabulario (Efecto YouGlish)</h3>
+                                            <button onClick={() => setClips([...clips, {word: '', startSeconds: 0, context: '', definition: ''}])} className="bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 px-3 py-1 rounded-lg flex items-center gap-1 font-bold text-sm hover:bg-rose-200 transition-colors"><Plus size={16}/> Añadir</button>
+                                        </div>
+
+                                        <div className="space-y-4">
+                                            {clips.length === 0 && <p className="text-slate-400 text-sm font-bold italic text-center py-4">Usa la IA para extraer palabras con sus marcas de tiempo exactas.</p>}
+                                            {clips.map((clip, idx) => (
+                                                <div key={idx} className="bg-slate-50 dark:bg-zinc-950 p-4 rounded-2xl border border-slate-200 dark:border-zinc-800 relative group">
+                                                    <button onClick={() => setClips(clips.filter((_, i) => i !== idx))} className="absolute top-4 right-4 text-rose-500 hover:bg-rose-100 dark:hover:bg-rose-900/30 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
+                                                    
+                                                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                                                        <div className="md:col-span-3">
+                                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Palabra Clave</label>
+                                                            <input id={`word-${idx}`} name={`word-${idx}`} autoComplete="off" value={clip.word} onChange={e => updateClip(idx, 'word', e.target.value)} className="w-full bg-white dark:bg-zinc-900 p-2 rounded-lg outline-none font-black text-indigo-600 dark:text-indigo-400 border border-slate-200 dark:border-zinc-800"/>
+                                                        </div>
+                                                        <div className="md:col-span-2">
+                                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1 flex items-center gap-1"><Clock size={10}/> Segundo</label>
+                                                            <input type="number" id={`sec-${idx}`} name={`sec-${idx}`} autoComplete="off" value={clip.startSeconds} onChange={e => updateClip(idx, 'startSeconds', parseInt(e.target.value)||0)} className="w-full bg-white dark:bg-zinc-900 p-2 rounded-lg outline-none font-mono text-sm border border-slate-200 dark:border-zinc-800"/>
+                                                            <span className="text-[10px] text-slate-500 font-bold ml-1">({formatTime(clip.startSeconds)})</span>
+                                                        </div>
+                                                        <div className="md:col-span-7">
+                                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Contexto Subtitulado</label>
+                                                            <input id={`ctx-${idx}`} name={`ctx-${idx}`} autoComplete="off" value={clip.context} onChange={e => updateClip(idx, 'context', e.target.value)} className="w-full bg-white dark:bg-zinc-900 p-2 rounded-lg outline-none text-sm italic border border-slate-200 dark:border-zinc-800 mb-2"/>
+                                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Definición (Para el alumno)</label>
+                                                            <input id={`def-${idx}`} name={`def-${idx}`} autoComplete="off" value={clip.definition} onChange={e => updateClip(idx, 'definition', e.target.value)} className="w-full bg-white dark:bg-zinc-900 p-2 rounded-lg outline-none text-sm border border-slate-200 dark:border-zinc-800"/>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* SECCIÓN 2: PREGUNTAS DE COMPRENSIÓN */}
+                                    <div className="bg-white dark:bg-zinc-900 rounded-[2rem] shadow-xl p-8 border border-slate-100 dark:border-zinc-800">
+                                        <div className="flex justify-between items-center mb-6 border-b border-slate-100 dark:border-zinc-800 pb-4">
+                                            <h3 className="font-black text-xl flex items-center gap-2 text-indigo-600 dark:text-indigo-400"><HelpCircle size={24}/> Quiz Auditivo</h3>
+                                            <button onClick={() => setQuestions([...questions, {q: '', options: ['','','',''], correctIndex: 0, startSeconds: 0}])} className="bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 px-3 py-1 rounded-lg flex items-center gap-1 font-bold text-sm hover:bg-indigo-200 transition-colors"><Plus size={16}/> Añadir</button>
+                                        </div>
+
+                                        <div className="space-y-6">
+                                            {questions.length === 0 && <p className="text-slate-400 text-sm font-bold italic text-center py-4">No hay preguntas generadas aún.</p>}
+                                            {questions.map((q, qIdx) => (
+                                                <div key={qIdx} className="bg-slate-50 dark:bg-zinc-950 p-6 rounded-2xl border border-slate-200 dark:border-zinc-800 relative">
+                                                    <button onClick={() => setQuestions(questions.filter((_, i) => i !== qIdx))} className="absolute top-4 right-4 text-rose-500 hover:bg-rose-100 dark:hover:bg-rose-900/30 p-1.5 rounded-lg"><Trash2 size={16}/></button>
+                                                    
+                                                    <div className="flex items-start gap-4 mb-4">
+                                                        <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 font-black rounded-xl flex items-center justify-center shrink-0">{qIdx + 1}</div>
+                                                        <div className="flex-1">
+                                                            <input id={`q-${qIdx}`} name={`q-${qIdx}`} autoComplete="off" value={q.q} onChange={e => updateQuestion(qIdx, 'q', e.target.value)} placeholder="Escribe la pregunta aquí..." className="w-full bg-transparent outline-none font-black text-lg mb-2 border-b border-transparent focus:border-indigo-500 pb-1"/>
+                                                            
+                                                            <div className="flex items-center gap-2 mb-4">
+                                                                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1"><Clock size={12}/> Minuto Clave:</span>
+                                                                <input type="number" id={`qsec-${qIdx}`} name={`qsec-${qIdx}`} autoComplete="off" value={q.startSeconds} onChange={e => updateQuestion(qIdx, 'startSeconds', parseInt(e.target.value)||0)} className="w-20 bg-white dark:bg-zinc-900 p-1.5 rounded-md outline-none font-mono text-sm border border-slate-200 dark:border-zinc-800 text-center"/>
+                                                                <span className="text-[10px] text-slate-500 font-bold ml-1">({formatTime(q.startSeconds)})</span>
+                                                            </div>
+
+                                                            <div className="space-y-2">
+                                                                {q.options.map((opt, oIdx) => (
+                                                                    <div key={oIdx} className="flex items-center gap-3">
+                                                                        <input type="radio" id={`radio-${qIdx}-${oIdx}`} name={`radio-${qIdx}`} checked={q.correctIndex === oIdx} onChange={() => updateQuestion(qIdx, 'correctIndex', oIdx)} className="w-4 h-4 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/>
+                                                                        <input id={`opt-${qIdx}-${oIdx}`} name={`opt-${qIdx}-${oIdx}`} autoComplete="off" value={opt} onChange={e => {
+                                                                            const newOpts = [...q.options];
+                                                                            newOpts[oIdx] = e.target.value;
+                                                                            updateQuestion(qIdx, 'options', newOpts);
+                                                                        }} placeholder={`Opción ${oIdx + 1}`} className={`flex-1 p-2 rounded-lg outline-none text-sm border ${q.correctIndex === oIdx ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800 font-bold text-indigo-900 dark:text-indigo-100' : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-300'}`}/>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<Dashboard />);
+    </script>
+</body>
+</html>
