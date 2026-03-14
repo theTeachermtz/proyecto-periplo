@@ -30,64 +30,17 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Play, Pause, Square, FastForward, RotateCcw } from 'lucide-react';
+        import { Play, Pause, Rewind, FastForward, ExternalLink } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // Algoritmo mejorado para leer el transcript copiado de YouTube
-        const parseTranscript = (rawText) => {
-            const lines = rawText.trim().split('\n');
-            const transcript = [];
-            let currentStart = 0;
-
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i].trim();
-                if (!line) continue;
-
-                // Busca si la línea empieza con un timestamp (ej: 0:05, 12:30, 1:02:15)
-                const timeMatch = line.match(/^(\d{1,2}:)?(\d{1,2}):(\d{2})/);
-                
-                if (timeMatch) {
-                    let parts = timeMatch[0].split(':').map(Number);
-                    if (parts.length === 2) currentStart = parts[0] * 60 + parts[1];
-                    else if (parts.length === 3) currentStart = parts[0] * 3600 + parts[1] * 60 + parts[2];
-                    
-                    // Si YouTube pegó el tiempo y el texto en la misma línea
-                    let textStr = line.replace(timeMatch[0], '').trim();
-                    if (textStr) {
-                        transcript.push({ start: currentStart, text: textStr });
-                    } else {
-                        // Preparamos el bloque esperando que la siguiente línea sea el texto
-                        transcript.push({ start: currentStart, text: "" });
-                    }
-                } else {
-                    // Es una línea de texto. Se la asignamos al último bloque de tiempo.
-                    if (transcript.length > 0) {
-                        const lastIndex = transcript.length - 1;
-                        if (transcript[lastIndex].text === "") {
-                            transcript[lastIndex].text = line;
-                        } else {
-                            // Si hay varias líneas de texto para el mismo segundo, las unimos
-                            transcript[lastIndex].text += " " + line;
-                        }
-                    }
-                }
-            }
-
-            // Calculamos cuándo termina cada frase
-            for (let i = 0; i < transcript.length; i++) {
-                transcript[i].end = transcript[i + 1] ? transcript[i + 1].start : transcript[i].start + 5; 
-            }
-            // Filtramos por si quedó algún bloque de tiempo vacío
-            return transcript.filter(t => t.text.trim() !== "");
-        };
-
         const YouGlishApp = () => {
             const [taller, setTaller] = useState(null);
             const [parsedSubs, setParsedSubs] = useState([]);
             const [currentTime, setCurrentTime] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
             const playerRef = useRef(null);
 
             useEffect(() => {
@@ -100,7 +53,7 @@
                     if (docSnap.exists()) {
                         const data = docSnap.data();
                         setTaller(data);
-                        setParsedSubs(parseTranscript(data.rawTranscript || ""));
+                        setParsedSubs(data.parsedTranscript || []);
                         loadYouTubeScript(data.videoId);
                     } else {
                         alert("Actividad no encontrada.");
@@ -124,10 +77,15 @@
                 playerRef.current = new window.YT.Player('yt-player-container', {
                     videoId: vidId,
                     playerVars: { 'controls': 0, 'disablekb': 1, 'rel': 0, 'modestbranding': 1, 'playsinline': 1 },
+                    events: {
+                        'onStateChange': (event) => {
+                            // 1 = Reproduciendo, 3 = Buffering
+                            setIsPlaying(event.data === 1 || event.data === 3);
+                        }
+                    }
                 });
             };
 
-            // El reloj maestro de React: Revisa el tiempo de YouTube 10 veces por segundo
             useEffect(() => {
                 const interval = setInterval(() => {
                     if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
@@ -137,72 +95,109 @@
                 return () => clearInterval(interval);
             }, []);
 
-            const handlePlay = () => playerRef.current?.playVideo();
-            const handlePause = () => playerRef.current?.pauseVideo();
-            const handleReplay = () => { playerRef.current?.seekTo(0); playerRef.current?.playVideo(); };
-            const handleForward = () => { 
-                if(playerRef.current?.getCurrentTime) {
-                    playerRef.current.seekTo(playerRef.current.getCurrentTime() + 5); 
+            const togglePlayPause = () => {
+                if (!playerRef.current || typeof playerRef.current.getPlayerState !== 'function') return;
+                const state = playerRef.current.getPlayerState();
+                if (state === 1 || state === 3) { 
+                    playerRef.current.pauseVideo();
+                    setIsPlaying(false);
+                } else { 
+                    playerRef.current.playVideo();
+                    setIsPlaying(true);
                 }
             };
 
-            // Encuentra cuál es el índice del subtítulo que debería estar leyendo ahora mismo
+            const jumpSeconds = (seconds) => {
+                if(playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+                    const newTime = playerRef.current.getCurrentTime() + seconds;
+                    playerRef.current.seekTo(newTime); 
+                    playerRef.current.playVideo();
+                }
+            };
+
             let activeIndex = parsedSubs.findIndex(sub => currentTime >= sub.start && currentTime < sub.end);
-            
-            // Si hay un hueco de silencio, mantenemos el último subtítulo visible un rato
             if (activeIndex === -1 && parsedSubs.length > 0) {
                 const pastSubs = parsedSubs.filter(sub => currentTime >= sub.end);
                 if (pastSubs.length > 0) activeIndex = parsedSubs.indexOf(pastSubs[pastSubs.length - 1]);
                 else activeIndex = 0;
             }
 
-            if (!taller) return <div className="h-screen flex items-center justify-center font-black text-2xl animate-pulse text-slate-400">Cargando taller...</div>;
+            if (!taller) return <div className="h-screen flex items-center justify-center font-black text-2xl animate-pulse text-slate-400">Cargando...</div>;
 
             return (
                 <div className="max-w-4xl mx-auto p-4 md:p-8 py-12">
-                    <h1 className="text-3xl md:text-4xl font-black text-slate-800 mb-8 text-center">{taller.title}</h1>
-
-                    {/* Contenedor del Video */}
-                    <div className="bg-black rounded-3xl overflow-hidden shadow-xl aspect-video w-full mb-6 relative border-4 border-slate-800 pointer-events-none">
-                        <div id="yt-player-container" className="absolute top-0 left-0 w-full h-full"></div>
+                    
+                    <div className="flex justify-between items-center mb-6">
+                        <h1 className="text-3xl md:text-4xl font-black text-slate-800">{taller.title}</h1>
+                        <a href={`https://www.youtube.com/watch?v=${taller.videoId}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold px-4 py-2 rounded-lg transition text-sm shadow-sm shrink-0">
+                            <ExternalLink size={16}/> YouTube
+                        </a>
                     </div>
 
-                    {/* INTERFAZ ESTILO YOUGLISH: Solo muestra la oración actual y contexto */}
-                    <div className="bg-white rounded-3xl shadow-lg border border-slate-200 mb-8 overflow-hidden">
-                        <div className="bg-slate-800 p-8 min-h-[180px] flex flex-col items-center justify-center text-center px-4 relative">
+                    {/* CONJUNTO: VIDEO + BARRA DE CONTROLES */}
+                    <div className="shadow-2xl mb-8 border-4 border-slate-900 rounded-3xl overflow-hidden bg-slate-900">
+                        
+                        {/* Area del Video */}
+                        <div className="w-full relative aspect-video bg-black pointer-events-none">
+                            <div id="yt-player-container" className="absolute inset-0 w-full h-full"></div>
+                        </div>
+
+                        {/* CAPA TRANSPARENTE PARA EL CLICK (Encima del video) */}
+                        <div onClick={togglePlayPause} className="absolute top-[88px] left-0 w-full aspect-video z-50 cursor-pointer flex items-center justify-center group" style={{top: '10%'}}>
+                            {isPlaying ? (
+                                <div className="bg-black/40 text-white p-4 rounded-full opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm">
+                                    <Pause size={48} fill="currentColor"/>
+                                </div>
+                            ) : (
+                                <div className="bg-rose-600/90 text-white p-5 rounded-full shadow-lg backdrop-blur-sm transform scale-100 group-hover:scale-110 transition-transform">
+                                    <Play size={48} fill="currentColor" className="ml-2"/>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* BARRA DE CONTROLES (Pegada justo abajo del video) */}
+                        <div className="p-4 flex justify-center items-center gap-6 md:gap-10 bg-slate-900 relative z-50">
+                            <button onClick={() => jumpSeconds(-5)} className="text-slate-400 hover:text-white p-2 rounded-xl transition flex flex-col items-center group">
+                                <Rewind size={24} className="group-hover:-translate-x-1 transition-transform"/>
+                                <span className="text-[10px] font-bold mt-1 tracking-widest">-5s</span>
+                            </button>
                             
-                            {/* Oración Anterior (Contexto) */}
+                            <button onClick={togglePlayPause} className="bg-rose-600 hover:bg-rose-500 text-white w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition transform active:scale-95 border-4 border-slate-800">
+                                {isPlaying ? <Pause fill="currentColor" size={28}/> : <Play fill="currentColor" size={28} className="ml-1"/>}
+                            </button>
+
+                            <button onClick={() => jumpSeconds(5)} className="text-slate-400 hover:text-white p-2 rounded-xl transition flex flex-col items-center group">
+                                <FastForward size={24} className="group-hover:translate-x-1 transition-transform"/>
+                                <span className="text-[10px] font-bold mt-1 tracking-widest">+5s</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* CAJA INDEPENDIENTE DE SUBTÍTULOS (Abajo del todo) */}
+                    <div className="bg-white rounded-3xl shadow-lg border border-slate-200 overflow-hidden">
+                        <div className="bg-slate-800 p-8 min-h-[220px] flex flex-col items-center justify-center text-center px-4 md:px-12">
                             {activeIndex > 0 && (
-                                <p className="text-slate-500 text-sm md:text-base font-medium mb-3 opacity-70 transition-all">
+                                <p onClick={() => jumpSeconds(-5)} className="text-slate-500 text-sm md:text-base font-medium mb-4 opacity-70 transition-all cursor-pointer hover:text-slate-300">
                                     {parsedSubs[activeIndex - 1].text}
                                 </p>
                             )}
                             
-                            {/* Oración Actual (Destacada) */}
                             {parsedSubs.length > 0 ? (
-                                <p className="text-2xl md:text-4xl font-black text-yellow-400 my-2 transition-all transform scale-100">
+                                <p className="text-2xl md:text-4xl font-black text-amber-400 my-2 transition-all leading-tight">
                                     {parsedSubs[activeIndex]?.text || "..."}
                                 </p>
                             ) : (
                                 <p className="text-xl text-slate-500 italic">No se detectaron subtítulos.</p>
                             )}
                             
-                            {/* Oración Siguiente (Contexto) */}
                             {activeIndex >= 0 && activeIndex < parsedSubs.length - 1 && (
-                                <p className="text-slate-500 text-sm md:text-base font-medium mt-3 opacity-70 transition-all">
+                                <p onClick={() => jumpSeconds(5)} className="text-slate-500 text-sm md:text-base font-medium mt-4 opacity-70 transition-all cursor-pointer hover:text-slate-300">
                                     {parsedSubs[activeIndex + 1].text}
                                 </p>
                             )}
                         </div>
-
-                        {/* Controles de Reproducción integrados en la caja */}
-                        <div className="bg-white p-4 flex flex-wrap justify-center gap-3">
-                            <button onClick={handlePlay} className="bg-rose-600 text-white px-6 py-2.5 rounded-xl font-black flex items-center gap-2 hover:bg-rose-700 transition shadow-sm active:scale-95"><Play size={18}/> Play</button>
-                            <button onClick={handlePause} className="bg-slate-100 text-slate-700 px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-200 transition active:scale-95"><Pause size={18}/> Pausa</button>
-                            <button onClick={handleReplay} className="bg-slate-100 text-slate-700 px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-200 transition active:scale-95"><RotateCcw size={18}/> Repetir</button>
-                            <button onClick={handleForward} className="bg-slate-100 text-slate-700 px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-200 transition active:scale-95"><FastForward size={18}/> +5s</button>
-                        </div>
                     </div>
+
                 </div>
             );
         };
