@@ -20,6 +20,31 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;900&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        
+        /* Estilo para la barra de progreso */
+        input[type=range] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #e11d48; /* rose-600 */
+            cursor: pointer;
+            margin-top: -6px;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #334155; /* slate-700 */
+            border-radius: 2px;
+        }
+        input[type=range]:focus {
+            outline: none;
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800 min-h-screen">
@@ -30,17 +55,28 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Play, Pause, Rewind, FastForward, ExternalLink } from 'lucide-react';
+        import { Play, Pause, Rewind, FastForward, ExternalLink, Subtitles, EyeOff } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        // Helper para formatear los segundos a "Minutos:Segundos"
+        const formatTime = (secs) => {
+            if (!secs || isNaN(secs)) return "0:00";
+            const m = Math.floor(secs / 60);
+            const s = Math.floor(secs % 60);
+            return `${m}:${s < 10 ? '0' : ''}${s}`;
+        };
+
         const YouGlishApp = () => {
             const [taller, setTaller] = useState(null);
             const [parsedSubs, setParsedSubs] = useState([]);
             const [currentTime, setCurrentTime] = useState(0);
+            const [duration, setDuration] = useState(0);
             const [isPlaying, setIsPlaying] = useState(false);
+            const [showSubs, setShowSubs] = useState(true); // Estado para apagar/prender subtítulos
+            
             const playerRef = useRef(null);
 
             useEffect(() => {
@@ -78,14 +114,19 @@
                     videoId: vidId,
                     playerVars: { 'controls': 0, 'disablekb': 1, 'rel': 0, 'modestbranding': 1, 'playsinline': 1 },
                     events: {
+                        'onReady': (event) => {
+                            setDuration(event.target.getDuration());
+                        },
                         'onStateChange': (event) => {
-                            // 1 = Reproduciendo, 3 = Buffering
                             setIsPlaying(event.data === 1 || event.data === 3);
+                            // Por si YouTube no nos dio la duración al inicio
+                            if (duration === 0) setDuration(event.target.getDuration());
                         }
                     }
                 });
             };
 
+            // Reloj de React: Mantiene la barra de progreso y los subtítulos sincronizados
             useEffect(() => {
                 const interval = setInterval(() => {
                     if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
@@ -95,6 +136,7 @@
                 return () => clearInterval(interval);
             }, []);
 
+            // Click invisible en el video
             const togglePlayPause = () => {
                 if (!playerRef.current || typeof playerRef.current.getPlayerState !== 'function') return;
                 const state = playerRef.current.getPlayerState();
@@ -107,6 +149,7 @@
                 }
             };
 
+            // Para los botones de -5s y +5s
             const jumpSeconds = (seconds) => {
                 if(playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
                     const newTime = playerRef.current.getCurrentTime() + seconds;
@@ -115,12 +158,32 @@
                 }
             };
 
+            // Cuando el usuario arrastra la barra manualmente
+            const handleSeek = (e) => {
+                const newTime = parseFloat(e.target.value);
+                setCurrentTime(newTime);
+                if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+                    playerRef.current.seekTo(newTime);
+                }
+            };
+
+            // Lógica para encontrar qué frase mostrar
             let activeIndex = parsedSubs.findIndex(sub => currentTime >= sub.start && currentTime < sub.end);
             if (activeIndex === -1 && parsedSubs.length > 0) {
                 const pastSubs = parsedSubs.filter(sub => currentTime >= sub.end);
                 if (pastSubs.length > 0) activeIndex = parsedSubs.indexOf(pastSubs[pastSubs.length - 1]);
                 else activeIndex = 0;
             }
+
+            // Función para renderizar el texto con efecto hover por palabra
+            const renderKaraokeWords = (text) => {
+                if (!text) return null;
+                return text.split(' ').map((word, i) => (
+                    <span key={i} className="inline-block mx-1 hover:text-white transition-colors duration-150 cursor-crosshair">
+                        {word}
+                    </span>
+                ));
+            };
 
             if (!taller) return <div className="h-screen flex items-center justify-center font-black text-2xl animate-pulse text-slate-400">Cargando...</div>;
 
@@ -137,66 +200,96 @@
                     {/* CONJUNTO: VIDEO + BARRA DE CONTROLES */}
                     <div className="shadow-2xl mb-8 border-4 border-slate-900 rounded-3xl overflow-hidden bg-slate-900">
                         
-                        {/* Area del Video */}
+                        {/* Area del Video (Capa intocable de YouTube) */}
                         <div className="w-full relative aspect-video bg-black pointer-events-none">
                             <div id="yt-player-container" className="absolute inset-0 w-full h-full"></div>
                         </div>
 
-                        {/* CAPA TRANSPARENTE PARA EL CLICK (Encima del video) */}
-                        <div onClick={togglePlayPause} className="absolute top-[88px] left-0 w-full aspect-video z-50 cursor-pointer flex items-center justify-center group" style={{top: '10%'}}>
-                            {isPlaying ? (
-                                <div className="bg-black/40 text-white p-4 rounded-full opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm">
-                                    <Pause size={48} fill="currentColor"/>
-                                </div>
-                            ) : (
-                                <div className="bg-rose-600/90 text-white p-5 rounded-full shadow-lg backdrop-blur-sm transform scale-100 group-hover:scale-110 transition-transform">
-                                    <Play size={48} fill="currentColor" className="ml-2"/>
-                                </div>
-                            )}
+                        {/* CAPA TRANSPARENTE 100% INVISIBLE PARA EL CLICK */}
+                        <div onClick={togglePlayPause} className="absolute top-0 left-0 w-full aspect-video z-50 cursor-pointer">
+                            {/* Ya no hay íconos estorbando aquí, solo la función click */}
                         </div>
 
-                        {/* BARRA DE CONTROLES (Pegada justo abajo del video) */}
-                        <div className="p-4 flex justify-center items-center gap-6 md:gap-10 bg-slate-900 relative z-50">
-                            <button onClick={() => jumpSeconds(-5)} className="text-slate-400 hover:text-white p-2 rounded-xl transition flex flex-col items-center group">
-                                <Rewind size={24} className="group-hover:-translate-x-1 transition-transform"/>
-                                <span className="text-[10px] font-bold mt-1 tracking-widest">-5s</span>
-                            </button>
+                        {/* CONTROLES INFERIORES */}
+                        <div className="flex flex-col bg-slate-900 border-t border-slate-800 p-4 relative z-50">
                             
-                            <button onClick={togglePlayPause} className="bg-rose-600 hover:bg-rose-500 text-white w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition transform active:scale-95 border-4 border-slate-800">
-                                {isPlaying ? <Pause fill="currentColor" size={28}/> : <Play fill="currentColor" size={28} className="ml-1"/>}
-                            </button>
+                            {/* BARRA DE PROGRESO (Seekbar) */}
+                            <div className="flex items-center gap-4 mb-4 px-2">
+                                <span className="text-xs font-mono text-slate-400 w-10 text-right">{formatTime(currentTime)}</span>
+                                <input 
+                                    type="range" 
+                                    min="0" 
+                                    max={duration || 100} 
+                                    value={currentTime} 
+                                    onChange={handleSeek}
+                                    className="w-full"
+                                />
+                                <span className="text-xs font-mono text-slate-400 w-10">{formatTime(duration)}</span>
+                            </div>
 
-                            <button onClick={() => jumpSeconds(5)} className="text-slate-400 hover:text-white p-2 rounded-xl transition flex flex-col items-center group">
-                                <FastForward size={24} className="group-hover:translate-x-1 transition-transform"/>
-                                <span className="text-[10px] font-bold mt-1 tracking-widest">+5s</span>
-                            </button>
+                            {/* BOTONES */}
+                            <div className="flex justify-center items-center relative">
+                                
+                                {/* Controles centrales de reproducción */}
+                                <div className="flex items-center gap-6 md:gap-10">
+                                    <button onClick={() => jumpSeconds(-5)} className="text-slate-400 hover:text-white p-2 rounded-xl transition flex flex-col items-center group">
+                                        <Rewind size={24} className="group-hover:-translate-x-1 transition-transform"/>
+                                        <span className="text-[10px] font-bold mt-1 tracking-widest">-5s</span>
+                                    </button>
+                                    
+                                    <button onClick={togglePlayPause} className="bg-rose-600 hover:bg-rose-500 text-white w-16 h-16 rounded-full flex items-center justify-center shadow-lg transition transform active:scale-95 border-4 border-slate-800">
+                                        {isPlaying ? <Pause fill="currentColor" size={28}/> : <Play fill="currentColor" size={28} className="ml-1"/>}
+                                    </button>
+
+                                    <button onClick={() => jumpSeconds(5)} className="text-slate-400 hover:text-white p-2 rounded-xl transition flex flex-col items-center group">
+                                        <FastForward size={24} className="group-hover:translate-x-1 transition-transform"/>
+                                        <span className="text-[10px] font-bold mt-1 tracking-widest">+5s</span>
+                                    </button>
+                                </div>
+
+                                {/* Botón Toggle Subtítulos (Esquina derecha) */}
+                                <div className="absolute right-0">
+                                    <button 
+                                        onClick={() => setShowSubs(!showSubs)} 
+                                        className={`p-3 rounded-xl transition flex flex-col items-center ${showSubs ? 'text-amber-400 hover:text-amber-300' : 'text-slate-500 hover:text-slate-400'}`}
+                                        title={showSubs ? "Ocultar Subtítulos" : "Mostrar Subtítulos"}
+                                    >
+                                        {showSubs ? <Subtitles size={24}/> : <EyeOff size={24}/>}
+                                        <span className="text-[10px] font-bold mt-1">CC</span>
+                                    </button>
+                                </div>
+
+                            </div>
                         </div>
                     </div>
 
-                    {/* CAJA INDEPENDIENTE DE SUBTÍTULOS (Abajo del todo) */}
-                    <div className="bg-white rounded-3xl shadow-lg border border-slate-200 overflow-hidden">
-                        <div className="bg-slate-800 p-8 min-h-[220px] flex flex-col items-center justify-center text-center px-4 md:px-12">
-                            {activeIndex > 0 && (
-                                <p onClick={() => jumpSeconds(-5)} className="text-slate-500 text-sm md:text-base font-medium mb-4 opacity-70 transition-all cursor-pointer hover:text-slate-300">
-                                    {parsedSubs[activeIndex - 1].text}
-                                </p>
-                            )}
-                            
-                            {parsedSubs.length > 0 ? (
-                                <p className="text-2xl md:text-4xl font-black text-amber-400 my-2 transition-all leading-tight">
-                                    {parsedSubs[activeIndex]?.text || "..."}
-                                </p>
-                            ) : (
-                                <p className="text-xl text-slate-500 italic">No se detectaron subtítulos.</p>
-                            )}
-                            
-                            {activeIndex >= 0 && activeIndex < parsedSubs.length - 1 && (
-                                <p onClick={() => jumpSeconds(5)} className="text-slate-500 text-sm md:text-base font-medium mt-4 opacity-70 transition-all cursor-pointer hover:text-slate-300">
-                                    {parsedSubs[activeIndex + 1].text}
-                                </p>
-                            )}
+                    {/* CAJA DE SUBTÍTULOS (Solo se muestra si showSubs es true) */}
+                    {showSubs && (
+                        <div className="bg-white rounded-3xl shadow-lg border border-slate-200 overflow-hidden transition-all duration-300">
+                            <div className="bg-slate-800 p-8 min-h-[220px] flex flex-col items-center justify-center text-center px-4 md:px-12">
+                                {activeIndex > 0 && (
+                                    <p onClick={() => jumpSeconds(-5)} className="text-slate-500 text-sm md:text-base font-medium mb-4 opacity-70 transition-all cursor-pointer hover:text-slate-300">
+                                        {parsedSubs[activeIndex - 1].text}
+                                    </p>
+                                )}
+                                
+                                {parsedSubs.length > 0 ? (
+                                    <p className="text-3xl md:text-4xl font-black text-amber-400 my-2 transition-all leading-relaxed">
+                                        {/* AQUI SE RENDERIZAN LAS PALABRAS SEPARADAS PARA EL HOVER */}
+                                        {renderKaraokeWords(parsedSubs[activeIndex]?.text)}
+                                    </p>
+                                ) : (
+                                    <p className="text-xl text-slate-500 italic">No se detectaron subtítulos.</p>
+                                )}
+                                
+                                {activeIndex >= 0 && activeIndex < parsedSubs.length - 1 && (
+                                    <p onClick={() => jumpSeconds(5)} className="text-slate-500 text-sm md:text-base font-medium mt-4 opacity-70 transition-all cursor-pointer hover:text-slate-300">
+                                        {parsedSubs[activeIndex + 1].text}
+                                    </p>
+                                )}
+                            </div>
                         </div>
-                    </div>
+                    )}
 
                 </div>
             );
