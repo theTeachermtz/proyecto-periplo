@@ -32,7 +32,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
-        import { Youtube, Play, Loader2, ArrowLeft, KeyRound, AlertTriangle, Sparkles, BookOpen, Trash2, Plus } from 'lucide-react';
+        import { Youtube, Play, Loader2, ArrowLeft, KeyRound, Sparkles, BookOpen, Trash2, Plus, Clock } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -79,6 +79,13 @@
             return transcript.filter(t => t.text.trim() !== "");
         };
 
+        const formatTime = (secs) => {
+            if (isNaN(secs)) return "0:00";
+            const m = Math.floor(secs / 60);
+            const s = Math.floor(secs % 60);
+            return `${m}:${s < 10 ? '0' : ''}${s}`;
+        };
+
         const SimpleDashboard = () => {
             const [apiKey, setApiKey] = useState("");
             const [title, setTitle] = useState("");
@@ -88,61 +95,53 @@
             const [channelName, setChannelName] = useState("");
             const [thumbnailUrl, setThumbnailUrl] = useState("");
             const [isFetchingMeta, setIsFetchingMeta] = useState(false);
-            const [embedError, setEmbedError] = useState(false);
             const [isSaving, setIsSaving] = useState(false);
 
-            // Nuevos estados para la IA y el vocabulario
             const [isExtractingVocab, setIsExtractingVocab] = useState(false);
             const [vocabulary, setVocabulary] = useState([]);
 
             useEffect(() => {
-                const savedYtKey = localStorage.getItem('youtube_api_key');
                 const savedGeminiKey = localStorage.getItem('gemini_api_key');
-                if (savedGeminiKey) setApiKey(savedGeminiKey); // Usamos la de Gemini para el vocabulario
-                // (Omití auto-cargar la de YT aquí para no enredar los inputs, asumiendo que ya tienes metadata en mente)
+                if (savedGeminiKey) setApiKey(savedGeminiKey);
             }, []);
 
             const videoId = extractYouTubeId(videoUrl);
 
-            // Mágia de YT (Si tienes una API de YT hardcodeada o se la pasas)
             useEffect(() => {
                 if (videoId) {
-                    // Simulamos la extracción de metadata para no depender obligatoriamente de tu API key de YT todo el tiempo
-                    // Si consigues la API key de YT real, la puedes volver a conectar aquí.
                     setThumbnailUrl(`https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`);
                 } else {
                     setThumbnailUrl("");
                 }
             }, [videoId]);
 
-            // FUNCION IA: Extraer Slang y Phrasal Verbs
             const extractVocabWithAI = async () => {
                 if (!apiKey) return alert("Necesitas pegar tu API Key de Gemini arriba para usar la IA.");
                 if (!transcript) return alert("Pega el transcript del video primero.");
 
                 setIsExtractingVocab(true);
                 try {
+                    const cleanTrans = parseDirtyTranscript(transcript);
                     const prompt = `
-                    Eres un profesor de idiomas creando material de estudio avanzado.
-                    Analiza el siguiente transcript de un video de YouTube y extrae vocabulario clave (phrasal verbs, slang, modismos, o palabras útiles).
+                    Eres un profesor de idiomas creando material interactivo.
+                    Analiza el siguiente transcript y extrae de 5 a 8 palabras clave (phrasal verbs, slang, modismos).
                     
-                    REGLA DE ORO ESTRICTA:
-                    Sin importar la longitud del video, extrae ÚNICAMENTE de 5 a un MÁXIMO de 10 expresiones. Elige solo las más útiles para el día a día. No abrumes al estudiante.
+                    Por cada palabra, debes encontrar en el transcript EN QUÉ SEGUNDO EMPIEZA la idea y EN QUÉ SEGUNDO TERMINA (Dale un margen de 5 a 10 segundos al clip para que el alumno entienda el contexto completo).
 
-                    Para cada palabra, proporciona una definición sencilla y la oración original (contexto) del video.
-
-                    Devuelve ÚNICAMENTE un arreglo JSON válido con esta estructura exacta:
+                    Devuelve ÚNICAMENTE un JSON con esta estructura exacta:
                     [
                         { 
-                            "word": "figure out", 
-                            "type": "phrasal verb",
-                            "definition": "understand or solve something", 
-                            "context": "I need to figure out how this works"
+                            "word": "let this sink in", 
+                            "type": "idiom",
+                            "definition": "realize or understand something deeply", 
+                            "context": "Take a moment and let this sink in before answering.",
+                            "startSeconds": 45,
+                            "endSeconds": 55
                         }
                     ]
 
-                    Transcript:
-                    ${transcript}
+                    Transcript procesado (con tiempos):
+                    ${JSON.stringify(cleanTrans.map(t => '[' + t.start + 's] ' + t.text))}
                     `;
 
                     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
@@ -152,13 +151,11 @@
 
                     const data = await response.json();
                     let resultText = data.candidates[0].content.parts[0].text;
-                    
                     const jsonMatch = resultText.match(/\[[\s\S]*\]/);
                     if (!jsonMatch) throw new Error("La IA no devolvió el formato correcto.");
                     
                     const newVocab = JSON.parse(jsonMatch[0]);
                     setVocabulary(newVocab);
-                    
                 } catch (e) {
                     alert("Error extrayendo vocabulario. Revisa tu API key. Detalle: " + e.message);
                 } finally {
@@ -176,14 +173,14 @@
 
                     const params = new URLSearchParams(window.location.search);
                     const parentPath = params.get('folder') ? decodeURIComponent(params.get('folder')) : '';
-                    const finalTitle = title.trim() !== "" ? title.trim() : "Listening Activity";
+                    const finalTitle = title.trim() !== "" ? title.trim() : "Listening & Vocab Activity";
 
                     const payload = {
                         title: finalTitle,
                         thumbnailUrl: thumbnailUrl,
                         type: 'LISTENING', 
                         videoId: videoId,
-                        vocabulary: vocabulary, // AQUI SE GUARDA LA LISTA DE LA IA
+                        vocabulary: vocabulary,
                         parsedTranscript: cleanTranscriptArray,
                         parentPath: parentPath,
                         createdAt: serverTimestamp(),
@@ -208,7 +205,7 @@
             return (
                 <div className="w-full flex flex-col lg:flex-row gap-8">
                     
-                    {/* PANEL IZQUIERDO: CONFIGURACIÓN BÁSICA */}
+                    {/* PANEL IZQUIERDO */}
                     <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl shadow-2xl flex-1 relative flex flex-col h-[90vh]">
                         <button onClick={() => window.location.href = 'index.html'} className="absolute top-8 left-8 text-zinc-400 hover:text-white transition"><ArrowLeft size={24}/></button>
                         <h1 className="text-3xl font-black text-rose-500 mb-8 text-center flex items-center justify-center gap-3">
@@ -248,15 +245,15 @@
                         </div>
 
                         <button onClick={handleProcessAndCreate} disabled={isSaving || !videoId || !transcript} className="w-full bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white py-4 rounded-xl font-black shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 text-xl mt-6 shrink-0">
-                            {isSaving ? <Loader2 className="animate-spin"/> : <Play/>} Crear y Ver Karaoke
+                            {isSaving ? <Loader2 className="animate-spin"/> : <Play/>} Crear y Ver Actividad
                         </button>
                     </div>
 
-                    {/* PANEL DERECHO: VOCABULARIO IA */}
+                    {/* PANEL DERECHO */}
                     <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl shadow-2xl flex-1 flex flex-col h-[90vh]">
                         <div className="flex justify-between items-center mb-6">
                             <h2 className="text-2xl font-black text-emerald-500 flex items-center gap-2">
-                                <BookOpen size={28}/> Diccionario IA
+                                <BookOpen size={28}/> Clips de Vocabulario
                             </h2>
                             <button onClick={extractVocabWithAI} disabled={isExtractingVocab || !transcript} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-4 py-2 rounded-xl font-bold flex gap-2 transition-transform active:scale-95 text-sm">
                                 {isExtractingVocab ? <Loader2 className="animate-spin" size={18}/> : <Sparkles size={18}/>} 
@@ -268,12 +265,12 @@
                             {vocabulary.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-zinc-600 border-2 border-dashed border-zinc-800 rounded-2xl p-8 text-center">
                                     <Sparkles size={48} className="mb-4 opacity-50"/>
-                                    <p className="font-bold">Pega tu transcript y dale al botón de arriba.</p>
-                                    <p className="text-sm mt-2">La IA leerá el texto y sacará los mejores Phrasal Verbs y Slangs para tus alumnos.</p>
+                                    <p className="font-bold">Pega tu transcript y dale al botón.</p>
+                                    <p className="text-sm mt-2">La IA leerá el texto, sacará Phrasal Verbs y marcará los segundos exactos del clip para tu alumno.</p>
                                 </div>
                             ) : (
                                 <>
-                                    <button onClick={() => setVocabulary([{word:'', type:'slang', definition:'', context:''}, ...vocabulary])} className="w-full py-2 border-2 border-dashed border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 rounded-xl font-bold flex justify-center items-center gap-2 transition mb-4">
+                                    <button onClick={() => setVocabulary([{word:'', type:'slang', definition:'', context:'', startSeconds:0, endSeconds:10}, ...vocabulary])} className="w-full py-2 border-2 border-dashed border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 rounded-xl font-bold flex justify-center items-center gap-2 transition mb-4">
                                         <Plus size={18}/> Añadir manual
                                     </button>
                                     
@@ -283,12 +280,21 @@
                                             
                                             <div className="flex gap-3 mb-3 pr-8">
                                                 <input value={v.word} onChange={e => updateVocab(idx, 'word', e.target.value)} placeholder="Palabra / Slang" className="flex-1 bg-transparent outline-none font-black text-lg text-emerald-400 border-b border-transparent focus:border-emerald-800"/>
-                                                <input value={v.type} onChange={e => updateVocab(idx, 'type', e.target.value)} placeholder="Tipo (ej. Phrasal verb)" className="w-32 bg-zinc-900 px-3 py-1 rounded-lg outline-none text-xs font-bold text-zinc-400 uppercase text-center border border-zinc-800 focus:border-emerald-800"/>
+                                                <input value={v.type} onChange={e => updateVocab(idx, 'type', e.target.value)} placeholder="Tipo" className="w-24 bg-zinc-900 px-2 py-1 rounded-lg outline-none text-xs font-bold text-zinc-400 uppercase text-center border border-zinc-800"/>
+                                            </div>
+
+                                            <div className="flex items-center gap-2 mb-3 bg-zinc-900 p-2 rounded-lg border border-zinc-800 w-max">
+                                                <Clock size={14} className="text-zinc-500"/>
+                                                <span className="text-xs font-bold text-zinc-500">CLIP:</span>
+                                                <input type="number" value={v.startSeconds || 0} onChange={e => updateVocab(idx, 'startSeconds', parseInt(e.target.value)||0)} className="w-16 bg-zinc-950 text-center text-xs font-mono py-1 rounded border border-zinc-700 outline-none text-emerald-400"/>
+                                                <span className="text-xs text-zinc-600">to</span>
+                                                <input type="number" value={v.endSeconds || 0} onChange={e => updateVocab(idx, 'endSeconds', parseInt(e.target.value)||0)} className="w-16 bg-zinc-950 text-center text-xs font-mono py-1 rounded border border-zinc-700 outline-none text-rose-400"/>
+                                                <span className="text-xs text-zinc-500 ml-2">({formatTime(v.startSeconds)} - {formatTime(v.endSeconds)})</span>
                                             </div>
                                             
                                             <div className="space-y-2">
                                                 <input value={v.definition} onChange={e => updateVocab(idx, 'definition', e.target.value)} placeholder="Definición..." className="w-full bg-transparent outline-none text-sm text-zinc-300 border-b border-transparent focus:border-zinc-700"/>
-                                                <textarea value={v.context} onChange={e => updateVocab(idx, 'context', e.target.value)} placeholder="Ejemplo o contexto..." className="w-full bg-zinc-900 p-3 rounded-xl outline-none text-sm italic text-zinc-500 resize-none h-16 border border-zinc-800 focus:border-zinc-600"></textarea>
+                                                <textarea value={v.context} onChange={e => updateVocab(idx, 'context', e.target.value)} placeholder="Contexto..." className="w-full bg-zinc-900 p-3 rounded-xl outline-none text-sm italic text-zinc-500 resize-none h-12 border border-zinc-800 focus:border-zinc-600"></textarea>
                                             </div>
                                         </div>
                                     ))}
