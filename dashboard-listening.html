@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Listening | Periplo</title>
+    <title>Dashboard Listening | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="importmap">
     {
@@ -20,369 +20,332 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;900&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
-        
-        input[type=range] { -webkit-appearance: none; background: transparent; }
-        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #e11d48; cursor: pointer; margin-top: -6px; position: relative; z-index: 40; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
-        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: transparent; border-radius: 2px; }
-        input[type=range]:focus { outline: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
     </style>
 </head>
-<body class="bg-zinc-950 text-slate-100 min-h-screen relative overflow-x-hidden">
-    <div id="root"></div>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen p-4 md:p-8 flex items-center justify-center font-sans">
+    <div id="root" class="w-full max-w-[1400px]"></div>
 
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef } from 'react';
+        import React, { useState, useEffect } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Play, Pause, Rewind, FastForward, ExternalLink, Subtitles, EyeOff, Youtube, BrainCircuit, HelpCircle, CheckCircle2, XCircle, Sparkles, Maximize, Minimize } from 'lucide-react';
+        import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+        import { Youtube, Play, Loader2, ArrowLeft, KeyRound, Sparkles, BookOpen, Trash2, Plus, Clock, HelpCircle } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        const formatTime = (secs) => {
-            if (!secs || isNaN(secs)) return "0:00";
-            const m = Math.floor(secs / 60);
-            const s = Math.floor(secs % 60);
-            return `${m}:${s < 10 ? '0' : ''}${s}`;
+        const extractYouTubeId = (url) => {
+            const match = url.match(/^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/);
+            return (match && match[2].length === 11) ? match[2] : null;
         };
 
-        const YouGlishApp = () => {
-            const [taller, setTaller] = useState(null);
-            const [parsedSubs, setParsedSubs] = useState([]);
-            const [vocabulary, setVocabulary] = useState([]);
-            const [questions, setQuestions] = useState([]); 
-            
-            const [currentTime, setCurrentTime] = useState(0);
-            const [duration, setDuration] = useState(0);
-            const [isPlaying, setIsPlaying] = useState(false);
-            
-            const [displayMode, setDisplayMode] = useState('karaoke'); 
-            const [cinemaMode, setCinemaMode] = useState(false); // Estado para Modo Cine
-            
-            const [selectedAnswer, setSelectedAnswer] = useState(null);
-            const [currentActiveQIndex, setCurrentActiveQIndex] = useState(-1);
-            const [optionsVisible, setOptionsVisible] = useState(false); // Estado para ocultar/mostrar opciones
+        const parseDirtyTranscript = (rawText) => {
+            const lines = rawText.trim().split('\n');
+            const transcript = [];
+            let currentStart = 0;
 
-            const playerRef = useRef(null);
+            for (let i = 0; i < lines.length; i++) {
+                let line = lines[i].trim();
+                if (!line) continue;
+                if (line.toLowerCase().startsWith('capítulo') || line.toLowerCase().startsWith('chapter')) continue;
 
-            useEffect(() => {
-                const fetchTaller = async () => {
-                    const params = new URLSearchParams(window.location.search);
-                    const id = params.get('id'); 
-                    if (!id) return alert("Falta el ID en la URL");
-
-                    const docSnap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id));
-                    if (docSnap.exists()) {
-                        const data = docSnap.data();
-                        setTaller(data);
-                        setParsedSubs(data.parsedTranscript || []);
-                        setVocabulary(data.vocabulary || []);
-                        setQuestions(data.questions || []); 
-                        loadYouTubeScript(data.videoId);
-                    } else {
-                        alert("Actividad no encontrada.");
-                    }
-                };
-                fetchTaller();
-            }, []);
-
-            const loadYouTubeScript = (vidId) => {
-                if (!window.YT) {
-                    const tag = document.createElement('script');
-                    tag.src = 'https://www.youtube.com/iframe_api';
-                    window.onYouTubeIframeAPIReady = () => initPlayer(vidId);
-                    document.body.appendChild(tag);
+                const timeMatch = line.match(/^(\d{1,2}:)?(\d{1,2}):(\d{2})/);
+                if (timeMatch) {
+                    let parts = timeMatch[0].split(':').map(Number);
+                    if (parts.length === 2) currentStart = parts[0] * 60 + parts[1];
+                    else if (parts.length === 3) currentStart = parts[0] * 3600 + parts[1] * 60 + parts[2];
+                    
+                    let textStr = line.substring(timeMatch[0].length);
+                    textStr = textStr.replace(/^[\s\d]*(minutos?|mins?)?\s*(y)?\s*[\s\d]*(segundos?|segs?)/i, '').trim();
+                    
+                    if (textStr) transcript.push({ start: currentStart, text: textStr });
+                    else transcript.push({ start: currentStart, text: "" });
                 } else {
-                    initPlayer(vidId);
-                }
-            };
-
-            const initPlayer = (vidId) => {
-                playerRef.current = new window.YT.Player('yt-player-container', {
-                    videoId: vidId,
-                    playerVars: { 'controls': 0, 'disablekb': 1, 'rel': 0, 'modestbranding': 1, 'playsinline': 1 },
-                    events: {
-                        'onReady': (event) => setDuration(event.target.getDuration()),
-                        'onStateChange': (event) => {
-                            setIsPlaying(event.data === 1 || event.data === 3);
-                            if (duration === 0) setDuration(event.target.getDuration());
-                        }
+                    if (transcript.length > 0) {
+                        const lastIndex = transcript.length - 1;
+                        if (transcript[lastIndex].text === "") transcript[lastIndex].text = line;
+                        else transcript[lastIndex].text += " " + line;
                     }
-                });
-            };
-
-            useEffect(() => {
-                const interval = setInterval(() => {
-                    if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
-                        setCurrentTime(playerRef.current.getCurrentTime());
-                    }
-                }, 100);
-                return () => clearInterval(interval);
-            }, []);
-
-            const togglePlayPause = () => {
-                if (!playerRef.current || typeof playerRef.current.getPlayerState !== 'function') return;
-                const state = playerRef.current.getPlayerState();
-                if (state === 1 || state === 3) { 
-                    playerRef.current.pauseVideo();
-                    setIsPlaying(false);
-                } else { 
-                    playerRef.current.playVideo();
-                    setIsPlaying(true);
                 }
-            };
-
-            const jumpSeconds = (seconds) => {
-                if(playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
-                    const newTime = playerRef.current.getCurrentTime() + seconds;
-                    playerRef.current.seekTo(newTime); 
-                    playerRef.current.playVideo();
-                }
-            };
-
-            const handleSeek = (e) => {
-                const newTime = parseFloat(e.target.value);
-                setCurrentTime(newTime);
-                if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
-                    playerRef.current.seekTo(newTime);
-                }
-            };
-
-            let activeSubIndex = parsedSubs.findIndex(sub => currentTime >= sub.start && currentTime < sub.end);
-            if (activeSubIndex === -1 && parsedSubs.length > 0) {
-                const pastSubs = parsedSubs.filter(sub => currentTime >= sub.end);
-                if (pastSubs.length > 0) activeSubIndex = parsedSubs.indexOf(pastSubs[pastSubs.length - 1]);
-                else activeSubIndex = 0;
             }
 
-            const activeVocab = vocabulary.find(v => currentTime >= v.startSeconds && currentTime <= v.endSeconds);
+            for (let i = 0; i < transcript.length; i++) {
+                transcript[i].end = transcript[i + 1] ? transcript[i + 1].start : transcript[i].start + 5; 
+            }
+            return transcript.filter(t => t.text.trim() !== "");
+        };
+
+        const SimpleDashboard = () => {
+            const [apiKey, setApiKey] = useState("");
+            const [title, setTitle] = useState("");
+            const [videoUrl, setVideoUrl] = useState("");
+            const [transcript, setTranscript] = useState("");
             
-            const activeQuestionIndex = questions.findIndex(q => currentTime >= q.startSeconds && currentTime <= q.endSeconds);
-            const activeQuestion = activeQuestionIndex !== -1 ? questions[activeQuestionIndex] : null;
+            const [thumbnailUrl, setThumbnailUrl] = useState("");
+            const [isSaving, setIsSaving] = useState(false);
 
-            // Resetear el estado de opciones cuando cambia la pregunta
+            const [isExtractingVocab, setIsExtractingVocab] = useState(false);
+            const [vocabulary, setVocabulary] = useState([]);
+
+            const [isExtractingQuestions, setIsExtractingQuestions] = useState(false);
+            const [questions, setQuestions] = useState([]);
+
             useEffect(() => {
-                if (activeQuestionIndex !== currentActiveQIndex) {
-                    setSelectedAnswer(null);
-                    setOptionsVisible(false); // Ocultamos las opciones por defecto al llegar a una nueva pregunta
-                    setCurrentActiveQIndex(activeQuestionIndex);
+                const savedGeminiKey = localStorage.getItem('gemini_api_key');
+                if (savedGeminiKey) setApiKey(savedGeminiKey);
+            }, []);
+
+            const videoId = extractYouTubeId(videoUrl);
+
+            useEffect(() => {
+                if (videoId) {
+                    setThumbnailUrl(`https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`);
+                } else {
+                    setThumbnailUrl("");
                 }
-            }, [activeQuestionIndex, currentActiveQIndex]);
+            }, [videoId]);
 
-            const renderKaraokeWords = (text) => {
-                if (!text) return null;
-                return text.split(' ').map((word, i) => (
-                    <span key={i} className="inline-block mx-1 text-yellow-400 hover:text-white transition-colors duration-200 cursor-crosshair">
-                        {word}
-                    </span>
-                ));
+            const extractVocabWithAI = async () => {
+                if (!apiKey) return alert("Necesitas pegar tu API Key de Gemini.");
+                if (!transcript) return alert("Pega el transcript del video primero.");
+
+                setIsExtractingVocab(true);
+                try {
+                    const cleanTrans = parseDirtyTranscript(transcript);
+                    const prompt = `
+                    Extrae de 5 a 10 palabras clave (phrasal verbs, slang, modismos) del siguiente transcript.
+                    Calcula EN QUÉ SEGUNDO EMPIEZA la idea y EN QUÉ SEGUNDO TERMINA (Dale margen de 5-10 segundos al clip).
+                    Devuelve ÚNICAMENTE un JSON con esta estructura exacta:
+                    [
+                        { 
+                            "word": "let this sink in", 
+                            "type": "idiom",
+                            "definition": "realize or understand something deeply", 
+                            "context": "Take a moment and let this sink in before answering.",
+                            "startSeconds": 45,
+                            "endSeconds": 55
+                        }
+                    ]
+                    Transcript procesado: ${JSON.stringify(cleanTrans.map(t => '[' + t.start + 's] ' + t.text))}
+                    `;
+
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    });
+
+                    const data = await response.json();
+                    let resultText = data.candidates[0].content.parts[0].text;
+                    const jsonMatch = resultText.match(/\[[\s\S]*\]/);
+                    if (!jsonMatch) throw new Error("Formato incorrecto de la IA.");
+                    
+                    setVocabulary(JSON.parse(jsonMatch[0]));
+                } catch (e) { alert("Error extrayendo vocabulario: " + e.message); } 
+                finally { setIsExtractingVocab(false); }
             };
 
-            const getActiveMarkerColor = () => {
-                if (displayMode === 'vocab') return 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]';
-                if (displayMode === 'questions') return 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.8)]';
-                return 'bg-white/20';
+            const extractQuestionsWithAI = async () => {
+                if (!apiKey) return alert("Necesitas pegar tu API Key de Gemini.");
+                if (!transcript) return alert("Pega el transcript del video primero.");
+
+                setIsExtractingQuestions(true);
+                try {
+                    const cleanTrans = parseDirtyTranscript(transcript);
+                    const prompt = `
+                    Eres un creador de exámenes TOEFL avanzado. Analiza TODO este transcript de principio a fin.
+                    Extrae "clips de comprensión" basados en ideas completas (chistes, comparaciones, opiniones fuertes, inferencias).
+                    
+                    REGLA CLAVE 1: ¡NO TE DETENGAS AL PRINCIPIO! Distribuye las preguntas a lo largo de TODO el video. Revisa hasta el último segundo. Si el video es largo, extrae entre 5 y 12 preguntas de alta calidad.
+                    REGLA CLAVE 2: NO fuerces preguntas en partes aburridas o silencios, pero asegúrate de no dejar vacíos largos si sí hay información útil.
+                    
+                    Para cada clip, crea una pregunta tipo TOEFL y encuentra el SEGUNDO EXACTO de inicio y fin (dale margen de 10-15 segundos al clip).
+                    
+                    Devuelve ÚNICAMENTE un JSON con esta estructura exacta:
+                    [
+                        {
+                            "q": "What does he imply when he compares Guatemala to Guantanamo?",
+                            "options": ["It is a dangerous place.", "It has a similar spelling.", "It is known for strict rules.", "It is a popular tourist spot."],
+                            "correctIndex": 0,
+                            "startSeconds": 120,
+                            "endSeconds": 135
+                        }
+                    ]
+                    Transcript procesado: ${JSON.stringify(cleanTrans.map(t => '[' + t.start + 's] ' + t.text))}
+                    `;
+
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    });
+
+                    const data = await response.json();
+                    let resultText = data.candidates[0].content.parts[0].text;
+                    const jsonMatch = resultText.match(/\[[\s\S]*\]/);
+                    if (!jsonMatch) throw new Error("Formato incorrecto de la IA.");
+                    
+                    setQuestions(JSON.parse(jsonMatch[0]));
+                } catch (e) { alert("Error extrayendo preguntas: " + e.message); } 
+                finally { setIsExtractingQuestions(false); }
             };
 
-            const getDotColor = (isActive) => {
-                if (displayMode === 'vocab') return isActive ? 'bg-emerald-300 scale-150' : 'bg-emerald-500/80';
-                if (displayMode === 'questions') return isActive ? 'bg-indigo-300 scale-150' : 'bg-indigo-500/80';
-                return 'bg-transparent';
+            const handleProcessAndCreate = async () => {
+                if (!videoId || !transcript) return alert("Faltan campos obligatorios.");
+
+                setIsSaving(true);
+                try {
+                    const cleanTranscriptArray = parseDirtyTranscript(transcript);
+                    if (cleanTranscriptArray.length === 0) throw new Error("No se pudo extraer el texto.");
+
+                    const params = new URLSearchParams(window.location.search);
+                    const parentPath = params.get('folder') ? decodeURIComponent(params.get('folder')) : '';
+                    const finalTitle = title.trim() !== "" ? title.trim() : "Listening & Comp Activity";
+
+                    const payload = {
+                        title: finalTitle,
+                        thumbnailUrl: thumbnailUrl,
+                        type: 'LISTENING', 
+                        videoId: videoId,
+                        vocabulary: vocabulary,
+                        questions: questions,
+                        parsedTranscript: cleanTranscriptArray,
+                        parentPath: parentPath,
+                        createdAt: serverTimestamp(),
+                        updatedAt: serverTimestamp()
+                    };
+
+                    const docRef = await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), payload);
+                    window.location.href = `listening.html?id=${docRef.id}`;
+                } catch (e) { alert("Error: " + e.message); } 
+                finally { setIsSaving(false); }
             };
 
-            const getActiveArray = () => {
-                if (displayMode === 'vocab') return vocabulary;
-                if (displayMode === 'questions') return questions;
-                return [];
+            const updateVocab = (index, field, value) => {
+                const newArr = [...vocabulary];
+                newArr[index][field] = value;
+                setVocabulary(newArr);
             };
 
-            if (!taller) return <div className="h-screen flex items-center justify-center font-black text-2xl animate-pulse text-zinc-500">Cargando experiencia...</div>;
+            const updateQuestion = (index, field, value) => {
+                const newArr = [...questions];
+                newArr[index][field] = value;
+                setQuestions(newArr);
+            };
 
             return (
-                <div className="relative min-h-screen">
-                    {taller.thumbnailUrl && (
-                        <div className="fixed inset-0 z-[-1] bg-cover bg-center bg-no-repeat opacity-30 blur-[60px] transform scale-110" style={{ backgroundImage: `url(${taller.thumbnailUrl})` }}></div>
-                    )}
-                    <div className="fixed inset-0 z-[-1] bg-black/60"></div>
+                <div className="w-full flex flex-col lg:flex-row gap-8">
+                    
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl shadow-2xl w-full lg:w-1/3 relative flex flex-col h-[90vh]">
+                        <button onClick={() => window.location.href = 'index.html'} className="absolute top-8 left-8 text-zinc-400 hover:text-white transition"><ArrowLeft size={24}/></button>
+                        <h1 className="text-3xl font-black text-rose-500 mb-8 text-center flex items-center justify-center gap-3">
+                            <Youtube size={36}/> Creador AI
+                        </h1>
 
-                    {/* CONTENEDOR PRINCIPAL: Aquí aplica el Modo Cine */}
-                    <div className={`mx-auto p-4 md:p-8 py-12 relative z-10 transition-all duration-500 ${cinemaMode ? 'max-w-[1400px]' : 'max-w-4xl'}`}>
-                        
-                        <div className="flex flex-col md:flex-row md:justify-between md:items-end mb-8 gap-4">
+                        <div className="bg-zinc-950/50 p-4 rounded-xl mb-6 flex gap-3 items-center border border-zinc-800 shrink-0">
+                            <KeyRound className="text-zinc-500" size={20}/>
+                            <input type="password" value={apiKey} onChange={e => { setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value); }} placeholder="API Key de Gemini..." className="flex-1 bg-transparent outline-none text-sm"/>
+                        </div>
+
+                        <div className="space-y-6 flex-1 flex flex-col overflow-y-auto custom-scrollbar pr-2">
                             <div>
-                                {taller.channelName && <p className="text-rose-400 font-bold uppercase tracking-widest text-xs flex items-center gap-1 mb-2"><Youtube size={14}/> {taller.channelName}</p>}
-                                <h1 className="text-3xl md:text-5xl font-black text-white leading-tight shadow-sm">{taller.title}</h1>
+                                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">URL de YouTube</label>
+                                <input value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="https://youtube.com/..." className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 text-rose-400 font-mono"/>
                             </div>
-                            
-                            <div className="flex items-center gap-2 shrink-0">
-                                {/* Botón Modo Cine */}
-                                <button onClick={() => setCinemaMode(!cinemaMode)} className="flex items-center gap-2 bg-white/10 hover:bg-white/20 backdrop-blur-md text-white font-bold px-4 py-2.5 rounded-xl transition text-sm border border-white/10">
-                                    {cinemaMode ? <><Minimize size={16}/> Normal</> : <><Maximize size={16}/> Cine</>}
+                            <div>
+                                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Título</label>
+                                <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej: Entrevista a Elon Musk" className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 font-bold"/>
+                            </div>
+                            <div className="flex-1 flex flex-col min-h-[200px]">
+                                <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Transcript Sucio</label>
+                                <textarea value={transcript} onChange={e => setTranscript(e.target.value)} placeholder="Pega el transcript aquí..." className="flex-1 w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 resize-none font-mono text-sm text-zinc-400"></textarea>
+                            </div>
+                        </div>
+
+                        <button onClick={handleProcessAndCreate} disabled={isSaving || !videoId || !transcript} className="w-full bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white py-4 rounded-xl font-black shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 text-xl mt-6 shrink-0">
+                            {isSaving ? <Loader2 className="animate-spin"/> : <Play/>} Guardar y Ver
+                        </button>
+                    </div>
+
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl shadow-2xl flex-1 flex flex-col h-[90vh] overflow-y-auto custom-scrollbar">
+                        
+                        <div className="mb-12">
+                            <div className="flex justify-between items-center mb-6">
+                                <h2 className="text-2xl font-black text-emerald-500 flex items-center gap-2"><BookOpen size={28}/> 1. Clips Vocabulario</h2>
+                                <button onClick={extractVocabWithAI} disabled={isExtractingVocab || !transcript} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-4 py-2 rounded-xl font-bold flex gap-2 transition-transform active:scale-95 text-sm">
+                                    {isExtractingVocab ? <Loader2 className="animate-spin" size={18}/> : <Sparkles size={18}/>} Extraer Vocab
                                 </button>
-                                <a href={`https://www.youtube.com/watch?v=${taller.videoId}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 bg-white/10 hover:bg-white/20 backdrop-blur-md text-white font-bold px-4 py-2.5 rounded-xl transition text-sm border border-white/10">
-                                    <ExternalLink size={16}/> YouTube
-                                </a>
+                            </div>
+
+                            <div className="space-y-4">
+                                {vocabulary.map((v, idx) => (
+                                    <div key={idx} className="bg-zinc-950 p-5 rounded-2xl border border-zinc-800 relative group">
+                                        <button onClick={() => setVocabulary(vocabulary.filter((_, i) => i !== idx))} className="absolute top-3 right-3 text-rose-500 hover:bg-rose-900/30 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
+                                        <div className="flex gap-3 mb-3 pr-8">
+                                            <input value={v.word} onChange={e => updateVocab(idx, 'word', e.target.value)} className="flex-1 bg-transparent outline-none font-black text-lg text-emerald-400 border-b border-transparent focus:border-emerald-800"/>
+                                        </div>
+                                        <div className="flex items-center gap-2 mb-3 bg-zinc-900 p-2 rounded-lg border border-zinc-800 w-max">
+                                            <Clock size={14} className="text-zinc-500"/>
+                                            <input type="number" value={v.startSeconds || 0} onChange={e => updateVocab(idx, 'startSeconds', parseInt(e.target.value)||0)} className="w-16 bg-zinc-950 text-center text-xs font-mono py-1 rounded text-emerald-400 border-none outline-none"/>
+                                            <span className="text-xs text-zinc-600">to</span>
+                                            <input type="number" value={v.endSeconds || 0} onChange={e => updateVocab(idx, 'endSeconds', parseInt(e.target.value)||0)} className="w-16 bg-zinc-950 text-center text-xs font-mono py-1 rounded text-rose-400 border-none outline-none"/>
+                                        </div>
+                                        <input value={v.definition} onChange={e => updateVocab(idx, 'definition', e.target.value)} className="w-full bg-transparent outline-none text-sm text-zinc-300"/>
+                                    </div>
+                                ))}
                             </div>
                         </div>
 
-                        <div className="shadow-2xl mb-8 border border-white/10 rounded-3xl overflow-hidden bg-black/80 backdrop-blur-xl">
-                            <div className="w-full relative aspect-video bg-black">
-                                <div className="absolute inset-0 w-full h-full pointer-events-none">
-                                    <div id="yt-player-container" className="w-full h-full"></div>
-                                </div>
-                                <div onClick={togglePlayPause} className="absolute inset-0 z-10 cursor-pointer"></div>
+                        <div>
+                            <div className="flex justify-between items-center mb-6 border-t border-zinc-800 pt-8">
+                                <h2 className="text-2xl font-black text-indigo-400 flex items-center gap-2"><HelpCircle size={28}/> 2. Clips Comprensión</h2>
+                                <button onClick={extractQuestionsWithAI} disabled={isExtractingQuestions || !transcript} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2 rounded-xl font-bold flex gap-2 transition-transform active:scale-95 text-sm">
+                                    {isExtractingQuestions ? <Loader2 className="animate-spin" size={18}/> : <Sparkles size={18}/>} Extraer Preguntas
+                                </button>
                             </div>
 
-                            <div className="flex flex-col p-4 relative z-20">
-                                <div className="flex items-center gap-4 mb-2 px-2">
-                                    <span className="text-xs font-mono text-zinc-400 w-10 text-right">{formatTime(currentTime)}</span>
-                                    
-                                    <div className="relative w-full flex items-center h-6">
-                                        <div className="absolute left-0 right-0 h-1 bg-white/20 rounded-full z-0"></div>
+                            <div className="space-y-4">
+                                {questions.map((q, qIdx) => (
+                                    <div key={qIdx} className="bg-zinc-950 p-5 rounded-2xl border border-zinc-800 relative group">
+                                        <button onClick={() => setQuestions(questions.filter((_, i) => i !== qIdx))} className="absolute top-3 right-3 text-rose-500 hover:bg-rose-900/30 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
                                         
-                                        {(displayMode === 'vocab' || displayMode === 'questions') && duration > 0 && getActiveArray().map((item, i) => {
-                                            const leftPercent = (item.startSeconds / duration) * 100;
-                                            const widthPercent = ((item.endSeconds - item.startSeconds) / duration) * 100;
-                                            const isActive = currentTime >= item.startSeconds && currentTime <= item.endSeconds;
-                                            
-                                            return (
-                                                <React.Fragment key={i}>
-                                                    {isActive && <div className={`absolute h-1.5 rounded-full z-10 ${getActiveMarkerColor()}`} style={{left: `${leftPercent}%`, width: `${widthPercent}%`}}></div>}
-                                                    <div className={`absolute w-2 h-2 rounded-full transform -translate-y-1/2 z-20 transition-all top-1/2 ${getDotColor(isActive)}`} style={{left: `${leftPercent}%`}}></div>
-                                                </React.Fragment>
-                                            );
-                                        })}
-
-                                        <input type="range" min="0" max={duration || 100} value={currentTime} onChange={handleSeek} className="absolute inset-0 w-full h-full z-30 m-0"/>
-                                    </div>
-                                    <span className="text-xs font-mono text-zinc-400 w-10">{formatTime(duration)}</span>
-                                </div>
-
-                                <div className="flex justify-between items-center relative py-2 px-4">
-                                    <div className="w-16"></div> 
-
-                                    <div className="flex items-center gap-8">
-                                        <button onClick={() => jumpSeconds(-5)} className="text-zinc-400 hover:text-white transition flex flex-col items-center group"><Rewind size={24} className="group-hover:-translate-x-1 transition-transform"/></button>
-                                        <button onClick={togglePlayPause} className="bg-white text-black hover:scale-105 w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition transform active:scale-95">
-                                            {isPlaying ? <Pause fill="currentColor" size={24}/> : <Play fill="currentColor" size={24} className="ml-1"/>}
-                                        </button>
-                                        <button onClick={() => jumpSeconds(5)} className="text-zinc-400 hover:text-white transition flex flex-col items-center group"><FastForward size={24} className="group-hover:translate-x-1 transition-transform"/></button>
-                                    </div>
-
-                                    <div className="flex items-center gap-1">
-                                        <button onClick={() => setDisplayMode(displayMode === 'karaoke' ? 'none' : 'karaoke')} className={`p-2 rounded-xl transition flex flex-col items-center ${displayMode === 'karaoke' ? 'text-amber-400' : 'text-zinc-500 hover:text-zinc-400'}`} title="Karaoke">
-                                            <Subtitles size={24}/>
-                                            <span className="text-[9px] font-bold mt-1">CC</span>
-                                        </button>
-
-                                        <button onClick={() => setDisplayMode(displayMode === 'vocab' ? 'none' : 'vocab')} className={`p-2 rounded-xl transition flex flex-col items-center relative ${displayMode === 'vocab' ? 'text-emerald-400' : 'text-zinc-500 hover:text-zinc-400'}`} title="Vocabulario">
-                                            <BrainCircuit size={24}/>
-                                            <span className="text-[9px] font-bold mt-1">VOCAB</span>
-                                            {vocabulary.length > 0 && <span className="absolute -top-1 -right-1 bg-emerald-600 text-white text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center">{vocabulary.length}</span>}
-                                        </button>
-
-                                        <button onClick={() => setDisplayMode(displayMode === 'questions' ? 'none' : 'questions')} className={`p-2 rounded-xl transition flex flex-col items-center relative ${displayMode === 'questions' ? 'text-indigo-400' : 'text-zinc-500 hover:text-zinc-400'}`} title="Preguntas de Comprensión">
-                                            <HelpCircle size={24}/>
-                                            <span className="text-[9px] font-bold mt-1">QUIZ</span>
-                                            {questions.length > 0 && <span className="absolute -top-1 -right-1 bg-indigo-600 text-white text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center">{questions.length}</span>}
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="min-h-[220px]"> 
-                            
-                            {displayMode === 'karaoke' && (
-                                <div className="bg-black/40 backdrop-blur-md rounded-3xl shadow-lg border border-white/5 overflow-hidden transition-all duration-300 h-full min-h-[220px] flex flex-col items-center justify-center text-center px-4 md:px-12 animate-in fade-in slide-in-from-bottom-4">
-                                    {activeSubIndex > 0 && <p onClick={() => jumpSeconds(-5)} className="text-zinc-500 text-sm md:text-base font-medium mb-4 opacity-70 transition-all cursor-pointer hover:text-zinc-300">{parsedSubs[activeSubIndex - 1].text}</p>}
-                                    {parsedSubs.length > 0 ? <p className="text-3xl md:text-5xl font-black text-white my-2 transition-all leading-snug drop-shadow-lg">{renderKaraokeWords(parsedSubs[activeSubIndex]?.text)}</p> : <p className="text-xl text-zinc-500 italic">No se detectaron subtítulos.</p>}
-                                    {activeSubIndex >= 0 && activeSubIndex < parsedSubs.length - 1 && <p onClick={() => jumpSeconds(5)} className="text-zinc-500 text-sm md:text-base font-medium mt-4 opacity-70 transition-all cursor-pointer hover:text-zinc-300">{parsedSubs[activeSubIndex + 1].text}</p>}
-                                </div>
-                            )}
-
-                            {displayMode === 'vocab' && (
-                                <div className="bg-emerald-950/30 backdrop-blur-md rounded-3xl shadow-lg border border-emerald-500/20 overflow-hidden transition-all duration-300 h-full min-h-[220px] flex items-center justify-center px-4 md:px-12 animate-in zoom-in-95">
-                                    {activeVocab ? (
-                                        <div className="text-center animate-in fade-in slide-in-from-bottom-2">
-                                            <div className="inline-flex items-center gap-2 bg-emerald-500/20 text-emerald-400 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-widest mb-4 border border-emerald-500/30"><Sparkles size={14}/> {activeVocab.type || "Key Phrase"}</div>
-                                            <h2 className="text-4xl md:text-5xl font-black text-white mb-4 drop-shadow-md">"{activeVocab.word}"</h2>
-                                            <p className="text-xl text-emerald-100/80 italic font-medium">{activeVocab.definition}</p>
+                                        <input value={q.q} onChange={e => updateQuestion(qIdx, 'q', e.target.value)} placeholder="Pregunta estilo TOEFL..." className="w-full bg-transparent outline-none font-black text-lg text-indigo-400 border-b border-transparent focus:border-indigo-800 mb-3 pr-8"/>
+                                        
+                                        <div className="flex items-center gap-2 mb-4 bg-zinc-900 p-2 rounded-lg border border-zinc-800 w-max">
+                                            <Clock size={14} className="text-zinc-500"/>
+                                            <span className="text-xs font-bold text-zinc-500">CLIP DE INFERENCIA:</span>
+                                            <input type="number" value={q.startSeconds || 0} onChange={e => updateQuestion(qIdx, 'startSeconds', parseInt(e.target.value)||0)} className="w-16 bg-zinc-950 text-center text-xs font-mono py-1 rounded text-indigo-400 border-none outline-none"/>
+                                            <span className="text-xs text-zinc-600">to</span>
+                                            <input type="number" value={q.endSeconds || 0} onChange={e => updateQuestion(qIdx, 'endSeconds', parseInt(e.target.value)||0)} className="w-16 bg-zinc-950 text-center text-xs font-mono py-1 rounded text-rose-400 border-none outline-none"/>
                                         </div>
-                                    ) : (
-                                        <div className="text-center text-emerald-500/50 flex flex-col items-center">
-                                            <BrainCircuit size={48} className="mb-4 opacity-50"/>
-                                            <p className="text-lg font-bold uppercase tracking-widest">Escucha con atención...</p>
-                                            <p className="text-xs mt-4">Sigue los puntos verdes para encontrar la próxima expresión.</p>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
 
-                            {displayMode === 'questions' && (
-                                <div className="bg-indigo-950/30 backdrop-blur-md rounded-3xl shadow-lg border border-indigo-500/20 overflow-hidden transition-all duration-300 h-full min-h-[220px] flex items-center justify-center px-4 md:px-12 animate-in zoom-in-95 py-6">
-                                    {activeQuestion ? (
-                                        <div className="w-full animate-in fade-in slide-in-from-bottom-2 flex flex-col items-center">
-                                            <div className="inline-flex items-center gap-2 bg-indigo-500/20 text-indigo-400 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-widest mb-4 border border-indigo-500/30"><HelpCircle size={14}/> Pop Quiz</div>
-                                            
-                                            <h2 className="text-2xl md:text-3xl font-black text-white mb-6 text-center drop-shadow-md max-w-3xl">{activeQuestion.q}</h2>
-                                            
-                                            {/* LÓGICA DE OCULTAR/MOSTRAR OPCIONES */}
-                                            {!optionsVisible ? (
-                                                <button onClick={() => setOptionsVisible(true)} className="mt-4 bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-full font-bold shadow-lg transition-transform active:scale-95 flex items-center gap-2">
-                                                    <HelpCircle size={20}/> Mostrar Opciones
-                                                </button>
-                                            ) : (
-                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-3xl animate-in zoom-in-95">
-                                                    {activeQuestion.options.map((opt, idx) => {
-                                                        const isSelected = selectedAnswer === idx;
-                                                        const isCorrect = activeQuestion.correctIndex === idx;
-                                                        const showResult = selectedAnswer !== null;
-
-                                                        let btnStyle = "bg-white/5 border-white/10 hover:bg-white/10 text-white"; 
-                                                        if (showResult) {
-                                                            if (isCorrect) btnStyle = "bg-emerald-500/20 border-emerald-500 text-emerald-300 ring-2 ring-emerald-500 scale-[1.02]";
-                                                            else if (isSelected && !isCorrect) btnStyle = "bg-rose-500/20 border-rose-500 text-rose-300 opacity-80";
-                                                            else btnStyle = "bg-black/20 border-transparent text-zinc-500 opacity-50"; 
-                                                        }
-
-                                                        return (
-                                                            <button 
-                                                                key={idx} 
-                                                                onClick={() => !showResult && setSelectedAnswer(idx)}
-                                                                disabled={showResult}
-                                                                className={`p-4 rounded-2xl border text-left font-semibold transition-all duration-300 flex justify-between items-center ${btnStyle}`}
-                                                            >
-                                                                <span>{opt}</span>
-                                                                {showResult && isCorrect && <CheckCircle2 className="text-emerald-500 shrink-0"/>}
-                                                                {showResult && isSelected && !isCorrect && <XCircle className="text-rose-500 shrink-0"/>}
-                                                            </button>
-                                                        );
-                                                    })}
+                                        <div className="space-y-2">
+                                            {q.options.map((opt, oIdx) => (
+                                                <div key={oIdx} className="flex items-center gap-3">
+                                                    <input type="radio" name={`radio-${qIdx}`} checked={q.correctIndex === oIdx} onChange={() => updateQuestion(qIdx, 'correctIndex', oIdx)} className="w-4 h-4 text-indigo-600 focus:ring-indigo-500 cursor-pointer"/>
+                                                    <input value={opt} onChange={e => {
+                                                        const newOpts = [...q.options];
+                                                        newOpts[oIdx] = e.target.value;
+                                                        updateQuestion(qIdx, 'options', newOpts);
+                                                    }} className={`flex-1 p-2 rounded-lg outline-none text-sm border ${q.correctIndex === oIdx ? 'bg-indigo-900/20 border-indigo-800 font-bold text-indigo-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400'}`}/>
                                                 </div>
-                                            )}
+                                            ))}
                                         </div>
-                                    ) : (
-                                        <div className="text-center text-indigo-500/50 flex flex-col items-center">
-                                            <HelpCircle size={48} className="mb-4 opacity-50"/>
-                                            <p className="text-lg font-bold uppercase tracking-widest">Atento al contexto...</p>
-                                            <p className="text-xs mt-4">Sigue los puntos morados. Prepárate para pausar y responder.</p>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-
+                                    </div>
+                                ))}
+                            </div>
                         </div>
 
                     </div>
+
                 </div>
             );
         };
 
         const root = createRoot(document.getElementById('root'));
-        root.render(<YouGlishApp />);
+        root.render(<SimpleDashboard />);
     </script>
 </body>
 </html>
