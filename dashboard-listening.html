@@ -22,11 +22,11 @@
     <div id="root" class="w-full max-w-3xl"></div>
 
     <script type="text/babel" data-type="module">
-        import React, { useState } from 'react';
+        import React, { useState, useEffect } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
-        import { Youtube, Play, Loader2, ArrowLeft } from 'lucide-react';
+        import { Youtube, Play, Loader2, ArrowLeft, KeyRound, Image as ImageIcon, AlertTriangle } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -55,7 +55,6 @@
                     else if (parts.length === 3) currentStart = parts[0] * 3600 + parts[1] * 60 + parts[2];
                     
                     let textStr = line.substring(timeMatch[0].length);
-                    // Regex mejorada para arrancar números, minutos y segundos pegados
                     textStr = textStr.replace(/^[\s\d]*(minutos?|mins?)?\s*(y)?\s*[\s\d]*(segundos?|segs?)/i, '').trim();
                     
                     if (textStr) transcript.push({ start: currentStart, text: textStr });
@@ -76,15 +75,64 @@
         };
 
         const SimpleDashboard = () => {
+            const [ytApiKey, setYtApiKey] = useState("");
             const [title, setTitle] = useState("");
             const [videoUrl, setVideoUrl] = useState("");
             const [transcript, setTranscript] = useState("");
+            
+            // Nuevos estados para la metadata del video
+            const [channelName, setChannelName] = useState("");
+            const [thumbnailUrl, setThumbnailUrl] = useState("");
+            const [isFetchingMeta, setIsFetchingMeta] = useState(false);
+            const [embedError, setEmbedError] = useState(false);
+
             const [isSaving, setIsSaving] = useState(false);
+
+            useEffect(() => {
+                const savedKey = localStorage.getItem('youtube_api_key');
+                if (savedKey) setYtApiKey(savedKey);
+            }, []);
 
             const videoId = extractYouTubeId(videoUrl);
 
+            // Efecto Mágico: Cuando detecta un ID de YouTube válido y hay API Key, busca los datos
+            useEffect(() => {
+                if (videoId && ytApiKey) {
+                    const fetchVideoData = async () => {
+                        setIsFetchingMeta(true);
+                        setEmbedError(false);
+                        try {
+                            const response = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id=${videoId}&key=${ytApiKey}`);
+                            const data = await response.json();
+                            
+                            if (data.items && data.items.length > 0) {
+                                const video = data.items[0];
+                                
+                                // ¿Se puede incrustar en otra web?
+                                if (!video.status.embeddable) {
+                                    setEmbedError(true);
+                                }
+
+                                setTitle(video.snippet.title);
+                                setChannelName(video.snippet.channelTitle);
+                                
+                                // Buscar la mejor calidad de imagen disponible
+                                const thumbs = video.snippet.thumbnails;
+                                const bestThumb = thumbs.maxres || thumbs.high || thumbs.medium || thumbs.default;
+                                if (bestThumb) setThumbnailUrl(bestThumb.url);
+                            }
+                        } catch (error) {
+                            console.error("Error al buscar metadata de YouTube:", error);
+                        }
+                        setIsFetchingMeta(false);
+                    };
+                    fetchVideoData();
+                }
+            }, [videoId, ytApiKey]);
+
             const handleProcessAndCreate = async () => {
-                if (!title || !videoId || !transcript) return alert("Llena todos los campos.");
+                if (!title || !videoId || !transcript) return alert("Faltan campos por llenar.");
+                if (embedError) return alert("No puedes usar este video porque el creador bloqueó la reproducción externa.");
 
                 setIsSaving(true);
                 try {
@@ -96,6 +144,8 @@
 
                     const payload = {
                         title: title,
+                        channelName: channelName, // Guardamos el nombre del canal
+                        thumbnailUrl: thumbnailUrl, // Guardamos la foto para el fondo
                         type: 'LISTENING', 
                         videoId: videoId,
                         clips: [], 
@@ -115,24 +165,49 @@
                 }
             };
 
-            const goBack = () => {
-                const params = new URLSearchParams(window.location.search);
-                const parentPath = params.get('folder') ? decodeURIComponent(params.get('folder')) : '';
-                window.location.href = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html';
-            };
-
             return (
-                <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl shadow-2xl relative">
-                    <button onClick={goBack} className="absolute top-8 left-8 text-zinc-400 hover:text-white transition"><ArrowLeft size={24}/></button>
+                <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl shadow-2xl relative w-full">
+                    <button onClick={() => window.location.href = 'index.html'} className="absolute top-8 left-8 text-zinc-400 hover:text-white transition"><ArrowLeft size={24}/></button>
                     <h1 className="text-3xl font-black text-rose-500 mb-8 text-center flex items-center justify-center gap-3">
-                        <Youtube size={36}/> Creador de Karaoke
+                        <Youtube size={36}/> Creador Premium
                     </h1>
+
+                    <div className="bg-zinc-950/50 p-4 rounded-xl mb-6 flex gap-3 items-center border border-zinc-800">
+                        <KeyRound className="text-zinc-500" size={20}/>
+                        <input type="password" value={ytApiKey} onChange={e => { setYtApiKey(e.target.value); localStorage.setItem('youtube_api_key', e.target.value); }} placeholder="Tu API Key de YouTube v3 (Opcional pero recomendada)..." className="flex-1 bg-transparent outline-none text-sm"/>
+                    </div>
+
                     <div className="space-y-6">
-                        <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Título de la Actividad" className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 text-lg font-bold"/>
-                        <input value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="URL de YouTube" className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 text-rose-400 font-mono"/>
-                        <textarea value={transcript} onChange={e => setTranscript(e.target.value)} placeholder="Pega el transcript sucio aquí..." className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 h-64 resize-y font-mono text-sm text-zinc-400"></textarea>
-                        <button onClick={handleProcessAndCreate} disabled={isSaving || !videoId || !transcript || !title} className="w-full bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white py-4 rounded-xl font-black shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 text-xl">
-                            {isSaving ? <Loader2 className="animate-spin"/> : <Play/>} Crear Karaoke
+                        <div>
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">URL de YouTube</label>
+                            <input value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="Pega el enlace aquí para autocompletar..." className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 text-rose-400 font-mono"/>
+                            {isFetchingMeta && <p className="text-xs text-rose-400 mt-2 flex items-center gap-1"><Loader2 size={12} className="animate-spin"/> Extrayendo datos del video...</p>}
+                            {embedError && <p className="text-xs text-red-500 font-bold mt-2 flex items-center gap-1"><AlertTriangle size={14}/> Error: El autor bloqueó este video para otras webs.</p>}
+                        </div>
+
+                        {thumbnailUrl && (
+                            <div className="flex gap-4 items-center bg-zinc-950 p-4 rounded-xl border border-zinc-800">
+                                <img src={thumbnailUrl} alt="Thumbnail" className="w-24 h-auto rounded-lg shadow-md object-cover"/>
+                                <div>
+                                    <p className="text-xs text-zinc-400 font-bold uppercase tracking-wider mb-1">Detectado Automáticamente</p>
+                                    <p className="font-bold text-white text-sm line-clamp-1">{title}</p>
+                                    <p className="text-zinc-500 text-xs">{channelName}</p>
+                                </div>
+                            </div>
+                        )}
+
+                        <div>
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Título de la Actividad</label>
+                            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Puedes modificar el título extraído..." className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 text-lg font-bold"/>
+                        </div>
+
+                        <div>
+                            <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest block mb-2">Transcript Sucio</label>
+                            <textarea value={transcript} onChange={e => setTranscript(e.target.value)} placeholder="Pega el texto de YouTube directo aquí..." className="w-full bg-zinc-950 border border-zinc-800 p-4 rounded-xl outline-none focus:border-rose-500 h-40 resize-y font-mono text-sm text-zinc-400"></textarea>
+                        </div>
+
+                        <button onClick={handleProcessAndCreate} disabled={isSaving || !videoId || !transcript || !title || embedError} className="w-full bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white py-4 rounded-xl font-black shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 text-xl mt-4">
+                            {isSaving ? <Loader2 className="animate-spin"/> : <Play/>} Crear Experiencia Premium
                         </button>
                     </div>
                 </div>
