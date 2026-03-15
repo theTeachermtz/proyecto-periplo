@@ -21,7 +21,6 @@
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;900&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
         
-        /* Ocultar el track nativo del input para poner el nuestro custom con puntitos */
         input[type=range] { -webkit-appearance: none; background: transparent; }
         input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #e11d48; cursor: pointer; margin-top: -6px; position: relative; z-index: 40; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
         input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: transparent; border-radius: 2px; }
@@ -36,7 +35,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Play, Pause, Rewind, FastForward, ExternalLink, Subtitles, EyeOff, Youtube, Brain, BrainCircuit, Sparkles } from 'lucide-react';
+        import { Play, Pause, Rewind, FastForward, ExternalLink, Subtitles, EyeOff, Youtube, BrainCircuit, MessageCircleQuestion, CheckCircle2, XCircle } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -53,14 +52,19 @@
             const [taller, setTaller] = useState(null);
             const [parsedSubs, setParsedSubs] = useState([]);
             const [vocabulary, setVocabulary] = useState([]);
+            const [questions, setQuestions] = useState([]); // Nuevo estado para las preguntas
             
             const [currentTime, setCurrentTime] = useState(0);
             const [duration, setDuration] = useState(0);
             const [isPlaying, setIsPlaying] = useState(false);
             
-            // Modos de pantalla: 'karaoke' o 'vocab' o 'none'
+            // Modos: 'karaoke', 'vocab', 'questions', 'none'
             const [displayMode, setDisplayMode] = useState('karaoke'); 
             
+            // Para saber qué opción de la pregunta cliqueó el profe
+            const [selectedAnswer, setSelectedAnswer] = useState(null);
+            const [currentActiveQIndex, setCurrentActiveQIndex] = useState(-1);
+
             const playerRef = useRef(null);
 
             useEffect(() => {
@@ -75,6 +79,7 @@
                         setTaller(data);
                         setParsedSubs(data.parsedTranscript || []);
                         setVocabulary(data.vocabulary || []);
+                        setQuestions(data.questions || []); // Cargamos las preguntas
                         loadYouTubeScript(data.videoId);
                     } else {
                         alert("Actividad no encontrada.");
@@ -145,7 +150,7 @@
                 }
             };
 
-            // Lógica Karaoke
+            // Detectores de tiempo
             let activeSubIndex = parsedSubs.findIndex(sub => currentTime >= sub.start && currentTime < sub.end);
             if (activeSubIndex === -1 && parsedSubs.length > 0) {
                 const pastSubs = parsedSubs.filter(sub => currentTime >= sub.end);
@@ -153,10 +158,20 @@
                 else activeSubIndex = 0;
             }
 
-            // Lógica Vocabulario (Detectar clip)
             const activeVocab = vocabulary.find(v => currentTime >= v.startSeconds && currentTime <= v.endSeconds);
             
-            // Función Hover Karaoke
+            // Detectar pregunta activa
+            const activeQuestionIndex = questions.findIndex(q => currentTime >= q.startSeconds && currentTime <= q.endSeconds);
+            const activeQuestion = activeQuestionIndex !== -1 ? questions[activeQuestionIndex] : null;
+
+            // Resetear el estado de la respuesta si cambiamos de pregunta
+            useEffect(() => {
+                if (activeQuestionIndex !== currentActiveQIndex) {
+                    setSelectedAnswer(null);
+                    setCurrentActiveQIndex(activeQuestionIndex);
+                }
+            }, [activeQuestionIndex, currentActiveQIndex]);
+
             const renderKaraokeWords = (text) => {
                 if (!text) return null;
                 return text.split(' ').map((word, i) => (
@@ -166,30 +181,39 @@
                 ));
             };
 
+            // Helpers para la barra de progreso
+            const getActiveMarkerColor = () => {
+                if (displayMode === 'vocab') return 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]';
+                if (displayMode === 'questions') return 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.8)]';
+                return 'bg-white/20';
+            };
+
+            const getDotColor = (isActive) => {
+                if (displayMode === 'vocab') return isActive ? 'bg-emerald-300 scale-150' : 'bg-emerald-500/80';
+                if (displayMode === 'questions') return isActive ? 'bg-indigo-300 scale-150' : 'bg-indigo-500/80';
+                return 'bg-transparent';
+            };
+
+            const getActiveArray = () => {
+                if (displayMode === 'vocab') return vocabulary;
+                if (displayMode === 'questions') return questions;
+                return [];
+            };
+
             if (!taller) return <div className="h-screen flex items-center justify-center font-black text-2xl animate-pulse text-zinc-500">Cargando experiencia...</div>;
 
             return (
                 <div className="relative min-h-screen">
-                    
-                    {/* FONDO CINEMÁTICO */}
                     {taller.thumbnailUrl && (
-                        <div 
-                            className="fixed inset-0 z-[-1] bg-cover bg-center bg-no-repeat opacity-30 blur-[60px] transform scale-110"
-                            style={{ backgroundImage: `url(${taller.thumbnailUrl})` }}
-                        ></div>
+                        <div className="fixed inset-0 z-[-1] bg-cover bg-center bg-no-repeat opacity-30 blur-[60px] transform scale-110" style={{ backgroundImage: `url(${taller.thumbnailUrl})` }}></div>
                     )}
                     <div className="fixed inset-0 z-[-1] bg-black/60"></div>
 
                     <div className="max-w-4xl mx-auto p-4 md:p-8 py-12 relative z-10">
                         
-                        {/* Header */}
                         <div className="flex flex-col md:flex-row md:justify-between md:items-end mb-8 gap-4">
                             <div>
-                                {taller.channelName && (
-                                    <p className="text-rose-400 font-bold uppercase tracking-widest text-xs flex items-center gap-1 mb-2">
-                                        <Youtube size={14}/> {taller.channelName}
-                                    </p>
-                                )}
+                                {taller.channelName && <p className="text-rose-400 font-bold uppercase tracking-widest text-xs flex items-center gap-1 mb-2"><Youtube size={14}/> {taller.channelName}</p>}
                                 <h1 className="text-3xl md:text-5xl font-black text-white leading-tight shadow-sm">{taller.title}</h1>
                             </div>
                             <a href={`https://www.youtube.com/watch?v=${taller.videoId}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 bg-white/10 hover:bg-white/20 backdrop-blur-md text-white font-bold px-5 py-2.5 rounded-xl transition text-sm shrink-0 border border-white/10">
@@ -197,9 +221,7 @@
                             </a>
                         </div>
 
-                        {/* REPRODUCTOR Y CONTROLES */}
                         <div className="shadow-2xl mb-8 border border-white/10 rounded-3xl overflow-hidden bg-black/80 backdrop-blur-xl">
-                            
                             <div className="w-full relative aspect-video bg-black">
                                 <div className="absolute inset-0 w-full h-full pointer-events-none">
                                     <div id="yt-player-container" className="w-full h-full"></div>
@@ -207,141 +229,142 @@
                                 <div onClick={togglePlayPause} className="absolute inset-0 z-10 cursor-pointer"></div>
                             </div>
 
-                            {/* Controles de Reproducción */}
                             <div className="flex flex-col p-4 relative z-20">
-                                
-                                {/* BARRA DE TIEMPO CON PUNTITOS DE VOCABULARIO */}
+                                {/* BARRA DE TIEMPO DINÁMICA */}
                                 <div className="flex items-center gap-4 mb-2 px-2">
                                     <span className="text-xs font-mono text-zinc-400 w-10 text-right">{formatTime(currentTime)}</span>
                                     
                                     <div className="relative w-full flex items-center h-6">
-                                        {/* Barra base gris */}
                                         <div className="absolute left-0 right-0 h-1 bg-white/20 rounded-full z-0"></div>
                                         
-                                        {/* Puntitos y Clips de la IA */}
-                                        {displayMode === 'vocab' && duration > 0 && vocabulary.map((v, i) => {
-                                            const leftPercent = (v.startSeconds / duration) * 100;
-                                            const widthPercent = ((v.endSeconds - v.startSeconds) / duration) * 100;
-                                            const isVocabActive = currentTime >= v.startSeconds && currentTime <= v.endSeconds;
+                                        {/* Renderizado de puntitos y segmentos según el modo */}
+                                        {(displayMode === 'vocab' || displayMode === 'questions') && duration > 0 && getActiveArray().map((item, i) => {
+                                            const leftPercent = (item.startSeconds / duration) * 100;
+                                            const widthPercent = ((item.endSeconds - item.startSeconds) / duration) * 100;
+                                            const isActive = currentTime >= item.startSeconds && currentTime <= item.endSeconds;
                                             
                                             return (
                                                 <React.Fragment key={i}>
-                                                    {/* Segmento resaltado si estamos dentro del clip */}
-                                                    {isVocabActive && (
-                                                        <div className="absolute h-1.5 bg-emerald-500 rounded-full z-10 shadow-[0_0_8px_rgba(16,185,129,0.8)]" style={{left: `${leftPercent}%`, width: `${widthPercent}%`}}></div>
-                                                    )}
-                                                    {/* Puntito de inicio */}
-                                                    <div 
-                                                        className={`absolute w-2 h-2 rounded-full transform -translate-y-1/2 z-20 transition-all ${isVocabActive ? 'bg-emerald-300 scale-150 top-1/2' : 'bg-emerald-500/80 top-1/2'}`} 
-                                                        style={{left: `${leftPercent}%`}}
-                                                        title={`Vocab: ${v.word}`}
-                                                    ></div>
+                                                    {isActive && <div className={`absolute h-1.5 rounded-full z-10 ${getActiveMarkerColor()}`} style={{left: `${leftPercent}%`, width: `${widthPercent}%`}}></div>}
+                                                    <div className={`absolute w-2 h-2 rounded-full transform -translate-y-1/2 z-20 transition-all top-1/2 ${getDotColor(isActive)}`} style={{left: `${leftPercent}%`}}></div>
                                                 </React.Fragment>
                                             );
                                         })}
 
-                                        {/* El input range nativo encima para controlar el drag */}
                                         <input type="range" min="0" max={duration || 100} value={currentTime} onChange={handleSeek} className="absolute inset-0 w-full h-full z-30 m-0"/>
                                     </div>
-
                                     <span className="text-xs font-mono text-zinc-400 w-10">{formatTime(duration)}</span>
                                 </div>
 
                                 <div className="flex justify-between items-center relative py-2 px-4">
-                                    <div className="w-16"></div> {/* Spacer */}
+                                    <div className="w-16"></div> 
 
                                     {/* Botones Centrales */}
                                     <div className="flex items-center gap-8">
-                                        <button onClick={() => jumpSeconds(-5)} className="text-zinc-400 hover:text-white transition flex flex-col items-center group">
-                                            <Rewind size={24} className="group-hover:-translate-x-1 transition-transform"/>
-                                        </button>
-                                        
+                                        <button onClick={() => jumpSeconds(-5)} className="text-zinc-400 hover:text-white transition flex flex-col items-center group"><Rewind size={24} className="group-hover:-translate-x-1 transition-transform"/></button>
                                         <button onClick={togglePlayPause} className="bg-white text-black hover:scale-105 w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition transform active:scale-95">
                                             {isPlaying ? <Pause fill="currentColor" size={24}/> : <Play fill="currentColor" size={24} className="ml-1"/>}
                                         </button>
-
-                                        <button onClick={() => jumpSeconds(5)} className="text-zinc-400 hover:text-white transition flex flex-col items-center group">
-                                            <FastForward size={24} className="group-hover:translate-x-1 transition-transform"/>
-                                        </button>
+                                        <button onClick={() => jumpSeconds(5)} className="text-zinc-400 hover:text-white transition flex flex-col items-center group"><FastForward size={24} className="group-hover:translate-x-1 transition-transform"/></button>
                                     </div>
 
-                                    {/* Selectores de Modo */}
-                                    <div className="flex items-center gap-2">
-                                        {/* Boton Subtitulos (CC) */}
-                                        <button 
-                                            onClick={() => setDisplayMode(displayMode === 'karaoke' ? 'none' : 'karaoke')} 
-                                            className={`p-2 rounded-xl transition flex flex-col items-center ${displayMode === 'karaoke' ? 'text-amber-400' : 'text-zinc-500 hover:text-zinc-400'}`}
-                                            title="Modo Karaoke"
-                                        >
+                                    {/* SELECTORES DE MODO (Ahora 3) */}
+                                    <div className="flex items-center gap-1">
+                                        <button onClick={() => setDisplayMode(displayMode === 'karaoke' ? 'none' : 'karaoke')} className={`p-2 rounded-xl transition flex flex-col items-center ${displayMode === 'karaoke' ? 'text-amber-400' : 'text-zinc-500 hover:text-zinc-400'}`} title="Karaoke">
                                             <Subtitles size={24}/>
                                             <span className="text-[9px] font-bold mt-1">CC</span>
                                         </button>
 
-                                        {/* Boton Vocabulario (Cerebro) */}
-                                        <button 
-                                            onClick={() => setDisplayMode(displayMode === 'vocab' ? 'none' : 'vocab')} 
-                                            className={`p-2 rounded-xl transition flex flex-col items-center relative ${displayMode === 'vocab' ? 'text-emerald-400' : 'text-zinc-500 hover:text-zinc-400'}`}
-                                            title="Modo Cacería de Vocabulario"
-                                        >
-                                            {displayMode === 'vocab' ? <BrainCircuit size={24}/> : <Brain size={24}/>}
+                                        <button onClick={() => setDisplayMode(displayMode === 'vocab' ? 'none' : 'vocab')} className={`p-2 rounded-xl transition flex flex-col items-center relative ${displayMode === 'vocab' ? 'text-emerald-400' : 'text-zinc-500 hover:text-zinc-400'}`} title="Vocabulario">
+                                            <BrainCircuit size={24}/>
                                             <span className="text-[9px] font-bold mt-1">VOCAB</span>
-                                            {/* Notificación de cuántas palabras hay */}
                                             {vocabulary.length > 0 && <span className="absolute -top-1 -right-1 bg-emerald-600 text-white text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center">{vocabulary.length}</span>}
+                                        </button>
+
+                                        {/* Botón de Preguntas TOEFL */}
+                                        <button onClick={() => setDisplayMode(displayMode === 'questions' ? 'none' : 'questions')} className={`p-2 rounded-xl transition flex flex-col items-center relative ${displayMode === 'questions' ? 'text-indigo-400' : 'text-zinc-500 hover:text-zinc-400'}`} title="Preguntas de Comprensión">
+                                            <MessageCircleQuestion size={24}/>
+                                            <span className="text-[9px] font-bold mt-1">QUIZ</span>
+                                            {questions.length > 0 && <span className="absolute -top-1 -right-1 bg-indigo-600 text-white text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center">{questions.length}</span>}
                                         </button>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
-                        {/* DISPLAY DE CAJA INFERIOR (Depende del modo activo) */}
-                        <div className="h-[220px]"> {/* Altura fija para que la pantalla no salte */}
+                        {/* DISPLAY INFERIOR DINÁMICO */}
+                        <div className="min-h-[220px]"> 
                             
-                            {/* MODO KARAOKE */}
+                            {/* 1. MODO KARAOKE */}
                             {displayMode === 'karaoke' && (
-                                <div className="bg-black/40 backdrop-blur-md rounded-3xl shadow-lg border border-white/5 overflow-hidden transition-all duration-300 h-full flex flex-col items-center justify-center text-center px-4 md:px-12 animate-in fade-in slide-in-from-bottom-4">
-                                    {activeSubIndex > 0 && (
-                                        <p onClick={() => jumpSeconds(-5)} className="text-zinc-500 text-sm md:text-base font-medium mb-4 opacity-70 transition-all cursor-pointer hover:text-zinc-300">
-                                            {parsedSubs[activeSubIndex - 1].text}
-                                        </p>
-                                    )}
-                                    
-                                    {parsedSubs.length > 0 ? (
-                                        <p className="text-3xl md:text-5xl font-black text-white my-2 transition-all leading-snug drop-shadow-lg">
-                                            {renderKaraokeWords(parsedSubs[activeSubIndex]?.text)}
-                                        </p>
-                                    ) : (
-                                        <p className="text-xl text-zinc-500 italic">No se detectaron subtítulos.</p>
-                                    )}
-                                    
-                                    {activeSubIndex >= 0 && activeSubIndex < parsedSubs.length - 1 && (
-                                        <p onClick={() => jumpSeconds(5)} className="text-zinc-500 text-sm md:text-base font-medium mt-4 opacity-70 transition-all cursor-pointer hover:text-zinc-300">
-                                            {parsedSubs[activeSubIndex + 1].text}
-                                        </p>
-                                    )}
+                                <div className="bg-black/40 backdrop-blur-md rounded-3xl shadow-lg border border-white/5 overflow-hidden transition-all duration-300 h-full min-h-[220px] flex flex-col items-center justify-center text-center px-4 md:px-12 animate-in fade-in slide-in-from-bottom-4">
+                                    {activeSubIndex > 0 && <p onClick={() => jumpSeconds(-5)} className="text-zinc-500 text-sm md:text-base font-medium mb-4 opacity-70 transition-all cursor-pointer hover:text-zinc-300">{parsedSubs[activeSubIndex - 1].text}</p>}
+                                    {parsedSubs.length > 0 ? <p className="text-3xl md:text-5xl font-black text-white my-2 transition-all leading-snug drop-shadow-lg">{renderKaraokeWords(parsedSubs[activeSubIndex]?.text)}</p> : <p className="text-xl text-zinc-500 italic">No se detectaron subtítulos.</p>}
+                                    {activeSubIndex >= 0 && activeSubIndex < parsedSubs.length - 1 && <p onClick={() => jumpSeconds(5)} className="text-zinc-500 text-sm md:text-base font-medium mt-4 opacity-70 transition-all cursor-pointer hover:text-zinc-300">{parsedSubs[activeSubIndex + 1].text}</p>}
                                 </div>
                             )}
 
-                            {/* MODO CACERÍA DE VOCABULARIO */}
+                            {/* 2. MODO VOCABULARIO */}
                             {displayMode === 'vocab' && (
-                                <div className="bg-emerald-950/30 backdrop-blur-md rounded-3xl shadow-lg border border-emerald-500/20 overflow-hidden transition-all duration-300 h-full flex items-center justify-center px-4 md:px-12 animate-in zoom-in-95">
+                                <div className="bg-emerald-950/30 backdrop-blur-md rounded-3xl shadow-lg border border-emerald-500/20 overflow-hidden transition-all duration-300 h-full min-h-[220px] flex items-center justify-center px-4 md:px-12 animate-in zoom-in-95">
                                     {activeVocab ? (
                                         <div className="text-center animate-in fade-in slide-in-from-bottom-2">
-                                            <div className="inline-flex items-center gap-2 bg-emerald-500/20 text-emerald-400 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-widest mb-4 border border-emerald-500/30">
-                                                <Sparkles size={14}/> {activeVocab.type || "Key Phrase"}
-                                            </div>
-                                            <h2 className="text-4xl md:text-5xl font-black text-white mb-4 drop-shadow-md">
-                                                "{activeVocab.word}"
-                                            </h2>
-                                            <p className="text-xl text-emerald-100/80 italic font-medium">
-                                                {activeVocab.definition}
-                                            </p>
+                                            <div className="inline-flex items-center gap-2 bg-emerald-500/20 text-emerald-400 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-widest mb-4 border border-emerald-500/30"><Sparkles size={14}/> {activeVocab.type || "Key Phrase"}</div>
+                                            <h2 className="text-4xl md:text-5xl font-black text-white mb-4 drop-shadow-md">"{activeVocab.word}"</h2>
+                                            <p className="text-xl text-emerald-100/80 italic font-medium">{activeVocab.definition}</p>
                                         </div>
                                     ) : (
                                         <div className="text-center text-emerald-500/50 flex flex-col items-center">
                                             <BrainCircuit size={48} className="mb-4 opacity-50"/>
                                             <p className="text-lg font-bold uppercase tracking-widest">Escucha con atención...</p>
-                                            <p className="text-sm mt-2">La expresión aparecerá aquí cuando sea el momento.</p>
-                                            <p className="text-xs mt-4">Pista: Sigue los puntos verdes en la barra de tiempo.</p>
+                                            <p className="text-xs mt-4">Sigue los puntos verdes para encontrar la próxima expresión.</p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* 3. MODO PREGUNTAS (QUIZ) */}
+                            {displayMode === 'questions' && (
+                                <div className="bg-indigo-950/30 backdrop-blur-md rounded-3xl shadow-lg border border-indigo-500/20 overflow-hidden transition-all duration-300 h-full min-h-[220px] flex items-center justify-center px-4 md:px-12 animate-in zoom-in-95 py-6">
+                                    {activeQuestion ? (
+                                        <div className="w-full animate-in fade-in slide-in-from-bottom-2 flex flex-col items-center">
+                                            <div className="inline-flex items-center gap-2 bg-indigo-500/20 text-indigo-400 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-widest mb-4 border border-indigo-500/30"><MessageCircleQuestion size={14}/> Pop Quiz</div>
+                                            
+                                            <h2 className="text-2xl md:text-3xl font-black text-white mb-6 text-center drop-shadow-md max-w-3xl">{activeQuestion.q}</h2>
+                                            
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-3xl">
+                                                {activeQuestion.options.map((opt, idx) => {
+                                                    const isSelected = selectedAnswer === idx;
+                                                    const isCorrect = activeQuestion.correctIndex === idx;
+                                                    const showResult = selectedAnswer !== null;
+
+                                                    let btnStyle = "bg-white/5 border-white/10 hover:bg-white/10 text-white"; // Default
+                                                    if (showResult) {
+                                                        if (isCorrect) btnStyle = "bg-emerald-500/20 border-emerald-500 text-emerald-300 ring-2 ring-emerald-500 scale-[1.02]";
+                                                        else if (isSelected && !isCorrect) btnStyle = "bg-rose-500/20 border-rose-500 text-rose-300 opacity-80";
+                                                        else btnStyle = "bg-black/20 border-transparent text-zinc-500 opacity-50"; // Las no elegidas y no correctas
+                                                    }
+
+                                                    return (
+                                                        <button 
+                                                            key={idx} 
+                                                            onClick={() => !showResult && setSelectedAnswer(idx)}
+                                                            disabled={showResult}
+                                                            className={`p-4 rounded-2xl border text-left font-semibold transition-all duration-300 flex justify-between items-center ${btnStyle}`}
+                                                        >
+                                                            <span>{opt}</span>
+                                                            {showResult && isCorrect && <CheckCircle2 className="text-emerald-500 shrink-0"/>}
+                                                            {showResult && isSelected && !isCorrect && <XCircle className="text-rose-500 shrink-0"/>}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="text-center text-indigo-500/50 flex flex-col items-center">
+                                            <MessageCircleQuestion size={48} className="mb-4 opacity-50"/>
+                                            <p className="text-lg font-bold uppercase tracking-widest">Atento al contexto...</p>
+                                            <p className="text-xs mt-4">Sigue los puntos morados. Prepárate para pausar y responder.</p>
                                         </div>
                                     )}
                                 </div>
