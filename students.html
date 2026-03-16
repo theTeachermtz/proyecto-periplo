@@ -72,7 +72,6 @@
             { id: 'pro', name: 'Pro', icon: Award }
         ];
 
-        // ALUMNOS INICIALES CONFIGURADOS
         const INITIAL_SETUP = [
             { name: "Victor", level: "vip" }, { name: "Fabiola", level: "vip" }, { name: "Fabian", level: "vip" },
             { name: "Dayanhi", level: "vip" }, { name: "Tucho", level: "vip" }, { name: "Cinthia", level: "vip" },
@@ -208,15 +207,26 @@
                 setEvalModal(student);
             };
 
+            // GUARDA Y AUTO-ASIGNA NIVEL
             const saveEvaluation = async () => {
                 if (!evalModal) return;
                 try {
-                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'students', evalModal.id), { skills: evalSkills });
+                    const currentTotal = parseInt(evalSkills.speaking||0)+parseInt(evalSkills.listening||0)+parseInt(evalSkills.reading||0)+parseInt(evalSkills.grammar||0)+parseInt(evalSkills.vocabulary||0)+parseInt(evalSkills.pronunciation||0);
+                    
+                    let targetLevel = evalModal.level;
+                    // Solo auto-asignamos si NO es VIP, porque VIP es estatus de clase
+                    if (evalModal.level !== 'vip') {
+                        targetLevel = getSuggestedLevel(currentTotal);
+                    }
+
+                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'students', evalModal.id), { 
+                        skills: evalSkills,
+                        level: targetLevel
+                    });
                     setEvalModal(null);
                 } catch (error) { alert("Error: " + error.message); }
             };
 
-            // ALGORITMO MATCHMAKER
             const runMatchmaker = () => {
                 const semiStudents = students.filter(s => s.level !== 'vip' && s.level !== 'limbo' && s.skills);
                 let pairs = [];
@@ -229,16 +239,14 @@
                         const t1 = Object.values(s1.skills).reduce((a,b)=>a+Number(b),0);
                         const t2 = Object.values(s2.skills).reduce((a,b)=>a+Number(b),0);
                         
-                        if(Math.abs(t1 - t2) <= 12) { // Similares en puntaje global
+                        if(Math.abs(t1 - t2) <= 12) { 
                             let reason = "";
                             let strength = "good";
 
-                            // Detección de problemas compartidos
                             const struggles1 = Object.entries(s1.skills).filter(([k,v]) => Number(v) <= 4).map(e=>e[0]);
                             const struggles2 = Object.entries(s2.skills).filter(([k,v]) => Number(v) <= 4).map(e=>e[0]);
                             const sharedStruggle = struggles1.find(sk => struggles2.includes(sk));
                             
-                            // Detección de complemento (Uno bueno en algo, el otro malo)
                             const good1 = Object.entries(s1.skills).filter(([k,v]) => Number(v) >= 7).map(e=>e[0]);
                             const complement = good1.find(sk => struggles2.includes(sk));
 
@@ -256,7 +264,7 @@
                         }
                     }
                 }
-                return pairs.sort((a,b)=>a.diff - b.diff).slice(0, 4); // Top 4 matches
+                return pairs.sort((a,b)=>a.diff - b.diff).slice(0, 4);
             };
 
             const filteredStudents = activeTab === 'all' ? students : students.filter(s => (s.level || 'limbo') === activeTab);
@@ -278,7 +286,6 @@
                                 
                                 <div className="p-6 md:p-8 overflow-y-auto custom-scrollbar flex-1 bg-slate-50 dark:bg-zinc-950 space-y-8">
                                     
-                                    {/* SECCIÓN 1: ALUMNOS ESTANCADOS EN LIMBO */}
                                     <section>
                                         <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><HelpCircle size={16}/> Pendientes de Evaluación</h4>
                                         <div className="flex flex-wrap gap-2">
@@ -289,28 +296,6 @@
                                         </div>
                                     </section>
 
-                                    {/* SECCIÓN 2: SUGERENCIAS DE NIVEL */}
-                                    <section>
-                                        <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><ArrowUpCircle size={16}/> Sugerencias de Promoción</h4>
-                                        <div className="grid sm:grid-cols-2 gap-4">
-                                            {students.filter(s => s.level !== 'vip' && s.level !== 'limbo' && s.skills).map(s => {
-                                                const t = Object.values(s.skills).reduce((a,b)=>a+Number(b),0);
-                                                const recLevel = getSuggestedLevel(t);
-                                                if (s.level === recLevel) return null; // Está en el nivel correcto
-                                                return (
-                                                    <div key={s.id} className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 p-4 rounded-xl flex justify-between items-center">
-                                                        <div>
-                                                            <p className="font-black text-slate-800 dark:text-white">{s.name}</p>
-                                                            <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mt-1">Puntaje: {t}/60</p>
-                                                        </div>
-                                                        <button onClick={() => handleChangeLevel(s.id, recLevel)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-md hover:scale-105 transition-transform">Mover a {LEVELS.find(l=>l.id===recLevel).name}</button>
-                                                    </div>
-                                                )
-                                            })}
-                                        </div>
-                                    </section>
-
-                                    {/* SECCIÓN 3: PAREJAS PERFECTAS */}
                                     <section>
                                         <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><GitMerge size={16}/> Pairs Recomendados (Semi-Grupales)</h4>
                                         <div className="grid md:grid-cols-2 gap-4">
@@ -352,8 +337,23 @@
                                         <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-1">Arquetipo Actual</p>
                                         <h4 className={`text-xl font-black ${calculateArchetype(evalSkills).color}`}>{calculateArchetype(evalSkills).name}</h4>
                                         <p className="text-sm font-medium text-slate-600 dark:text-zinc-400 mt-1">{calculateArchetype(evalSkills).desc}</p>
-                                        <div className="mt-3 font-black text-lg text-indigo-900 dark:text-indigo-300">
-                                            {parseInt(evalSkills.speaking)+parseInt(evalSkills.listening)+parseInt(evalSkills.reading)+parseInt(evalSkills.grammar)+parseInt(evalSkills.vocabulary)+parseInt(evalSkills.pronunciation)} <span className="text-sm opacity-50">/ 60 pts</span>
+                                        
+                                        {/* INDICADOR DE AUTO-ASIGNACIÓN DE NIVEL */}
+                                        <div className="mt-4 font-black text-lg text-indigo-900 dark:text-indigo-300 flex flex-col items-center">
+                                            <div className="flex items-center gap-1">
+                                                {parseInt(evalSkills.speaking||0)+parseInt(evalSkills.listening||0)+parseInt(evalSkills.reading||0)+parseInt(evalSkills.grammar||0)+parseInt(evalSkills.vocabulary||0)+parseInt(evalSkills.pronunciation||0)} 
+                                                <span className="text-sm opacity-50">/ 60 pts</span>
+                                            </div>
+                                            
+                                            {evalModal.level === 'vip' ? (
+                                                <div className="mt-2 text-[10px] bg-white/50 dark:bg-black/20 px-3 py-1 rounded-full text-amber-600 dark:text-amber-400 uppercase tracking-widest flex items-center gap-1 border border-amber-200 dark:border-amber-800">
+                                                    <Star size={10}/> Alumno VIP (Mantiene Categoría)
+                                                </div>
+                                            ) : (
+                                                <div className="mt-2 text-[10px] bg-white/50 dark:bg-black/20 px-3 py-1 rounded-full text-indigo-700 dark:text-indigo-300 uppercase tracking-widest flex items-center gap-1">
+                                                    Auto-asignar a: <b className="ml-1 text-indigo-900 dark:text-white">{LEVELS.find(l => l.id === getSuggestedLevel(parseInt(evalSkills.speaking||0)+parseInt(evalSkills.listening||0)+parseInt(evalSkills.reading||0)+parseInt(evalSkills.grammar||0)+parseInt(evalSkills.vocabulary||0)+parseInt(evalSkills.pronunciation||0)))?.name}</b>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
 
@@ -369,7 +369,7 @@
                                             <div key={skill.id}>
                                                 <div className="flex justify-between items-center mb-2">
                                                     <label className={`text-xs font-bold uppercase tracking-widest flex items-center gap-1.5 ${skill.color}`}><skill.icon size={14}/> {skill.label}</label>
-                                                    <span className="font-black text-sm w-6 text-right text-slate-700 dark:text-slate-300">{evalSkills[skill.id]}</span>
+                                                    <span className="font-black text-sm w-6 text-right text-slate-700 dark:text-slate-300">{evalSkills[skill.id] || 0}</span>
                                                 </div>
                                                 <input 
                                                     type="range" min="0" max="10" step="1" 
