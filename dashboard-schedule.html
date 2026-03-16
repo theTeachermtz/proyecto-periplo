@@ -60,27 +60,28 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // FORZAR ZONA HORARIA DE MÉXICO
         const getMexicoTime = () => {
             const mxString = new Date().toLocaleString("en-US", { timeZone: "America/Mexico_City" });
             return new Date(mxString);
         };
 
-        // SALTO DEL DOMINGO: Si es Domingo (0), adelanta al Lunes (1)
         const getInitialDate = () => {
             const mxTime = getMexicoTime();
-            if (mxTime.getDay() === 0) {
-                return addDays(mxTime, 1);
-            }
+            if (mxTime.getDay() === 0) return addDays(mxTime, 1);
             return mxTime;
         };
 
         const TIMES = ['07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00'];
+        const formatTimeDisplay = (time24) => { const [hour] = time24.split(':'); const h = parseInt(hour, 10); return `${h % 12 || 12}:00 ${h >= 12 ? 'pm' : 'am'}`; };
 
-        const formatTimeDisplay = (time24) => {
-            const [hour] = time24.split(':');
-            const h = parseInt(hour, 10);
-            return `${h % 12 || 12}:00 ${h >= 12 ? 'pm' : 'am'}`;
+        // TRADUCTOR DE DÍAS (SAB -> SÁB)
+        const matchDays = (dbDay, gridDay) => {
+            if (!dbDay || !gridDay) return false;
+            let d1 = dbDay.toUpperCase().replace(/\./g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            let d2 = gridDay.toUpperCase().replace(/\./g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            if (d1 === 'MIER') d1 = 'MIE';
+            if (d2 === 'MIER') d2 = 'MIE';
+            return d1 === d2;
         };
 
         const FRUIT_FLOWER_PALETTE = [
@@ -117,14 +118,13 @@
             
             const [draggedEventId, setDraggedEventId] = useState(null);
             const [duplicationMode, setDuplicationMode] = useState({ active: false, sourceEvent: null, selectedSlots: [] });
-            const [deleteConfirm, setDeleteConfirm] = useState({ open: false, event: null });
             
-            const [formData, setFormData] = useState({
-                title: '', type: 'class', notes: '', meetLink: '', customColor: '', 
-                isRecurring: true
-            });
+            // MODALES DE CONFIRMACIÓN Y RECURRENCIA
+            const [deleteConfirm, setDeleteConfirm] = useState({ open: false, event: null, dateStr: null });
+            const [recurringPrompt, setRecurringPrompt] = useState(null); // { action: 'move'|'delete'|'edit', event, sourceDate, payload }
+            
+            const [formData, setFormData] = useState({ title: '', type: 'class', notes: '', meetLink: '', customColor: '', isRecurring: true });
 
-            // ESTADOS DE NOTIFICACIONES
             const [notifications, setNotifications] = useState([]);
             const [showNotifPanel, setShowNotifPanel] = useState(false);
 
@@ -143,7 +143,6 @@
                     Notification.requestPermission();
                 }
 
-                // LIMIT(10) APLICADO A LAS NOTIFICACIONES
                 const qNotifs = query(collection(db, 'artifacts', 'periplo-app-v1', 'notifications'), orderBy('createdAt', 'desc'), limit(10));
                 const unsubNotifs = onSnapshot(qNotifs, (snapshot) => {
                     const notifsList = snapshot.docs.map(d => ({id: d.id, ...d.data()}));
@@ -178,10 +177,7 @@
             const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
             const weekDays = Array.from({ length: 6 }).map((_, i) => addDays(weekStart, i));
 
-            const toggleTheme = () => {
-                setIsDarkMode(!isDarkMode);
-                localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light');
-            };
+            const toggleTheme = () => { setIsDarkMode(!isDarkMode); localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light'); };
 
             const markAllAsRead = async () => {
                 const unread = notifications.filter(n => !n.read);
@@ -192,33 +188,46 @@
 
             const unreadCount = notifications.filter(n => !n.read).length;
 
-            // AUTO-READ: MARCAR COMO LEÍDAS AL ABRIR EL PANEL
             useEffect(() => {
-                if (showNotifPanel && unreadCount > 0) {
-                    markAllAsRead();
-                }
+                if (showNotifPanel && unreadCount > 0) markAllAsRead();
             }, [showNotifPanel, unreadCount, notifications]);
 
+            // MOTOR INTELIGENTE DE EXCEPCIONES
             const getEventsForSlot = (dateStr, dayName, time) => {
-                return events.filter(e => (e.date === dateStr && e.time === time) || (!e.date && e.day === dayName && e.time === time));
+                return events.filter(e => {
+                    if (e.date === dateStr && e.time === time) return true; // Fijos únicos
+                    if (!e.date && matchDays(e.day, dayName) && e.time === time) { // Recurrentes
+                        if (e.canceledDates && e.canceledDates.includes(dateStr)) return false; // Es una excepción
+                        return true;
+                    }
+                    return false;
+                });
             };
 
-            const handleDragStart = (e, eventId) => {
+            const handleDragStart = (e, eventId, dateStr) => {
                 setDraggedEventId(eventId);
-                e.dataTransfer.setData('text/plain', eventId);
+                e.dataTransfer.setData('text/plain', JSON.stringify({ id: eventId, sourceDate: dateStr }));
                 e.dataTransfer.effectAllowed = 'move';
             };
 
             const handleDrop = async (e, targetDate, targetDay, targetTime) => {
                 e.preventDefault();
-                const eventId = e.dataTransfer.getData('text/plain');
-                const eventToMove = events.find(ev => ev.id === eventId);
-                if (!eventToMove) return;
-
+                const dataStr = e.dataTransfer.getData('text/plain');
+                if (!dataStr) return;
+                
                 try {
-                    const isRecurring = !eventToMove.date;
+                    const { id, sourceDate } = JSON.parse(dataStr);
+                    const eventToMove = events.find(ev => ev.id === id);
+                    if (!eventToMove) return;
+
+                    if (!eventToMove.date) {
+                        setRecurringPrompt({ action: 'move', event: eventToMove, sourceDate, payload: { targetDate, targetDay, targetTime } });
+                        setDraggedEventId(null);
+                        return;
+                    }
+
                     await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', eventToMove.id), {
-                        day: targetDay, time: targetTime, date: isRecurring ? null : targetDate
+                        day: targetDay, time: targetTime, date: targetDate
                     });
                 } catch (error) { alert("Error moviendo: " + error.message); }
                 setDraggedEventId(null);
@@ -245,12 +254,19 @@
                 setDuplicationMode({ active: false, sourceEvent: null, selectedSlots: [] });
             };
 
-            const openDeleteConfirm = (e, event) => { e.stopPropagation(); setDeleteConfirm({ open: true, event: event }); };
+            const openDeleteConfirm = (e, event, dateStr) => { e.stopPropagation(); setDeleteConfirm({ open: true, event, dateStr }); };
 
             const confirmDelete = async () => {
                 if (!deleteConfirm.event) return;
-                try { await deleteDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', deleteConfirm.event.id)); } catch (e) { alert(e.message); }
-                setDeleteConfirm({ open: false, event: null });
+                const { event, dateStr } = deleteConfirm;
+                setDeleteConfirm({ open: false, event: null, dateStr: null });
+                
+                if (!event.date) {
+                    setRecurringPrompt({ action: 'delete', event, sourceDate: dateStr, payload: null });
+                    return;
+                }
+
+                try { await deleteDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', event.id)); } catch (e) { alert(e.message); }
                 if (isModalOpen) closeModal();
             };
 
@@ -285,19 +301,125 @@
                     student: editingEvent ? editingEvent.student : formData.title.trim()
                 };
 
-                try {
-                    if (editingEvent) await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', editingEvent.id), eventData);
-                    else await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), eventData);
-                } catch (e) { alert(e.message); }
+                if (editingEvent) {
+                    if (!editingEvent.date && !formData.isRecurring) {
+                        setRecurringPrompt({ action: 'edit', event: editingEvent, sourceDate: currentSlot.dateStr, payload: eventData });
+                        return;
+                    }
+                    if (!editingEvent.date) {
+                        setRecurringPrompt({ action: 'edit', event: editingEvent, sourceDate: currentSlot.dateStr, payload: eventData });
+                        return;
+                    }
+                    try { await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', editingEvent.id), eventData); } catch (e) { alert(e.message); }
+                } else {
+                    try { await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), eventData); } catch (e) { alert(e.message); }
+                }
                 closeModal();
             };
 
             const closeModal = () => { setIsModalOpen(false); setEditingEvent(null); };
 
+            // MOTOR EJECUTOR DE EVENTOS FANTASMAS (EXCEPCIONES)
+            const executeRecurringAction = async (mode) => {
+                const { action, event, sourceDate, payload } = recurringPrompt;
+                setRecurringPrompt(null);
+                
+                try {
+                    if (action === 'delete') {
+                        if (mode === 'single') {
+                            const newCanceled = [...(event.canceledDates || []), sourceDate];
+                            await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', event.id), { canceledDates: newCanceled });
+                        } else {
+                            await deleteDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', event.id));
+                        }
+                        if (isModalOpen) closeModal();
+                    } else if (action === 'move') {
+                        if (mode === 'single') {
+                            const newCanceled = [...(event.canceledDates || []), sourceDate];
+                            await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', event.id), { canceledDates: newCanceled });
+                            const newEvent = { ...event };
+                            delete newEvent.id; delete newEvent.canceledDates;
+                            newEvent.date = payload.targetDate; newEvent.day = payload.targetDay; newEvent.time = payload.targetTime;
+                            await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), newEvent);
+                        } else {
+                            await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', event.id), { day: payload.targetDay, time: payload.targetTime });
+                        }
+                    } else if (action === 'edit') {
+                        if (mode === 'single') {
+                            const newCanceled = [...(event.canceledDates || []), sourceDate];
+                            await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', event.id), { canceledDates: newCanceled });
+                            const newEvent = { ...payload };
+                            newEvent.date = sourceDate; 
+                            await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), newEvent);
+                        } else {
+                            await updateDoc(doc(db, 'artifacts/periplo-app-v1', 'schedule', event.id), payload);
+                        }
+                        closeModal();
+                    }
+                } catch(e) { alert(e.message); }
+            };
+
             return (
                 <div className={`${isDarkMode ? 'dark' : ''}`}>
                     <div className="min-h-screen bg-stone-50 dark:bg-zinc-950 text-stone-800 dark:text-stone-100 font-sans flex flex-col h-screen overflow-hidden transition-colors duration-300 relative">
                         
+                        {/* MODAL DE EVENTO RECURRENTE */}
+                        {recurringPrompt && (
+                            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
+                                <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl p-6 max-w-sm w-full border border-stone-200 dark:border-zinc-700">
+                                    <div className="flex items-center gap-3 mb-2 text-indigo-500">
+                                        <Repeat size={24}/>
+                                        <h3 className="text-lg font-black text-stone-900 dark:text-white">Evento Recurrente</h3>
+                                    </div>
+                                    <p className="text-sm font-medium text-stone-500 dark:text-zinc-400 mb-6 leading-relaxed">Esta es una clase fija. ¿Quieres aplicar este cambio SOLO hoy, o a todas las clases del futuro?</p>
+                                    <div className="flex flex-col gap-3">
+                                        <button onClick={() => executeRecurringAction('single')} className="w-full py-3 bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 rounded-xl font-bold transition-colors shadow-sm">Solo este evento ({recurringPrompt.sourceDate})</button>
+                                        <button onClick={() => executeRecurringAction('all')} className="w-full py-3 bg-teal-50 dark:bg-teal-900/30 hover:bg-teal-100 dark:hover:bg-teal-900/50 text-teal-700 dark:text-teal-300 rounded-xl font-bold transition-colors shadow-sm">Todos los eventos</button>
+                                        <button onClick={() => setRecurringPrompt(null)} className="w-full py-3 mt-2 text-stone-500 hover:bg-stone-100 dark:hover:bg-zinc-800 rounded-xl font-bold transition-colors">Cancelar</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {showNotifPanel && (
+                            <div className="fixed inset-0 z-50 flex justify-end">
+                                <div className="absolute inset-0 bg-black/20 dark:bg-black/50 backdrop-blur-sm" onClick={() => setShowNotifPanel(false)}></div>
+                                <div className="w-full max-w-md bg-white dark:bg-zinc-900 h-full shadow-2xl relative flex flex-col animate-in slide-in-from-right duration-300 border-l border-stone-200 dark:border-zinc-800">
+                                    <div className="p-6 border-b border-stone-200 dark:border-zinc-800 flex justify-between items-center bg-stone-50 dark:bg-zinc-950 rounded-t-2xl shrink-0">
+                                        <div className="flex items-center gap-2">
+                                            <div className="p-1.5 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 rounded-lg"><Bell size={16}/></div>
+                                            <h2 className="text-sm font-black uppercase tracking-widest text-stone-800 dark:text-white">Notificaciones</h2>
+                                        </div>
+                                        <button onClick={() => setShowNotifPanel(false)} className="p-1.5 hover:bg-stone-200 dark:hover:bg-zinc-800 rounded-full transition-colors text-stone-500"><X size={16}/></button>
+                                    </div>
+                                    
+                                    <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-2">
+                                        {notifications.length === 0 ? (
+                                            <div className="py-12 flex flex-col items-center justify-center text-stone-400 dark:text-zinc-600">
+                                                <Bell size={32} className="opacity-20 mb-3"/>
+                                                <p className="font-bold text-sm">No hay novedades.</p>
+                                            </div>
+                                        ) : (
+                                            notifications.map(n => {
+                                                const timeAgo = n.createdAt ? formatDistanceToNow(n.createdAt.toDate(), { addSuffix: true, locale: es }) : 'hace un momento';
+                                                return (
+                                                    <div key={n.id} className={`p-3 rounded-xl border transition-colors ${n.read ? 'bg-transparent border-transparent opacity-60 hover:bg-stone-50 dark:hover:bg-zinc-800/50' : 'bg-stone-50 dark:bg-zinc-800 border-indigo-200 dark:border-indigo-800 shadow-sm'}`}>
+                                                        <div className="flex gap-3">
+                                                            <div className="text-lg">{n.message.split(' ')[0]}</div>
+                                                            <div>
+                                                                <p className="text-xs font-bold text-stone-800 dark:text-stone-200 leading-snug">{n.message.substring(2)}</p>
+                                                                <p className="text-[9px] text-stone-400 dark:text-zinc-500 font-bold mt-1 uppercase">{timeAgo}</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )
+                                            })
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {duplicationMode.active && (
                             <div className="fixed top-0 left-0 right-0 z-[45] bg-indigo-600 text-white shadow-lg p-3 animate-in slide-in-from-top">
                                 <div className="max-w-[1400px] mx-auto flex items-center justify-between">
@@ -320,55 +442,13 @@
                                         <span className="font-bold text-xs min-w-[100px] text-center capitalize">{format(weekStart, 'MMM d')} - {format(addDays(weekStart, 5), 'MMM d')}</span>
                                         <button onClick={()=>setCurrentDate(addWeeks(currentDate, 1))} className="p-1 hover:bg-white dark:hover:bg-zinc-700 rounded"><ChevronRight size={16}/></button>
                                     </div>
-                                    
                                     <div className="flex items-center gap-2 border-l border-stone-200 dark:border-zinc-700 pl-4">
-                                        {/* BOTÓN DE NOTIFICACIONES */}
                                         <button onClick={() => setShowNotifPanel(!showNotifPanel)} className="p-2 rounded-full bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-zinc-300 hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors relative">
                                             <Bell size={20}/>
                                             {unreadCount > 0 && <span className="absolute top-0 right-0 w-4 h-4 bg-red-500 border-2 border-white dark:border-zinc-900 rounded-full flex items-center justify-center text-[8px] font-black text-white">{unreadCount}</span>}
                                         </button>
                                         <button onClick={toggleTheme} className="p-2 rounded-full bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-amber-400">{isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}</button>
                                     </div>
-
-                                    {/* PANEL DE NOTIFICACIONES FLOTANTE COMPACTO */}
-                                    {showNotifPanel && (
-                                        <>
-                                            <div className="fixed inset-0 z-[45]" onClick={() => setShowNotifPanel(false)}></div>
-                                            <div className="absolute top-14 right-0 w-80 sm:w-96 bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl z-50 flex flex-col border border-stone-200 dark:border-zinc-800 max-h-[70vh] animate-in slide-in-from-top-4 fade-in duration-200">
-                                                <div className="p-4 border-b border-stone-200 dark:border-zinc-800 flex justify-between items-center bg-stone-50 dark:bg-zinc-950 rounded-t-2xl shrink-0">
-                                                    <div className="flex items-center gap-2">
-                                                        <div className="p-1.5 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 rounded-lg"><Bell size={16}/></div>
-                                                        <h2 className="text-sm font-black uppercase tracking-widest text-stone-800 dark:text-white">Notificaciones</h2>
-                                                    </div>
-                                                    <button onClick={() => setShowNotifPanel(false)} className="p-1.5 hover:bg-stone-200 dark:hover:bg-zinc-800 rounded-full transition-colors text-stone-500"><X size={16}/></button>
-                                                </div>
-                                                
-                                                <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-2">
-                                                    {notifications.length === 0 ? (
-                                                        <div className="py-12 flex flex-col items-center justify-center text-stone-400 dark:text-zinc-600">
-                                                            <Bell size={32} className="opacity-20 mb-3"/>
-                                                            <p className="font-bold text-sm">No hay novedades.</p>
-                                                        </div>
-                                                    ) : (
-                                                        notifications.map(n => {
-                                                            const timeAgo = n.createdAt ? formatDistanceToNow(n.createdAt.toDate(), { addSuffix: true, locale: es }) : 'hace un momento';
-                                                            return (
-                                                                <div key={n.id} className={`p-3 rounded-xl border transition-colors ${n.read ? 'bg-transparent border-transparent opacity-60 hover:bg-stone-50 dark:hover:bg-zinc-800/50' : 'bg-stone-50 dark:bg-zinc-800 border-indigo-200 dark:border-indigo-800 shadow-sm'}`}>
-                                                                    <div className="flex gap-3">
-                                                                        <div className="text-lg">{n.message.split(' ')[0]}</div>
-                                                                        <div>
-                                                                            <p className="text-xs font-bold text-stone-800 dark:text-stone-200 leading-snug">{n.message.substring(2)}</p>
-                                                                            <p className="text-[9px] text-stone-400 dark:text-zinc-500 font-bold mt-1 uppercase">{timeAgo}</p>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            )
-                                                        })
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </>
-                                    )}
                                 </div>
                             </div>
                         </header>
@@ -429,11 +509,11 @@
                                                                         let finalColorClasses = event.customColor || (typeConfig ? typeConfig.color : 'bg-white dark:bg-zinc-800');
                                                                         
                                                                         return (
-                                                                            <div key={event.id} draggable={!duplicationMode.active} onDragStart={(e) => handleDragStart(e, event.id)} onDragEnd={()=>setDraggedEventId(null)} onClick={(e) => { e.stopPropagation(); handleSlotClick(event, dateStr, dayName, time); }} className={`w-full rounded-xl p-2 border-2 shadow-sm flex flex-col justify-center relative transition-all min-h-[70px] shrink-0 ${draggedEventId === event.id ? 'opacity-40 scale-95' : 'hover:scale-[1.02] hover:shadow-md cursor-grab active:cursor-grabbing'} ${finalColorClasses}`}>
+                                                                            <div key={event.id} draggable={!duplicationMode.active} onDragStart={(e) => handleDragStart(e, event.id, dateStr)} onDragEnd={()=>setDraggedEventId(null)} onClick={(e) => { e.stopPropagation(); handleSlotClick(event, dateStr, dayName, time); }} className={`w-full rounded-xl p-2 border-2 shadow-sm flex flex-col justify-center relative transition-all min-h-[70px] shrink-0 ${draggedEventId === event.id ? 'opacity-40 scale-95' : 'hover:scale-[1.02] hover:shadow-md cursor-grab active:cursor-grabbing'} ${finalColorClasses}`}>
                                                                                 {!duplicationMode.active && (
                                                                                     <div className="absolute top-1 right-1 flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
                                                                                         <button onClick={(e) => startDuplication(e, event)} className="p-1 bg-indigo-500 text-white rounded-full shadow-md hover:bg-indigo-600 transition-colors"><Copy className="w-3 h-3" /></button>
-                                                                                        <button onClick={(e) => openDeleteConfirm(e, event)} className="p-1 bg-rose-500 text-white rounded-full shadow-md hover:bg-rose-600 transition-colors"><Trash2 className="w-3 h-3" /></button>
+                                                                                        <button onClick={(e) => openDeleteConfirm(e, event, dateStr)} className="p-1 bg-rose-500 text-white rounded-full shadow-md hover:bg-rose-600 transition-colors"><Trash2 className="w-3 h-3" /></button>
                                                                                     </div>
                                                                                 )}
                                                                                 <div className="font-black text-[11px] sm:text-xs leading-tight break-words uppercase tracking-tight z-10 flex items-start justify-between gap-1">
@@ -464,7 +544,7 @@
                             <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
                                 <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl p-6 max-w-sm w-full border border-stone-200 dark:border-zinc-700">
                                     <h3 className="text-lg font-black text-stone-900 dark:text-white mb-2">¿Eliminar evento?</h3>
-                                    <div className="flex justify-end space-x-3"><button onClick={() => setDeleteConfirm({ open: false, event: null })} className="px-4 py-2 text-stone-500 hover:bg-stone-100 dark:bg-zinc-800 rounded-lg text-sm font-bold">Cancelar</button><button onClick={confirmDelete} className="px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white rounded-lg text-sm font-bold">Eliminar</button></div>
+                                    <div className="flex justify-end space-x-3"><button onClick={() => setDeleteConfirm({ open: false, event: null, dateStr: null })} className="px-4 py-2 text-stone-500 hover:bg-stone-100 dark:bg-zinc-800 rounded-lg text-sm font-bold">Cancelar</button><button onClick={confirmDelete} className="px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white rounded-lg text-sm font-bold">Eliminar</button></div>
                                 </div>
                             </div>
                         )}
@@ -509,7 +589,7 @@
                                         <div><label className="block text-xs font-black text-stone-400 dark:text-zinc-500 uppercase mb-2">Notas</label><textarea value={formData.notes} onChange={(e) => setFormData({...formData, notes: e.target.value})} className="w-full px-4 py-3 rounded-xl border-2 border-stone-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-teal-500 outline-none transition-colors resize-none h-20 font-medium" placeholder="Detalles..." /></div>
                                     </div>
                                     <div className="bg-stone-50 dark:bg-zinc-950 px-6 py-4 flex justify-between items-center border-t border-stone-200 dark:border-zinc-800 shrink-0">
-                                        {editingEvent ? (<button onClick={() => { confirmDelete({open: true, event: editingEvent}); closeModal(); }} className="flex items-center space-x-2 px-4 py-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition-colors text-sm font-bold"><Trash2 className="w-5 h-5" /><span>Borrar</span></button>) : (<div></div>)}
+                                        {editingEvent ? (<button onClick={() => { setDeleteConfirm({open: true, event: editingEvent, dateStr: currentSlot.dateStr}); closeModal(); }} className="flex items-center space-x-2 px-4 py-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition-colors text-sm font-bold"><Trash2 className="w-5 h-5" /><span>Borrar</span></button>) : (<div></div>)}
                                         <div className="flex space-x-3"><button onClick={closeModal} className="px-5 py-2 text-stone-500 dark:text-zinc-400 hover:bg-stone-200 dark:hover:bg-zinc-800 rounded-xl text-sm font-bold">Cancelar</button><button onClick={handleSave} className="flex items-center space-x-2 px-6 py-2 bg-stone-900 dark:bg-white hover:bg-black dark:hover:bg-stone-200 text-white dark:text-black rounded-xl shadow-lg text-sm font-bold"><Save className="w-5 h-5" /><span>Guardar</span></button></div>
                                     </div>
                                 </div>
