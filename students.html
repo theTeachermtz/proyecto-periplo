@@ -28,6 +28,11 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        /* Custom Range Slider */
+        input[type=range] { -webkit-appearance: none; background: transparent; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%; background: #6366f1; cursor: pointer; margin-top: -8px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 6px; cursor: pointer; background: #e2e8f0; border-radius: 4px; }
+        .dark input[type=range]::-webkit-slider-runnable-track { background: #3f3f46; }
     </style>
 </head>
 <body class="bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 transition-colors duration-300">
@@ -37,13 +42,12 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-        import { Users, Link as LinkIcon, Plus, Trash2, ArrowLeft, Sun, Moon, CheckCircle2, UserPlus, Hash, Star, LayoutGrid, Zap, Award } from 'lucide-react';
+        import { Users, Link as LinkIcon, Plus, Trash2, ArrowLeft, Sun, Moon, CheckCircle2, UserPlus, Hash, Star, LayoutGrid, Zap, Award, Activity, MessageCircle, Ear, BookOpen, PenTool, Brain, Save, X } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // PALETA DE COLORES
         const PALETTE = [
             'bg-violet-200 border-violet-300 text-violet-900 dark:bg-violet-900/50 dark:border-violet-500 dark:text-violet-100',
             'bg-stone-200 border-stone-300 text-stone-900 dark:bg-stone-800 dark:border-stone-500 dark:text-stone-200',
@@ -59,7 +63,6 @@
             'bg-red-200 border-red-300 text-red-900 dark:bg-red-900/50 dark:border-red-500 dark:text-red-100'
         ];
 
-        // NIVELES DE ALUMNOS
         const LEVELS = [
             { id: 'all', name: 'Todos', icon: Users },
             { id: 'vip', name: 'VIP (Individual)', icon: Star },
@@ -67,6 +70,31 @@
             { id: 'advanced', name: 'Avanzado (Semi)', icon: Zap },
             { id: 'pro', name: 'Pro (Semi)', icon: Award }
         ];
+
+        // ALGORITMO DE ARQUETIPOS
+        const calculateArchetype = (s) => {
+            const speaking = parseInt(s.speaking) || 0;
+            const listening = parseInt(s.listening) || 0;
+            const reading = parseInt(s.reading) || 0;
+            const grammar = parseInt(s.grammar) || 0;
+            const vocab = parseInt(s.vocabulary) || 0;
+            
+            const total = speaking + listening + reading + grammar + vocab;
+
+            if (total <= 5) return { name: "En Ceros 🥚", desc: "Listo para ser moldeado desde la raíz.", color: "text-stone-500" };
+            if (total >= 45) return { name: "Maestro Jedi 👑", desc: "Casi nativo. Sueña en inglés.", color: "text-amber-500" };
+
+            // Desbalances
+            if (grammar >= 7 && speaking <= 4) return { name: "Teórico Bloqueado 📚", desc: "Sabe reglas, pero le da pánico hablar.", color: "text-blue-500" };
+            if (speaking >= 7 && grammar <= 4) return { name: "Tarzán Fluido 🌴", desc: "Habla sin miedo, pero conjuga a lo salvaje.", color: "text-emerald-500" };
+            if (listening >= 7 && speaking <= 4) return { name: "Esponja Muda 🧽", desc: "Entiende el chisme, pero no opina.", color: "text-cyan-500" };
+            if ((reading >= 7 || vocab >= 7) && listening <= 4 && speaking <= 4) return { name: "Lector Académico 🤓", desc: "Lee a Shakespeare, no puede pedir un café.", color: "text-purple-500" };
+            
+            // Balanceados por nivel
+            if (total < 20) return { name: "Sobreviviente 🐣", desc: "Se defiende con lo mínimo indispensable.", color: "text-orange-500" };
+            if (total >= 20 && total < 36) return { name: "Todo Terreno 🚙", desc: "Balanceado. El intermedio sólido ideal.", color: "text-teal-500" };
+            return { name: "Avanzado Pulido 💎", desc: "Detalles mínimos por arreglar.", color: "text-indigo-500" };
+        };
 
         const getRandomColor = () => PALETTE[Math.floor(Math.random() * PALETTE.length)];
 
@@ -80,11 +108,15 @@
         const StudentManager = () => {
             const [students, setStudents] = useState([]);
             const [newStudentName, setNewStudentName] = useState('');
-            const [newStudentLevel, setNewStudentLevel] = useState('vip'); // Por defecto
+            const [newStudentLevel, setNewStudentLevel] = useState('vip');
             
             const [copiedId, setCopiedId] = useState(null);
             const [isDarkMode, setIsDarkMode] = useState(true);
             const [activeTab, setActiveTab] = useState('all');
+
+            // ESTADO DE EVALUACIÓN
+            const [evalModal, setEvalModal] = useState(null); // Contiene el student.id
+            const [evalSkills, setEvalSkills] = useState({ speaking: 0, listening: 0, reading: 0, grammar: 0, vocabulary: 0 });
 
             useEffect(() => {
                 const savedTheme = localStorage.getItem('themePreference');
@@ -114,10 +146,11 @@
                         folio: folio,
                         color: color,
                         level: newStudentLevel,
+                        skills: { speaking: 0, listening: 0, reading: 0, grammar: 0, vocabulary: 0 },
                         createdAt: serverTimestamp() 
                     });
                     setNewStudentName('');
-                    setNewStudentLevel('vip'); // Resetear
+                    setNewStudentLevel('vip');
                 } catch (error) { alert("Error al agregar: " + error.message); }
             };
 
@@ -129,11 +162,8 @@
             };
 
             const handleChangeLevel = async (id, newLevel) => {
-                try {
-                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'students', id), { level: newLevel });
-                } catch (error) {
-                    alert("Error al cambiar nivel: " + error.message);
-                }
+                try { await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'students', id), { level: newLevel }); } 
+                catch (error) { alert("Error al cambiar nivel: " + error.message); }
             };
 
             const copyLink = (name, id) => {
@@ -143,12 +173,82 @@
                 setTimeout(() => setCopiedId(null), 2000);
             };
 
+            // FUNCIONES DE EVALUACIÓN
+            const openEvaluation = (student) => {
+                setEvalSkills(student.skills || { speaking: 0, listening: 0, reading: 0, grammar: 0, vocabulary: 0 });
+                setEvalModal(student);
+            };
+
+            const saveEvaluation = async () => {
+                if (!evalModal) return;
+                try {
+                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'students', evalModal.id), { skills: evalSkills });
+                    setEvalModal(null);
+                } catch (error) { alert("Error guardando evaluación: " + error.message); }
+            };
+
             const filteredStudents = activeTab === 'all' 
                 ? students 
-                : students.filter(s => (s.level || 'vip') === activeTab); // Asumimos VIP si es viejo y no tiene nivel
+                : students.filter(s => (s.level || 'vip') === activeTab);
 
             return (
                 <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 transition-colors duration-300">
+                    
+                    {/* MODAL DE EVALUACIÓN (RADAR) */}
+                    {evalModal && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in zoom-in-95 duration-200">
+                            <div className="bg-white dark:bg-zinc-900 rounded-[2rem] shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200 dark:border-zinc-800 flex flex-col">
+                                <div className="p-6 border-b border-slate-200 dark:border-zinc-800 flex justify-between items-start bg-slate-50 dark:bg-zinc-950">
+                                    <div>
+                                        <h3 className="text-2xl font-black text-slate-800 dark:text-white flex items-center gap-2"><Activity className="text-indigo-500"/> Evaluar Alumno</h3>
+                                        <p className="font-bold text-slate-500 dark:text-zinc-400 mt-1">{evalModal.name}</p>
+                                    </div>
+                                    <button onClick={() => setEvalModal(null)} className="p-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 rounded-full transition-colors"><X size={20}/></button>
+                                </div>
+                                
+                                <div className="p-6 space-y-6">
+                                    {/* Mostrar Arquetipo en Vivo */}
+                                    <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800 rounded-xl p-4 text-center">
+                                        <p className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-1">Arquetipo Actual</p>
+                                        <h4 className={`text-xl font-black ${calculateArchetype(evalSkills).color}`}>{calculateArchetype(evalSkills).name}</h4>
+                                        <p className="text-sm font-medium text-slate-600 dark:text-zinc-400 mt-1">{calculateArchetype(evalSkills).desc}</p>
+                                        <div className="mt-3 font-black text-lg text-indigo-900 dark:text-indigo-300">
+                                            {parseInt(evalSkills.speaking)+parseInt(evalSkills.listening)+parseInt(evalSkills.reading)+parseInt(evalSkills.grammar)+parseInt(evalSkills.vocabulary)} <span className="text-sm opacity-50">/ 50 pts</span>
+                                        </div>
+                                    </div>
+
+                                    {/* Sliders */}
+                                    <div className="space-y-4">
+                                        {[
+                                            { id: 'speaking', icon: MessageCircle, label: 'Speaking (Fluidez)', color: 'text-emerald-500' },
+                                            { id: 'listening', icon: Ear, label: 'Listening (Oído)', color: 'text-cyan-500' },
+                                            { id: 'reading', icon: BookOpen, label: 'Reading (Lectura)', color: 'text-blue-500' },
+                                            { id: 'grammar', icon: PenTool, label: 'Grammar (Estructura)', color: 'text-purple-500' },
+                                            { id: 'vocabulary', icon: Brain, label: 'Vocabulary (Léxico)', color: 'text-rose-500' },
+                                        ].map(skill => (
+                                            <div key={skill.id}>
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <label className={`text-xs font-bold uppercase tracking-widest flex items-center gap-1.5 ${skill.color}`}><skill.icon size={14}/> {skill.label}</label>
+                                                    <span className="font-black text-sm w-6 text-right text-slate-700 dark:text-slate-300">{evalSkills[skill.id]}</span>
+                                                </div>
+                                                <input 
+                                                    type="range" min="0" max="10" step="1" 
+                                                    value={evalSkills[skill.id]} 
+                                                    onChange={e => setEvalSkills({...evalSkills, [skill.id]: e.target.value})} 
+                                                    className="w-full"
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="p-6 bg-slate-50 dark:bg-zinc-950 border-t border-slate-200 dark:border-zinc-800 flex justify-end gap-3">
+                                    <button onClick={() => setEvalModal(null)} className="px-5 py-2.5 rounded-xl font-bold text-slate-500 hover:bg-slate-200 dark:hover:bg-zinc-800 transition-colors">Cancelar</button>
+                                    <button onClick={saveEvaluation} className="px-6 py-2.5 rounded-xl font-black bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg flex items-center gap-2"><Save size={18}/> Guardar Perfil</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     <header className="bg-white dark:bg-zinc-900 shadow-sm border-b border-slate-200 dark:border-zinc-800 sticky top-0 z-40">
                         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
                             <div className="flex items-center gap-3">
@@ -171,7 +271,6 @@
                     </header>
 
                     <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-                        {/* SECCIÓN DE REGISTRO */}
                         <div className="bg-white dark:bg-zinc-900 rounded-3xl shadow-xl border border-slate-200 dark:border-zinc-800 p-6 sm:p-8 mb-8">
                             <h2 className="text-lg font-black mb-4 flex items-center gap-2 text-slate-800 dark:text-white"><UserPlus className="text-indigo-500"/> Registrar Nuevo Alumno</h2>
                             <form onSubmit={handleAddStudent} className="flex flex-col gap-4">
@@ -180,7 +279,6 @@
                                     <button type="submit" disabled={!newStudentName.trim()} className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-6 py-3 rounded-xl font-black uppercase tracking-widest shadow-lg transition-colors flex items-center justify-center gap-2 shrink-0"><Plus size={18}/> <span className="hidden sm:inline">Agregar</span></button>
                                 </div>
                                 
-                                {/* SELECTOR DE NIVEL RÁPIDO */}
                                 <div className="flex flex-wrap items-center gap-2 sm:gap-4 mt-2">
                                     <span className="text-xs font-bold text-slate-400 uppercase tracking-widest mr-2">Nivel:</span>
                                     {LEVELS.filter(l => l.id !== 'all').map(lvl => (
@@ -195,7 +293,6 @@
                             </form>
                         </div>
 
-                        {/* SISTEMA DE PESTAÑAS (TABS) */}
                         <div className="flex overflow-x-auto custom-scrollbar mb-6 gap-2 pb-2">
                             {LEVELS.map(tab => {
                                 const count = tab.id === 'all' ? students.length : students.filter(s => (s.level || 'vip') === tab.id).length;
@@ -218,38 +315,58 @@
                             </div>
                         ) : (
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {filteredStudents.map(student => (
-                                    <div key={student.id} className={`rounded-2xl p-5 border shadow-sm flex flex-col justify-between group hover:shadow-md transition-shadow relative overflow-hidden ${student.color ? student.color : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800'}`}>
-                                        
-                                        <div className="flex justify-between items-start mb-4 relative z-10">
-                                            <div>
-                                                <div className="flex items-center gap-1.5 mb-1 opacity-70">
-                                                    <Hash size={12}/>
-                                                    <span className="text-[10px] font-black tracking-widest">{student.folio || '0000'}</span>
+                                {filteredStudents.map(student => {
+                                    const archetype = student.skills ? calculateArchetype(student.skills) : { name: "No evaluado", color: "text-slate-400" };
+                                    const totalScore = student.skills ? parseInt(student.skills.speaking)+parseInt(student.skills.listening)+parseInt(student.skills.reading)+parseInt(student.skills.grammar)+parseInt(student.skills.vocabulary) : 0;
+                                    
+                                    return (
+                                        <div key={student.id} className={`rounded-2xl p-5 border shadow-sm flex flex-col justify-between group hover:shadow-md transition-shadow relative overflow-hidden ${student.color ? student.color : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800'}`}>
+                                            
+                                            <div className="flex justify-between items-start mb-2 relative z-10">
+                                                <div>
+                                                    <div className="flex items-center gap-1.5 mb-1 opacity-70">
+                                                        <Hash size={12}/>
+                                                        <span className="text-[10px] font-black tracking-widest">{student.folio || '0000'}</span>
+                                                    </div>
+                                                    <h3 className="font-black text-xl truncate pr-2" title={student.name}>{student.name}</h3>
                                                 </div>
-                                                <h3 className="font-black text-xl truncate pr-2" title={student.name}>{student.name}</h3>
+                                                <button onClick={() => handleDeleteStudent(student.id, student.name)} className="opacity-50 hover:opacity-100 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
                                             </div>
-                                            <button onClick={() => handleDeleteStudent(student.id, student.name)} className="opacity-50 hover:opacity-100 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
-                                        </div>
 
-                                        {/* SELECTOR PARA CAMBIAR EL NIVEL DEL ALUMNO EXISTENTE */}
-                                        <div className="mb-6 relative z-10">
-                                            <select 
-                                                value={student.level || 'vip'} 
-                                                onChange={(e) => handleChangeLevel(student.id, e.target.value)}
-                                                className="w-full bg-white/50 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-lg px-2 py-1 text-xs font-bold outline-none cursor-pointer appearance-none"
-                                            >
-                                                {LEVELS.filter(l => l.id !== 'all').map(lvl => (
-                                                    <option key={lvl.id} value={lvl.id} className="bg-white dark:bg-zinc-900 text-slate-800 dark:text-white">{lvl.name}</option>
-                                                ))}
-                                            </select>
+                                            {/* INFO DEL ARQUETIPO Y BOTÓN EVALUAR */}
+                                            <div className="mb-4 flex items-center justify-between bg-white/40 dark:bg-black/20 p-2 rounded-xl">
+                                                <div className="flex flex-col">
+                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${archetype.color}`}>{archetype.name}</span>
+                                                    {student.skills ? (
+                                                        <div className="flex items-center gap-1 mt-0.5 opacity-60">
+                                                            <div className="w-16 h-1.5 bg-black/10 dark:bg-white/10 rounded-full overflow-hidden"><div className="h-full bg-current" style={{width: `${(totalScore/50)*100}%`}}></div></div>
+                                                            <span className="text-[9px] font-bold">{totalScore}/50</span>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-[9px] font-bold opacity-60 mt-0.5">Pendiente</span>
+                                                    )}
+                                                </div>
+                                                <button onClick={() => openEvaluation(student)} className="p-1.5 bg-white/50 dark:bg-black/30 hover:bg-white dark:hover:bg-black/60 rounded-lg transition-colors"><Activity size={16}/></button>
+                                            </div>
+
+                                            <div className="mb-4 relative z-10">
+                                                <select 
+                                                    value={student.level || 'vip'} 
+                                                    onChange={(e) => handleChangeLevel(student.id, e.target.value)}
+                                                    className="w-full bg-white/50 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs font-bold outline-none cursor-pointer appearance-none"
+                                                >
+                                                    {LEVELS.filter(l => l.id !== 'all').map(lvl => (
+                                                        <option key={lvl.id} value={lvl.id} className="bg-white dark:bg-zinc-900 text-slate-800 dark:text-white">{lvl.name}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            
+                                            <button onClick={() => copyLink(student.name, student.id)} className={`w-full py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all border-2 z-10 bg-white/50 dark:bg-black/20 hover:bg-white/80 dark:hover:bg-black/40 border-transparent`}>
+                                                {copiedId === student.id ? <><CheckCircle2 size={16}/> Copiado</> : <><LinkIcon size={16}/> Copiar Agenda</>}
+                                            </button>
                                         </div>
-                                        
-                                        <button onClick={() => copyLink(student.name, student.id)} className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all border-2 z-10 bg-white/50 dark:bg-black/20 hover:bg-white/80 dark:hover:bg-black/40 border-transparent`}>
-                                            {copiedId === student.id ? <><CheckCircle2 size={16}/> Enlace Copiado</> : <><LinkIcon size={16}/> Copiar Link Agenda</>}
-                                        </button>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         )}
                     </main>
