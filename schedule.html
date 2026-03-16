@@ -68,13 +68,11 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // FORZAR HORA MÉXICO PARA EL RELOJ
         const getMexicoTime = () => {
             const mxString = new Date().toLocaleString("en-US", { timeZone: "America/Mexico_City" });
             return new Date(mxString);
         };
 
-        // LECTOR LOCAL DE FECHAS
         const parseLocal = (dateStr) => {
             if (!dateStr) return new Date();
             const [y, m, d] = dateStr.split('-');
@@ -84,19 +82,25 @@
         const TIMES = ['07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00'];
         const formatTimeDisplay = (time24) => { const h = parseInt(time24.split(':')[0], 10); return `${h % 12 || 12}:00 ${h >= 12 ? 'pm' : 'am'}`; };
         
-        // NORMALIZADOR PARA COMPARACIÓN ESTRICTA
         const normalizeName = (name) => name ? name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim() : "";
 
-        // FIX: COMPROBADOR DE IDENTIDAD BLINDADO (No más "Ana" cruzándose con "Mariana")
+        // TRADUCTOR DE DÍAS PARA FANTASMAS (SAB -> SÁB, MIER -> MIÉ)
+        const matchDays = (dbDay, gridDay) => {
+            if (!dbDay || !gridDay) return false;
+            let d1 = dbDay.toUpperCase().replace(/\./g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            let d2 = gridDay.toUpperCase().replace(/\./g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            if (d1 === 'MIER') d1 = 'MIE';
+            if (d2 === 'MIER') d2 = 'MIE';
+            return d1 === d2;
+        };
+
         const checkIsMine = (event, studentName) => {
             if (!event || !studentName) return false;
             const sn = normalizeName(studentName);
             const evStudent = normalizeName(event.student);
             
-            // Si el campo explícito de estudiante coincide, es de él.
             if (evStudent === sn && sn !== "") return true;
             
-            // Si no hay student (agendado viejo), verificamos el título, pero de forma exacta.
             const evTitle = normalizeName(event.title).replace("clase de ", "").trim();
             const snFirstName = sn.split(' ')[0];
             const titleFirstName = evTitle.split(' ')[0];
@@ -104,7 +108,6 @@
             if (evTitle === sn || evTitle === snFirstName || titleFirstName === snFirstName) {
                 return true;
             }
-            
             return false;
         };
 
@@ -177,7 +180,7 @@
                 await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'notifications'), { message, createdAt: serverTimestamp(), read: false });
             };
 
-            // RESTAURADO: ALGORITMO ACUSÓN (CON REGLAS ESTRICTAS DE CUPOS)
+            // ALGORITMO ACUSÓN RESTAURADO CON MATCHDAYS
             const canBookMore = (targetDateStr, currentStudentName) => {
                 const myEvents = events.filter(e => checkIsMine(e, currentStudentName));
                 
@@ -185,7 +188,7 @@
                 const dayName = format(targetDate, 'EEE', {locale:es}).toUpperCase().replace('.','');
                 
                 // Regla 1: Límite Diario (1 al día)
-                const hasClassToday = myEvents.some(e => e.date === targetDateStr || (!e.date && e.day === dayName));
+                const hasClassToday = myEvents.some(e => e.date === targetDateStr || (!e.date && matchDays(e.day, dayName)));
                 if (hasClassToday) { 
                     alert("⚠️ Ya tienes una clase agendada para este día. El límite es 1 clase por día."); 
                     return false; 
@@ -220,7 +223,8 @@
                 return true;
             };
 
-            const getEventForSlot = (dateStr, dayName, time) => events.find(e => (e.date === dateStr && e.time === time) || (!e.date && e.day === dayName && e.time === time));
+            // SE BUSCAN EVENTOS USANDO EL TRADUCTOR DE DÍAS
+            const getEventForSlot = (dateStr, dayName, time) => events.find(e => (e.date === dateStr && e.time === time) || (!e.date && matchDays(e.day, dayName) && e.time === time));
 
             const handleSlotClick = (dateStr, dayName, time) => {
                 const existing = getEventForSlot(dateStr, dayName, time);
