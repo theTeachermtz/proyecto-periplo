@@ -11,6 +11,15 @@
         document.documentElement.classList.add('dark');
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/default.css">
+    <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/index.min.js"></script>
+    <script>
+        window.onload = function() {
+            MobileDragDrop.polyfill({ holdToDrag: 400 }); 
+        };
+    </script>
+
     <script type="importmap">
     {
       "imports": {
@@ -18,6 +27,8 @@
         "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
         "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
         "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "date-fns": "https://esm.sh/date-fns@2.30.0",
+        "date-fns/locale": "https://esm.sh/date-fns@2.30.0/locale",
         "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
         "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
       }
@@ -26,19 +37,35 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap'); 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow-x: hidden; }
         .fade-in { animation: fadeIn 0.4s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .circle-transition { transition: stroke-dashoffset 1.5s ease-out; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         
-        /* Animación sutil de latido para invitar al clic */
         @keyframes pulse-ring {
             0% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.6); }
             70% { box-shadow: 0 0 0 12px rgba(79, 70, 229, 0); }
             100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); }
         }
         .animate-invite { animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+        /* Estilos específicos del Calendario */
+        .sticky-col { position: sticky; left: 0; z-index: 20; }
+        .sticky-corner { position: sticky; left: 0; top: 0; z-index: 40; }
+        .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px); background-attachment: local; line-height: 32px; padding-top: 6px; }
+        .dark .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #3f3f46 31px, #3f3f46 32px); }
+        .draggable-item { touch-action: pan-x pan-y; -webkit-user-drag: element; }
+        @keyframes led-glow {
+            0% { box-shadow: 0 0 4px rgba(16,185,129,0.5), 0 0 8px rgba(16,185,129,0.3); }
+            50% { box-shadow: 0 0 10px rgba(16,185,129,1), 0 0 20px rgba(16,185,129,0.8); }
+            100% { box-shadow: 0 0 4px rgba(16,185,129,0.5), 0 0 8px rgba(16,185,129,0.3); }
+        }
+        .led-line { position: absolute; left: 0; width: 100%; height: 2px; background-color: #10b981; animation: led-glow 1.5s infinite alternate; z-index: 30; pointer-events: none; }
+        
+        /* Scroll custom para el calendario interno */
+        .cal-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+        .cal-scroll::-webkit-scrollbar-thumb { background: #52525b; border-radius: 4px; }
     </style>
 </head>
 <body class="bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 min-h-screen font-sans">
@@ -48,8 +75,10 @@
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Loader2, Calendar, Video, Trophy, Target, Sparkles, Brain, Key, PenTool, Flame, Lock, ChevronRight, BarChart, BookOpen, Palette, Home, Gamepad2, Library, Quote, Music, Play } from 'lucide-react';
+        import { getFirestore, doc, getDoc, collection, onSnapshot, addDoc, deleteDoc, updateDoc, query, serverTimestamp } from 'firebase/firestore';
+        import { format, startOfWeek, addDays, isSameDay, addWeeks, isAfter } from 'date-fns';
+        import { es } from 'date-fns/locale';
+        import { Loader2, Calendar, Video, Trophy, Target, Sparkles, Brain, Key, PenTool, Flame, Lock, ChevronRight, BarChart, BookOpen, Palette, Home, Gamepad2, Library, Quote, Music, Play, ChevronLeft, X, Clock, ArrowRightLeft, Save, ZoomIn, ZoomOut, LocateFixed, UserPlus } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -57,6 +86,7 @@
 
         const LEVEL_HIERARCHY = ['basic', 'advanced', 'pro'];
 
+        // --- ALGORITMOS MAESTROS ---
         const calculateArchetype = (s) => {
             if (!s) return { name: "Limbo / Por Evaluar", desc: "Realiza la evaluación para perfilar.", color: "text-slate-400" };
             const total = (parseInt(s.speaking)||0) + (parseInt(s.listening)||0) + (parseInt(s.reading)||0) + (parseInt(s.grammar)||0) + (parseInt(s.vocabulary)||0) + (parseInt(s.pronunciation)||0);
@@ -75,17 +105,13 @@
 
             return (
                 <button onClick={onClick} className="flex flex-col items-center bg-white dark:bg-zinc-900/50 p-4 rounded-3xl border border-slate-200 dark:border-zinc-800/50 relative overflow-hidden shadow-sm hover:shadow-md hover:border-indigo-500/50 transition-all w-36 group">
-                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-indigo-500">
-                        <Gamepad2 size={14}/>
-                    </div>
+                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-indigo-500"><Gamepad2 size={14}/></div>
                     <div className="relative w-24 h-24 flex items-center justify-center">
                         <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                             <circle cx="50" cy="50" r={radius} stroke="currentColor" strokeWidth="8" fill="transparent" className="text-slate-100 dark:text-zinc-800" />
                             <circle cx="50" cy="50" r={radius} stroke={strokeColor} strokeWidth="8" fill="transparent" strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" className="circle-transition" />
                         </svg>
-                        <div className="absolute flex flex-col items-center">
-                            <span className="text-xl font-black text-slate-800 dark:text-white">{score}</span>
-                        </div>
+                        <div className="absolute flex flex-col items-center"><span className="text-xl font-black text-slate-800 dark:text-white">{score}</span></div>
                     </div>
                     <div className={`mt-3 flex flex-col items-center gap-1 ${colorClass}`}>
                         <Icon size={16} />
@@ -95,6 +121,9 @@
             );
         };
 
+        // ==========================================
+        // VISTA: HOME
+        // ==========================================
         const HomeView = ({ student, setTab }) => (
             <div className="space-y-6 fade-in">
                 <div className="bg-gradient-to-br from-indigo-600 to-purple-800 p-8 sm:p-10 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden">
@@ -118,10 +147,10 @@
                         <div className="bg-white dark:bg-zinc-900 rounded-[2rem] p-6 shadow-xl border border-slate-200 dark:border-zinc-800 flex items-center justify-between">
                             <div className="flex items-center gap-4">
                                 <div className="bg-indigo-100 dark:bg-indigo-500/20 p-4 rounded-2xl text-indigo-600 dark:text-indigo-400"><Calendar size={24} /></div>
-                                <div><h3 className="font-black text-slate-800 dark:text-white text-lg">Próxima Sesión</h3><p className="text-slate-500 dark:text-zinc-400 text-xs font-bold uppercase tracking-widest">Viernes, 5:00 PM (EST)</p></div>
+                                <div><h3 className="font-black text-slate-800 dark:text-white text-lg">Tu Agenda</h3><p className="text-slate-500 dark:text-zinc-400 text-xs font-bold uppercase tracking-widest">Reserva y ve tus clases</p></div>
                             </div>
-                            <button className="bg-indigo-600 hover:bg-indigo-500 text-white font-black p-4 rounded-xl transition-transform active:scale-95 shadow-lg shadow-indigo-500/30">
-                                <Video size={20} />
+                            <button onClick={() => setTab('schedule')} className="bg-indigo-600 hover:bg-indigo-500 text-white font-black p-4 rounded-xl transition-transform active:scale-95 shadow-lg shadow-indigo-500/30">
+                                <ChevronRight size={20} />
                             </button>
                         </div>
 
@@ -149,15 +178,11 @@
                             <p className="text-xl sm:text-2xl font-black text-slate-800 dark:text-amber-50 leading-tight relative z-10">"A smooth sea never made a skilled sailor."</p>
                             <p className="text-amber-600 dark:text-amber-400 font-bold text-sm mt-4">— Franklin D. Roosevelt</p>
                         </div>
-
                         <div className="bg-slate-900 rounded-[2rem] p-6 shadow-xl relative overflow-hidden flex flex-col justify-between min-h-[160px] group cursor-pointer border border-slate-800">
                             <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500 rounded-full blur-[60px] opacity-40 group-hover:opacity-60 transition-opacity"></div>
                             <h4 className="text-[10px] font-black text-rose-400 uppercase tracking-widest flex items-center gap-2"><Music size={14}/> Song of the week</h4>
                             <div className="flex items-end justify-between relative z-10 mt-4">
-                                <div>
-                                    <p className="text-white font-black text-xl leading-tight">Blinding Lights</p>
-                                    <p className="text-slate-400 font-bold text-sm">The Weeknd</p>
-                                </div>
+                                <div><p className="text-white font-black text-xl leading-tight">Blinding Lights</p><p className="text-slate-400 font-bold text-sm">The Weeknd</p></div>
                                 <div className="bg-white text-black p-3 rounded-full hover:scale-110 transition-transform"><Play size={20} fill="currentColor"/></div>
                             </div>
                         </div>
@@ -166,6 +191,9 @@
             </div>
         );
 
+        // ==========================================
+        // VISTA: PERFORMANCE (Gráficas)
+        // ==========================================
         const PerformanceView = ({ student, evalData, setTab }) => {
             const [activeTrack, setActiveTrack] = useState(student?.level || 'basic');
             const [chartView, setChartView] = useState('radar'); 
@@ -182,8 +210,12 @@
                 else if(section === 'verbs') {
                     if(activeTrack === 'basic') Object.values(evalData['verbs']?.skills || {}).forEach(v => points += (v===2?1:v===1?0.5:0));
                     else ['v_reg','v_irreg','v_part','v_phrasal','v_phrasal2','v_idioms','v_sayings','v_colloc'].forEach(k => { Object.values(evalData[k]?.skills || {}).forEach(v => points += (v===2?1:v===1?0.5:0)); });
+                } else if(section === 'nouns') {
+                    ['n_b_1','n_b_2','n_b_3','n_b_4','n_b_5','n_a_1','n_a_2','n_a_3','n_a_4','n_a_5','n_p_1','n_p_2','n_p_3','n_p_4','n_p_5'].forEach(k => { Object.values(evalData[k]?.skills || {}).forEach(v => points += (v===2?1:v===1?0.5:0)); });
+                } else if(section === 'adjectives') {
+                    ['adj_1','adj_2','adj_3','adj_4','adj_5','adj_a_1','adj_a_2','adj_a_3','adj_a_4','adj_a_5'].forEach(k => { Object.values(evalData[k]?.skills || {}).forEach(v => points += (v===2?1:v===1?0.5:0)); });
                 } else {
-                    Object.keys(evalData).forEach(k => { if(k!=='verbs' && k!=='key_structs' && !k.startsWith('v_')) Object.values(evalData[k]?.skills || {}).forEach(v => points += (v===2?1:v===1?0.5:0)); });
+                    Object.keys(evalData).forEach(k => { if(k!=='verbs' && k!=='key_structs' && !k.startsWith('v_') && !k.startsWith('n_') && !k.startsWith('adj_')) Object.values(evalData[k]?.skills || {}).forEach(v => points += (v===2?1:v===1?0.5:0)); });
                 }
                 const rawScore = (points / totalItems) * 10;
                 return Math.min(10, Math.round(rawScore * 10) / 10); 
@@ -212,10 +244,8 @@
                         data: {
                             labels: ['Speaking', 'Listening', 'Reading', 'Grammar', 'Vocabulary', 'Pronunc.'],
                             datasets: [{
-                                data: dataValues,
-                                backgroundColor: chartView === 'bar' ? 'rgba(245, 158, 11, 0.8)' : 'rgba(245, 158, 11, 0.2)',
-                                borderColor: 'rgba(245, 158, 11, 1)', pointBackgroundColor: '#f59e0b', pointBorderColor: '#fff', borderWidth: 2,
-                                borderRadius: chartView === 'bar' ? 4 : 0, 
+                                data: dataValues, backgroundColor: chartView === 'bar' ? 'rgba(245, 158, 11, 0.8)' : 'rgba(245, 158, 11, 0.2)',
+                                borderColor: 'rgba(245, 158, 11, 1)', pointBackgroundColor: '#f59e0b', pointBorderColor: '#fff', borderWidth: 2, borderRadius: chartView === 'bar' ? 4 : 0, 
                             }]
                         },
                         options: chartView === 'radar' 
@@ -229,11 +259,6 @@
             const isLocked = LEVEL_HIERARCHY.indexOf(activeTrack) > LEVEL_HIERARCHY.indexOf(student?.level || 'basic');
             const archetypeData = calculateArchetype(student?.skills);
             const macroTotal = getSkill('speaking') + getSkill('listening') + getSkill('reading') + getSkill('grammar') + getSkill('vocabulary') + getSkill('pronunciation');
-
-            const handleRingClick = (area) => {
-                alert(`Llevando al alumno al Playground para jugar la categoría: ${area}`);
-                setTab('playground');
-            };
 
             return (
                 <div className="space-y-6 fade-in">
@@ -249,7 +274,6 @@
                                 <span className="text-[10px] text-slate-400 uppercase font-bold tracking-widest">Global Pts</span>
                             </div>
                         </div>
-                        
                         <div className="w-full flex flex-col items-center relative">
                             <div className="w-full flex justify-between items-center mb-6">
                                 <h3 className="font-black text-slate-300 uppercase tracking-widest text-xs flex items-center gap-2"><Target className="text-amber-500" size={16}/> Balance de Habilidades</h3>
@@ -277,17 +301,16 @@
                         <div className="bg-white dark:bg-zinc-900 rounded-[2.5rem] p-6 sm:p-8 shadow-lg border border-slate-200 dark:border-zinc-800 animate-in fade-in">
                             <div className="flex flex-col sm:flex-row justify-between items-center mb-8 gap-4">
                                 <h3 className="font-black text-slate-800 dark:text-white uppercase tracking-widest text-xs flex items-center gap-2"><Sparkles className="text-indigo-500" size={16}/> Hacia {activeTrack.toUpperCase()} Mastery</h3>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-100 dark:bg-zinc-800 px-3 py-1.5 rounded-lg">Selecciona un área para practicar 👇</p>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-100 dark:bg-zinc-800 px-3 py-1.5 rounded-lg">Click para practicar un área 👇</p>
                             </div>
-                            
                             <div className="flex flex-wrap justify-center gap-4 sm:gap-6">
-                                <CircularProgress score={getRealScore('grammar')} label="Grammar Core" colorClass="text-emerald-500" strokeColor="#10b981" icon={PenTool} onClick={() => handleRingClick('grammar')}/>
-                                <CircularProgress score={getRealScore('verbs')} label="Verb Mastery" colorClass="text-rose-500" strokeColor="#f43f5e" icon={Brain} onClick={() => handleRingClick('verbs')}/>
-                                <CircularProgress score={getRealScore('nouns')} label="Noun Mastery" colorClass="text-sky-500" strokeColor="#0ea5e9" icon={BookOpen} onClick={() => handleRingClick('nouns')}/>
+                                <CircularProgress score={getRealScore('grammar')} label="Grammar Core" colorClass="text-emerald-500" strokeColor="#10b981" icon={PenTool} onClick={() => setTab('playground')}/>
+                                <CircularProgress score={getRealScore('verbs')} label="Verb Mastery" colorClass="text-rose-500" strokeColor="#f43f5e" icon={Brain} onClick={() => setTab('playground')}/>
+                                <CircularProgress score={getRealScore('nouns')} label="Noun Mastery" colorClass="text-sky-500" strokeColor="#0ea5e9" icon={BookOpen} onClick={() => setTab('playground')}/>
                                 {(activeTrack === 'basic' || activeTrack === 'advanced') && (
-                                    <CircularProgress score={getRealScore('adjectives')} label={activeTrack === 'advanced' ? "Adjectives 2.0" : "Adj. Mastery"} colorClass="text-pink-500" strokeColor="#ec4899" icon={Palette} onClick={() => handleRingClick('adjectives')}/>
+                                    <CircularProgress score={getRealScore('adjectives')} label={activeTrack === 'advanced' ? "Adjectives 2.0" : "Adj. Mastery"} colorClass="text-pink-500" strokeColor="#ec4899" icon={Palette} onClick={() => setTab('playground')}/>
                                 )}
-                                <CircularProgress score={getRealScore('key_structs')} label="Structures" colorClass="text-indigo-500" strokeColor="#6366f1" icon={Key} onClick={() => handleRingClick('key_structs')}/>
+                                <CircularProgress score={getRealScore('key_structs')} label="Structures" colorClass="text-indigo-500" strokeColor="#6366f1" icon={Key} onClick={() => setTab('playground')}/>
                             </div>
                         </div>
                     )}
@@ -295,6 +318,355 @@
             );
         };
 
+        // ==========================================
+        // VISTA 3: AGENDA (Calendario Interno Drag & Drop)
+        // ==========================================
+        
+        // Funciones Helper para Fechas
+        const getMexicoTime = () => new Date(new Date().toLocaleString("en-US", { timeZone: "America/Mexico_City" }));
+        const getInitialDate = () => { const t = getMexicoTime(); if (t.getDay() === 0) return addDays(t, 1); return t; };
+        const parseLocal = (dateStr) => { if (!dateStr) return new Date(); const [y, m, d] = dateStr.split('-'); return new Date(y, m - 1, d); };
+        const TIMES = ['07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00'];
+        const formatTimeDisplay = (time24) => { const h = parseInt(time24.split(':')[0], 10); return `${h % 12 || 12}:00 ${h >= 12 ? 'pm' : 'am'}`; };
+        const normalizeName = (name) => name ? name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim() : "";
+        const matchDays = (dbDay, gridDay) => {
+            if (!dbDay || !gridDay) return false;
+            let d1 = dbDay.toUpperCase().replace(/\./g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            let d2 = gridDay.toUpperCase().replace(/\./g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            if (d1 === 'MIER') d1 = 'MIE'; if (d2 === 'MIER') d2 = 'MIE';
+            return d1 === d2;
+        };
+        const checkIsMine = (event, studentName) => {
+            if (!event || !studentName) return false;
+            const sn = normalizeName(studentName); const evStudent = normalizeName(event.student);
+            if (evStudent === sn && sn !== "") return true;
+            const evTitle = normalizeName(event.title).replace("clase de ", "").trim();
+            const snFirstName = sn.split(' ')[0]; const titleFirstName = evTitle.split(' ')[0];
+            return (evTitle === sn || evTitle === snFirstName || titleFirstName === snFirstName);
+        };
+
+        const ScheduleView = ({ student }) => {
+            const [events, setEvents] = useState([]);
+            const [studentsList, setStudentsList] = useState([]); 
+            const [currentDate, setCurrentDate] = useState(getInitialDate());
+            const [now, setNow] = useState(getMexicoTime());
+            const [zoomLevel, setZoomLevel] = useState(1);
+
+            const [bookingModal, setBookingModal] = useState(null); 
+            const [classHubModal, setClassHubModal] = useState(null); 
+            const [rescheduleMode, setRescheduleMode] = useState(null); 
+            
+            const [vocabNotes, setVocabNotes] = useState('');
+            const [grammarNotes, setGrammarNotes] = useState('');
+            const [isSavingNotes, setIsSavingNotes] = useState(false);
+            const [draggedEventId, setDraggedEventId] = useState(null);
+
+            const studentName = student?.name || "Alumno";
+
+            const scrollToCurrentTime = () => {
+                setZoomLevel(1);
+                setTimeout(() => { const liveEl = document.getElementById('live-cell'); if(liveEl) liveEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' }); }, 150);
+            };
+
+            useEffect(() => {
+                const timer = setInterval(() => setNow(getMexicoTime()), 60000);
+                const qEvents = query(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'));
+                const unsubscribeEvents = onSnapshot(qEvents, (snapshot) => {
+                    setEvents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                });
+                const qStudents = query(collection(db, 'artifacts', 'periplo-app-v1', 'students'));
+                const unsubscribeStudents = onSnapshot(qStudents, (snapshot) => {
+                    setStudentsList(snapshot.docs.map(doc => doc.data()));
+                });
+                scrollToCurrentTime();
+                return () => { clearInterval(timer); unsubscribeEvents(); unsubscribeStudents(); };
+            }, []);
+
+            const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
+            const weekDays = Array.from({ length: 6 }).map((_, i) => addDays(weekStart, i));
+            
+            const handlePrevWeek = () => setCurrentDate(addWeeks(currentDate, -1));
+            const handleNextWeek = () => {
+                const next = addWeeks(currentDate, 1);
+                if (!isAfter(next, addWeeks(getMexicoTime(), 2))) setCurrentDate(next);
+            };
+
+            const notifyTeacher = async (message) => { await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'notifications'), { message, createdAt: serverTimestamp(), read: false }); };
+
+            const canBookMore = (targetDateStr, currentStudentName) => {
+                const myEvents = events.filter(e => checkIsMine(e, currentStudentName));
+                const targetDate = parseLocal(targetDateStr);
+                const dayName = format(targetDate, 'EEE', {locale:es}).toUpperCase().replace('.','');
+                
+                const hasClassToday = myEvents.some(e => e.date === targetDateStr || (!e.date && matchDays(e.day, dayName)));
+                if (hasClassToday) { alert("⚠️ Ya tienes una clase agendada para este día. El límite es 1 por día."); return false; }
+
+                const targetWeekStart = startOfWeek(targetDate, { weekStartsOn: 1 });
+                const targetWeekEnd = addDays(targetWeekStart, 6);
+                const startStr = format(targetWeekStart, 'yyyy-MM-dd');
+                const endStr = format(targetWeekEnd, 'yyyy-MM-dd');
+
+                let countThisWeek = 0; let detectedDates = [];
+                myEvents.forEach(e => {
+                    if (!e.date) { countThisWeek++; detectedDates.push(`${e.day} (Fija)`); } 
+                    else if (e.date >= startStr && e.date <= endStr) { countThisWeek++; detectedDates.push(e.date); }
+                });
+
+                if (countThisWeek >= 3) { alert(`⚠️ Límite de 3 clases por semana.\n\nTienes en:\n➡️ ${detectedDates.join('\n➡️ ')}`); return false; }
+                return true;
+            };
+
+            const getEventForSlot = (dateStr, dayName, time) => events.find(e => (e.date === dateStr && e.time === time) || (!e.date && matchDays(e.day, dayName) && e.time === time));
+
+            const handleSlotClick = (dateStr, dayName, time) => {
+                const existing = getEventForSlot(dateStr, dayName, time);
+
+                if (rescheduleMode) {
+                    if (existing) return; 
+                    if (confirm(`¿Mover clase al ${dayName} ${dateStr} a las ${formatTimeDisplay(time)}?`)) performReschedule(dateStr, dayName, time);
+                    return;
+                }
+
+                if (existing) {
+                    if (checkIsMine(existing, studentName)) {
+                        setVocabNotes(existing.notes_vocab || '');
+                        setGrammarNotes(existing.notes_grammar || '');
+                        setClassHubModal(existing);
+                    }
+                    return;
+                }
+
+                if (canBookMore(dateStr, studentName)) {
+                    if(confirm(`¿Reservar NUEVA clase el ${dateStr} a las ${formatTimeDisplay(time)}?`)) bookClass(dateStr, dayName, time, studentName);
+                }
+            };
+
+            const handleDragStart = (e, id) => { setDraggedEventId(id); e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; };
+            
+            const handleDrop = async (e, tDate, tDay, tTime) => {
+                e.preventDefault();
+                const id = e.dataTransfer.getData('text/plain');
+                if(!id) return;
+                const evToMove = events.find(x => x.id === id);
+                if(!evToMove) return;
+
+                if(getEventForSlot(tDate, tDay, tTime)) { alert("⚠️ Ese espacio ya está ocupado."); setDraggedEventId(null); return; }
+
+                if(confirm(`¿Mover tu clase al ${tDate} a las ${formatTimeDisplay(tTime)}?`)) {
+                    try { 
+                        await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', id), { date: tDate, day: tDay, time: tTime }); 
+                        notifyTeacher(`🔄 ${studentName} arrastró su clase al ${tDate} a las ${formatTimeDisplay(tTime)}`);
+                    } catch(err) { alert(err.message); }
+                }
+                setDraggedEventId(null);
+            };
+
+            const bookClass = async (dateStr, dayName, time, name) => {
+                const sn = normalizeName(name);
+                const studentRecord = studentsList.find(s => normalizeName(s.name) === sn);
+                const studentColor = studentRecord?.color || 'bg-emerald-200 border-emerald-300 text-emerald-900 dark:bg-emerald-900/50 dark:border-emerald-500 dark:text-emerald-100'; 
+
+                try {
+                    await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), {
+                        date: dateStr, day: dayName, time, title: "Clase de " + name.split(' ')[0], student: name, type: 'class', notes: 'Agendado por alumno', 
+                        customColor: studentColor, meetLink: '' 
+                    });
+                    notifyTeacher(`📗 ${name} agendó una clase el ${dateStr} a las ${time}`);
+                } catch (e) { alert("Error: " + e.message); }
+            };
+
+            const saveNotes = async () => {
+                if(!classHubModal) return;
+                setIsSavingNotes(true);
+                try {
+                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', classHubModal.id), { notes_vocab: vocabNotes, notes_grammar: grammarNotes });
+                    setTimeout(() => setIsSavingNotes(false), 500);
+                } catch (e) { alert(e.message); setIsSavingNotes(false); }
+            };
+
+            const cancelClass = async () => {
+                if (!classHubModal) return;
+                if (confirm("¿Seguro que quieres CANCELAR esta clase? El espacio quedará libre.")) {
+                    try {
+                        await deleteDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', classHubModal.id));
+                        notifyTeacher(`🚨 ${studentName} CANCELÓ su clase del ${classHubModal.date || classHubModal.day} a las ${classHubModal.time}`);
+                        setClassHubModal(null);
+                    } catch (e) { alert("Error: " + e.message); }
+                }
+            };
+
+            const initReschedule = () => { setRescheduleMode(classHubModal); setClassHubModal(null); };
+
+            const performReschedule = async (newDate, newDayName, newTime) => {
+                if (!rescheduleMode) return;
+                try {
+                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', rescheduleMode.id), { date: newDate, day: newDayName, time: newTime });
+                    notifyTeacher(`🔄 ${studentName} MOVIÓ su clase al ${newDate} a las ${newTime}`);
+                    setRescheduleMode(null);
+                } catch (e) { alert("Error: " + e.message); }
+            };
+
+            return (
+                <div className="fade-in bg-white dark:bg-zinc-900 rounded-[2.5rem] shadow-xl border border-slate-200 dark:border-zinc-800 overflow-hidden relative h-[75vh] min-h-[600px] flex flex-col">
+                    
+                    {rescheduleMode && (
+                        <div className="bg-amber-500 text-white p-4 shadow-md z-50 flex justify-between items-center absolute top-0 w-full">
+                            <div className="flex items-center gap-3"><ArrowRightLeft className="animate-pulse"/><div><p className="font-black text-sm uppercase">Modo Reprogramación</p><p className="text-xs">Selecciona un espacio vacío (amarillo).</p></div></div>
+                            <button onClick={() => setRescheduleMode(null)} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-lg text-xs font-bold">Cancelar</button>
+                        </div>
+                    )}
+
+                    {/* Header del Calendario Interno */}
+                    <div className="p-4 border-b border-stone-200 dark:border-zinc-800 flex flex-wrap justify-between items-center bg-stone-50 dark:bg-zinc-950 shrink-0 z-10 gap-4">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-teal-500 p-2 rounded-xl text-white shadow-md"><Calendar size={20}/></div>
+                            <div><h2 className="text-lg font-black text-stone-800 dark:text-white leading-none">Reserva de Clases</h2><p className="text-xs font-bold text-teal-600 dark:text-teal-400 mt-1 uppercase">Límite: 3 por semana</p></div>
+                        </div>
+                        <div className="flex items-center gap-2 bg-white dark:bg-zinc-800 px-3 py-1.5 rounded-xl border border-stone-200 dark:border-zinc-700 shadow-sm">
+                            <button onClick={handlePrevWeek} className="p-1 hover:bg-stone-100 dark:hover:bg-zinc-700 rounded transition-colors"><ChevronLeft size={16}/></button>
+                            <span className="font-bold text-xs min-w-[100px] text-center capitalize">{format(weekStart, 'MMM d')} - {format(addDays(weekStart, 5), 'MMM d')}</span>
+                            <button onClick={handleNextWeek} disabled={isAfter(addWeeks(currentDate, 1), addWeeks(getMexicoTime(), 2))} className="p-1 hover:bg-stone-100 dark:hover:bg-zinc-700 rounded disabled:opacity-30"><ChevronRight size={16}/></button>
+                        </div>
+                    </div>
+
+                    {/* Grid del Calendario */}
+                    <div className="flex-1 overflow-auto p-4 cal-scroll relative bg-stone-50 dark:bg-zinc-950">
+                        <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-stone-200 dark:border-zinc-800 origin-top-left transition-transform duration-200 w-full min-w-max" style={{ zoom: zoomLevel }}>
+                            <div className="grid grid-cols-[80px_repeat(6,minmax(160px,1fr))] border-b-2 border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950 sticky top-0 z-30">
+                                <div className="sticky-corner p-4 text-center text-xs font-black text-stone-400 dark:text-zinc-500 uppercase border-r border-stone-200 dark:border-zinc-800 bg-stone-100 dark:bg-zinc-950 flex items-center justify-center">HORA</div>
+                                {weekDays.map(day => {
+                                    const isToday = isSameDay(day, now);
+                                    return (
+                                        <div key={day.toString()} className={`p-3 text-center border-r border-stone-200 dark:border-zinc-800 last:border-r-0 ${isToday ? 'bg-teal-50 dark:bg-teal-900/20' : ''}`}>
+                                            <div className={`text-[10px] font-bold uppercase ${isToday ? 'text-teal-600 dark:text-teal-400' : 'text-stone-400 dark:text-zinc-500'}`}>{format(day, 'EEE', { locale: es })}</div>
+                                            <div className={`text-lg font-black tracking-tight ${isToday ? 'text-teal-700 dark:text-teal-300' : 'text-stone-800 dark:text-zinc-300'}`}>{format(day, 'd')}</div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+
+                            <div className="divide-y divide-stone-100 dark:divide-zinc-800 relative">
+                                {TIMES.map(time => {
+                                    const currentHourStr = format(now, 'HH:00');
+                                    const isCurrentHourRow = time === currentHourStr;
+
+                                    return (
+                                        <div key={time} className="grid grid-cols-[80px_repeat(6,minmax(160px,1fr))] h-[110px] relative">
+                                            <div className={`sticky-col p-2 text-xs font-black flex items-center justify-center border-r border-stone-200 dark:border-zinc-800 backdrop-blur-sm ${isCurrentHourRow ? 'bg-teal-100 dark:bg-teal-900/60 text-teal-700 dark:text-teal-300' : 'bg-stone-50 dark:bg-zinc-950/90 text-stone-400 dark:text-zinc-500'}`}><span>{formatTimeDisplay(time)}</span></div>
+                                            {weekDays.map(day => {
+                                                const dateStr = format(day, 'yyyy-MM-dd');
+                                                const dayName = format(day, 'EEE', {locale: es}).toUpperCase().replace('.',''); 
+                                                const event = getEventForSlot(dateStr, dayName, time);
+                                                const isMine = checkIsMine(event, studentName);
+                                                
+                                                const isToday = isSameDay(day, now);
+                                                const isLiveCell = isToday && isCurrentHourRow;
+                                                const currentMinutePercent = (now.getMinutes() / 60) * 100;
+                                                
+                                                let cellClass = `relative p-1 border-r border-stone-100 dark:border-zinc-800 last:border-r-0 transition-all duration-200 group overflow-hidden ${isToday ? 'bg-teal-50/30 dark:bg-teal-900/5' : ''}`;
+                                                let cellContent = null;
+
+                                                if (rescheduleMode) {
+                                                    if (event) cellClass += " bg-stone-100 dark:bg-zinc-950 opacity-30 cursor-not-allowed";
+                                                    else {
+                                                        cellClass += " cursor-pointer bg-amber-50 dark:bg-amber-900/10 hover:bg-amber-100 border-amber-200";
+                                                        cellContent = <div className="h-full w-full rounded-xl border-2 border-dashed border-amber-300 flex items-center justify-center animate-pulse"><span className="text-amber-600 font-bold text-xs uppercase flex items-center gap-1"><ArrowRightLeft size={14}/> Mover Aquí</span></div>;
+                                                    }
+                                                } else {
+                                                    if (event) {
+                                                        let finalColorClasses = event.customColor || 'bg-emerald-100 border-emerald-300 text-emerald-900 dark:bg-emerald-900/40 dark:border-emerald-500';
+                                                        
+                                                        if (isMine) {
+                                                            cellClass += " cursor-pointer";
+                                                            cellContent = (
+                                                                <div draggable="true" onDragStart={e=>handleDragStart(e,event.id)} onDragEnd={()=>setDraggedEventId(null)} className={`draggable-item h-full w-full rounded-xl p-2.5 border-2 shadow-md flex flex-col justify-between hover:scale-[1.02] cursor-grab active:cursor-grabbing ${draggedEventId === event.id ? 'opacity-40' : ''} ${finalColorClasses}`}>
+                                                                    <div><div className="text-[10px] font-black uppercase mb-1 flex items-center gap-1 opacity-80"><BookOpen size={10}/> MI CLASE</div><div className="text-xs md:text-sm font-bold leading-tight line-clamp-2" title={event.title}>{event.title}</div></div>
+                                                                    <span className="text-[10px] mt-2 font-bold flex items-center justify-center gap-1 bg-white/40 dark:bg-black/20 w-full py-1 rounded opacity-90"><PenTool size={10}/> Abrir / Posponer</span>
+                                                                </div>
+                                                            );
+                                                        } else {
+                                                            cellClass += " cursor-not-allowed";
+                                                            cellContent = <div className="h-full w-full bg-stone-100 dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-xl flex items-center justify-center opacity-70"><div className="flex items-center gap-1 text-stone-400 dark:text-zinc-600 font-bold text-xs uppercase"><Lock size={12}/> Ocupado</div></div>;
+                                                        }
+                                                    } else {
+                                                        cellClass += " cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20";
+                                                        cellContent = <div className="h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><div className="flex flex-col items-center gap-1 text-teal-500 dark:text-teal-400"><UserPlus size={20}/><span className="text-[10px] font-bold uppercase">Apartar</span></div></div>;
+                                                    }
+                                                }
+
+                                                return (
+                                                    <div id={isLiveCell ? "live-cell" : ""} key={`${dateStr}-${time}`} onDragEnter={e=>e.preventDefault()} onDragOver={e=>{e.preventDefault(); e.dataTransfer.dropEffect='move'}} onDrop={e=>handleDrop(e,dateStr,dayName,time)} onClick={() => handleSlotClick(dateStr, dayName, time)} className={cellClass}>
+                                                        {isLiveCell && <div className="led-line" style={{ top: `${currentMinutePercent}%` }}></div>}
+                                                        {cellContent}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Controles de Zoom */}
+                    <div className="absolute bottom-6 right-6 flex flex-col gap-2 z-40 hidden md:flex">
+                        <button onClick={() => setZoomLevel(z => Math.min(z + 0.1, 1.5))} className="p-3 bg-white dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 shadow-xl rounded-full text-stone-600 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-700 active:scale-95 transition-all"><ZoomIn size={20}/></button>
+                        <button onClick={() => setZoomLevel(z => Math.max(z - 0.1, 0.5))} className="p-3 bg-white dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 shadow-xl rounded-full text-stone-600 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-700 active:scale-95 transition-all"><ZoomOut size={20}/></button>
+                        <button onClick={scrollToCurrentTime} className="p-3 bg-teal-600 border border-teal-700 shadow-xl rounded-full text-white hover:bg-teal-700 active:scale-95 transition-all mt-2"><LocateFixed size={20}/></button>
+                    </div>
+
+                    {/* MODAL: APUNTES DE LA CLASE */}
+                    {classHubModal && (
+                        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                            <div className="bg-white dark:bg-zinc-900 rounded-[2rem] shadow-2xl w-full max-w-2xl overflow-hidden border border-stone-200 dark:border-zinc-700 flex flex-col max-h-[90%]">
+                                <div className="bg-teal-600 p-6 text-white shrink-0 flex justify-between items-start">
+                                    <div>
+                                        <h3 className="text-xl sm:text-2xl font-black">{classHubModal.title}</h3>
+                                        <p className="opacity-80 font-medium text-sm flex items-center gap-2 mt-1"><CalendarIcon size={14}/> {classHubModal.date || classHubModal.day} • {formatTimeDisplay(classHubModal.time)}</p>
+                                    </div>
+                                    <button onClick={() => setClassHubModal(null)} className="bg-black/20 hover:bg-black/40 p-2 rounded-full transition-colors"><X size={20}/></button>
+                                </div>
+
+                                <div className="p-4 sm:p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6 bg-stone-50 dark:bg-zinc-950">
+                                    <div className="flex gap-4">
+                                        {classHubModal.meetLink ? (
+                                            <a href={classHubModal.meetLink} target="_blank" className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-2xl font-black text-center shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 flex items-center justify-center gap-2 sm:text-lg">
+                                                <Video size={24}/> ENTRAR A LA CLASE
+                                            </a>
+                                        ) : (
+                                            <div className="flex-1 bg-stone-200 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400 p-4 rounded-2xl font-bold text-center border-2 border-dashed border-stone-300 dark:border-zinc-700 flex items-center justify-center gap-2">
+                                                <Clock size={20}/> El profe pondrá el link pronto
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="grid md:grid-cols-2 gap-4">
+                                        <div className="bg-yellow-50 dark:bg-zinc-900 border border-yellow-200 dark:border-zinc-700 rounded-2xl p-4 shadow-inner">
+                                            <h4 className="text-yellow-800 dark:text-yellow-500 font-black uppercase text-xs tracking-widest mb-2 flex items-center gap-2"><BookOpen size={14}/> Vocabulario</h4>
+                                            <textarea value={vocabNotes} onChange={e => setVocabNotes(e.target.value)} onBlur={saveNotes} placeholder="Anota palabras nuevas aquí..." className="w-full h-32 sm:h-48 bg-transparent outline-none resize-none text-stone-700 dark:text-stone-300 font-medium notebook-lines placeholder-yellow-800/30 dark:placeholder-zinc-600 text-sm"/>
+                                        </div>
+                                        <div className="bg-blue-50 dark:bg-zinc-900 border border-blue-200 dark:border-zinc-700 rounded-2xl p-4 shadow-inner">
+                                            <h4 className="text-blue-800 dark:text-blue-400 font-black uppercase text-xs tracking-widest mb-2 flex items-center gap-2"><PenTool size={14}/> Gramática</h4>
+                                            <textarea value={grammarNotes} onChange={e => setGrammarNotes(e.target.value)} onBlur={saveNotes} placeholder="Apuntes de reglas y estructuras..." className="w-full h-32 sm:h-48 bg-transparent outline-none resize-none text-stone-700 dark:text-stone-300 font-medium notebook-lines placeholder-blue-800/30 dark:placeholder-zinc-600 text-sm"/>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="bg-white dark:bg-zinc-900 p-4 border-t border-stone-200 dark:border-zinc-800 shrink-0 flex items-center justify-between">
+                                    <div className="text-stone-400 text-xs font-bold hidden sm:block">{isSavingNotes ? <span className="text-emerald-500">Guardando...</span> : "Notas autoguardadas."}</div>
+                                    <div className="flex gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                                        <button onClick={cancelClass} className="px-4 py-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl font-bold text-sm transition-colors border border-transparent hover:border-rose-200">Cancelar</button>
+                                        <button onClick={initReschedule} className="px-4 py-2 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 hover:bg-stone-200 dark:hover:bg-zinc-700 rounded-xl font-bold text-sm transition-colors border border-stone-200 dark:border-zinc-700">Posponer</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // ==========================================
+        // VISTAS PLACEHOLDER (Playground & Library)
+        // ==========================================
         const PlaceholderView = ({ title, icon: Icon, desc }) => (
             <div className="h-[60vh] flex flex-col items-center justify-center text-center bg-white dark:bg-zinc-900 rounded-[2.5rem] border border-slate-200 dark:border-zinc-800 shadow-xl fade-in p-6">
                 <div className="bg-indigo-50 dark:bg-indigo-900/20 p-6 rounded-full mb-6 text-indigo-500"><Icon size={64}/></div>
@@ -312,7 +684,6 @@
             const [loading, setLoading] = useState(true);
             const [currentTab, setCurrentTab] = useState('home');
             
-            // ESTADOS DEL MENÚ LATERAL (Colapsable)
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             const [hasClickedMenu, setHasClickedMenu] = useState(false);
 
@@ -344,56 +715,27 @@
             return (
                 <div className="min-h-screen flex flex-col md:flex-row bg-slate-50 dark:bg-zinc-950 overflow-x-hidden">
                     
-                    {/* SIDEBAR (Desktop) - Dinámico (Ancho 20 o 64) */}
                     <aside className={`hidden md:flex flex-col bg-white dark:bg-zinc-900 border-r border-slate-200 dark:border-zinc-800 fixed h-full z-50 transition-all duration-300 ease-in-out ${isSidebarOpen ? 'w-64' : 'w-20'}`}>
-                        
                         <div className={`p-6 pb-2 border-b border-slate-100 dark:border-zinc-800/50 flex items-center h-[88px] ${isSidebarOpen ? 'justify-start gap-3' : 'justify-center'}`}>
-                            <button 
-                                onClick={() => { setIsSidebarOpen(!isSidebarOpen); setHasClickedMenu(true); }}
-                                className={`bg-indigo-600 p-2.5 rounded-xl text-white transition-all hover:bg-indigo-500 shadow-md shrink-0 ${!hasClickedMenu ? 'animate-invite' : ''}`}
-                                title={isSidebarOpen ? "Colapsar menú" : "Expandir menú"}
-                            >
-                                <RocketIcon size={20}/>
-                            </button>
+                            <button onClick={() => { setIsSidebarOpen(!isSidebarOpen); setHasClickedMenu(true); }} className={`bg-indigo-600 p-2.5 rounded-xl text-white transition-all hover:bg-indigo-500 shadow-md shrink-0 ${!hasClickedMenu ? 'animate-invite' : ''}`} title={isSidebarOpen ? "Colapsar menú" : "Expandir menú"}><RocketIcon size={20}/></button>
                             {isSidebarOpen && <h1 className="text-xl font-black tracking-tight whitespace-nowrap fade-in">Periplo</h1>}
                         </div>
-                        
                         <nav className={`flex-1 py-4 space-y-2 overflow-y-auto no-scrollbar flex flex-col ${isSidebarOpen ? 'px-4' : 'items-center px-0'}`}>
                             {isSidebarOpen && <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-3 mb-4 mt-2 w-full fade-in">Menú Principal</div>}
-                            
                             {NAV_ITEMS.map(item => (
-                                <button 
-                                    key={item.id} 
-                                    onClick={() => setCurrentTab(item.id)}
-                                    title={!isSidebarOpen ? item.label : ''}
-                                    className={`flex items-center rounded-2xl font-bold transition-all
-                                        ${isSidebarOpen ? 'w-full px-4 py-3 gap-3 justify-start' : 'w-12 h-12 justify-center shrink-0'}
-                                        ${currentTab === item.id 
-                                            ? 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400' 
-                                            : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800/50 hover:text-slate-900 dark:hover:text-white'}`}
-                                >
+                                <button key={item.id} onClick={() => setCurrentTab(item.id)} title={!isSidebarOpen ? item.label : ''} className={`flex items-center rounded-2xl font-bold transition-all ${isSidebarOpen ? 'w-full px-4 py-3 gap-3 justify-start' : 'w-12 h-12 justify-center shrink-0'} ${currentTab === item.id ? 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400' : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800/50 hover:text-slate-900 dark:hover:text-white'}`}>
                                     <item.icon size={20} className={currentTab === item.id ? 'stroke-[2.5px] shrink-0' : 'shrink-0'}/> 
                                     {isSidebarOpen && <span className="whitespace-nowrap fade-in">{item.label}</span>}
                                 </button>
                             ))}
                         </nav>
-                        
                         <div className={`p-4 border-t border-slate-100 dark:border-zinc-800/50 flex ${isSidebarOpen ? 'items-center justify-start gap-3' : 'justify-center'}`}>
-                            <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center font-black text-slate-500 shrink-0">
-                                {student?.name?.charAt(0)}
-                            </div>
-                            {isSidebarOpen && (
-                                <div className="overflow-hidden fade-in">
-                                    <p className="text-sm font-bold truncate text-slate-800 dark:text-white">{student?.name}</p>
-                                    <p className="text-[10px] font-black text-indigo-500 uppercase tracking-widest truncate">{student?.level}</p>
-                                </div>
-                            )}
+                            <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center font-black text-slate-500 shrink-0">{student?.name?.charAt(0)}</div>
+                            {isSidebarOpen && <div className="overflow-hidden fade-in"><p className="text-sm font-bold truncate text-slate-800 dark:text-white">{student?.name}</p><p className="text-[10px] font-black text-indigo-500 uppercase tracking-widest truncate">{student?.level}</p></div>}
                         </div>
                     </aside>
 
-                    {/* MAIN CONTENT AREA - Su margen izquierdo cambia si la barra se expande */}
                     <main className={`flex-1 relative pb-24 md:pb-8 transition-all duration-300 ease-in-out ${isSidebarOpen ? 'md:ml-64' : 'md:ml-20'}`}>
-                        {/* Header móvil */}
                         <header className="md:hidden bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border-b border-slate-200 dark:border-zinc-800 sticky top-0 z-40 p-4 flex justify-between items-center">
                             <h1 className="text-lg font-black flex items-center gap-2"><RocketIcon size={20} className="text-indigo-500"/> Periplo</h1>
                             <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-zinc-800 flex items-center justify-center font-black text-indigo-600 dark:text-indigo-400 text-xs">{student?.name?.charAt(0)}</div>
@@ -402,24 +744,19 @@
                         <div className="max-w-5xl mx-auto p-4 sm:p-6 lg:p-8">
                             {currentTab === 'home' && <HomeView student={student} setTab={setCurrentTab}/>}
                             {currentTab === 'performance' && <PerformanceView student={student} evalData={evalData} setTab={setCurrentTab}/>}
-                            {currentTab === 'schedule' && <PlaceholderView title="Tu Agenda" desc="Aquí podrás reservar, modificar y ver los enlaces a tus próximas sesiones en vivo." icon={Calendar}/>}
+                            
+                            {/* AQUI RENDERIZAMOS LA AGENDA REAL */}
+                            {currentTab === 'schedule' && <ScheduleView student={student} />}
+                            
                             {currentTab === 'playground' && <PlaceholderView title="Patio de Juegos" desc="Bienvenido al Arcade. Aquí encontrarás mini-juegos diseñados para atacar directamente tus áreas de oportunidad." icon={Gamepad2}/>}
                             {currentTab === 'library' && <PlaceholderView title="La Biblioteca" desc="Recursos didácticos, PDFs y explicaciones en video sobre los temas que estamos viendo en clase." icon={Library}/>}
                         </div>
                     </main>
 
-                    {/* BOTTOM NAVIGATION (Mobile) */}
                     <nav className="md:hidden fixed bottom-0 w-full bg-white/90 dark:bg-zinc-900/90 backdrop-blur-lg border-t border-slate-200 dark:border-zinc-800 pb-safe z-50 flex justify-around px-2 py-2">
                         {NAV_ITEMS.map(item => (
-                            <button 
-                                key={item.id} 
-                                onClick={() => setCurrentTab(item.id)}
-                                className={`flex flex-col items-center justify-center w-16 h-14 rounded-2xl transition-all
-                                    ${currentTab === item.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300'}`}
-                            >
-                                <div className={`${currentTab === item.id ? 'bg-indigo-50 dark:bg-indigo-500/20 p-1.5 rounded-xl mb-1' : 'mb-1'}`}>
-                                    <item.icon size={20} className={currentTab === item.id ? 'stroke-[2.5px]' : ''}/>
-                                </div>
+                            <button key={item.id} onClick={() => setCurrentTab(item.id)} className={`flex flex-col items-center justify-center w-16 h-14 rounded-2xl transition-all ${currentTab === item.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300'}`}>
+                                <div className={`${currentTab === item.id ? 'bg-indigo-50 dark:bg-indigo-500/20 p-1.5 rounded-xl mb-1' : 'mb-1'}`}><item.icon size={20} className={currentTab === item.id ? 'stroke-[2.5px]' : ''}/></div>
                                 <span className={`text-[9px] font-bold ${currentTab === item.id ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>{item.label}</span>
                             </button>
                         ))}
