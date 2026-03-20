@@ -96,10 +96,20 @@
             const [qaMode, setQaMode] = useState(false);
             const [currentQIdx, setCurrentQIdx] = useState(0);
             const [timeLeft, setTimeLeft] = useState(12);
+            const [timerStarted, setTimerStarted] = useState(false); // NUEVO ESTADO: Botón de inicio manual
             const [showParagraphHelp, setShowParagraphHelp] = useState(false);
             const [qaFinished, setQaFinished] = useState(false);
             const [score, setScore] = useState(0);
             const timerRef = useRef(null);
+
+            // CORRECCIÓN 1: Sincronizar el estado Dark Mode con la etiqueta HTML para que Tailwind funcione en el pop-up
+            useEffect(() => {
+                if (isDarkMode) {
+                    document.documentElement.classList.add('dark');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                }
+            }, [isDarkMode]);
 
             useEffect(() => {
                 const savedTheme = localStorage.getItem('themePreference');
@@ -246,16 +256,26 @@
             const startChallenge = () => {
                 if (!currentStory.questions || currentStory.questions.length === 0) { alert("Esta lectura no tiene preguntas."); return; }
                 setQaMode(true);
-                startTimer();
+                setCurrentQIdx(0);
+                setScore(0);
+                setTimerStarted(false); // Reseteamos
+                setTimeLeft(12);
+                setShowParagraphHelp(false);
+                if (timerRef.current) clearInterval(timerRef.current);
             };
 
+            // NUEVO: Función para que el profe inicie el tiempo
             const startTimer = () => {
+                setTimerStarted(true);
                 setTimeLeft(12);
                 setShowParagraphHelp(false);
                 if (timerRef.current) clearInterval(timerRef.current);
                 timerRef.current = setInterval(() => {
                     setTimeLeft(prev => {
-                        if (prev <= 1) { clearInterval(timerRef.current); setShowParagraphHelp(true); return 0; }
+                        if (prev <= 1) { 
+                            clearInterval(timerRef.current); 
+                            return 0; // Se detiene en 0 y espera acción del profe
+                        }
                         return prev - 1;
                     });
                 }, 1000);
@@ -263,10 +283,13 @@
 
             const handleSentenceClick = (sentence) => {
                 const q = currentStory.questions[currentQIdx];
-                const cleanAnswer = q.a.toLowerCase().replace(/[^a-z0-9]/g, '');
+                // CORRECCIÓN 2: Extraer la respuesta correcta real de las opciones, ya que q.a no existe
+                const correctAnswer = q.options ? q.options[q.correctIndex] : "";
+                
+                const cleanAnswer = correctAnswer.toLowerCase().replace(/[^a-z0-9]/g, '');
                 const cleanSentence = sentence.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-                if (cleanSentence.includes(cleanAnswer) || cleanAnswer.includes(cleanSentence.substring(0, 10))) {
+                if (cleanAnswer && (cleanSentence.includes(cleanAnswer) || cleanAnswer.includes(cleanSentence.substring(0, 10)))) {
                     confetti({ particleCount: 50, spread: 30, origin: { y: 0.8 } });
                     setScore(s => s + 1);
                     nextQuestion();
@@ -280,7 +303,10 @@
             const nextQuestion = () => {
                 if (currentQIdx < currentStory.questions.length - 1) {
                     setCurrentQIdx(idx => idx + 1);
-                    startTimer();
+                    setTimerStarted(false); // Pausa el siguiente timer
+                    setTimeLeft(12);
+                    setShowParagraphHelp(false);
+                    if (timerRef.current) clearInterval(timerRef.current);
                 } else {
                     setQaFinished(true);
                     if (timerRef.current) clearInterval(timerRef.current);
@@ -331,7 +357,6 @@
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                                     {stories.map((s, i) => {
                                         const wordCount = s.tokens ? s.tokens.filter(t => t.isWord).length : s.text.split(/\s+/).length;
-                                        // FIX: Cuenta dinámicamente los huecos basados en los tokens que ya procesó la app
                                         const blanksCount = s.tokens ? s.tokens.filter(t => t.isHidden).length : (s.blanks ? s.blanks.length : 0);
                                         
                                         return (
@@ -409,7 +434,7 @@
                     </div>
 
                     {qaMode && (
-                        <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm flex flex-col items-center justify-center p-6 animate-in zoom-in-95 duration-300">
+                        <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm flex flex-col items-center justify-center p-4 md:p-6 animate-in zoom-in-95 duration-300">
                             {qaFinished ? (
                                 <div className="bg-white dark:bg-slate-800 rounded-[3rem] p-12 text-center max-w-lg w-full shadow-2xl">
                                     <div className="w-24 h-24 bg-emerald-100 dark:bg-emerald-900/50 text-emerald-500 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={48} strokeWidth={3}/></div>
@@ -422,26 +447,41 @@
                                     <div className="bg-slate-900 text-white p-6 relative">
                                         <div className="flex justify-between items-center relative z-10">
                                             <span className="font-black tracking-widest text-slate-400 text-xs uppercase flex items-center gap-2"><Swords size={16}/> Pregunta {currentQIdx + 1} de {currentStory.questions.length}</span>
-                                            <div className={`font-black text-2xl flex items-center gap-2 ${timeLeft <= 3 ? 'text-red-400 animate-pulse' : 'text-emerald-400'}`}><Timer size={24}/> {timeLeft}s</div>
+                                            <div className={`font-black text-2xl flex items-center gap-2 ${timeLeft <= 3 && timerStarted ? 'text-red-400 animate-pulse' : 'text-emerald-400'}`}><Timer size={24}/> {timeLeft}s</div>
                                         </div>
-                                        <div className="absolute bottom-0 left-0 h-1.5 bg-emerald-500 timer-bar" style={{ animationDuration: '12s', animationPlayState: timeLeft === 0 ? 'paused' : 'running' }}></div>
+                                        {timerStarted && <div className="absolute bottom-0 left-0 h-1.5 bg-emerald-500 timer-bar" style={{ animationDuration: '12s', animationPlayState: timeLeft === 0 ? 'paused' : 'running' }}></div>}
                                     </div>
                                     <div className="p-6 md:p-12 text-center">
-                                        <h3 className={`text-xl md:text-3xl font-black mb-8 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>"{currentStory.questions[currentQIdx].q}"</h3>
-                                        {showParagraphHelp ? (
+                                        <h3 className="text-xl md:text-3xl font-black mb-8 text-slate-800 dark:text-white">"{currentStory.questions[currentQIdx].q}"</h3>
+                                        
+                                        {!timerStarted ? (
+                                            <button onClick={startTimer} className="bg-indigo-600 text-white px-8 py-3 rounded-full font-bold text-lg hover:bg-indigo-500 transition-transform active:scale-95 shadow-lg flex items-center gap-2 mx-auto">
+                                                <PlayCircle size={24}/> Iniciar Reloj
+                                            </button>
+                                        ) : timeLeft > 0 ? (
+                                            <div className="h-32 md:h-48 flex items-center justify-center flex-col text-slate-400 dark:text-slate-500">
+                                                <Lightbulb size={40} className="mb-4 opacity-30"/>
+                                                <p className="font-bold">Piensa rápido...</p>
+                                            </div>
+                                        ) : !showParagraphHelp ? (
+                                            <div className="h-32 md:h-48 flex items-center justify-center flex-col animate-in zoom-in duration-300">
+                                                <p className="text-red-500 font-black text-2xl mb-6">¡Tiempo agotado!</p>
+                                                <button onClick={() => setShowParagraphHelp(true)} className="bg-amber-500 text-white px-8 py-3 rounded-xl font-bold shadow-lg hover:bg-amber-400 transition-transform active:scale-95 flex items-center gap-2">
+                                                    <BookOpen size={20}/> Buscar en el Texto
+                                                </button>
+                                            </div>
+                                        ) : (
                                             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 text-left">
-                                                <div className="bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-400 text-xs font-black uppercase tracking-widest p-3 rounded-t-xl text-center border-b border-amber-200 dark:border-amber-900/50">¡Tiempo agotado! Encuentra la respuesta aquí:</div>
-                                                <div className={`p-4 md:p-8 rounded-b-xl border border-t-0 leading-relaxed text-base md:text-lg font-medium shadow-inner ${isDarkMode ? 'bg-slate-900 border-slate-700 text-slate-300' : 'bg-slate-50 border-amber-100 text-slate-700'}`}>
+                                                <div className="bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-400 text-xs font-black uppercase tracking-widest p-3 rounded-t-xl text-center border-b border-amber-200 dark:border-amber-900/50">Encuentra la respuesta aquí:</div>
+                                                <div className="p-4 md:p-8 rounded-b-xl border border-t-0 leading-relaxed text-base md:text-lg font-medium shadow-inner bg-slate-50 border-amber-100 text-slate-700 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300">
                                                     {getTargetParagraphSentences().map((sentence, i) => (
                                                         <span key={i} onClick={() => handleSentenceClick(sentence)} className="inline hover:bg-amber-200 dark:hover:bg-indigo-900 cursor-pointer transition-colors rounded px-1 py-0.5 mx-0.5 border border-transparent hover:border-amber-300 dark:hover:border-indigo-700">{sentence}. </span>
                                                     ))}
                                                 </div>
-                                                <p className="text-center text-xs text-slate-400 mt-4 uppercase font-bold tracking-widest">Haz clic en la oración correcta</p>
-                                            </div>
-                                        ) : (
-                                            <div className="h-32 md:h-48 flex items-center justify-center flex-col text-slate-400">
-                                                <Lightbulb size={40} className="mb-4 opacity-30"/>
-                                                <p className="font-bold">Piensa rápido...</p>
+                                                <div className="flex justify-between items-center mt-6">
+                                                    <p className="text-xs text-slate-400 uppercase font-bold tracking-widest">Haz clic en la oración correcta</p>
+                                                    <button onClick={nextQuestion} className="text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-white uppercase tracking-widest flex items-center gap-1 transition-colors">Saltar Pregunta <ArrowRight size={14}/></button>
+                                                </div>
                                             </div>
                                         )}
                                     </div>
