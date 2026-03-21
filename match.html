@@ -2,9 +2,14 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>LingoMatch Pro | Periplo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Match Madness | Periplo</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+    
+    <link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' }; document.documentElement.classList.add('dark');</script>
+    
     <script type="importmap">
     {
       "imports": {
@@ -13,104 +18,319 @@
         "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
         "lucide-react": "https://esm.sh/lucide-react@0.263.1",
         "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
-        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
         "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
       }
     }
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+
     <style>
-        body { font-family: 'Plus Jakarta Sans', sans-serif; user-select: none; -webkit-user-select: none; overflow: hidden; height: 100dvh; background-color: #f0f9ff; }
-        .btn-3d { transition: all 0.1s; border-bottom-width: 4px; }
-        .btn-3d:active:not(:disabled) { border-bottom-width: 0px; transform: translateY(4px); }
+        body { font-family: 'Varela Round', sans-serif; user-select: none; -webkit-user-select: none; touch-action: manipulation; overflow: hidden; height: 100dvh; }
         @keyframes shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-5px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-5px); } 80% { transform: translateX(5px); } }
         .animate-shake { animation: shake 0.4s ease-in-out; }
+        @keyframes popOut { 0% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } 100% { transform: scale(0.5); opacity: 0; } }
+        .animate-pop-out { animation: popOut 0.25s forwards ease-in; }
+        @keyframes popIn { 0% { transform: scale(0.5); opacity: 0; } 70% { transform: scale(1.05); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+        .animate-pop-in { animation: popIn 0.25s forwards ease-out; }
+        @keyframes bounce-small { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+        .animate-bounce-small { animation: bounce-small 0.3s ease-out; }
+        .btn-juicy { transition: transform 0.1s, background-color 0.2s, border-color 0.2s, color 0.2s; }
+        .btn-juicy:active:not(:disabled) { transform: translateY(4px); border-bottom-width: 0px !important; margin-top: 4px; }
+        .btn-wrapper { height: 4rem; display: flex; flex-direction: column; justify-content: flex-end; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
 </head>
-<body>
+<body class="bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 transition-colors duration-300">
     <div id="root"></div>
+
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect } from 'react';
+        import React, { useState, useEffect, useRef, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getAuth, signInAnonymously } from 'firebase/auth';
-        import { getFirestore, doc, getDoc, onSnapshot, updateDoc, setDoc } from 'firebase/firestore';
-        import { Users, Play, CheckCircle2, XCircle, Trophy, User, Pause, AlertTriangle, BookOpen, LogIn, Plus, Eye } from 'lucide-react';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+        import { ArrowLeft, Loader2, Sun, Moon } from 'lucide-react';
 
-        // Configuración idéntica a tu UNO
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
         const db = getFirestore(app);
-        const appId = 'periplo-app-v1';
 
-        const MatchGame = () => {
-            const [user, setUser] = useState(null);
-            const [deckData, setDeckData] = useState(null);
-            const [roomCode, setRoomCode] = useState('');
-            const [roomData, setRoomData] = useState(null);
-            const [selection, setSelection] = useState({ col0: null, col1: null, col2: null });
-            const [feedback, setFeedback] = useState('none');
-            const [errorModal, setErrorModal] = useState(null);
+        const ROUNDS = [
+            { round: 1, pairsToWin: 15, timeSeconds: 60, title: "Calentamiento" },
+            { round: 2, pairsToWin: 20, timeSeconds: 55, title: "Acelerando" },
+            { round: 3, pairsToWin: 25, timeSeconds: 50, title: "Avanzado" },
+            { round: 4, pairsToWin: 30, timeSeconds: 45, title: "Experto" },
+            { round: 5, pairsToWin: 35, timeSeconds: 40, title: "Jefe Final" }
+        ];
 
-            useEffect(() => {
-                const params = new URLSearchParams(window.location.search);
-                const deckId = params.get('id');
-                signInAnonymously(auth).then(cred => setUser(cred.user));
-                
-                if (deckId) {
-                    getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', deckId)).then(snap => {
-                        if (snap.exists()) setDeckData(snap.data().content);
-                    });
-                }
-            }, []);
+        const shuffleArray = (array) => {
+            const arr = [...array];
+            for (let i = arr.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+            return arr;
+        };
 
-            // Lógica de conexión a sala sincronizada con Firestore
-            useEffect(() => {
-                if (!roomCode) return;
-                const unsubscribe = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomCode), (snap) => {
-                    if (snap.exists()) setRoomData(snap.data());
-                });
-                return () => unsubscribe();
-            }, [roomCode]);
+        const WordButton = ({ text, status, onClick }) => {
+            let baseClasses = "btn-juicy w-full h-full rounded-2xl border-2 font-bold text-sm sm:text-base md:text-lg flex items-center justify-center cursor-pointer select-none overflow-x-auto no-scrollbar whitespace-nowrap px-2 ";
+            let colorClasses = "";
+            let animClasses = "";
 
-            const handleCreateRoom = async () => {
-                const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-                const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', code);
-                await setDoc(roomRef, {
-                    gameState: 'roles',
-                    players: [
-                        { id: 'p1', name: 'Jugador 1', score: 0, color: 'bg-blue-500', occupied: false, uid: null },
-                        { id: 'p2', name: 'Jugador 2', score: 0, color: 'bg-pink-500', occupied: false, uid: null }
-                    ],
-                    currentTurn: 'p1',
-                    matchedUids: []
-                });
-                setRoomCode(code);
-            };
-
-            if (!roomData) return (
-                <div className="h-full flex flex-col items-center justify-center p-6 bg-sky-50">
-                    <h1 className="text-4xl font-black text-sky-600 mb-8">LingoMatch Pro</h1>
-                    <button onClick={handleCreateRoom} className="btn-3d bg-green-500 text-white font-bold py-4 px-8 rounded-2xl border-green-700 text-xl mb-4">Crear Sala</button>
-                    <div className="flex gap-2">
-                        <input placeholder="CÓDIGO" className="p-4 rounded-2xl border-2 border-sky-200 uppercase font-black text-center" onChange={e => setRoomCode(e.target.value.toUpperCase())} />
-                    </div>
-                </div>
-            );
+            if (status === 'idle' || status === 'entering') {
+                colorClasses = "bg-white dark:bg-zinc-800 border-b-4 border-slate-200 dark:border-zinc-700 text-slate-700 dark:text-zinc-200 hover:bg-slate-50 dark:hover:bg-zinc-700";
+                if (status === 'entering') animClasses = "animate-pop-in";
+            } else if (status === 'selected') {
+                colorClasses = "bg-sky-50 dark:bg-sky-900/30 border-sky-400 dark:border-sky-600 border-b-4 text-sky-600 dark:text-sky-400";
+            } else if (status === 'correct') {
+                colorClasses = "bg-green-100 dark:bg-green-900/40 border-green-400 dark:border-green-600 text-green-600 dark:text-green-400 border-b-4";
+                animClasses = "animate-pop-out";
+            } else if (status === 'wrong') {
+                colorClasses = "bg-red-100 dark:bg-red-900/30 border-red-400 dark:border-red-600 text-red-600 dark:text-red-400 border-b-4";
+                animClasses = "animate-shake";
+            }
 
             return (
-                <div className="h-full flex flex-col bg-white">
-                    <header className="p-4 border-b flex justify-between items-center">
-                        <span className="font-black text-sky-600">SALA: {roomCode}</span>
-                        <div className="flex gap-4">
-                            {roomData.players.map(p => <span key={p.id} className={`${p.color} text-white px-3 py-1 rounded-xl font-bold text-sm`}>{p.score}</span>)}
+                <div className="btn-wrapper">
+                    <button className={`${baseClasses} ${colorClasses} ${animClasses}`} onClick={onClick} disabled={status === 'correct' || status === 'wrong'}>{text}</button>
+                </div>
+            );
+        };
+
+        const MatchGame = () => {
+            const [loading, setLoading] = useState(true);
+            const [gameData, setGameData] = useState(null);
+            const [wordPool, setWordPool] = useState([]);
+            
+            const [gameState, setGameState] = useState('menu'); 
+            const [currentRoundIdx, setCurrentRoundIdx] = useState(0);
+            const [timeLeft, setTimeLeft] = useState(0);
+            const [score, setScore] = useState(0);
+            const [leftCol, setLeftCol] = useState([]);
+            const [rightCol, setRightCol] = useState([]);
+            const [selectedLeft, setSelectedLeft] = useState(null);
+            const [selectedRight, setSelectedRight] = useState(null);
+            const [bitmojiState, setBitmojiState] = useState('idle');
+
+            const [isDarkMode, setIsDarkMode] = useState(true);
+
+            const poolRef = useRef([]);
+            const poolIndexRef = useRef(0);
+            const scoreRef = useRef(0);
+            const currentRoundData = ROUNDS[currentRoundIdx];
+
+            useEffect(() => {
+                const savedTheme = localStorage.getItem('themePreference');
+                if (savedTheme === 'light') setIsDarkMode(false);
+
+                const init = async () => {
+                    const params = new URLSearchParams(window.location.search);
+                    const id = params.get('id');
+                    if (!id) return;
+                    
+                    const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id));
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        setGameData(data);
+                        setWordPool(data.content.wordPool); // Array of {id, en, es}
+                    }
+                    setLoading(false);
+                };
+                init();
+            }, []);
+
+            useEffect(() => {
+                if (isDarkMode) document.documentElement.classList.add('dark');
+                else document.documentElement.classList.remove('dark');
+            }, [isDarkMode]);
+
+            const toggleTheme = () => { setIsDarkMode(!isDarkMode); localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light'); };
+            const handleExit = () => { window.location.href = 'index.html'; };
+
+            const startRound = (roundIdx = currentRoundIdx) => {
+                const roundData = ROUNDS[roundIdx];
+                const shuffledPool = shuffleArray(wordPool);
+                poolRef.current = shuffledPool;
+                
+                const initialWords = shuffledPool.slice(0, 5);
+                poolIndexRef.current = 5; 
+
+                const rightShuffled = shuffleArray([...initialWords]);
+
+                setLeftCol(initialWords.map(w => ({ id: w.id, text: w.es, status: 'idle', animKey: Date.now() + Math.random() })));
+                setRightCol(rightShuffled.map(w => ({ id: w.id, text: w.en, status: 'idle', animKey: Date.now() + Math.random() })));
+                
+                setScore(0);
+                scoreRef.current = 0;
+                setTimeLeft(roundData.timeSeconds);
+                setSelectedLeft(null);
+                setSelectedRight(null);
+                setCurrentRoundIdx(roundIdx);
+                setBitmojiState('idle');
+                setGameState('playing');
+            };
+
+            const resetGame = () => { setCurrentRoundIdx(0); setGameState('menu'); };
+
+            useEffect(() => {
+                let timer;
+                if (gameState === 'playing' && timeLeft > 0) {
+                    timer = setInterval(() => {
+                        setTimeLeft(prev => {
+                            if (prev <= 0.1) {
+                                clearInterval(timer);
+                                if (scoreRef.current < ROUNDS[currentRoundIdx].pairsToWin) setGameState('game_over');
+                                return 0;
+                            }
+                            return prev - 0.1;
+                        });
+                    }, 100);
+                }
+                return () => clearInterval(timer);
+            }, [gameState, currentRoundIdx]);
+
+            useEffect(() => {
+                if (gameState === 'playing' && score >= currentRoundData.pairsToWin) {
+                    if (currentRoundIdx === ROUNDS.length - 1) setGameState('game_won');
+                    else setGameState('round_won');
+                }
+            }, [score, gameState, currentRoundIdx, currentRoundData]);
+
+            const getNextWord = useCallback(() => {
+                const pool = poolRef.current;
+                const word = pool[poolIndexRef.current % pool.length]; 
+                poolIndexRef.current += 1;
+                return word;
+            }, []);
+
+            const processMatch = (leftIndex, rightIndex) => {
+                const leftItem = leftCol[leftIndex];
+                const rightItem = rightCol[rightIndex];
+                const isMatch = leftItem.id === rightItem.id;
+
+                if (isMatch) {
+                    setLeftCol(prev => prev.map((item, i) => i === leftIndex ? { ...item, status: 'correct' } : item));
+                    setRightCol(prev => prev.map((item, i) => i === rightIndex ? { ...item, status: 'correct' } : item));
+                    
+                    const newScore = scoreRef.current + 1;
+                    scoreRef.current = newScore;
+                    setScore(newScore);
+                    setBitmojiState('happy');
+
+                    setTimeout(() => {
+                        if (scoreRef.current <= ROUNDS[currentRoundIdx].pairsToWin) {
+                            const newWord = getNextWord();
+                            const animId = Date.now() + Math.random();
+                            
+                            setLeftCol(prev => { const next = [...prev]; next[leftIndex] = { id: newWord.id, text: newWord.es, status: 'entering', animKey: animId }; return next; });
+                            setRightCol(prev => { const next = [...prev]; next[rightIndex] = { id: newWord.id, text: newWord.en, status: 'entering', animKey: animId + 1 }; return next; });
+
+                            setTimeout(() => {
+                                setLeftCol(p => p.map((item, i) => i === leftIndex ? { ...item, status: 'idle' } : item));
+                                setRightCol(p => p.map((item, i) => i === rightIndex ? { ...item, status: 'idle' } : item));
+                                setBitmojiState(prev => prev === 'happy' ? 'idle' : prev);
+                            }, 250);
+                        }
+                    }, 250);
+                } else {
+                    setLeftCol(prev => prev.map((item, i) => i === leftIndex ? { ...item, status: 'wrong' } : item));
+                    setRightCol(prev => prev.map((item, i) => i === rightIndex ? { ...item, status: 'wrong' } : item));
+                    setBitmojiState('wrong');
+
+                    setTimeout(() => {
+                        setLeftCol(prev => prev.map((item, i) => i === leftIndex ? { ...item, status: 'idle' } : item));
+                        setRightCol(prev => prev.map((item, i) => i === rightIndex ? { ...item, status: 'idle' } : item));
+                        setBitmojiState(prev => prev === 'wrong' ? 'idle' : prev);
+                    }, 400); 
+                }
+            };
+
+            const handleWordClick = (side, index) => {
+                const column = side === 'left' ? leftCol : rightCol;
+                if (column[index].status === 'correct' || column[index].status === 'wrong') return;
+
+                if (side === 'left') {
+                    if (selectedLeft === index) { setSelectedLeft(null); setLeftCol(prev => prev.map((item, i) => i === index ? { ...item, status: 'idle' } : item)); return; }
+                    setLeftCol(prev => prev.map((item, i) => { if (i === index) return { ...item, status: 'selected' }; if (i === selectedLeft) return { ...item, status: 'idle' }; return item; }));
+                    setSelectedLeft(index);
+                    if (selectedRight !== null) { processMatch(index, selectedRight); setSelectedLeft(null); setSelectedRight(null); }
+                } else {
+                    if (selectedRight === index) { setSelectedRight(null); setRightCol(prev => prev.map((item, i) => i === index ? { ...item, status: 'idle' } : item)); return; }
+                    setRightCol(prev => prev.map((item, i) => { if (i === index) return { ...item, status: 'selected' }; if (i === selectedRight) return { ...item, status: 'idle' }; return item; }));
+                    setSelectedRight(index);
+                    if (selectedLeft !== null) { processMatch(selectedLeft, index); setSelectedLeft(null); setSelectedRight(null); }
+                }
+            };
+
+            if (loading) return <div className="h-[100dvh] flex items-center justify-center text-slate-400 bg-slate-50 dark:bg-zinc-950"><Loader2 className="animate-spin mr-2"/> Cargando...</div>;
+            if (!gameData || wordPool.length < 5) return <div className="h-[100dvh] flex items-center justify-center text-red-400 bg-slate-50 dark:bg-zinc-950">Error: No hay suficientes palabras en esta actividad.</div>;
+
+            return (
+                <div className="h-[100dvh] flex flex-col items-center">
+                    
+                    {/* HEADER */}
+                    <div className="w-full px-6 py-4 flex items-center justify-between shrink-0 sticky top-0 z-30 shadow-sm transition-colors bg-white dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800">
+                        <div className="flex items-center gap-4">
+                            <button onClick={handleExit} className="p-2 rounded-full transition-colors hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-500 dark:text-zinc-400"><ArrowLeft size={20}/></button>
+                            <h1 className="text-xl font-black leading-none text-slate-800 dark:text-white truncate max-w-[200px] md:max-w-md">{gameData.title}</h1>
                         </div>
-                    </header>
-                    <main className="flex-1 grid grid-cols-3 gap-4 p-4 items-center">
-                        {/* Aquí se renderizarían las columnas dinámicas según deckData */}
-                        <div className="text-center text-slate-400 font-bold italic col-span-3">Cargando tablero dinámico...</div>
-                    </main>
+                        <button onClick={toggleTheme} className="p-2 rounded-full transition-colors hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-600 dark:text-amber-400">{isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}</button>
+                    </div>
+
+                    <div className="w-full max-w-4xl mx-auto flex-1 flex flex-col px-4 py-6 md:py-10 relative">
+                        {gameState === 'menu' && (
+                            <div className="flex-1 flex flex-col items-center justify-center text-center animate-pop-in max-w-md mx-auto">
+                                <div className="mb-8 p-6 bg-white dark:bg-zinc-900 rounded-3xl shadow-sm border-2 border-b-[6px] border-slate-200 dark:border-zinc-800">
+                                    <h1 className="text-4xl font-extrabold text-sky-500 mb-2">Match<br/>Madness</h1>
+                                    <p className="text-slate-500 dark:text-zinc-400 font-medium">Empareja palabras a la velocidad de la luz.</p>
+                                </div>
+                                <button className="w-full btn-juicy bg-green-400 dark:bg-green-500 text-white border-2 border-b-[6px] border-green-600 dark:border-green-700 rounded-2xl py-4 text-xl font-bold uppercase tracking-widest" onClick={() => startRound(0)}>Jugar</button>
+                            </div>
+                        )}
+
+                        {gameState === 'playing' && (
+                            <div className="flex-1 flex flex-col w-full relative">
+                                <div className="mb-6 max-w-xl mx-auto w-full">
+                                    <div className="flex justify-between items-center mb-3">
+                                        <div className="font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest text-sm">Ronda {currentRoundIdx + 1}</div>
+                                        <div className="font-bold text-sky-500 text-xl">{score} / {currentRoundData.pairsToWin}</div>
+                                    </div>
+                                    <div className="h-4 w-full bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden relative">
+                                        <div className={`absolute top-0 left-0 h-full transition-all duration-100 ease-linear rounded-full ${timeLeft < 10 ? 'bg-red-400' : 'bg-orange-400'}`} style={{ width: `${(timeLeft / currentRoundData.timeSeconds) * 100}%` }}/>
+                                    </div>
+                                </div>
+
+                                <div className="flex-1 grid grid-cols-[1fr_60px_1fr] md:grid-cols-[1fr_120px_1fr] gap-2 md:gap-6 mt-2 relative items-center">
+                                    <div className="flex flex-col gap-3">
+                                        {leftCol.map((item, index) => (<WordButton key={item.animKey} text={item.text} status={item.status} onClick={() => handleWordClick('left', index)}/>))}
+                                    </div>
+                                    <div className="flex flex-col justify-center items-center h-full">
+                                        {bitmojiState === 'idle' && <img src="image_c9055d.jpg" alt="Thinking" className="w-16 md:w-32 rounded-full transition-transform duration-300 drop-shadow-md" />}
+                                        {bitmojiState === 'happy' && <img src="image_c9025d.png" alt="Correct!" className="w-20 md:w-40 animate-bounce-small drop-shadow-lg z-10" />}
+                                        {bitmojiState === 'wrong' && <img src="image_c9055d.jpg" alt="Wrong" className="w-16 md:w-32 rounded-full animate-shake drop-shadow-md border-4 border-red-400" style={{ filter: 'grayscale(50%) sepia(100%) hue-rotate(300deg)' }} />}
+                                    </div>
+                                    <div className="flex flex-col gap-3">
+                                        {rightCol.map((item, index) => (<WordButton key={item.animKey} text={item.text} status={item.status} onClick={() => handleWordClick('right', index)}/>))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {(gameState === 'round_won' || gameState === 'game_won' || gameState === 'game_over') && (
+                            <div className="flex-1 flex flex-col items-center justify-center text-center animate-pop-in z-10 max-w-md mx-auto w-full">
+                                <div className={`p-8 rounded-3xl w-full border-2 border-b-[6px] mb-8 ${gameState === 'game_over' ? 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800' : gameState === 'game_won' ? 'bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700' : 'bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-800'}`}>
+                                    {gameState === 'round_won' && (<><h2 className="text-3xl font-extrabold text-green-500 mb-2">¡Ronda {currentRoundIdx + 1} Superada!</h2><p className="text-green-700 dark:text-green-400 font-medium">Reflejos impresionantes.</p></>)}
+                                    {gameState === 'game_won' && (<><h2 className="text-4xl font-extrabold text-yellow-500 mb-2">¡VICTORIA TOTAL!</h2><p className="text-yellow-700 dark:text-yellow-500 font-medium mb-4">Has dominado la locura de las palabras.</p><div className="text-6xl">👑</div></>)}
+                                    {gameState === 'game_over' && (<><h2 className="text-3xl font-extrabold text-red-500 mb-2">Se acabó el tiempo</h2><p className="text-slate-500 dark:text-zinc-400 font-medium">Lograste {score} de {currentRoundData.pairsToWin} pares.</p></>)}
+                                </div>
+                                <div className="w-full space-y-4">
+                                    {gameState === 'round_won' && (<button className="w-full btn-juicy bg-sky-400 dark:bg-sky-500 text-white border-2 border-b-[6px] border-sky-600 dark:border-sky-700 rounded-2xl py-4 text-xl font-bold uppercase tracking-widest" onClick={() => startRound(currentRoundIdx + 1)}>Siguiente Ronda</button>)}
+                                    {(gameState === 'game_over' || gameState === 'game_won') && (<button className="w-full btn-juicy bg-sky-400 dark:bg-sky-500 text-white border-2 border-b-[6px] border-sky-600 dark:border-sky-700 rounded-2xl py-4 text-xl font-bold uppercase tracking-widest" onClick={resetGame}>Volver al Menú</button>)}
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 </div>
             );
         };
