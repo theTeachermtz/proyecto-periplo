@@ -42,7 +42,7 @@
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Users, Play, Plus, LogIn, CheckCircle2, XCircle, Trophy, User, Pause, Clock, Timer, Medal, Crown, Zap, ChevronRight } from 'lucide-react';
+        import { Users, Play, Plus, LogIn, CheckCircle2, XCircle, Trophy, User, Pause, Clock, Timer, AlertTriangle } from 'lucide-react';
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
@@ -66,7 +66,7 @@
             const [modeSelected, setModeSelected] = useState(null); // 'single' | 'multi'
             const [isSinglePlayer, setIsSinglePlayer] = useState(false);
             
-            // Room & Game State (Shared structure for both modes)
+            // Room & Game State
             const [roomCode, setRoomCode] = useState('');
             const [inputCode, setInputCode] = useState('');
             const [roomData, setRoomData] = useState(null); 
@@ -122,15 +122,19 @@
                 return () => clearInterval(timerRef.current);
             }, [roomData?.gameState, isSinglePlayer, countdown, isPaused]);
 
-            // --- ANIMATION CONTROLLERS ---
-            const triggerCountdown = (callback, textPrefix = "") => {
-                setCountdown(textPrefix ? `${textPrefix} - 3` : '3');
-                let count = 3;
+            // --- DEFINICIÓN DE ROLES CORREGIDA ---
+            const myPlayer = roomData?.players?.find(p => p.uid === user?.uid);
+            const myRole = isSinglePlayer ? 'p1' : (myPlayer ? myPlayer.id : null);
+
+            // --- MOTOR CINEMATOGRÁFICO DE TRANSICIONES ---
+            const triggerSequence = (steps, callback) => {
+                let i = 0;
+                setCountdown(steps[0]);
                 const int = setInterval(() => {
-                    count--;
-                    if (count > 0) setCountdown(textPrefix ? `${textPrefix} - ${count}` : count.toString());
-                    else if (count === 0) setCountdown('¡GO!');
-                    else {
+                    i++;
+                    if (i < steps.length) {
+                        setCountdown(steps[i]);
+                    } else {
                         clearInterval(int);
                         setCountdown(null);
                         if (callback) callback();
@@ -143,7 +147,6 @@
                 const isErr = penaltySecs > 2;
                 setFeedback(isErr ? 'error' : 'partial');
                 
-                // Efecto flotante
                 const id = Date.now();
                 setPenaltyFlies(prev => [...prev, { id, text: pointsText, isErr }]);
                 setTimeout(() => setPenaltyFlies(prev => prev.filter(p => p.id !== id)), 800);
@@ -154,16 +157,14 @@
                     setTimeout(() => setTimerAnim(false), 500);
                 }
 
-                // Liberar el tablero rápido sin modales
                 setTimeout(() => {
                     setSelection({ c1: null, c2: null, c3: null });
                     setFeedback('none');
                     setLocked(false);
-                    if (!isSinglePlayer) processTurn(isErr ? 0 : 1, false); // En multi pasa turno
+                    if (!isSinglePlayer) processTurn(isErr ? 0 : 1, false);
                 }, 600);
             };
 
-            // --- STATE UPDATER (Dual Engine) ---
             const updateGame = async (newData) => {
                 if (isSinglePlayer) setRoomData(prev => ({...prev, ...newData}));
                 else await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), newData);
@@ -173,8 +174,6 @@
             const setupSinglePlayer = async () => {
                 setIsSinglePlayer(true);
                 setModeSelected('single');
-                
-                // Fetch Leaderboard
                 const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/leaderboard`), orderBy('time', 'asc'), limit(5));
                 const snap = await getDocs(q);
                 setLeaderboard(snap.docs.map(d => d.data()));
@@ -182,31 +181,30 @@
 
             const startSinglePlayer = () => {
                 if (!playerName.trim()) return alert("Por favor escribe tu nombre o apodo.");
-                triggerCountdown(() => {
-                    const settings = quizData.content.settings || { rounds: 4, rowsPerRound: 6 };
-                    const totalNeeded = settings.rounds * settings.rowsPerRound;
-                    let allPairs = shuffle([...quizData.content.pairs]);
-                    if (allPairs.length < totalNeeded) {
-                        const diff = totalNeeded - allPairs.length;
-                        for(let i=0; i<diff; i++) allPairs.push(allPairs[i % allPairs.length]);
-                    }
-                    const gamePool = allPairs.slice(0, totalNeeded);
-                    
-                    setRoomData({
-                        gameState: 'playing', mode: 'single', settings, gamePool, currentRound: 1,
-                        board: generateBoardColumns(gamePool.slice(0, settings.rowsPerRound)),
-                        matchedIds: [],
-                        players: [{ id: 'p1', name: playerName, score: 0, occupied: true }]
-                    });
-                    setTimer(0);
-                }, "PREPÁRATE");
+                
+                const settings = quizData.content.settings || { rounds: 4, rowsPerRound: 6 };
+                const totalNeeded = settings.rounds * settings.rowsPerRound;
+                let allPairs = shuffle([...quizData.content.pairs]);
+                if (allPairs.length < totalNeeded) {
+                    const diff = totalNeeded - allPairs.length;
+                    for(let i=0; i<diff; i++) allPairs.push(allPairs[i % allPairs.length]);
+                }
+                const gamePool = allPairs.slice(0, totalNeeded);
+                
+                // Muestra la pantalla inmediatamente
+                setRoomData({
+                    gameState: 'playing', mode: 'single', settings, gamePool, currentRound: 1,
+                    board: generateBoardColumns(gamePool.slice(0, settings.rowsPerRound)),
+                    matchedIds: [],
+                    players: [{ id: 'p1', name: playerName, score: 0, occupied: true, uid: user?.uid }]
+                });
+                
+                // Arranca la animación encima de la pantalla
+                triggerSequence(['READY...', 'SET...', 'GO!'], () => { setTimer(0); });
             };
 
             // --- MULTIPLAYER SETUP ---
-            const setupMultiplayer = () => {
-                setIsSinglePlayer(false);
-                setModeSelected('multi');
-            };
+            const setupMultiplayer = () => { setIsSinglePlayer(false); setModeSelected('multi'); };
 
             const createRoom = async () => {
                 const code = genCode();
@@ -229,10 +227,8 @@
             };
 
             const selectRole = async (roleId) => {
-                if (roleId === 'obs') { setIsObserver(true); return; }
                 const updated = roomData.players.map(p => p.id === roleId ? { ...p, occupied: true, uid: user.uid } : (p.uid === user.uid ? { ...p, occupied: false, uid: null } : p));
                 await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), { players: updated });
-                setIsObserver(false);
             };
 
             const startMultiplayer = async () => {
@@ -263,7 +259,7 @@
 
             // --- GAMEPLAY LOGIC ---
             const handleSelect = (col, item) => {
-                if (locked || myRole === 'obs' || countdown) return;
+                if (locked || countdown) return;
                 if (!isSinglePlayer && myRole !== roomData.currentTurn) return;
                 setSelection(prev => ({ ...prev, [col]: prev[col]?.uid === item.uid ? null : item }));
             };
@@ -277,7 +273,7 @@
                     
                     if (isPerfect) {
                         setFeedback('success');
-                        setTimeout(() => processTurn(3, true), 400); // Rápido en aciertos
+                        setTimeout(() => processTurn(3, true), 400); 
                     } else if (isPartial) {
                         triggerPenalty(isSinglePlayer ? "+2s" : "+1 Pt", 2);
                     } else {
@@ -323,11 +319,11 @@
                         }
                         await updateGame({ gameState: 'end', players: updatedPlayers, finalTime: timer });
                     } else {
-                        triggerCountdown(async () => {
+                        triggerSequence(['¡BIEN HECHO!', `RONDA ${nextRound}`, '3', '2', '1', 'GO!'], async () => {
                             const startIndex = (nextRound - 1) * roomData.settings.rowsPerRound;
                             const nextPairs = roomData.gamePool.slice(startIndex, startIndex + roomData.settings.rowsPerRound);
                             await updateGame({ currentRound: nextRound, board: generateBoardColumns(nextPairs), matchedIds: [], players: updatedPlayers, currentTurn: nextTurn });
-                        }, `RONDA ${nextRound}`);
+                        });
                     }
                 } else {
                     await updateGame({ players: updatedPlayers, matchedIds: newMatched, currentTurn: nextTurn });
@@ -337,7 +333,6 @@
             // --- VISTAS ---
             if (!quizData) return <div className="h-screen flex items-center justify-center font-black animate-pulse">Cargando Motor...</div>;
 
-            // PANTALLA 1: ELEGIR MODALIDAD
             if (!modeSelected) return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
                     <div className="text-center mb-10">
@@ -359,7 +354,6 @@
                 </div>
             );
 
-            // PANTALLA 2A: LOBBY SINGLE PLAYER (LEADERBOARD)
             if (modeSelected === 'single' && !roomData) return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
                     <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-6 rounded-3xl shadow-2xl">
@@ -391,7 +385,6 @@
                 </div>
             );
 
-            // PANTALLA 2B: LOBBY MULTIPLAYER
             if (modeSelected === 'multi' && !roomData) return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
                     <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl w-full max-w-sm shadow-2xl z-10">
@@ -406,7 +399,6 @@
                 </div>
             );
 
-            // PANTALLA 3: ROLES MULTIPLAYER
             if (roomData?.gameState === 'roles') return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
                     <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[2rem] overflow-hidden shadow-2xl">
@@ -422,7 +414,7 @@
                                     </button>
                                 ))}
                             </div>
-                            {roomData.players.some(p => p.occupied) && myRole !== 'obs' && (
+                            {roomData.players.some(p => p.occupied) && (
                                 <button onClick={startMultiplayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 flex items-center justify-center gap-2 text-xl mt-8">
                                     <Play fill="currentColor"/> EMPEZAR PARTIDA
                                 </button>
@@ -432,21 +424,20 @@
                 </div>
             );
 
-            // PANTALLA 4: GAMEPLAY
             if (roomData?.gameState === 'playing') {
                 const activePlayer = roomData.players.find(p => p.id === roomData.currentTurn);
                 const isMyTurn = isSinglePlayer || myRole === roomData.currentTurn;
 
                 const renderCol = (items, colKey) => (
-                    <div className="flex-1 flex flex-col gap-2">
+                    <div className="flex-1 flex flex-col gap-2 relative">
                         {items.map(item => {
                             const isMatched = roomData.matchedIds.includes(item.uid);
                             const isSel = selection[colKey]?.uid === item.uid;
                             
                             let bg = "bg-zinc-900 border-zinc-800 text-zinc-300";
                             if (isSel) {
-                                if (feedback === 'error') bg = "bg-rose-500 border-rose-700 text-white";
-                                else if (feedback === 'partial') bg = "bg-amber-500 border-amber-700 text-white";
+                                if (feedback === 'error') bg = "bg-rose-500 border-rose-700 text-white animate-shake";
+                                else if (feedback === 'partial') bg = "bg-amber-500 border-amber-700 text-white animate-shake";
                                 else if (feedback === 'success') bg = "bg-emerald-500 border-emerald-700 text-white scale-105";
                                 else bg = "bg-indigo-600 border-indigo-800 text-white scale-105";
                             }
@@ -465,18 +456,17 @@
                 return (
                     <div className="h-[100dvh] flex flex-col bg-zinc-950 relative">
                         
-                        {/* OVERLAY DE COUNTDOWN / PAUSA */}
                         {(countdown || isPaused) && (
                             <div className="fixed inset-0 bg-zinc-950/80 backdrop-blur-md z-50 flex items-center justify-center">
                                 {countdown ? (
-                                    <div className="text-[10vw] font-black italic text-white animate-pulse drop-shadow-[0_0_30px_rgba(99,102,241,0.8)] tracking-tighter text-center">
+                                    <div className="text-7xl md:text-[10vw] font-black italic text-white animate-pulse drop-shadow-[0_0_30px_rgba(99,102,241,0.8)] tracking-tighter text-center">
                                         {countdown}
                                     </div>
                                 ) : (
                                     <div className="bg-zinc-900 p-8 rounded-3xl border border-zinc-800 text-center max-w-sm w-full">
                                         <Pause size={48} className="text-zinc-500 mx-auto mb-4"/>
                                         <h2 className="text-2xl font-black text-white mb-6 uppercase tracking-widest">Pausa</h2>
-                                        <button onClick={() => { setIsPaused(false); triggerCountdown(null, "REANUDANDO"); }} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 mb-3">Reanudar</button>
+                                        <button onClick={() => { setIsPaused(false); triggerSequence(['3', '2', '1', 'GO!']); }} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 mb-3">Reanudar</button>
                                         <button onClick={() => window.location.href='index.html'} className="btn-juicy w-full bg-zinc-800 text-zinc-400 font-black py-4 rounded-xl border-zinc-950">Abandonar</button>
                                     </div>
                                 )}
@@ -484,10 +474,9 @@
                         )}
 
                         <header className="bg-zinc-900 border-b border-zinc-800 p-4 shrink-0 z-20 flex justify-between items-center shadow-lg relative">
-                            {/* CAJA DE CASTIGOS FLOTANTES */}
-                            <div className="absolute top-full right-4 mt-2 pointer-events-none">
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-4 pointer-events-none z-50 flex gap-10 w-full max-w-lg justify-around">
                                 {penaltyFlies.map(p => (
-                                    <div key={p.id} className={`absolute right-0 text-2xl font-black italic animate-float drop-shadow-lg ${p.isErr ? 'text-rose-500' : 'text-amber-500'}`}>
+                                    <div key={p.id} className={`text-3xl font-black italic animate-float drop-shadow-[0_0_10px_rgba(0,0,0,1)] ${p.isErr ? 'text-rose-500' : 'text-amber-500'}`}>
                                         {p.text}
                                     </div>
                                 ))}
