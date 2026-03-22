@@ -29,6 +29,16 @@
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
         .cell-input::selection { background: transparent; }
         .crossword-container { transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
+
+        @keyframes heartbeat-glow {
+            0%, 100% { opacity: 0; transform: scale(0.95); }
+            10% { opacity: 0.25; transform: scale(1.05); }
+            20% { opacity: 0.05; transform: scale(1); }
+            30% { opacity: 0.25; transform: scale(1.05); }
+            45%, 90% { opacity: 0; transform: scale(0.95); }
+        }
+        .glow-beat-1 { animation: heartbeat-glow 4s ease-in-out infinite; }
+        .glow-beat-2 { animation: heartbeat-glow 4s ease-in-out infinite 2s; } 
     </style>
 </head>
 <body class="text-zinc-100 h-[100dvh] flex flex-col">
@@ -155,7 +165,7 @@
 
         const CrosswordApp = () => {
             const [user, setUser] = useState(null);
-            const [quizId, setQuizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [quizId, setQuizId] = useState(newSearchParams(window.location.search).get('id'));
             const [quizData, setQuizData] = useState(null);
             const [loading, setLoading] = useState(true);
 
@@ -176,7 +186,6 @@
             const inputRefs = useRef({});
             const containerRef = useRef(null);
             
-            // Transformación Automática (Zoom y Pan calculados por React)
             const [baseScale, setBaseScale] = useState(1);
             const [zoomTransform, setZoomTransform] = useState({ scale: 1, x: 0, y: 0 });
 
@@ -204,7 +213,6 @@
                 return () => unsub();
             }, [quizId]);
 
-            // Calcular escala base (Perfectamente centrado, sin arrastrar)
             useEffect(() => {
                 if (!layout || !containerRef.current) return;
                 const calculateOverviewScale = () => {
@@ -212,11 +220,8 @@
                     const cellSize = window.innerWidth < 768 ? 40 : 48;
                     const gridW = layout.width * cellSize;
                     const gridH = layout.height * cellSize;
-                    
-                    // Márgenes seguros para que nunca toque el header ni el footer
                     const paddingX = window.innerWidth < 768 ? 40 : 80;
                     const paddingY = window.innerWidth < 768 ? 80 : 120;
-                    
                     const scale = Math.min((clientWidth - paddingX) / gridW, (clientHeight - paddingY) / gridH, 1.2);
                     setBaseScale(scale);
                     if (viewMode === 'overview') setZoomTransform({ scale, x: 0, y: 0 });
@@ -227,7 +232,6 @@
                 return () => window.removeEventListener('resize', calculateOverviewScale);
             }, [layout, viewMode]);
 
-            // Cámara Cinematográfica (Enfocar palabra)
             useEffect(() => {
                 if (viewMode === 'focused' && activePlacementId && layout && containerRef.current) {
                     const activePlacement = layout.clues.across.concat(layout.clues.down).find(p => p.id === activePlacementId);
@@ -252,7 +256,6 @@
                 }
             }, [viewMode, activePlacementId, layout, baseScale]);
 
-            // Auto-scroll del popover
             useEffect(() => {
                 if (activePlacementId) {
                     const el = document.getElementById(`clue-${direction}-${activePlacementId}`);
@@ -303,11 +306,28 @@
                 if (val !== '') {
                     const cell = layout.grid[y][x];
                     const activePlacement = cell.placements.find(p => p.id === activePlacementId) || cell.placements[0];
-                    const dist = activePlacement.isHoriz ? (x - activePlacement.normX) : (y - activePlacement.normY);
+                    let dist = activePlacement.isHoriz ? (x - activePlacement.normX) : (y - activePlacement.normY);
 
-                    if (dist < activePlacement.wordStr.length - 1) {
-                        const nextX = activePlacement.isHoriz ? x + 1 : x;
-                        const nextY = activePlacement.isHoriz ? y : y + 1;
+                    // --- MAGIA: AUTO-SKIP CASILLAS VERDES ---
+                    let nextDist = dist + 1;
+                    let nextX = x;
+                    let nextY = y;
+                    let foundNext = false;
+
+                    while (nextDist < activePlacement.wordStr.length) {
+                        nextX = activePlacement.normX + (activePlacement.isHoriz ? nextDist : 0);
+                        nextY = activePlacement.normY + (activePlacement.isHoriz ? 0 : nextDist);
+                        const nextCell = layout.grid[nextY][nextX];
+                        const isNextProtected = nextCell.placements.some(p => solvedWords.includes(p.id));
+                        
+                        if (!isNextProtected) {
+                            foundNext = true;
+                            break;
+                        }
+                        nextDist++;
+                    }
+
+                    if (foundNext) {
                         setSelectedCell({ x: nextX, y: nextY }); 
                         setTimeout(() => inputRefs.current[`${nextX},${nextY}`]?.focus(), 10);
                     } else {
@@ -354,8 +374,6 @@
                 const cell = layout.grid[y][x];
                 const activePlacement = cell.placements.find(p => p.id === activePlacementId) || cell.placements[0];
                 const dist = activePlacement.isHoriz ? (x - activePlacement.normX) : (y - activePlacement.normY);
-                const isAtStart = dist === 0;
-                const isAtEnd = dist === activePlacement.wordStr.length - 1;
 
                 if (e.key === 'Enter') {
                     e.preventDefault(); checkCurrentWord();
@@ -364,24 +382,28 @@
                     if (inputs[`${x},${y}`] && !isProtected(x, y)) {
                         setInputs(prev => ({ ...prev, [`${x},${y}`]: '' }));
                     } else if (dist > 0) {
-                        const prevX = activePlacement.isHoriz ? x - 1 : x;
-                        const prevY = activePlacement.isHoriz ? y : y - 1;
-                        if (!isProtected(prevX, prevY)) {
-                            setInputs(prev => ({ ...prev, [`${prevX},${prevY}`]: '' }));
+                        // --- MAGIA: AUTO-SKIP REVERSA ---
+                        let prevDist = dist - 1;
+                        let prevX = x; let prevY = y;
+                        let foundPrev = false;
+                        
+                        while(prevDist >= 0) {
+                            prevX = activePlacement.normX + (activePlacement.isHoriz ? prevDist : 0);
+                            prevY = activePlacement.normY + (activePlacement.isHoriz ? 0 : prevDist);
+                            const prevCell = layout.grid[prevY][prevX];
+                            const isPrevProtected = prevCell.placements.some(p => solvedWords.includes(p.id));
+                            if (!isPrevProtected) {
+                                foundPrev = true;
+                                break;
+                            }
+                            prevDist--;
                         }
-                        setSelectedCell({ x: prevX, y: prevY });
-                        setTimeout(() => inputRefs.current[`${prevX},${prevY}`]?.focus(), 10);
-                    }
-                } else if (['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
-                    e.preventDefault(); 
-                    if (e.key === 'ArrowRight' && activePlacement.isHoriz && !isAtEnd) {
-                        setSelectedCell({ x: x + 1, y }); setTimeout(() => inputRefs.current[`${x + 1},${y}`]?.focus(), 10);
-                    } else if (e.key === 'ArrowDown' && !activePlacement.isHoriz && !isAtEnd) {
-                        setSelectedCell({ x, y: y + 1 }); setTimeout(() => inputRefs.current[`${x},${y + 1}`]?.focus(), 10);
-                    } else if (e.key === 'ArrowLeft' && activePlacement.isHoriz && !isAtStart) {
-                        setSelectedCell({ x: x - 1, y }); setTimeout(() => inputRefs.current[`${x - 1},${y}`]?.focus(), 10);
-                    } else if (e.key === 'ArrowUp' && !activePlacement.isHoriz && !isAtStart) {
-                        setSelectedCell({ x, y: y - 1 }); setTimeout(() => inputRefs.current[`${x},${y - 1}`]?.focus(), 10);
+
+                        if (foundPrev) {
+                            setInputs(prev => ({ ...prev, [`${prevX},${prevY}`]: '' }));
+                            setSelectedCell({ x: prevX, y: prevY });
+                            setTimeout(() => inputRefs.current[`${prevX},${prevY}`]?.focus(), 10);
+                        }
                     }
                 }
             };
@@ -398,15 +420,27 @@
                 setActivePlacementId(newActive.id);
                 setDirection(newActive.isHoriz ? 'across' : 'down');
 
-                // AUTO-FOCUS A LA PRIMERA LETRA
-                const firstX = newActive.normX; const firstY = newActive.normY;
-                setSelectedCell({ x: firstX, y: firstY });
+                // --- MAGIA: AUTO-FOCUS AL PRIMER HUECO ---
+                let focusX = newActive.normX; 
+                let focusY = newActive.normY;
+                for(let i=0; i<newActive.wordStr.length; i++) {
+                    const cx = newActive.normX + (newActive.isHoriz ? i : 0);
+                    const cy = newActive.normY + (newActive.isHoriz ? 0 : i);
+                    const checkCell = layout.grid[cy][cx];
+                    const isCellProtected = checkCell.placements.some(p => solvedWords.includes(p.id));
+                    if (!isCellProtected && !inputs[`${cx},${cy}`]) { 
+                        focusX = cx; focusY = cy; 
+                        break; 
+                    }
+                }
+
+                setSelectedCell({ x: focusX, y: focusY });
                 setViewMode('focused');
 
                 if (newActive.isHoriz) { setShowAcrossPop(true); setShowDownPop(false); } 
                 else { setShowDownPop(true); setShowAcrossPop(false); }
 
-                setTimeout(() => inputRefs.current[`${firstX},${firstY}`]?.focus(), 500); 
+                setTimeout(() => inputRefs.current[`${focusX},${focusY}`]?.focus(), 500); 
             };
 
             const handleClueClick = (placement) => {
@@ -419,7 +453,9 @@
                 for(let i=0; i<placement.wordStr.length; i++) {
                     const cx = placement.normX + (placement.isHoriz ? i : 0);
                     const cy = placement.normY + (placement.isHoriz ? 0 : i);
-                    if (!inputs[`${cx},${cy}`]) { focusX = cx; focusY = cy; break; }
+                    const cell = layout.grid[cy][cx];
+                    const isCellProtected = cell.placements.some(p => solvedWords.includes(p.id));
+                    if (!isCellProtected && !inputs[`${cx},${cy}`]) { focusX = cx; focusY = cy; break; }
                 }
                 setSelectedCell({ x: focusX, y: focusY });
                 setTimeout(() => inputRefs.current[`${focusX},${focusY}`]?.focus(), 600);
@@ -435,7 +471,6 @@
             return (
                 <div className="h-[100dvh] bg-zinc-950 text-zinc-100 font-sans flex flex-col overflow-hidden relative">
                     
-                    {/* CONFETI GLOBAL */}
                     {globalWin && (
                         <div className="absolute inset-0 z-[100] pointer-events-none flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in">
                             <div className="bg-emerald-500/20 border border-emerald-500 text-white p-8 rounded-[2rem] text-center shadow-2xl shadow-emerald-500/20">
@@ -449,7 +484,6 @@
                         </div>
                     )}
 
-                    {/* HEADER ESTRICTO (SHRINK-0) */}
                     <header className="p-4 sm:p-6 w-full flex flex-col sm:flex-row justify-between items-center shrink-0 border-b border-zinc-800/50 bg-zinc-900/80 backdrop-blur-md z-40 gap-4">
                         <div className="flex items-center gap-4 w-full sm:w-auto justify-between">
                             <div className="flex items-center gap-3">
@@ -463,12 +497,12 @@
                             </div>
                         </div>
 
-                        {/* BOTONES DE PISTAS (POPOVERS) */}
                         <div className="flex items-center gap-4 w-full sm:w-auto relative z-50">
                             
                             <div className="relative group w-1/2 sm:w-32">
-                                <button onClick={() => {setShowAcrossPop(!showAcrossPop); setShowDownPop(false);}} className={`relative w-full flex justify-center items-center gap-2 px-4 py-3 rounded-xl font-black text-sm uppercase tracking-widest transition-all border border-transparent shadow-sm ${showAcrossPop ? 'bg-amber-500 text-zinc-900' : 'bg-zinc-800 text-amber-400 hover:bg-zinc-700 hover:text-amber-300 active:scale-95'}`}>
-                                    <ArrowRight size={16} className={showAcrossPop ? 'text-zinc-900' : 'text-amber-400'}/> HOR
+                                <div className="absolute inset-0 bg-amber-500 blur-md rounded-xl pointer-events-none glow-beat-1"></div>
+                                <button onClick={() => {setShowAcrossPop(!showAcrossPop); setShowDownPop(false);}} className={`relative w-full flex justify-center items-center gap-2 px-4 py-3 rounded-xl font-black text-sm uppercase tracking-widest transition-all shadow-md ${showAcrossPop ? 'bg-amber-500 text-zinc-900' : 'bg-zinc-800 text-amber-500 hover:bg-zinc-700 hover:text-amber-400 active:scale-95'}`}>
+                                    <ArrowRight size={16} className={showAcrossPop ? 'text-zinc-900' : 'text-amber-500'}/> HOR
                                 </button>
                                 {showAcrossPop && (
                                     <div className="absolute top-full right-0 sm:right-auto sm:left-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 animate-in slide-in-from-top-2 z-50">
@@ -491,8 +525,9 @@
                             </div>
 
                             <div className="relative group w-1/2 sm:w-32">
-                                <button onClick={() => {setShowDownPop(!showDownPop); setShowAcrossPop(false);}} className={`relative w-full flex justify-center items-center gap-2 px-4 py-3 rounded-xl font-black text-sm uppercase tracking-widest transition-all border border-transparent shadow-sm ${showDownPop ? 'bg-amber-500 text-zinc-900' : 'bg-zinc-800 text-amber-400 hover:bg-zinc-700 hover:text-amber-300 active:scale-95'}`}>
-                                    <ArrowDown size={16} className={showDownPop ? 'text-zinc-900' : 'text-amber-400'}/> VER
+                                <div className="absolute inset-0 bg-amber-500 blur-md rounded-xl pointer-events-none glow-beat-2"></div>
+                                <button onClick={() => {setShowDownPop(!showDownPop); setShowAcrossPop(false);}} className={`relative w-full flex justify-center items-center gap-2 px-4 py-3 rounded-xl font-black text-sm uppercase tracking-widest transition-all shadow-md ${showDownPop ? 'bg-amber-500 text-zinc-900' : 'bg-zinc-800 text-amber-500 hover:bg-zinc-700 hover:text-amber-400 active:scale-95'}`}>
+                                    <ArrowDown size={16} className={showDownPop ? 'text-zinc-900' : 'text-amber-500'}/> VER
                                 </button>
                                 {showDownPop && (
                                     <div className="absolute top-full right-0 sm:right-auto sm:left-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 animate-in slide-in-from-top-2 z-50">
@@ -520,20 +555,14 @@
                         </div>
                     </header>
 
-                    {/* CONTENEDOR PRINCIPAL FLEX-1 MIN-H-0 PARA EVITAR OVERFLOW */}
                     <div className="flex-1 w-full relative flex min-h-0">
-                        {/* ÁREA DEL GRID ESTATICA Y CENTRADA */}
                         <div 
                             className="flex-1 relative overflow-hidden bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-zinc-900 to-black cursor-default"
                             onClick={(e) => { 
-                                // Si clickeamos en la zona negra (afuera del grid), se vuelve al overview
                                 if (e.target === e.currentTarget || e.target.classList.contains('crossword-container')) {
                                     if(viewMode==='focused') {
-                                        setViewMode('overview');
-                                        setActivePlacementId(null);
-                                        setSelectedCell(null);
-                                        setShowAcrossPop(false);
-                                        setShowDownPop(false);
+                                        setViewMode('overview'); setActivePlacementId(null); setSelectedCell(null);
+                                        setShowAcrossPop(false); setShowDownPop(false);
                                     }
                                 }
                             }}
@@ -547,7 +576,6 @@
                                         transform: `translate(${zoomTransform.x}px, ${zoomTransform.y}px) scale(${zoomTransform.scale})`,
                                     }}
                                 >
-                                    {/* EMOJIS FLOTANTES */}
                                     {viewMode === 'focused' && activePlacementObj && (
                                         <div 
                                             className="absolute z-50 text-4xl sm:text-5xl animate-bounce drop-shadow-xl pointer-events-none flex justify-center"
@@ -589,7 +617,6 @@
                                                     className={containerClasses}
                                                     onClick={() => handleCellClick(x, y)}
                                                 >
-                                                    {/* NÚMERO FUERA DE LA CELDA FLOTANTE Y SEPARADO */}
                                                     {cell.starts && cell.starts.map((s, idx) => (
                                                         <span key={idx} className={`absolute w-5 h-5 bg-amber-500 text-black rounded-full flex items-center justify-center text-[10px] font-black z-40 shadow-sm pointer-events-none ${s.isHoriz ? '-left-6 top-1/2 -translate-y-1/2' : '-top-6 left-1/2 -translate-x-1/2'}`}>
                                                             {s.number}
@@ -600,7 +627,11 @@
                                                         className={`w-full h-full bg-transparent text-center uppercase font-black text-xl md:text-2xl outline-none m-0 p-0 z-20 cell-input caret-transparent ${!isWordActive || isProtected ? 'pointer-events-none' : 'cursor-pointer'}`}
                                                         maxLength={2}
                                                         value={userVal}
-                                                        readOnly={!isWordActive || viewMode === 'overview'}
+                                                        autoCapitalize="characters"
+                                                        autoComplete="off"
+                                                        autoCorrect="off"
+                                                        spellCheck="false"
+                                                        readOnly={!isWordActive || viewMode === 'overview' || isProtected}
                                                         tabIndex={isWordActive && !isProtected ? 0 : -1}
                                                         onChange={(e) => handleInput(e, x, y)}
                                                         onKeyDown={(e) => handleKeyDown(e, x, y)}
