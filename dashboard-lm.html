@@ -30,43 +30,24 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-        import { Save, ArrowLeft, Sparkles, Plus, Trash2, Loader2, X, Settings2, Key, Search, Settings, AlertTriangle, CheckSquare, CheckCircle2, ClipboardPaste } from 'lucide-react';
+        import { Save, ArrowLeft, Sparkles, Plus, Trash2, Loader2, X, Settings2, Key, Search, ScanSearch, Settings, AlertTriangle } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // --- ARQUETIPOS DE LA API ---
         const AI_MODALITIES = [
             { 
                 id: 'verbs', 
                 name: 'Tiempos Verbales (Irregulares)', 
-                desc: 'C1: Presente | C2: Pasado | C3: Participio'
-            },
-            { 
-                id: 'implicit_subject', 
-                name: 'Sujeto Implícito (ES ➔ EN)', 
-                desc: 'C1: Verbo ES (Suj. Oculto) | C2: Sujeto + Verbo EN | C3: Complemento Único'
+                desc: 'C1: Presente | C2: Pasado | C3: Participio',
+                placeholder: 'Ej: Dame verbos irregulares agrupados por similitud fonética.'
             },
             { 
                 id: 'sentences', 
                 name: 'Frases Compuestas + Conjunciones', 
-                desc: 'C1: Oración 1 | C2: Conector (because, so...) | C3: Oración 2 congruente'
-            },
-            {
-                id: 'conditionals',
-                name: 'Condicionales (Las dos mitades)',
-                desc: 'C1: If Clause | C2: Sujeto/Modal (I would) | C3: Verbo base + Resultado'
-            },
-            {
-                id: 'questions',
-                name: 'Preguntas y Respuestas (ES ➔ EN)',
-                desc: 'C1: Pregunta ES | C2: Pregunta EN | C3: Respuesta Lógica y Única'
-            },
-            {
-                id: 'phrasal_verbs',
-                name: 'Phrasal Verbs (EN ➔ ES)',
-                desc: 'C1: Verbo Base | C2: Partícula (up, off...) | C3: Significado (Español)'
+                desc: 'C1: Oración 1 | C2: Conector (because, so, and...) | C3: Oración 2 congruente',
+                placeholder: 'Ej: Crea oraciones usando SÓLO modal verbs (can, must, will, should).'
             }
         ];
 
@@ -76,21 +57,12 @@
             const [loading, setLoading] = useState(false);
             const [editingId, setEditingId] = useState(null);
             
+            // --- CONFIGURACIÓN DEL JUEGO ---
             const [gameSettings, setGameSettings] = useState({ rounds: 4, rowsPerRound: 6 });
+            
             const [magiaModal, setMagiaModal] = useState(false);
+            const [aiConfig, setAiConfig] = useState({ modality: 'sentences', topic: '', rows: 30 });
             
-            const [aiConfig, setAiConfig] = useState({ 
-                modality: 'questions', 
-                topic: '', 
-                c1Prompt: '', 
-                c2Prompt: '', 
-                c3Prompt: '', 
-                rows: 30 
-            });
-            
-            const [bulkModal, setBulkModal] = useState(false);
-            const [bulkText, setBulkText] = useState('');
-
             const [apiKey, setApiKey] = useState("");
             const [availableModels, setAvailableModels] = useState([]);
             const [selectedModel, setSelectedModel] = useState('');
@@ -126,34 +98,6 @@
 
             const addRow = () => setPairs([...pairs, { id: Date.now(), c1: '', c2: '', c3: '', isDuplicate: false }]);
             const removeRow = (id) => { if (pairs.length > 1) setPairs(pairs.filter(p => p.id !== id)); };
-
-            const processBulkText = () => {
-                if (!bulkText.trim()) return;
-                const lines = bulkText.split('\n');
-                const newImportedPairs = [];
-                
-                lines.forEach((line, index) => {
-                    let cleanLine = line.replace(/^\||\|$/g, '').trim();
-                    if (!cleanLine) return;
-                    const parts = cleanLine.split(/[\t|]+/).map(s => s.trim()).filter(s => s);
-                    
-                    if (parts.length >= 3) {
-                        newImportedPairs.push({
-                            id: Date.now() + index,
-                            c1: parts[0], c2: parts[1], c3: parts[2], isDuplicate: false
-                        });
-                    }
-                });
-
-                if (newImportedPairs.length > 0) {
-                    const currentPairs = pairs.filter(p => p.c1 || p.c2 || p.c3);
-                    setPairs([...currentPairs, ...newImportedPairs]);
-                    setBulkModal(false);
-                    setBulkText('');
-                } else {
-                    alert("No se detectaron 3 columnas válidas.");
-                }
-            };
 
             const checkDuplicates = () => {
                 let hasDupes = false;
@@ -201,57 +145,8 @@
             const executeMagia = async () => {
                 if (!apiKey.trim()) return alert("⚠️ Necesitas ingresar tu API Key.");
                 if (!selectedModel) return alert("⚠️ Escanea y selecciona un modelo primero (botón lupa).");
+                if (!aiConfig.topic.trim()) return alert("Añade una instrucción o tema en la caja de texto.");
                 
-                let specificInstructions = "";
-                
-                if (['verbs', 'implicit_subject', 'questions', 'phrasal_verbs', 'conditionals'].includes(aiConfig.modality)) {
-                    if (!aiConfig.topic.trim()) return alert("Añade una instrucción o contexto en la caja de texto.");
-                    
-                    if (aiConfig.modality === 'verbs') {
-                        specificInstructions = `- Instrucción General: "${aiConfig.topic}"`;
-                    } else if (aiConfig.modality === 'implicit_subject') {
-                        specificInstructions = `
-                            - Tema/Contexto: "${aiConfig.topic}"
-                            - REGLA C1: Verbo o frase corta en ESPAÑOL con sujeto implícito.
-                            - REGLA C2: Traducción exacta al INGLÉS (Sujeto + Auxiliar/Verbo).
-                            - REGLA C3: Complemento en INGLÉS MUY ESPECÍFICO para que solo encaje con esa oración.
-                        `;
-                    } else if (aiConfig.modality === 'phrasal_verbs') {
-                        specificInstructions = `
-                            - Tema/Contexto: "${aiConfig.topic}"
-                            - REGLA C1: Solo el verbo base en inglés (ej. "give", "look").
-                            - REGLA C2: Solo la partícula/preposición (ej. "up", "after").
-                            - REGLA C3: Traducción exacta o significado en ESPAÑOL.
-                        `;
-                    } else if (aiConfig.modality === 'questions') {
-                        // PROMPT 100% ENFOCADO EN RESPUESTAS LÓGICAS
-                        specificInstructions = `
-                            - Tema/Contexto: "${aiConfig.topic}"
-                            - REGLA C1: Una pregunta COMPLETA y natural en ESPAÑOL (ej. "¿Cuándo compraste la casa?").
-                            - REGLA C2: La traducción exacta de C1 al INGLÉS (ej. "When did you buy the house?").
-                            - REGLA C3: Escribe una RESPUESTA LÓGICA Y MUY ESPECÍFICA en inglés para esa pregunta. PROHIBIDO poner nombres de tiempos gramaticales. (ej. "I bought it two years ago").
-                            - ADVERTENCIA: La C3 debe ser el candado único que conecte lógicamente SÓLO con su C2 correspondiente.
-                        `;
-                    } else if (aiConfig.modality === 'conditionals') {
-                        specificInstructions = `
-                            - Tema/Contexto: "${aiConfig.topic}"
-                            - REGLA C1: La condición ("If" clause). Ej: "If I won the lottery,"
-                            - REGLA C2: El sujeto y modal de resultado. Ej: "I would"
-                            - REGLA C3: El verbo base y contexto específico. Ej: "buy an island."
-                        `;
-                    }
-                } else if (aiConfig.modality === 'sentences') {
-                    if (!aiConfig.c1Prompt.trim() || !aiConfig.c2Prompt.trim() || !aiConfig.c3Prompt.trim()) {
-                        return alert("Por favor llena las instrucciones para las 3 columnas.");
-                    }
-                    specificInstructions = `
-                        - Tema General: Frases compuestas
-                        - REGLA C1: ${aiConfig.c1Prompt}
-                        - REGLA C2: ${aiConfig.c2Prompt}
-                        - REGLA C3: ${aiConfig.c3Prompt}
-                    `;
-                }
-
                 setMagiaModal(false);
                 setLoading(true);
 
@@ -262,11 +157,10 @@
                     Actúa como un profesor de inglés experto creando contenido para un juego de emparejamiento de tres columnas.
                     Genera exactamente un array JSON de ${aiConfig.rows} elementos.
                     
-                    Reglas de estructura base (${selectedModality.name}):
+                    Reglas de estructura (${selectedModality.name}):
                     ${selectedModality.desc}
                     
-                    INSTRUCCIONES DEL PROFESOR:
-                    ${specificInstructions}
+                    Instrucción específica del tema: "${aiConfig.topic}"
                     
                     Formato JSON requerido estrictamente:
                     [
@@ -277,7 +171,7 @@
                       }
                     ]
                     
-                    Asegúrate estrictamente de NO REPETIR textos idénticos en la columna 1 para evitar choques en el juego.
+                    Asegúrate estrictamente de NO REPETIR palabras en la columna 1.
                     NO devuelvas formato markdown, solo el array de JSON crudo.
                 `;
 
@@ -303,7 +197,9 @@
 
                     const newPairs = parsedData.map((item, index) => ({
                         id: Date.now() + index,
-                        c1: item.c1 || '', c2: item.c2 || '', c3: item.c3 || '',
+                        c1: item.c1 || '',
+                        c2: item.c2 || '',
+                        c3: item.c3 || '',
                         isDuplicate: false
                     }));
 
@@ -376,9 +272,10 @@
 
                     <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Título de este LingoMatch..." className="w-full bg-transparent text-3xl sm:text-4xl font-black border-b-2 border-zinc-800 mb-6 outline-none focus:border-indigo-500 pb-2 text-white placeholder-zinc-700"/>
 
+                    {/* PANEL DE CONFIGURACIÓN MATEMÁTICA */}
                     <div className="bg-zinc-900 p-5 rounded-2xl border border-zinc-800 mb-8">
                         <div className="flex items-center gap-2 mb-4 text-indigo-400 font-bold uppercase tracking-widest text-xs">
-                            <Settings size={16}/> Configuración de Partida
+                            <Settings size={16}/> Configuración de Partida (Single Player)
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 items-end">
                             <div>
@@ -408,10 +305,12 @@
                         {pairs.map((p, idx) => (
                             <div key={p.id} className={`grid grid-cols-1 md:grid-cols-12 gap-2 bg-zinc-900 pt-6 pb-4 px-4 rounded-2xl border-2 relative group transition-all ${p.isDuplicate ? 'border-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.3)]' : 'border-zinc-800'}`}>
                                 
+                                {/* NUMERADOR VISUAL */}
                                 <div className="absolute -left-2 -top-2 bg-indigo-600 text-white w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shadow-md border-2 border-zinc-900 z-10">
                                     {idx + 1}
                                 </div>
 
+                                {/* BOTÓN BORRAR REPOSICIONADO */}
                                 {pairs.length > 1 && (
                                     <button onClick={() => removeRow(p.id)} className="absolute -right-2 -top-2 bg-rose-500 hover:bg-rose-400 text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg md:hidden group-hover:md:flex z-10">
                                         <Trash2 size={14}/>
@@ -439,44 +338,11 @@
                             <Plus/> Añadir Fila Manualmente
                         </button>
                         
-                        <button onClick={() => setBulkModal(true)} className="flex-none sm:w-1/4 py-4 bg-zinc-900 border border-zinc-700 hover:border-indigo-500 rounded-2xl text-zinc-400 hover:text-indigo-400 font-bold flex items-center justify-center gap-2 transition-colors">
-                            <ClipboardPaste size={18}/> Pegado Rápido
-                        </button>
-
-                        <button onClick={checkDuplicates} className="flex-none sm:w-1/4 py-4 bg-zinc-900 border border-zinc-700 hover:border-rose-500 rounded-2xl text-zinc-400 hover:text-rose-400 font-bold flex items-center justify-center gap-2 transition-colors">
-                            <CheckSquare size={18}/> Verificar Duplicados
+                        <button onClick={checkDuplicates} className="flex-none sm:w-1/3 py-4 bg-zinc-900 border border-zinc-700 hover:border-rose-500 rounded-2xl text-zinc-400 hover:text-rose-400 font-bold flex items-center justify-center gap-2 transition-colors">
+                            <ScanSearch size={18}/> Verificar Duplicados
                         </button>
                     </div>
 
-                    {/* MODAL PEGADO RÁPIDO */}
-                    {bulkModal && (
-                        <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-                            <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col">
-                                <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
-                                    <div className="flex items-center gap-3">
-                                        <div className="bg-indigo-500/20 p-2 rounded-xl text-indigo-500"><ClipboardPaste size={24}/></div>
-                                        <div><h3 className="font-black text-xl text-white">Pegado Rápido (Tablas)</h3></div>
-                                    </div>
-                                    <button onClick={() => setBulkModal(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 transition-colors"><X size={20}/></button>
-                                </div>
-                                <div className="p-6">
-                                    <p className="text-sm text-zinc-400 mb-4">Copia las celdas de Excel o una tabla de la IA y pégalas aquí. El sistema cortará las 3 columnas automáticamente.</p>
-                                    <textarea 
-                                        value={bulkText} 
-                                        onChange={e => setBulkText(e.target.value)} 
-                                        placeholder="Col1    Col2    Col3..."
-                                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-sm text-white focus:border-indigo-500 outline-none h-64 resize-none font-mono whitespace-pre"
-                                    />
-                                </div>
-                                <div className="p-6 border-t border-zinc-800 bg-zinc-950 shrink-0 flex gap-3">
-                                    <button onClick={() => setBulkModal(false)} className="flex-1 text-zinc-400 font-bold hover:text-white transition-colors">Cancelar</button>
-                                    <button onClick={processBulkText} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-black uppercase tracking-widest transition-colors shadow-lg">Importar Datos</button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* MODAL CONFIGURADOR DE IA */}
                     {magiaModal && (
                         <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
                             <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -516,36 +382,15 @@
                                         </div>
                                     </div>
 
-                                    {/* RENDERIZADO DINÁMICO */}
-                                    {aiConfig.modality === 'sentences' ? (
-                                        <div>
-                                            <label className="block text-xs font-black text-zinc-500 uppercase tracking-widest mb-3">2. Reglas Específicas</label>
-                                            <div className="space-y-3">
-                                                <div>
-                                                    <label className="text-[10px] font-bold text-indigo-400 uppercase">Oración 1</label>
-                                                    <input value={aiConfig.c1Prompt} onChange={e => setAiConfig({...aiConfig, c1Prompt: e.target.value})} placeholder="Instrucción estricta para esta columna..." className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-sm text-white focus:border-indigo-500 outline-none"/>
-                                                </div>
-                                                <div>
-                                                    <label className="text-[10px] font-bold text-amber-400 uppercase">Conector</label>
-                                                    <input value={aiConfig.c2Prompt} onChange={e => setAiConfig({...aiConfig, c2Prompt: e.target.value})} placeholder="Instrucción estricta para esta columna..." className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-sm text-white focus:border-amber-500 outline-none"/>
-                                                </div>
-                                                <div>
-                                                    <label className="text-[10px] font-bold text-emerald-400 uppercase">Oración 2</label>
-                                                    <input value={aiConfig.c3Prompt} onChange={e => setAiConfig({...aiConfig, c3Prompt: e.target.value})} placeholder="Instrucción estricta para esta columna..." className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-sm text-white focus:border-emerald-500 outline-none"/>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <div>
-                                            <label className="block text-xs font-black text-zinc-500 uppercase tracking-widest mb-3">2. Instrucción o Contexto</label>
-                                            <textarea 
-                                                value={aiConfig.topic} 
-                                                onChange={e => setAiConfig({...aiConfig, topic: e.target.value})} 
-                                                placeholder={AI_MODALITIES.find(m => m.id === aiConfig.modality).placeholder}
-                                                className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-sm text-white focus:border-amber-500 outline-none h-24 resize-none"
-                                            />
-                                        </div>
-                                    )}
+                                    <div>
+                                        <label className="block text-xs font-black text-zinc-500 uppercase tracking-widest mb-3">2. Instrucción Pedagógica</label>
+                                        <textarea 
+                                            value={aiConfig.topic} 
+                                            onChange={e => setAiConfig({...aiConfig, topic: e.target.value})} 
+                                            placeholder={AI_MODALITIES.find(m => m.id === aiConfig.modality).placeholder}
+                                            className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-sm text-white focus:border-amber-500 outline-none h-24 resize-none"
+                                        />
+                                    </div>
 
                                     <div>
                                         <label className="block text-xs font-black text-zinc-500 uppercase tracking-widest mb-3">3. Cantidad de Filas (Max 60)</label>
