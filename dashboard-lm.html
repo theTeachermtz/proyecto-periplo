@@ -30,8 +30,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-        // ADIÓS ScanSearch. Importamos CheckSquare en su lugar.
-        import { Save, ArrowLeft, Sparkles, Plus, Trash2, Loader2, X, Settings2, Key, Search, Settings, AlertTriangle, CheckSquare, CheckCircle2 } from 'lucide-react';
+        import { Save, ArrowLeft, Sparkles, Plus, Trash2, Loader2, X, Settings2, Key, Search, Settings, AlertTriangle, CheckSquare, CheckCircle2, ClipboardPaste } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -58,12 +57,15 @@
             const [loading, setLoading] = useState(false);
             const [editingId, setEditingId] = useState(null);
             
-            // --- CONFIGURACIÓN DEL JUEGO ---
             const [gameSettings, setGameSettings] = useState({ rounds: 4, rowsPerRound: 6 });
             
             const [magiaModal, setMagiaModal] = useState(false);
             const [aiConfig, setAiConfig] = useState({ modality: 'sentences', topic: '', rows: 30 });
             
+            // --- ESTADO PARA PEGADO RÁPIDO ---
+            const [bulkModal, setBulkModal] = useState(false);
+            const [bulkText, setBulkText] = useState('');
+
             const [apiKey, setApiKey] = useState("");
             const [availableModels, setAvailableModels] = useState([]);
             const [selectedModel, setSelectedModel] = useState('');
@@ -99,6 +101,44 @@
 
             const addRow = () => setPairs([...pairs, { id: Date.now(), c1: '', c2: '', c3: '', isDuplicate: false }]);
             const removeRow = (id) => { if (pairs.length > 1) setPairs(pairs.filter(p => p.id !== id)); };
+
+            // --- LÓGICA DE PEGADO RÁPIDO (BULK IMPORT) ---
+            const processBulkText = () => {
+                if (!bulkText.trim()) return;
+                
+                const lines = bulkText.split('\n');
+                const newImportedPairs = [];
+                
+                lines.forEach((line, index) => {
+                    // Limpiamos los bordes de markdown si pegó una tabla de IA (| texto | texto |)
+                    let cleanLine = line.replace(/^\||\|$/g, '').trim();
+                    if (!cleanLine) return;
+                    
+                    // Cortamos por tabulaciones (Excel) o por las barritas (Markdown)
+                    const parts = cleanLine.split(/[\t|]+/).map(s => s.trim()).filter(s => s);
+                    
+                    // Solo importamos si tiene al menos las 3 columnas
+                    if (parts.length >= 3) {
+                        newImportedPairs.push({
+                            id: Date.now() + index,
+                            c1: parts[0],
+                            c2: parts[1],
+                            c3: parts[2],
+                            isDuplicate: false
+                        });
+                    }
+                });
+
+                if (newImportedPairs.length > 0) {
+                    // Si la tabla actual solo tiene 1 fila vacía, la sustituimos. Si no, agregamos al final.
+                    const currentPairs = pairs.filter(p => p.c1 || p.c2 || p.c3);
+                    setPairs([...currentPairs, ...newImportedPairs]);
+                    setBulkModal(false);
+                    setBulkText('');
+                } else {
+                    alert("No se detectaron 3 columnas válidas. Asegúrate de copiar directo de la tabla.");
+                }
+            };
 
             const checkDuplicates = () => {
                 let hasDupes = false;
@@ -273,7 +313,6 @@
 
                     <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Título de este LingoMatch..." className="w-full bg-transparent text-3xl sm:text-4xl font-black border-b-2 border-zinc-800 mb-6 outline-none focus:border-indigo-500 pb-2 text-white placeholder-zinc-700"/>
 
-                    {/* PANEL DE CONFIGURACIÓN MATEMÁTICA */}
                     <div className="bg-zinc-900 p-5 rounded-2xl border border-zinc-800 mb-8">
                         <div className="flex items-center gap-2 mb-4 text-indigo-400 font-bold uppercase tracking-widest text-xs">
                             <Settings size={16}/> Configuración de Partida (Single Player)
@@ -306,12 +345,10 @@
                         {pairs.map((p, idx) => (
                             <div key={p.id} className={`grid grid-cols-1 md:grid-cols-12 gap-2 bg-zinc-900 pt-6 pb-4 px-4 rounded-2xl border-2 relative group transition-all ${p.isDuplicate ? 'border-rose-500 shadow-[0_0_15px_rgba(244,63,94,0.3)]' : 'border-zinc-800'}`}>
                                 
-                                {/* NUMERADOR VISUAL */}
                                 <div className="absolute -left-2 -top-2 bg-indigo-600 text-white w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shadow-md border-2 border-zinc-900 z-10">
                                     {idx + 1}
                                 </div>
 
-                                {/* BOTÓN BORRAR REPOSICIONADO */}
                                 {pairs.length > 1 && (
                                     <button onClick={() => removeRow(p.id)} className="absolute -right-2 -top-2 bg-rose-500 hover:bg-rose-400 text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg md:hidden group-hover:md:flex z-10">
                                         <Trash2 size={14}/>
@@ -339,11 +376,45 @@
                             <Plus/> Añadir Fila Manualmente
                         </button>
                         
-                        <button onClick={checkDuplicates} className="flex-none sm:w-1/3 py-4 bg-zinc-900 border border-zinc-700 hover:border-rose-500 rounded-2xl text-zinc-400 hover:text-rose-400 font-bold flex items-center justify-center gap-2 transition-colors">
+                        {/* BOTÓN PEGADO RÁPIDO */}
+                        <button onClick={() => setBulkModal(true)} className="flex-none sm:w-1/4 py-4 bg-zinc-900 border border-zinc-700 hover:border-indigo-500 rounded-2xl text-zinc-400 hover:text-indigo-400 font-bold flex items-center justify-center gap-2 transition-colors">
+                            <ClipboardPaste size={18}/> Pegado Rápido
+                        </button>
+
+                        <button onClick={checkDuplicates} className="flex-none sm:w-1/4 py-4 bg-zinc-900 border border-zinc-700 hover:border-rose-500 rounded-2xl text-zinc-400 hover:text-rose-400 font-bold flex items-center justify-center gap-2 transition-colors">
                             <CheckSquare size={18}/> Verificar Duplicados
                         </button>
                     </div>
 
+                    {/* MODAL PEGADO RÁPIDO (BULK IMPORT) */}
+                    {bulkModal && (
+                        <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col">
+                                <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
+                                    <div className="flex items-center gap-3">
+                                        <div className="bg-indigo-500/20 p-2 rounded-xl text-indigo-500"><ClipboardPaste size={24}/></div>
+                                        <div><h3 className="font-black text-xl text-white">Pegado Rápido (Tablas)</h3></div>
+                                    </div>
+                                    <button onClick={() => setBulkModal(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 transition-colors"><X size={20}/></button>
+                                </div>
+                                <div className="p-6">
+                                    <p className="text-sm text-zinc-400 mb-4">Copia las celdas de Excel o una tabla de la IA y pégalas aquí. El sistema cortará las 3 columnas automáticamente y las agregará al final de tu lista actual.</p>
+                                    <textarea 
+                                        value={bulkText} 
+                                        onChange={e => setBulkText(e.target.value)} 
+                                        placeholder="Col1    Col2    Col3..."
+                                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-sm text-white focus:border-indigo-500 outline-none h-64 resize-none font-mono whitespace-pre"
+                                    />
+                                </div>
+                                <div className="p-6 border-t border-zinc-800 bg-zinc-950 shrink-0 flex gap-3">
+                                    <button onClick={() => setBulkModal(false)} className="flex-1 text-zinc-400 font-bold hover:text-white transition-colors">Cancelar</button>
+                                    <button onClick={processBulkText} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-black uppercase tracking-widest transition-colors shadow-lg">Importar Datos</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MODAL CONFIGURADOR DE IA */}
                     {magiaModal && (
                         <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
                             <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
