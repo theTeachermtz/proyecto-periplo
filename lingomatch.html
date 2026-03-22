@@ -32,6 +32,9 @@
         
         @keyframes shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-5px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-5px); } 80% { transform: translateX(5px); } }
         .animate-shake { animation: shake 0.4s ease-in-out; }
+
+        @keyframes floatUp { 0% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-40px) scale(1.3); } }
+        .animate-float { animation: floatUp 0.8s ease-out forwards; }
     </style>
 </head>
 <body class="text-zinc-100">
@@ -39,10 +42,10 @@
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Users, Play, Eye, Plus, LogIn, CheckCircle2, XCircle, Trophy, User, Pause, AlertTriangle, BookOpen, Clock, Zap, Timer, ChevronRight } from 'lucide-react';
+        import { Users, Play, Plus, LogIn, CheckCircle2, XCircle, Trophy, User, Pause, Clock, Timer, Medal, Crown, Zap, ChevronRight } from 'lucide-react';
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-        import { getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+        import { getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
         import confetti from 'canvas-confetti';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
@@ -52,31 +55,44 @@
 
         const shuffle = (array) => [...array].sort(() => Math.random() - 0.5);
         const genCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
+        const formatTime = (totalSecs) => `${Math.floor(totalSecs / 60).toString().padStart(2, '0')}:${(totalSecs % 60).toString().padStart(2, '0')}`;
 
         const LingoMatch = () => {
             const [user, setUser] = useState(null);
+            const [quizId, setQuizId] = useState(new URLSearchParams(window.location.search).get('id'));
             const [quizData, setQuizData] = useState(null);
+            
+            // Core Architecture States
+            const [modeSelected, setModeSelected] = useState(null); // 'single' | 'multi'
+            const [isSinglePlayer, setIsSinglePlayer] = useState(false);
+            
+            // Room & Game State (Shared structure for both modes)
             const [roomCode, setRoomCode] = useState('');
             const [inputCode, setInputCode] = useState('');
-            const [roomData, setRoomData] = useState(null);
-            const [isObserver, setIsObserver] = useState(false);
+            const [roomData, setRoomData] = useState(null); 
             
-            // UI States
+            // Single Player Specifics
+            const [playerName, setPlayerName] = useState('');
+            const [leaderboard, setLeaderboard] = useState([]);
+            
+            // Gameplay UI States
             const [selection, setSelection] = useState({ c1: null, c2: null, c3: null });
             const [feedback, setFeedback] = useState('none');
             const [locked, setLocked] = useState(false);
-            const [errorModal, setErrorModal] = useState(null);
+            const [isPaused, setIsPaused] = useState(false);
             
-            // Single Player Timer
+            // Fancy Animations
+            const [countdown, setCountdown] = useState(null);
+            const [penaltyFlies, setPenaltyFlies] = useState([]);
+            const [timerAnim, setTimerAnim] = useState(false);
+
             const [timer, setTimer] = useState(0);
             const timerRef = useRef(null);
 
-            // 1. Init Auth & Fetch Quiz
+            // 1. Initial Load
             useEffect(() => {
                 signInAnonymously(auth);
                 const unsub = onAuthStateChanged(auth, setUser);
-                
-                const quizId = new URLSearchParams(window.location.search).get('id');
                 if (quizId) {
                     getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId)).then(snap => {
                         if(snap.exists()) setQuizData(snap.data());
@@ -84,47 +100,118 @@
                     });
                 }
                 return () => unsub();
-            }, []);
+            }, [quizId]);
 
-            // 2. Sync Room
+            // 2. Multiplayer Firebase Sync
             useEffect(() => {
-                if (!user || !roomCode) return;
-                // RUTA CORREGIDA AQUÍ (4 NIVELES)
+                if (!user || !roomCode || isSinglePlayer) return;
                 const unsub = onSnapshot(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), (docSnap) => {
                     if (docSnap.exists()) setRoomData(docSnap.data());
                     else { setRoomCode(''); setRoomData(null); alert("La sala ha sido cerrada."); }
                 });
                 return () => unsub();
-            }, [user, roomCode]);
+            }, [user, roomCode, isSinglePlayer]);
 
-            // 3. Timer for Single Player
+            // 3. Single Player Timer
             useEffect(() => {
-                if (roomData?.gameState === 'playing' && roomData?.mode === 'single') {
+                if (roomData?.gameState === 'playing' && isSinglePlayer && !countdown && !isPaused) {
                     timerRef.current = setInterval(() => setTimer(prev => prev + 1), 1000);
                 } else {
                     clearInterval(timerRef.current);
                 }
                 return () => clearInterval(timerRef.current);
-            }, [roomData?.gameState, roomData?.mode]);
+            }, [roomData?.gameState, isSinglePlayer, countdown, isPaused]);
 
-            // Formato de Tiempo (mm:ss)
-            const formatTime = (totalSeconds) => {
-                const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
-                const s = (totalSeconds % 60).toString().padStart(2, '0');
-                return `${m}:${s}`;
+            // --- ANIMATION CONTROLLERS ---
+            const triggerCountdown = (callback, textPrefix = "") => {
+                setCountdown(textPrefix ? `${textPrefix} - 3` : '3');
+                let count = 3;
+                const int = setInterval(() => {
+                    count--;
+                    if (count > 0) setCountdown(textPrefix ? `${textPrefix} - ${count}` : count.toString());
+                    else if (count === 0) setCountdown('¡GO!');
+                    else {
+                        clearInterval(int);
+                        setCountdown(null);
+                        if (callback) callback();
+                    }
+                }, 800);
             };
 
-            const myPlayer = roomData?.players?.find(p => p.uid === user?.uid);
-            const myRole = myPlayer ? myPlayer.id : (isObserver ? 'obs' : null);
+            const triggerPenalty = (pointsText, penaltySecs) => {
+                setLocked(true);
+                const isErr = penaltySecs > 2;
+                setFeedback(isErr ? 'error' : 'partial');
+                
+                // Efecto flotante
+                const id = Date.now();
+                setPenaltyFlies(prev => [...prev, { id, text: pointsText, isErr }]);
+                setTimeout(() => setPenaltyFlies(prev => prev.filter(p => p.id !== id)), 800);
 
-            // --- LOBBY & ROLES ---
+                if (isSinglePlayer) {
+                    setTimer(prev => prev + penaltySecs);
+                    setTimerAnim(true);
+                    setTimeout(() => setTimerAnim(false), 500);
+                }
+
+                // Liberar el tablero rápido sin modales
+                setTimeout(() => {
+                    setSelection({ c1: null, c2: null, c3: null });
+                    setFeedback('none');
+                    setLocked(false);
+                    if (!isSinglePlayer) processTurn(isErr ? 0 : 1, false); // En multi pasa turno
+                }, 600);
+            };
+
+            // --- STATE UPDATER (Dual Engine) ---
+            const updateGame = async (newData) => {
+                if (isSinglePlayer) setRoomData(prev => ({...prev, ...newData}));
+                else await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), newData);
+            };
+
+            // --- SINGLE PLAYER (SPEEDRUN) SETUP ---
+            const setupSinglePlayer = async () => {
+                setIsSinglePlayer(true);
+                setModeSelected('single');
+                
+                // Fetch Leaderboard
+                const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/leaderboard`), orderBy('time', 'asc'), limit(5));
+                const snap = await getDocs(q);
+                setLeaderboard(snap.docs.map(d => d.data()));
+            };
+
+            const startSinglePlayer = () => {
+                if (!playerName.trim()) return alert("Por favor escribe tu nombre o apodo.");
+                triggerCountdown(() => {
+                    const settings = quizData.content.settings || { rounds: 4, rowsPerRound: 6 };
+                    const totalNeeded = settings.rounds * settings.rowsPerRound;
+                    let allPairs = shuffle([...quizData.content.pairs]);
+                    if (allPairs.length < totalNeeded) {
+                        const diff = totalNeeded - allPairs.length;
+                        for(let i=0; i<diff; i++) allPairs.push(allPairs[i % allPairs.length]);
+                    }
+                    const gamePool = allPairs.slice(0, totalNeeded);
+                    
+                    setRoomData({
+                        gameState: 'playing', mode: 'single', settings, gamePool, currentRound: 1,
+                        board: generateBoardColumns(gamePool.slice(0, settings.rowsPerRound)),
+                        matchedIds: [],
+                        players: [{ id: 'p1', name: playerName, score: 0, occupied: true }]
+                    });
+                    setTimer(0);
+                }, "PREPÁRATE");
+            };
+
+            // --- MULTIPLAYER SETUP ---
+            const setupMultiplayer = () => {
+                setIsSinglePlayer(false);
+                setModeSelected('multi');
+            };
+
             const createRoom = async () => {
-                if (!quizData) return alert("Esperando datos del juego...");
                 const code = genCode();
-                // RUTA CORREGIDA AQUÍ (4 NIVELES)
                 await setDoc(doc(db, 'artifacts/periplo-app-v1/rooms', code), {
-                    quizId: new URLSearchParams(window.location.search).get('id'),
-                    gameState: 'roles',
+                    quizId, gameState: 'roles',
                     players: [
                         { id: 'p1', name: 'Jugador 1', score: 0, color: 'bg-indigo-500', occupied: false, uid: null },
                         { id: 'p2', name: 'Jugador 2', score: 0, color: 'bg-rose-500', occupied: false, uid: null },
@@ -136,7 +223,6 @@
             };
 
             const joinRoom = async () => {
-                // RUTA CORREGIDA AQUÍ (4 NIVELES)
                 const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/rooms', inputCode.toUpperCase()));
                 if (snap.exists()) setRoomCode(inputCode.toUpperCase());
                 else alert('Código inválido.');
@@ -145,112 +231,60 @@
             const selectRole = async (roleId) => {
                 if (roleId === 'obs') { setIsObserver(true); return; }
                 const updated = roomData.players.map(p => p.id === roleId ? { ...p, occupied: true, uid: user.uid } : (p.uid === user.uid ? { ...p, occupied: false, uid: null } : p));
-                // RUTA CORREGIDA AQUÍ (4 NIVELES)
                 await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), { players: updated });
                 setIsObserver(false);
             };
 
-            // --- INICIAR PARTIDA ---
-            const startGame = async () => {
+            const startMultiplayer = async () => {
                 const activePlayers = roomData.players.filter(p => p.occupied);
-                const mode = activePlayers.length === 1 ? 'single' : 'multi';
-                
                 const settings = quizData.content.settings || { rounds: 4, rowsPerRound: 6 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
                 
                 let allPairs = shuffle([...quizData.content.pairs]);
-                
                 if (allPairs.length < totalNeeded) {
                     const diff = totalNeeded - allPairs.length;
                     for(let i=0; i<diff; i++) allPairs.push(allPairs[i % allPairs.length]);
                 }
                 const gamePool = allPairs.slice(0, totalNeeded);
-                const round1Pairs = gamePool.slice(0, settings.rowsPerRound);
 
-                // RUTA CORREGIDA AQUÍ (4 NIVELES)
-                await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), {
-                    gameState: 'playing',
-                    mode: mode,
-                    settings: settings,
-                    gamePool: gamePool,
-                    currentRound: 1,
-                    board: generateBoardColumns(round1Pairs),
-                    matchedIds: [],
-                    currentTurn: activePlayers[0].id,
+                await updateGame({
+                    gameState: 'playing', mode: 'multi', settings, gamePool, currentRound: 1,
+                    board: generateBoardColumns(gamePool.slice(0, settings.rowsPerRound)),
+                    matchedIds: [], currentTurn: activePlayers[0].id,
                     players: roomData.players.map(p => ({...p, score: 0, roundScore: 0}))
                 });
-
-                if (mode === 'single') setTimer(0);
             };
 
-            const generateBoardColumns = (pairsSubset) => {
-                return {
-                    c1: shuffle(pairsSubset.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c1 }))),
-                    c2: shuffle(pairsSubset.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c2 }))),
-                    c3: shuffle(pairsSubset.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c3 })))
-                };
-            };
+            const generateBoardColumns = (pairsSubset) => ({
+                c1: shuffle(pairsSubset.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c1 }))),
+                c2: shuffle(pairsSubset.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c2 }))),
+                c3: shuffle(pairsSubset.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c3 })))
+            });
 
-            // --- LÓGICA DEL JUEGO ---
+            // --- GAMEPLAY LOGIC ---
             const handleSelect = (col, item) => {
-                if (locked || myRole === 'obs') return;
-                if (roomData.mode === 'multi' && myRole !== roomData.currentTurn) return;
-                
+                if (locked || myRole === 'obs' || countdown) return;
+                if (!isSinglePlayer && myRole !== roomData.currentTurn) return;
                 setSelection(prev => ({ ...prev, [col]: prev[col]?.uid === item.uid ? null : item }));
             };
 
             useEffect(() => {
-                if (selection.c1 && selection.c2 && selection.c3) validateMatch();
+                if (selection.c1 && selection.c2 && selection.c3) {
+                    setLocked(true);
+                    const id1 = selection.c1.pairId, id2 = selection.c2.pairId, id3 = selection.c3.pairId;
+                    const isPerfect = (id1 === id2 && id2 === id3);
+                    const isPartial = !isPerfect && ((id1 === id2) || (id2 === id3) || (id1 === id3));
+                    
+                    if (isPerfect) {
+                        setFeedback('success');
+                        setTimeout(() => processTurn(3, true), 400); // Rápido en aciertos
+                    } else if (isPartial) {
+                        triggerPenalty(isSinglePlayer ? "+2s" : "+1 Pt", 2);
+                    } else {
+                        triggerPenalty(isSinglePlayer ? "+5s" : "Falló", 5);
+                    }
+                }
             }, [selection]);
-
-            const validateMatch = () => {
-                setLocked(true);
-                const id1 = selection.c1.pairId;
-                const id2 = selection.c2.pairId;
-                const id3 = selection.c3.pairId;
-
-                const isPerfect = (id1 === id2 && id2 === id3);
-                const isPartial = !isPerfect && ((id1 === id2) || (id2 === id3) || (id1 === id3));
-                
-                const targetPair = roomData.gamePool.find(p => p.id === id1) || roomData.gamePool.find(p => p.id === id2);
-
-                if (isPerfect) {
-                    setFeedback('success');
-                    setTimeout(() => processTurn(3, true), 800);
-                } else if (isPartial) {
-                    setFeedback('partial');
-                    setTimeout(() => {
-                        setErrorModal({
-                            title: "¡Casi!", 
-                            correct: `${targetPair.c1} ➔ ${targetPair.c2} ➔ ${targetPair.c3}`,
-                            penalty: roomData.mode === 'single' ? "+2 Segundos" : "+1 Punto Parcial",
-                            type: 'partial'
-                        });
-                    }, 500);
-                } else {
-                    setFeedback('error');
-                    setTimeout(() => {
-                        setErrorModal({
-                            title: "¡Error Total!", 
-                            correct: `${targetPair.c1} ➔ ${targetPair.c2} ➔ ${targetPair.c3}`,
-                            penalty: roomData.mode === 'single' ? "+5 Segundos" : "0 Puntos",
-                            type: 'error'
-                        });
-                    }, 500);
-                }
-            };
-
-            const acceptPenalty = async () => {
-                const type = errorModal.type;
-                setErrorModal(null);
-                
-                if (roomData.mode === 'single') {
-                    setTimer(prev => prev + (type === 'partial' ? 2 : 5));
-                    await processTurn(0, false);
-                } else {
-                    await processTurn(type === 'partial' ? 1 : 0, false);
-                }
-            };
 
             const processTurn = async (pointsEarned, clearBoard) => {
                 setSelection({ c1: null, c2: null, c3: null });
@@ -261,87 +295,125 @@
                 let newMatched = [...roomData.matchedIds];
                 let nextTurn = roomData.currentTurn;
 
-                if (roomData.mode === 'multi') {
+                if (!isSinglePlayer) {
                     updatedPlayers = updatedPlayers.map(p => p.id === roomData.currentTurn ? { ...p, score: p.score + pointsEarned, roundScore: (p.roundScore || 0) + pointsEarned } : p);
-                    
                     const active = updatedPlayers.filter(p => p.occupied);
                     const currIdx = active.findIndex(p => p.id === roomData.currentTurn);
                     nextTurn = active[(currIdx + 1) % active.length].id;
                 }
 
-                if (clearBoard) {
-                    newMatched = [...newMatched, selection.c1.uid, selection.c2.uid, selection.c3.uid];
-                }
+                if (clearBoard) newMatched.push(selection.c1.uid, selection.c2.uid, selection.c3.uid);
 
-                // RUTA CORREGIDA AQUÍ (4 NIVELES)
-                const ref = doc(db, 'artifacts/periplo-app-v1/rooms', roomCode);
                 const isRoundOver = newMatched.length >= (roomData.settings.rowsPerRound * 3);
 
                 if (isRoundOver) {
-                    let finalPlayers = [...updatedPlayers];
-                    
-                    if (roomData.mode === 'multi') {
-                        const maxRoundScore = Math.max(...finalPlayers.map(p => p.roundScore || 0));
-                        finalPlayers = finalPlayers.map(p => ({
-                            ...p,
-                            score: p.roundScore === maxRoundScore && p.roundScore > 0 ? p.score + 5 : p.score,
-                            roundScore: 0 
+                    if (!isSinglePlayer) {
+                        const maxRoundScore = Math.max(...updatedPlayers.map(p => p.roundScore || 0));
+                        updatedPlayers = updatedPlayers.map(p => ({
+                            ...p, score: p.roundScore === maxRoundScore && p.roundScore > 0 ? p.score + 5 : p.score, roundScore: 0 
                         }));
                     }
 
                     const nextRound = roomData.currentRound + 1;
                     
                     if (nextRound > roomData.settings.rounds) {
-                        confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
-                        await updateDoc(ref, { gameState: 'end', players: finalPlayers, finalTime: timer });
+                        confetti({ particleCount: 200, spread: 100, origin: { y: 0.6 } });
+                        if (isSinglePlayer) {
+                            await addDoc(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/leaderboard`), { playerName, time: timer, date: serverTimestamp() });
+                        }
+                        await updateGame({ gameState: 'end', players: updatedPlayers, finalTime: timer });
                     } else {
-                        const startIndex = (nextRound - 1) * roomData.settings.rowsPerRound;
-                        const nextPairs = roomData.gamePool.slice(startIndex, startIndex + roomData.settings.rowsPerRound);
-                        
-                        await updateDoc(ref, {
-                            currentRound: nextRound,
-                            board: generateBoardColumns(nextPairs),
-                            matchedIds: [],
-                            players: finalPlayers,
-                            currentTurn: nextTurn
-                        });
+                        triggerCountdown(async () => {
+                            const startIndex = (nextRound - 1) * roomData.settings.rowsPerRound;
+                            const nextPairs = roomData.gamePool.slice(startIndex, startIndex + roomData.settings.rowsPerRound);
+                            await updateGame({ currentRound: nextRound, board: generateBoardColumns(nextPairs), matchedIds: [], players: updatedPlayers, currentTurn: nextTurn });
+                        }, `RONDA ${nextRound}`);
                     }
                 } else {
-                    await updateDoc(ref, { players: updatedPlayers, matchedIds: newMatched, currentTurn: nextTurn });
+                    await updateGame({ players: updatedPlayers, matchedIds: newMatched, currentTurn: nextTurn });
                 }
             };
 
             // --- VISTAS ---
             if (!quizData) return <div className="h-screen flex items-center justify-center font-black animate-pulse">Cargando Motor...</div>;
 
-            if (!roomData) return (
-                <div className="h-screen flex flex-col items-center justify-center p-6 bg-zinc-950 relative overflow-hidden">
-                    <div className="absolute top-10 w-full text-center">
-                        <h1 className="text-3xl font-black italic text-indigo-500 mb-2">LINGOMATCH <span className="text-amber-400">TRIPLE</span></h1>
+            // PANTALLA 1: ELEGIR MODALIDAD
+            if (!modeSelected) return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
+                    <div className="text-center mb-10">
+                        <h1 className="text-4xl font-black italic text-indigo-500 mb-2 tracking-tighter">LINGOMATCH <span className="text-amber-400">TRIPLE</span></h1>
                         <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">{quizData.title}</p>
                     </div>
+                    <div className="w-full max-w-sm space-y-4">
+                        <button onClick={setupSinglePlayer} className="btn-juicy w-full bg-amber-500 text-zinc-950 font-black py-5 rounded-2xl border-amber-700 flex flex-col items-center justify-center gap-1 shadow-xl">
+                            <Timer size={32}/>
+                            <span className="text-xl tracking-widest uppercase">SPEEDRUN (1P)</span>
+                            <span className="text-xs font-bold opacity-80">Juega local. Guarda tu récord.</span>
+                        </button>
+                        <button onClick={setupMultiplayer} className="btn-juicy w-full bg-indigo-600 text-white font-black py-5 rounded-2xl border-indigo-800 flex flex-col items-center justify-center gap-1 shadow-xl mt-4">
+                            <Users size={32}/>
+                            <span className="text-xl tracking-widest uppercase">ARENA (VS)</span>
+                            <span className="text-xs font-bold opacity-80">Crea sala. Compite por turnos.</span>
+                        </button>
+                    </div>
+                </div>
+            );
 
+            // PANTALLA 2A: LOBBY SINGLE PLAYER (LEADERBOARD)
+            if (modeSelected === 'single' && !roomData) return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
+                    <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-6 rounded-3xl shadow-2xl">
+                        <div className="flex items-center gap-3 mb-6 border-b border-zinc-800 pb-4">
+                            <Trophy className="text-amber-400" size={28}/>
+                            <h2 className="text-xl font-black uppercase italic text-white tracking-widest">Mejores Tiempos</h2>
+                        </div>
+                        
+                        <div className="space-y-3 mb-8">
+                            {leaderboard.length === 0 ? <p className="text-center text-zinc-500 font-bold text-sm py-4">Sé el primero en dejar tu marca.</p> :
+                                leaderboard.map((l, i) => (
+                                    <div key={i} className="flex justify-between items-center bg-zinc-950 p-3 rounded-xl border border-zinc-800">
+                                        <div className="flex items-center gap-3">
+                                            <span className={`font-black text-sm ${i===0?'text-amber-400':i===1?'text-zinc-400':i===2?'text-amber-700':'text-zinc-600'}`}>#{i+1}</span>
+                                            <span className="font-bold text-white uppercase">{l.playerName}</span>
+                                        </div>
+                                        <span className="font-black text-indigo-400 tabular-nums">{formatTime(l.time)}</span>
+                                    </div>
+                                ))
+                            }
+                        </div>
+
+                        <input value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="TU NOMBRE / APODO" className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-4 text-center text-lg font-black uppercase outline-none focus:border-amber-500 text-white mb-4"/>
+                        <button onClick={startSinglePlayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2">
+                            <Play fill="currentColor"/> EMPEZAR
+                        </button>
+                        <button onClick={() => setModeSelected(null)} className="w-full text-zinc-500 font-bold text-xs mt-4 hover:text-white transition-colors">Volver a Selección</button>
+                    </div>
+                </div>
+            );
+
+            // PANTALLA 2B: LOBBY MULTIPLAYER
+            if (modeSelected === 'multi' && !roomData) return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
                     <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl w-full max-w-sm shadow-2xl z-10">
+                        <h2 className="text-center text-indigo-400 font-black italic text-2xl mb-6 uppercase tracking-widest">Lobby Arena</h2>
                         <button onClick={createRoom} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 flex items-center justify-center gap-2 mb-6"><Plus/> CREAR SALA</button>
                         <div className="flex gap-2">
                             <input value={inputCode} onChange={e => setInputCode(e.target.value)} maxLength={6} placeholder="CÓDIGO" className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-center text-xl font-black uppercase outline-none focus:border-indigo-500 text-white"/>
                             <button onClick={joinRoom} disabled={inputCode.length !== 6} className="btn-juicy bg-zinc-800 text-white font-black px-6 rounded-xl border-zinc-700 disabled:opacity-50"><LogIn/></button>
                         </div>
+                        <button onClick={() => setModeSelected(null)} className="w-full text-center text-zinc-500 font-bold text-xs mt-6 hover:text-white transition-colors">Volver a Selección</button>
                     </div>
                 </div>
             );
 
-            if (roomData.gameState === 'roles') return (
-                <div className="h-screen flex flex-col items-center justify-center p-6 bg-zinc-950">
+            // PANTALLA 3: ROLES MULTIPLAYER
+            if (roomData?.gameState === 'roles') return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
                     <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[2rem] overflow-hidden shadow-2xl">
                         <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950">
-                            <div>
-                                <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest">SALA ACTIVA</p>
-                                <p className="text-3xl font-black text-indigo-400 tracking-widest">{roomCode}</p>
-                            </div>
+                            <div><p className="text-xs text-zinc-500 font-bold uppercase tracking-widest">SALA ACTIVA</p><p className="text-3xl font-black text-indigo-400 tracking-widest">{roomCode}</p></div>
                             <button onClick={() => setRoomData(null)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white transition-colors"><XCircle/></button>
                         </div>
-                        
                         <div className="p-6">
                             <div className="grid grid-cols-2 gap-4 mb-6">
                                 {roomData.players.map(p => (
@@ -350,11 +422,9 @@
                                     </button>
                                 ))}
                             </div>
-                            
                             {roomData.players.some(p => p.occupied) && myRole !== 'obs' && (
-                                <button onClick={startGame} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 flex items-center justify-center gap-2 text-xl mt-8">
-                                    {roomData.players.filter(p=>p.occupied).length === 1 ? <Timer size={24}/> : <Play size={24} fill="currentColor"/>}
-                                    {roomData.players.filter(p=>p.occupied).length === 1 ? "MODO SPEEDRUN (1P)" : "MODO ARENA (VS)"}
+                                <button onClick={startMultiplayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 flex items-center justify-center gap-2 text-xl mt-8">
+                                    <Play fill="currentColor"/> EMPEZAR PARTIDA
                                 </button>
                             )}
                         </div>
@@ -362,10 +432,10 @@
                 </div>
             );
 
-            if (roomData.gameState === 'playing') {
-                const isMulti = roomData.mode === 'multi';
+            // PANTALLA 4: GAMEPLAY
+            if (roomData?.gameState === 'playing') {
                 const activePlayer = roomData.players.find(p => p.id === roomData.currentTurn);
-                const isMyTurn = !isMulti || myRole === roomData.currentTurn;
+                const isMyTurn = isSinglePlayer || myRole === roomData.currentTurn;
 
                 const renderCol = (items, colKey) => (
                     <div className="flex-1 flex flex-col gap-2">
@@ -375,8 +445,8 @@
                             
                             let bg = "bg-zinc-900 border-zinc-800 text-zinc-300";
                             if (isSel) {
-                                if (feedback === 'error') bg = "bg-rose-500 border-rose-700 text-white animate-shake";
-                                else if (feedback === 'partial') bg = "bg-amber-500 border-amber-700 text-white animate-shake";
+                                if (feedback === 'error') bg = "bg-rose-500 border-rose-700 text-white";
+                                else if (feedback === 'partial') bg = "bg-amber-500 border-amber-700 text-white";
                                 else if (feedback === 'success') bg = "bg-emerald-500 border-emerald-700 text-white scale-105";
                                 else bg = "bg-indigo-600 border-indigo-800 text-white scale-105";
                             }
@@ -394,13 +464,41 @@
 
                 return (
                     <div className="h-[100dvh] flex flex-col bg-zinc-950 relative">
-                        <header className="bg-zinc-900 border-b border-zinc-800 p-4 shrink-0 z-20 flex justify-between items-center shadow-lg">
+                        
+                        {/* OVERLAY DE COUNTDOWN / PAUSA */}
+                        {(countdown || isPaused) && (
+                            <div className="fixed inset-0 bg-zinc-950/80 backdrop-blur-md z-50 flex items-center justify-center">
+                                {countdown ? (
+                                    <div className="text-[10vw] font-black italic text-white animate-pulse drop-shadow-[0_0_30px_rgba(99,102,241,0.8)] tracking-tighter text-center">
+                                        {countdown}
+                                    </div>
+                                ) : (
+                                    <div className="bg-zinc-900 p-8 rounded-3xl border border-zinc-800 text-center max-w-sm w-full">
+                                        <Pause size={48} className="text-zinc-500 mx-auto mb-4"/>
+                                        <h2 className="text-2xl font-black text-white mb-6 uppercase tracking-widest">Pausa</h2>
+                                        <button onClick={() => { setIsPaused(false); triggerCountdown(null, "REANUDANDO"); }} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 mb-3">Reanudar</button>
+                                        <button onClick={() => window.location.href='index.html'} className="btn-juicy w-full bg-zinc-800 text-zinc-400 font-black py-4 rounded-xl border-zinc-950">Abandonar</button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        <header className="bg-zinc-900 border-b border-zinc-800 p-4 shrink-0 z-20 flex justify-between items-center shadow-lg relative">
+                            {/* CAJA DE CASTIGOS FLOTANTES */}
+                            <div className="absolute top-full right-4 mt-2 pointer-events-none">
+                                {penaltyFlies.map(p => (
+                                    <div key={p.id} className={`absolute right-0 text-2xl font-black italic animate-float drop-shadow-lg ${p.isErr ? 'text-rose-500' : 'text-amber-500'}`}>
+                                        {p.text}
+                                    </div>
+                                ))}
+                            </div>
+
                             <div className="flex items-center gap-3">
-                                <div className="bg-zinc-950 px-3 py-1.5 rounded-lg border border-zinc-800 font-black text-zinc-500 text-xs tracking-widest hidden sm:block">SALA {roomCode}</div>
+                                {!isSinglePlayer && <div className="bg-zinc-950 px-3 py-1.5 rounded-lg border border-zinc-800 font-black text-zinc-500 text-xs tracking-widest hidden sm:block">SALA {roomCode}</div>}
                                 <div className="font-black text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-lg uppercase text-xs">Ronda {roomData.currentRound} / {roomData.settings.rounds}</div>
                             </div>
                             
-                            {isMulti ? (
+                            {!isSinglePlayer ? (
                                 <div className="flex gap-2">
                                     {roomData.players.filter(p=>p.occupied).map(p => (
                                         <div key={p.id} className={`flex flex-col items-center px-3 py-1 rounded-xl border-2 transition-all ${p.id === roomData.currentTurn ? 'border-indigo-500 bg-indigo-500/20 scale-110' : 'border-transparent bg-zinc-950'}`}>
@@ -410,29 +508,15 @@
                                     ))}
                                 </div>
                             ) : (
-                                <div className="flex items-center gap-2 bg-zinc-950 border border-zinc-800 px-4 py-2 rounded-xl">
-                                    <Clock className="text-amber-500" size={20}/>
-                                    <span className="font-black text-2xl text-amber-500 tracking-wider tabular-nums">{formatTime(timer)}</span>
+                                <div className="flex items-center gap-3">
+                                    <div className={`flex items-center gap-2 bg-zinc-950 border px-4 py-2 rounded-xl transition-all ${timerAnim ? 'border-rose-500 bg-rose-500/20 text-rose-500 scale-110 animate-shake' : 'border-zinc-800 text-amber-500'}`}>
+                                        <Clock size={20}/>
+                                        <span className="font-black text-2xl tracking-wider tabular-nums">{formatTime(timer)}</span>
+                                    </div>
+                                    <button onClick={() => setIsPaused(true)} className="p-2.5 bg-zinc-800 rounded-xl hover:bg-zinc-700 transition-colors text-zinc-400"><Pause size={20}/></button>
                                 </div>
                             )}
                         </header>
-
-                        {errorModal && (
-                            <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
-                                <div className={`bg-zinc-900 border-4 rounded-3xl p-6 max-w-sm w-full text-center animate-shake shadow-2xl ${errorModal.type === 'error' ? 'border-rose-500 shadow-[0_0_30px_rgba(244,63,94,0.3)]' : 'border-amber-500 shadow-[0_0_30px_rgba(245,158,11,0.3)]'}`}>
-                                    <h2 className={`text-3xl font-black italic mb-2 uppercase ${errorModal.type === 'error' ? 'text-rose-500' : 'text-amber-500'}`}>{errorModal.title}</h2>
-                                    <p className="text-zinc-400 font-bold text-xs uppercase tracking-widest mb-4">La respuesta era:</p>
-                                    
-                                    <div className="bg-zinc-950 border border-zinc-800 p-4 rounded-2xl mb-6 font-black text-indigo-400 text-lg leading-snug">
-                                        {errorModal.correct}
-                                    </div>
-
-                                    <button onClick={acceptPenalty} className={`btn-juicy w-full text-white font-black py-4 rounded-2xl text-lg flex items-center justify-center gap-2 ${errorModal.type === 'error' ? 'bg-rose-600 border-rose-800' : 'bg-amber-600 border-amber-800'}`}>
-                                        <Timer/> PENALIZACIÓN {errorModal.penalty}
-                                    </button>
-                                </div>
-                            </div>
-                        )}
 
                         <main className={`flex-1 flex gap-2 sm:gap-4 p-2 sm:p-6 max-w-5xl mx-auto w-full transition-opacity duration-300 ${!isMyTurn ? 'opacity-50 pointer-events-none' : ''}`}>
                             {renderCol(roomData.board.c1, 'c1')}
@@ -440,7 +524,7 @@
                             {renderCol(roomData.board.c3, 'c3')}
                         </main>
                         
-                        {!isMyTurn && isMulti && (
+                        {!isMyTurn && !isSinglePlayer && (
                             <div className="absolute bottom-10 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-6 py-3 rounded-full font-black tracking-widest uppercase shadow-2xl animate-pulse">
                                 Espera tu turno
                             </div>
@@ -450,8 +534,7 @@
             }
 
             if (roomData.gameState === 'end') {
-                const isMulti = roomData.mode === 'multi';
-                const winner = isMulti ? [...roomData.players].sort((a,b) => b.score - a.score)[0] : null;
+                const winner = !isSinglePlayer ? [...roomData.players].sort((a,b) => b.score - a.score)[0] : null;
 
                 return (
                     <div className="h-screen flex items-center justify-center p-6 bg-zinc-950 text-center">
@@ -460,7 +543,7 @@
                             <h1 className="text-4xl font-black italic text-white mb-2 uppercase">¡Completado!</h1>
                             <p className="text-zinc-500 font-bold uppercase tracking-widest text-xs mb-8">Dominaste {roomData.gamePool.length} conceptos</p>
                             
-                            {isMulti ? (
+                            {!isSinglePlayer ? (
                                 <div className="bg-zinc-950 border border-zinc-800 p-6 rounded-2xl mb-8">
                                     <p className="text-zinc-400 font-bold mb-1">Ganador Absoluto</p>
                                     <p className={`text-3xl font-black uppercase ${winner.color.replace('bg-','text-')}`}>{winner.name}</p>
