@@ -46,12 +46,12 @@
 <body class="text-zinc-100 h-[100dvh] flex flex-col">
     <div id="root" class="h-full flex flex-col"></div>
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect } from 'react';
+        import React, { useState, useEffect, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Check, X, ArrowRight, RotateCcw, Keyboard, SkipForward, Award, Home, Share2 } from 'lucide-react';
+        import { Check, X, ArrowRight, RotateCcw, Keyboard, Award, Home, Share2, ChevronLeft, ChevronRight } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -82,9 +82,9 @@
             const [fullWordList, setFullWordList] = useState([]);
             const [showWordList, setShowWordList] = useState(false);
 
-            // Estados del Juego
-            const [pendingWords, setPendingWords] = useState([]);
-            const [completedCount, setCompletedCount] = useState(0);
+            // --- ESTADOS NAVEGACIÓN ESTILO FLASHCARDS ---
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [cardStatuses, setCardStatuses] = useState({}); // Seguimiento de palabras resueltas
             const [availableLetters, setAvailableLetters] = useState([]);
             const [inputSlots, setInputSlots] = useState([]);
             const [status, setStatus] = useState('playing'); // 'playing', 'correct', 'error'
@@ -99,17 +99,14 @@
                             const data = snap.data();
                             setQuizData(data);
                             
-                            // TRADUCTOR UNIVERSAL
                             const rawWords = data.content?.cards || data.content?.pairs || [];
                             const cleanWords = rawWords.map((w, i) => ({
                                 id: w.id || i, wordEn: w.wordEn || w.c1 || '', wordEs: w.wordEs || w.c3 || '',
                                 exampleEn: w.exampleEn || w.c2 || '', emojis: w.emojis || w.c2 || '🎯'
                             })).filter(w => w.wordEn);
                             
-                            // Revolvemos las palabras para rejugabilidad infinita
                             const shuffledWords = [...cleanWords].sort(() => 0.5 - Math.random());
                             setFullWordList(shuffledWords);
-                            setPendingWords(shuffledWords.map((_, i) => i)); // Llenamos la cola de índices
                         } else { alert("Juego no encontrado"); }
                         setLoading(false);
                     });
@@ -117,27 +114,41 @@
                 return () => unsub();
             }, [quizId]);
 
-            const currentWordIndex = pendingWords[0];
-            const globalWin = fullWordList.length > 0 && pendingWords.length === 0;
+            const totalWords = fullWordList.length;
+            const globalWin = totalWords > 0 && Object.keys(cardStatuses).length === totalWords;
 
-            // Inicializar nivel actual
+            // Cargar el nivel actual o restaurarlo si ya fue resuelto
             useEffect(() => {
-                if (currentWordIndex === undefined || globalWin) return;
+                if (totalWords === 0 || globalWin || !gameStarted) return;
 
-                const currentWord = fullWordList[currentWordIndex].wordEn.toUpperCase();
+                const currentData = fullWordList[currentIndex];
+                const currentWord = currentData.wordEn.toUpperCase();
                 const letters = currentWord.replace(/\s+/g, '').split('');
-                
-                let shuffled = shuffleArray(letters);
-                while (shuffled.join('') === letters.join('') && letters.length > 1) {
-                    shuffled = shuffleArray(letters);
-                }
 
-                const mappedAvailable = shuffled.map((char, index) => ({ id: `avail-${index}`, char }));
-                
-                setAvailableLetters(mappedAvailable);
-                setInputSlots(Array(letters.length).fill(null));
-                setStatus('playing');
-            }, [currentWordIndex, fullWordList, globalWin]);
+                if (cardStatuses[currentIndex] === 'correct') {
+                    // Si ya se resolvió, mostramos la palabra armada y vaciamos las disponibles
+                    setInputSlots(letters.map(char => ({ id: Math.random(), char })));
+                    setAvailableLetters([]);
+                    setStatus('correct');
+                } else {
+                    // Si no se ha resuelto, preparamos el tablero
+                    let shuffled = shuffleArray(letters);
+                    let attempts = 0;
+                    const isAllSame = letters.every(l => l === letters[0]);
+                    
+                    if (!isAllSame) {
+                        while (shuffled.join('') === letters.join('') && attempts < 10) {
+                            shuffled = shuffleArray(letters);
+                            attempts++;
+                        }
+                    }
+
+                    const mappedAvailable = shuffled.map((char, index) => ({ id: `avail-${index}`, char }));
+                    setAvailableLetters(mappedAvailable);
+                    setInputSlots(Array(letters.length).fill(null));
+                    setStatus('playing');
+                }
+            }, [currentIndex, fullWordList, cardStatuses, globalWin, gameStarted, totalWords]);
 
             // Teclado
             useEffect(() => {
@@ -145,7 +156,7 @@
 
                 const handleKeyDown = (e) => {
                     if (status !== 'playing') {
-                        if (e.key === 'Enter' && status === 'correct') handleNext();
+                        if (e.key === 'Enter') handleNext();
                         return;
                     }
 
@@ -162,6 +173,10 @@
                     } else if (e.key === 'Enter') {
                         e.preventDefault();
                         checkAnswer();
+                    } else if (e.key === 'ArrowRight') {
+                        handleNext();
+                    } else if (e.key === 'ArrowLeft') {
+                        handlePrev();
                     } else if (/^[A-ZÑ]$/.test(key)) {
                         const availableIndex = availableLetters.findIndex(item => item.char === key);
                         if (availableIndex !== -1) {
@@ -172,7 +187,7 @@
 
                 window.addEventListener('keydown', handleKeyDown);
                 return () => window.removeEventListener('keydown', handleKeyDown);
-            }, [status, inputSlots, availableLetters, pendingWords, gameStarted, globalWin]);
+            }, [status, inputSlots, availableLetters, gameStarted, globalWin, currentIndex, totalWords]);
 
             const handleAddLetter = (item, index) => {
                 if (status !== 'playing') return;
@@ -202,13 +217,14 @@
             };
 
             const checkAnswer = () => {
-                const targetWord = fullWordList[currentWordIndex].wordEn.toUpperCase().replace(/\s+/g, '');
+                const targetWord = fullWordList[currentIndex].wordEn.toUpperCase().replace(/\s+/g, '');
                 const currentGuess = inputSlots.map(s => s ? s.char : '').join('');
 
                 if (currentGuess.length < targetWord.length) return;
 
                 if (currentGuess === targetWord) {
                     setStatus('correct');
+                    setCardStatuses(prev => ({...prev, [currentIndex]: 'correct'}));
                 } else {
                     setStatus('error');
                     setShake(true);
@@ -217,15 +233,11 @@
             };
 
             const handleNext = () => {
-                setCompletedCount(prev => prev + 1);
-                setPendingWords(prev => prev.slice(1));
+                setCurrentIndex(prev => (prev === totalWords - 1 ? 0 : prev + 1));
             };
 
-            const handleSkip = () => {
-                setPendingWords(prev => {
-                    if (prev.length <= 1) return prev; 
-                    return [...prev.slice(1), prev[0]]; 
-                });
+            const handlePrev = () => {
+                setCurrentIndex(prev => (prev === 0 ? totalWords - 1 : prev - 1));
             };
 
             const handleRestart = () => {
@@ -241,7 +253,7 @@
             };
 
             if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-black animate-pulse">Generando Anagramas...</div>;
-            if (!fullWordList || fullWordList.length === 0) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-bold p-6 text-center">No se pudo generar el juego. El banco de palabras está vacío.</div>;
+            if (!fullWordList || totalWords === 0) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-bold p-6 text-center">No se pudo generar el juego. El banco de palabras está vacío.</div>;
 
             // --- PANTALLA DE INICIO ---
             if (!gameStarted) {
@@ -279,7 +291,7 @@
                 );
             }
 
-            const currentData = fullWordList[currentWordIndex];
+            const currentData = fullWordList[currentIndex];
             const isComplete = inputSlots.every(slot => slot !== null);
 
             const renderSlots = () => {
@@ -394,71 +406,57 @@
                                 <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Modo: Anagrama</p>
                             </div>
                         </div>
-
-                        {/* Barra de progreso */}
-                        <div className="flex items-center gap-3">
-                            <span className="text-zinc-400 font-black text-xs tracking-widest">
-                                {completedCount} / {fullWordList.length}
-                            </span>
-                        </div>
                     </header>
 
-                    {/* ÁREA PRINCIPAL */}
-                    <div className="flex-1 w-full flex items-center justify-center p-4 overflow-y-auto">
+                    {/* ÁREA PRINCIPAL ACERCADA AL BANNER */}
+                    <div className="flex-1 w-full flex flex-col items-center p-4 overflow-y-auto mt-2 sm:mt-6">
                         {!globalWin && currentData && (
-                            <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 max-w-xl w-full shadow-2xl flex flex-col">
+                            <div className="w-full max-w-xl flex flex-col flex-1">
                                 
-                                <div className="text-center space-y-3 mb-10">
-                                    <div className="text-6xl sm:text-7xl mb-4 tracking-widest select-none">
-                                        {currentData.emojis}
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 w-full shadow-2xl flex flex-col">
+                                    
+                                    <div className="text-center space-y-3 mb-10">
+                                        <div className="text-6xl sm:text-7xl mb-4 tracking-widest select-none">
+                                            {currentData.emojis}
+                                        </div>
+                                        <h2 className="text-2xl sm:text-3xl font-black text-white">
+                                            {currentData.wordEs}
+                                        </h2>
+                                        {/* EL EJEMPLO APARECE SOLO SI ES CORRECTO */}
+                                        {status === 'correct' && currentData.exampleEn && (
+                                            <p className="text-zinc-400 italic text-sm sm:text-base flex items-center justify-center gap-2 animate-in fade-in">
+                                                <Keyboard className="w-4 h-4 opacity-50" />
+                                                "{currentData.exampleEn}"
+                                            </p>
+                                        )}
                                     </div>
-                                    <h2 className="text-2xl sm:text-3xl font-black text-white">
-                                        {currentData.wordEs}
-                                    </h2>
-                                    {currentData.exampleEn && (
-                                        <p className="text-zinc-500 italic text-sm sm:text-base flex items-center justify-center gap-2">
-                                            <Keyboard className="w-4 h-4 opacity-50" />
-                                            "{currentData.exampleEn}"
-                                        </p>
-                                    )}
-                                </div>
 
-                                <div className={`flex flex-wrap justify-center gap-x-6 gap-y-3 mb-10 min-h-[4rem] ${shake ? 'animate-shake' : ''}`}>
-                                    {renderSlots()}
-                                </div>
+                                    <div className={`flex flex-wrap justify-center gap-x-6 gap-y-3 mb-10 min-h-[4rem] ${shake ? 'animate-shake' : ''}`}>
+                                        {renderSlots()}
+                                    </div>
 
-                                <div className="flex flex-wrap justify-center gap-2 sm:gap-3 mb-10 min-h-[4rem]">
-                                    {availableLetters.map((item, idx) => (
-                                        <button
-                                            key={item.id}
-                                            onClick={() => handleAddLetter(item, idx)}
-                                            disabled={status !== 'playing'}
-                                            className={`
-                                                w-10 h-12 sm:w-12 sm:h-14 bg-zinc-800 border-b-4 border-zinc-950 rounded-xl 
-                                                text-xl sm:text-2xl font-black text-white flex items-center justify-center uppercase
-                                                hover:bg-zinc-700 hover:-translate-y-1 active:translate-y-0 active:border-b-0 
-                                                transition-all duration-150 select-none cursor-pointer shrink-0 shadow-sm
-                                                ${status !== 'playing' ? 'opacity-50 cursor-not-allowed transform-none' : ''}
-                                            `}
-                                        >
-                                            {item.char}
-                                        </button>
-                                    ))}
-                                </div>
+                                    <div className="flex flex-wrap justify-center gap-2 sm:gap-3 mb-10 min-h-[4rem]">
+                                        {availableLetters.map((item, idx) => (
+                                            <button
+                                                key={item.id}
+                                                onClick={() => handleAddLetter(item, idx)}
+                                                disabled={status !== 'playing'}
+                                                className={`
+                                                    w-10 h-12 sm:w-12 sm:h-14 bg-zinc-800 border-b-4 border-zinc-950 rounded-xl 
+                                                    text-xl sm:text-2xl font-black text-white flex items-center justify-center uppercase
+                                                    hover:bg-zinc-700 hover:-translate-y-1 active:translate-y-0 active:border-b-0 
+                                                    transition-all duration-150 select-none cursor-pointer shrink-0 shadow-sm
+                                                    ${status !== 'playing' ? 'opacity-50 cursor-not-allowed transform-none border-b-0 translate-y-1' : ''}
+                                                `}
+                                            >
+                                                {item.char}
+                                            </button>
+                                        ))}
+                                    </div>
 
-                                {/* Botones de Acción */}
-                                <div className="mt-auto flex gap-3">
-                                    {status === 'playing' || status === 'error' ? (
-                                        <>
-                                            {pendingWords.length > 1 && (
-                                                <button
-                                                    onClick={handleSkip}
-                                                    className="px-5 py-4 rounded-2xl transition-all flex items-center justify-center bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-white active:scale-95 border border-zinc-700 shadow-md"
-                                                    title="Saltar para después"
-                                                >
-                                                    <SkipForward className="w-6 h-6" />
-                                                </button>
-                                            )}
+                                    {/* Botones de Acción del Juego */}
+                                    <div className="mt-auto flex gap-3">
+                                        {status === 'playing' || status === 'error' ? (
                                             <button
                                                 onClick={checkAnswer}
                                                 disabled={!isComplete}
@@ -472,16 +470,34 @@
                                                 {status === 'error' ? <X className="w-5 h-5" /> : <Check className="w-5 h-5" />}
                                                 <span>{status === 'error' ? 'Reintentar' : 'Comprobar'}</span>
                                             </button>
-                                        </>
-                                    ) : (
-                                        <button
-                                            onClick={handleNext}
-                                            className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black rounded-2xl font-black text-lg transition-all animate-pop flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 uppercase tracking-widest"
-                                        >
-                                            <span>Siguiente</span> <ArrowRight className="w-5 h-5" />
-                                        </button>
-                                    )}
+                                        ) : (
+                                            <button
+                                                onClick={handleNext}
+                                                className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black rounded-2xl font-black text-lg transition-all animate-pop flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 uppercase tracking-widest"
+                                            >
+                                                <span>Siguiente</span> <ArrowRight className="w-5 h-5" />
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
+
+                                {/* CONTROLES DE NAVEGACIÓN ESTILO FLASHCARDS (PEGADOS ABAJO) */}
+                                <div className="mt-6 flex items-center justify-center space-x-6 z-10 w-full">
+                                    <button onClick={handlePrev} className="p-4 rounded-full shadow-lg transition-all bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-white hover:bg-zinc-800 active:scale-95">
+                                        <ChevronLeft size={24} />
+                                    </button>
+
+                                    <div className="flex flex-col items-center bg-zinc-900 px-6 py-2 rounded-full shadow-sm border border-zinc-800">
+                                        <span className="text-base font-black text-zinc-300 tracking-widest">
+                                            {currentIndex + 1} <span className="text-zinc-600 font-normal mx-1">/</span> {totalWords}
+                                        </span>
+                                    </div>
+
+                                    <button onClick={handleNext} className="p-4 rounded-full shadow-lg transition-all bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-white hover:bg-zinc-800 active:scale-95">
+                                        <ChevronRight size={24} />
+                                    </button>
+                                </div>
+
                             </div>
                         )}
                     </div>
