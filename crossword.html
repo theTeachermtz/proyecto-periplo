@@ -49,7 +49,7 @@
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Check, RotateCcw, Award, Home, ArrowRight, ArrowDown, Edit2, X, LocateFixed, Plus, Minus, Share2 } from 'lucide-react';
+        import { Check, RotateCcw, Award, Home, ArrowRight, ArrowDown, Edit2, X, LocateFixed, Plus, Minus, Share2, User } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -166,10 +166,15 @@
         const CrosswordApp = () => {
             const [user, setUser] = useState(null);
             const [quizId, setQuizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [isStudent, setIsStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
             const [quizData, setQuizData] = useState(null);
             const [loading, setLoading] = useState(true);
 
-            // Banco de palabras completo
+            // Estados de Inicio y Jugador
+            const [gameStarted, setGameStarted] = useState(false);
+            const [playerName, setPlayerName] = useState('');
+            const [toastMsg, setToastMsg] = useState(null);
+
             const [fullWordList, setFullWordList] = useState([]);
             const [showWordList, setShowWordList] = useState(false);
 
@@ -207,7 +212,7 @@
                                 exampleEn: w.exampleEn || w.c2 || '', emojis: w.emojis || w.c2 || '🎯'
                             })).filter(w => w.wordEn);
                             
-                            setFullWordList(cleanWords); // Guardamos todo el mazo para el resumen final
+                            setFullWordList(cleanWords);
 
                             const shuffledWords = [...cleanWords].sort(() => 0.5 - Math.random());
                             const generated = generateCrossword(shuffledWords.slice(0, 15)); 
@@ -219,8 +224,9 @@
                 return () => unsub();
             }, [quizId]);
 
+            // Calcular escala base 
             useEffect(() => {
-                if (!layout || !containerRef.current) return;
+                if (!layout || !containerRef.current || !gameStarted) return;
                 const calculateOverviewScale = () => {
                     const { clientWidth, clientHeight } = containerRef.current;
                     const cellSize = window.innerWidth < 768 ? 40 : 48;
@@ -236,8 +242,9 @@
                 calculateOverviewScale();
                 window.addEventListener('resize', calculateOverviewScale);
                 return () => window.removeEventListener('resize', calculateOverviewScale);
-            }, [layout, viewMode]);
+            }, [layout, viewMode, gameStarted]);
 
+            // Cámara Cinematográfica (Enfocar palabra)
             useEffect(() => {
                 if (viewMode === 'focused' && activePlacementId && layout && containerRef.current) {
                     const activePlacement = layout.clues.across.concat(layout.clues.down).find(p => p.id === activePlacementId);
@@ -262,6 +269,7 @@
                 }
             }, [viewMode, activePlacementId, layout, baseScale]);
 
+            // Auto-scroll del popover
             useEffect(() => {
                 if (activePlacementId) {
                     const el = document.getElementById(`clue-${direction}-${activePlacementId}`);
@@ -270,8 +278,11 @@
             }, [activePlacementId, showAcrossPop, showDownPop, direction]);
 
             const copyLink = () => {
-                navigator.clipboard.writeText(window.location.href)
-                    .then(() => alert('¡Link copiado correctamente! Ya puedes pegarlo en WhatsApp o Classroom.'));
+                const studentUrl = `${window.location.origin}${window.location.pathname}?id=${quizId}&student=true`;
+                navigator.clipboard.writeText(studentUrl).then(() => {
+                    setToastMsg('¡Link para alumno copiado al portapapeles!');
+                    setTimeout(() => setToastMsg(null), 3000);
+                });
             };
 
             const checkCurrentWord = () => {
@@ -487,17 +498,60 @@
             if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-amber-500 font-black animate-pulse">Generando Malla...</div>;
             if (!layout) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-bold p-6 text-center">No se pudo generar el crucigrama. Verifica que tu banco de palabras no esté vacío o intenta con palabras más largas.</div>;
 
+            // --- PANTALLA DE INICIO (NUEVA) ---
+            if (!gameStarted) {
+                return (
+                    <div className="h-[100dvh] bg-zinc-950 flex flex-col items-center justify-center p-4 relative overflow-hidden">
+                        <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[2.5rem] shadow-2xl max-w-md w-full text-center z-10 animate-in zoom-in-95">
+                            <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center text-white text-4xl font-black shadow-lg shadow-indigo-600/20 mx-auto mb-6">P</div>
+                            <h1 className="text-3xl font-black text-amber-500 mb-2 leading-tight">{quizData?.title || 'Crucigrama'}</h1>
+                            <p className="text-zinc-400 mb-8 font-medium">Ingresa tu nombre para comenzar la actividad.</p>
+                            
+                            <input 
+                                type="text" 
+                                placeholder="Tu nombre..." 
+                                value={playerName}
+                                onChange={(e) => setPlayerName(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && playerName.trim() && setGameStarted(true)}
+                                className="w-full bg-zinc-950 border-2 border-zinc-800 rounded-xl p-4 text-center text-xl font-bold text-white mb-6 outline-none focus:border-amber-500 transition-colors"
+                            />
+                            
+                            <button 
+                                disabled={!playerName.trim()}
+                                onClick={() => setGameStarted(true)}
+                                className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-black font-black text-lg py-4 rounded-xl transition-all shadow-lg active:scale-95 uppercase tracking-widest"
+                            >
+                                Empezar Juego
+                            </button>
+                            
+                            {!isStudent && (
+                                <button onClick={() => window.location.href='index.html'} className="mt-6 text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-widest">
+                                    Volver al Hub (Maestro)
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
             const activePlacementObj = activePlacementId ? layout.clues.across.concat(layout.clues.down).find(p => p.id === activePlacementId) : null;
 
             return (
                 <div className="h-[100dvh] bg-zinc-950 text-zinc-100 font-sans flex flex-col overflow-hidden relative">
                     
+                    {/* NOTIFICACIÓN TOAST */}
+                    {toastMsg && (
+                        <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-emerald-500 text-black px-6 py-3 rounded-full font-black text-sm shadow-xl z-[120] animate-in slide-in-from-top-4 flex items-center gap-2">
+                            <Check size={16} /> {toastMsg}
+                        </div>
+                    )}
+
                     {/* CONFETI GLOBAL & MENU DE VICTORIA */}
                     {globalWin && (
                         <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in p-4">
                             <div className="bg-zinc-900 border border-zinc-700 text-white p-8 rounded-[2rem] text-center shadow-2xl w-full max-w-md">
                                 <Award className="w-24 h-24 text-amber-500 mx-auto mb-6 animate-bounce"/>
-                                <h2 className="text-4xl font-black mb-2">¡Completado!</h2>
+                                <h2 className="text-4xl font-black mb-2">¡Completado, {playerName}!</h2>
                                 <p className="text-zinc-400 font-bold uppercase tracking-widest mb-8">Puntaje Perfecto</p>
                                 
                                 <div className="flex flex-col gap-4 w-full">
@@ -507,6 +561,11 @@
                                     <button onClick={() => window.location.reload()} className="w-full bg-amber-500 hover:bg-amber-400 text-black font-black px-6 py-4 rounded-xl transition-all shadow-md active:scale-95 text-sm sm:text-base">
                                         🔄 JUGAR OTRO TABLERO
                                     </button>
+                                    {!isStudent && (
+                                        <button onClick={() => window.location.href='index.html'} className="mt-2 text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-widest">
+                                            SALIR AL HUB
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -543,21 +602,27 @@
                     <header className="p-4 sm:p-6 w-full flex flex-col sm:flex-row justify-between items-center shrink-0 border-b border-zinc-800/50 bg-zinc-900/80 backdrop-blur-md z-40 gap-4">
                         <div className="flex items-center gap-4 w-full sm:w-auto justify-between">
                             <div className="flex items-center gap-3">
-                                <button onClick={() => window.location.href='index.html'} className="p-2.5 bg-zinc-800 text-zinc-400 rounded-xl hover:bg-zinc-700 hover:text-white transition-colors border border-zinc-700">
-                                    <Home size={20}/>
-                                </button>
-                                <div className="w-px h-8 bg-zinc-800 mx-1 hidden sm:block"></div>
-                                <button onClick={copyLink} className="p-2.5 bg-zinc-800 text-sky-400 rounded-xl hover:bg-zinc-700 hover:text-sky-300 transition-colors border border-zinc-700 hidden sm:block" title="Copiar link para alumnos">
-                                    <Share2 size={20}/>
-                                </button>
-                                <div className="ml-2">
+                                {!isStudent && (
+                                    <button onClick={() => window.location.href='index.html'} className="p-2.5 bg-zinc-800 text-zinc-400 rounded-xl hover:bg-zinc-700 hover:text-white transition-colors border border-zinc-700">
+                                        <Home size={20}/>
+                                    </button>
+                                )}
+                                {!isStudent && <div className="w-px h-8 bg-zinc-800 mx-1 hidden sm:block"></div>}
+                                {!isStudent && (
+                                    <button onClick={copyLink} className="p-2.5 bg-zinc-800 text-sky-400 rounded-xl hover:bg-zinc-700 hover:text-sky-300 transition-colors border border-zinc-700 hidden sm:block" title="Copiar link para alumnos">
+                                        <Share2 size={20}/>
+                                    </button>
+                                )}
+                                <div className={!isStudent ? "ml-2" : ""}>
                                     <h1 className="text-lg font-black text-amber-500 leading-none tracking-tight">{quizData?.title || 'Actividad Periplo'}</h1>
                                     <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Modo: Crossword • 15 Palabras</p>
                                 </div>
                             </div>
-                            <button onClick={copyLink} className="p-2.5 bg-zinc-800 text-sky-400 rounded-xl hover:bg-zinc-700 hover:text-sky-300 transition-colors border border-zinc-700 block sm:hidden">
-                                <Share2 size={20}/>
-                            </button>
+                            {!isStudent && (
+                                <button onClick={copyLink} className="p-2.5 bg-zinc-800 text-sky-400 rounded-xl hover:bg-zinc-700 hover:text-sky-300 transition-colors border border-zinc-700 block sm:hidden">
+                                    <Share2 size={20}/>
+                                </button>
+                            )}
                         </div>
 
                         <div className="flex items-center gap-4 w-full sm:w-auto relative z-50">
@@ -568,7 +633,7 @@
                                     <ArrowRight size={16} className={showAcrossPop ? 'text-zinc-900' : 'text-amber-500'}/> HOR
                                 </button>
                                 {showAcrossPop && (
-                                    <div className="absolute top-full right-0 sm:right-auto sm:left-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 animate-in slide-in-from-top-2 z-50">
+                                    <div className="absolute top-full right-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 animate-in slide-in-from-top-2 z-50">
                                         <div className="flex justify-between items-center p-2 mb-1 border-b border-zinc-700">
                                             <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Elige una pista</span>
                                             <button onClick={()=>setShowAcrossPop(false)} className="text-zinc-500 hover:text-white"><X size={14}/></button>
@@ -593,7 +658,7 @@
                                     <ArrowDown size={16} className={showDownPop ? 'text-zinc-900' : 'text-amber-500'}/> VER
                                 </button>
                                 {showDownPop && (
-                                    <div className="absolute top-full right-0 sm:right-auto sm:left-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 animate-in slide-in-from-top-2 z-50">
+                                    <div className="absolute top-full right-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 animate-in slide-in-from-top-2 z-50">
                                         <div className="flex justify-between items-center p-2 mb-1 border-b border-zinc-700">
                                             <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Elige una pista</span>
                                             <button onClick={()=>setShowDownPop(false)} className="text-zinc-500 hover:text-white"><X size={14}/></button>
