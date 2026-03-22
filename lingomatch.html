@@ -42,7 +42,7 @@
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Users, Play, Plus, LogIn, CheckCircle2, XCircle, Trophy, User, Pause, Clock, Timer, AlertTriangle } from 'lucide-react';
+        import { Users, Play, Plus, LogIn, CheckCircle2, XCircle, Trophy, User, Pause, Clock, Timer, AlertTriangle, BookOpen, X } from 'lucide-react';
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
@@ -63,7 +63,7 @@
             const [quizData, setQuizData] = useState(null);
             
             // Core Architecture States
-            const [modeSelected, setModeSelected] = useState(null); // 'single' | 'multi'
+            const [modeSelected, setModeSelected] = useState(null); 
             const [isSinglePlayer, setIsSinglePlayer] = useState(false);
             
             // Room & Game State
@@ -81,6 +81,10 @@
             const [locked, setLocked] = useState(false);
             const [isPaused, setIsPaused] = useState(false);
             
+            // Modals (Endgame)
+            const [showLeaderboard, setShowLeaderboard] = useState(false);
+            const [showLibrary, setShowLibrary] = useState(false);
+
             // Fancy Animations
             const [countdown, setCountdown] = useState(null);
             const [penaltyFlies, setPenaltyFlies] = useState([]);
@@ -122,7 +126,6 @@
                 return () => clearInterval(timerRef.current);
             }, [roomData?.gameState, isSinglePlayer, countdown, isPaused]);
 
-            // --- DEFINICIÓN DE ROLES CORREGIDA ---
             const myPlayer = roomData?.players?.find(p => p.uid === user?.uid);
             const myRole = isSinglePlayer ? 'p1' : (myPlayer ? myPlayer.id : null);
 
@@ -170,13 +173,30 @@
                 else await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), newData);
             };
 
+            // --- REINICIAR AL MENU PRINCIPAL ---
+            const resetToMenu = () => {
+                setRoomData(null);
+                setModeSelected(null);
+                setIsSinglePlayer(false);
+                setTimer(0);
+                setCountdown(null);
+                setRoomCode('');
+                setShowLeaderboard(false);
+                setShowLibrary(false);
+            };
+
+            // --- LEADERBOARD LOGIC ---
+            const loadLeaderboard = async () => {
+                const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/leaderboard`), orderBy('time', 'asc'), limit(5));
+                const snap = await getDocs(q);
+                setLeaderboard(snap.docs.map(d => d.data()));
+            };
+
             // --- SINGLE PLAYER (SPEEDRUN) SETUP ---
             const setupSinglePlayer = async () => {
                 setIsSinglePlayer(true);
                 setModeSelected('single');
-                const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/leaderboard`), orderBy('time', 'asc'), limit(5));
-                const snap = await getDocs(q);
-                setLeaderboard(snap.docs.map(d => d.data()));
+                await loadLeaderboard();
             };
 
             const startSinglePlayer = () => {
@@ -191,7 +211,6 @@
                 }
                 const gamePool = allPairs.slice(0, totalNeeded);
                 
-                // Muestra la pantalla inmediatamente
                 setRoomData({
                     gameState: 'playing', mode: 'single', settings, gamePool, currentRound: 1,
                     board: generateBoardColumns(gamePool.slice(0, settings.rowsPerRound)),
@@ -199,7 +218,6 @@
                     players: [{ id: 'p1', name: playerName, score: 0, occupied: true, uid: user?.uid }]
                 });
                 
-                // Arranca la animación encima de la pantalla
                 triggerSequence(['READY...', 'SET...', 'GO!'], () => { setTimer(0); });
             };
 
@@ -467,7 +485,7 @@
                                         <Pause size={48} className="text-zinc-500 mx-auto mb-4"/>
                                         <h2 className="text-2xl font-black text-white mb-6 uppercase tracking-widest">Pausa</h2>
                                         <button onClick={() => { setIsPaused(false); triggerSequence(['3', '2', '1', 'GO!']); }} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 mb-3">Reanudar</button>
-                                        <button onClick={() => window.location.href='index.html'} className="btn-juicy w-full bg-zinc-800 text-zinc-400 font-black py-4 rounded-xl border-zinc-950">Abandonar</button>
+                                        <button onClick={resetToMenu} className="btn-juicy w-full bg-zinc-800 text-zinc-400 font-black py-4 rounded-xl border-zinc-950">Abandonar</button>
                                     </div>
                                 )}
                             </div>
@@ -526,30 +544,92 @@
                 const winner = !isSinglePlayer ? [...roomData.players].sort((a,b) => b.score - a.score)[0] : null;
 
                 return (
-                    <div className="h-screen flex items-center justify-center p-6 bg-zinc-950 text-center">
-                        <div className="bg-zinc-900 p-8 rounded-[2.5rem] shadow-2xl border border-zinc-800 max-w-md w-full">
-                            <Trophy size={80} className="text-amber-400 mx-auto mb-6 drop-shadow-lg" />
-                            <h1 className="text-4xl font-black italic text-white mb-2 uppercase">¡Completado!</h1>
-                            <p className="text-zinc-500 font-bold uppercase tracking-widest text-xs mb-8">Dominaste {roomData.gamePool.length} conceptos</p>
-                            
-                            {!isSinglePlayer ? (
-                                <div className="bg-zinc-950 border border-zinc-800 p-6 rounded-2xl mb-8">
-                                    <p className="text-zinc-400 font-bold mb-1">Ganador Absoluto</p>
-                                    <p className={`text-3xl font-black uppercase ${winner.color.replace('bg-','text-')}`}>{winner.name}</p>
-                                    <p className="text-xl font-bold text-white mt-2">{winner.score} PTS</p>
+                    <div className="h-[100dvh] flex flex-col bg-zinc-950">
+                        {/* CONTENEDOR PRINCIPAL FIN DE JUEGO */}
+                        <div className="flex-1 overflow-y-auto custom-scrollbar flex items-center justify-center p-6 text-center">
+                            <div className="bg-zinc-900 p-8 rounded-[2.5rem] shadow-2xl border border-zinc-800 max-w-md w-full my-auto">
+                                <Trophy size={80} className="text-amber-400 mx-auto mb-6 drop-shadow-lg" />
+                                <h1 className="text-4xl font-black italic text-white mb-2 uppercase">¡Completado!</h1>
+                                <p className="text-zinc-500 font-bold uppercase tracking-widest text-xs mb-8">Dominaste {roomData.gamePool.length} conceptos</p>
+                                
+                                {!isSinglePlayer ? (
+                                    <div className="bg-zinc-950 border border-zinc-800 p-6 rounded-2xl mb-8">
+                                        <p className="text-zinc-400 font-bold mb-1">Ganador Absoluto</p>
+                                        <p className={`text-3xl font-black uppercase ${winner.color.replace('bg-','text-')}`}>{winner.name}</p>
+                                        <p className="text-xl font-bold text-white mt-2">{winner.score} PTS</p>
+                                    </div>
+                                ) : (
+                                    <div className="bg-zinc-950 border border-zinc-800 p-6 rounded-2xl mb-8 relative overflow-hidden">
+                                        <div className="absolute -right-4 -top-4 opacity-10"><Clock size={100}/></div>
+                                        <p className="text-zinc-400 font-bold mb-1 uppercase tracking-widest text-xs">Tu Tiempo (Speedrun)</p>
+                                        <p className="text-5xl font-black text-amber-500 tabular-nums">{formatTime(roomData.finalTime)}</p>
+                                    </div>
+                                )}
+                                
+                                <div className="space-y-3">
+                                    {isSinglePlayer && (
+                                        <button onClick={() => { loadLeaderboard(); setShowLeaderboard(true); }} className="btn-juicy w-full bg-amber-600 text-white font-black py-4 rounded-xl border-amber-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                            <Trophy size={18}/> Show Leaderboard
+                                        </button>
+                                    )}
+                                    <button onClick={() => setShowLibrary(true)} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                        <BookOpen size={18}/> What's in this game?
+                                    </button>
+                                    <button onClick={resetToMenu} className="btn-juicy w-full bg-zinc-800 text-white font-black py-4 rounded-xl border-zinc-950 text-sm uppercase tracking-widest flex items-center justify-center gap-2 mt-4">
+                                        Volver al Inicio
+                                    </button>
                                 </div>
-                            ) : (
-                                <div className="bg-zinc-950 border border-zinc-800 p-6 rounded-2xl mb-8 relative overflow-hidden">
-                                    <div className="absolute -right-4 -top-4 opacity-10"><Clock size={100}/></div>
-                                    <p className="text-zinc-400 font-bold mb-1 uppercase tracking-widest text-xs">Tiempo Final (Speedrun)</p>
-                                    <p className="text-5xl font-black text-amber-500 tabular-nums">{formatTime(roomData.finalTime)}</p>
-                                </div>
-                            )}
-                            
-                            <button onClick={() => window.location.href='index.html'} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 text-lg uppercase tracking-widest">
-                                SALIR AL HUB
-                            </button>
+
+                                <button onClick={() => window.location.href='index.html'} className="text-zinc-500 font-bold text-xs uppercase tracking-widest mt-8 hover:text-white transition-colors">
+                                    Salir al Hub
+                                </button>
+                            </div>
                         </div>
+
+                        {/* MODALES FINALES (FLOTANTES) */}
+                        {showLibrary && (
+                            <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-xl flex flex-col max-h-[85vh] shadow-2xl overflow-hidden">
+                                    <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
+                                        <h3 className="font-black text-xl text-white uppercase tracking-widest flex items-center gap-2"><BookOpen size={20} className="text-indigo-400"/> Game Library</h3>
+                                        <button onClick={() => setShowLibrary(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 transition-colors"><X size={20}/></button>
+                                    </div>
+                                    <div className="p-6 overflow-y-auto custom-scrollbar space-y-2 bg-zinc-950/50">
+                                        {[...quizData.content.pairs].sort((a,b) => a.c1.localeCompare(b.c1)).map((p, i) => (
+                                            <div key={i} className="flex flex-col sm:flex-row gap-2 sm:gap-4 text-sm md:text-base font-bold bg-zinc-900 p-4 rounded-xl border border-zinc-800">
+                                                <span className="flex-1 text-indigo-400">{p.c1}</span>
+                                                <span className="flex-1 text-zinc-300">{p.c2}</span>
+                                                <span className="flex-1 text-zinc-300">{p.c3}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {showLeaderboard && (
+                            <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm flex flex-col shadow-2xl overflow-hidden">
+                                    <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
+                                        <h3 className="font-black text-xl text-amber-400 uppercase tracking-widest flex items-center gap-2"><Trophy size={20}/> Top 5</h3>
+                                        <button onClick={() => setShowLeaderboard(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 transition-colors"><X size={20}/></button>
+                                    </div>
+                                    <div className="p-6 space-y-3 bg-zinc-950/50">
+                                        {leaderboard.length === 0 ? <p className="text-center text-zinc-500 font-bold">Aún no hay récords.</p> :
+                                            leaderboard.map((l, i) => (
+                                                <div key={i} className="flex justify-between items-center bg-zinc-900 p-4 rounded-xl border border-zinc-800">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className={`font-black text-lg ${i===0?'text-amber-400':i===1?'text-zinc-400':i===2?'text-amber-700':'text-zinc-600'}`}>#{i+1}</span>
+                                                        <span className="font-bold text-white uppercase">{l.playerName}</span>
+                                                    </div>
+                                                    <span className="font-black text-indigo-400 tabular-nums">{formatTime(l.time)}</span>
+                                                </div>
+                                            ))
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 );
             }
