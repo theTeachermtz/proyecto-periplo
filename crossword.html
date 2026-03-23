@@ -28,7 +28,9 @@
         .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
         .cell-input::selection { background: transparent; }
-        .crossword-container { transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
+        
+        /* Modificamos la transición para que escale y se traslade fluido */
+        .crossword-container { transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
 
         @keyframes heartbeat-glow {
             0%, 100% { opacity: 0; transform: scale(0.95); }
@@ -56,7 +58,6 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // --- MOTOR GENERADOR DEL CRUCIGRAMA ---
         const generateCrossword = (words) => {
             if (!words || words.length === 0) return null;
             let bestLayout = null; let maxPlaced = 0;
@@ -194,8 +195,20 @@
             const inputRefs = useRef({});
             const containerRef = useRef(null);
             
+            // --- NUEVA LÓGICA DE DIMENSIONES BLINDADAS ---
+            const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
             const [baseScale, setBaseScale] = useState(1);
             const [zoomTransform, setZoomTransform] = useState({ scale: 1, x: 0, y: 0 });
+
+            // Detectar celular
+            useEffect(() => {
+                const handleResize = () => setIsMobile(window.innerWidth < 768);
+                window.addEventListener('resize', handleResize);
+                return () => window.removeEventListener('resize', handleResize);
+            }, []);
+
+            // Tamaño rígido en píxeles para evitar el "Acordeón"
+            const cellSize = isMobile ? 40 : 48;
 
             useEffect(() => {
                 signInAnonymously(auth);
@@ -223,50 +236,61 @@
                 return () => unsub();
             }, [quizId]);
 
+            // Calcular escala base (PERFECTO CENTRADO ABSOLUTO)
             useEffect(() => {
                 if (!layout || !containerRef.current || !gameStarted) return;
+                
                 const calculateOverviewScale = () => {
+                    // No recalculamos si están tecleando (teclado abierto)
+                    if (viewMode === 'focused') return; 
+                    
                     const { clientWidth, clientHeight } = containerRef.current;
-                    const cellSize = window.innerWidth < 768 ? 40 : 48;
                     const gridW = layout.width * cellSize;
                     const gridH = layout.height * cellSize;
                     
-                    const paddingX = window.innerWidth < 768 ? 100 : 160;
-                    const paddingY = window.innerWidth < 768 ? 160 : 200;
+                    // Márgenes de seguridad
+                    const paddingX = isMobile ? 40 : 160;
+                    const paddingY = isMobile ? 120 : 200;
                     
                     const scale = Math.min((clientWidth - paddingX) / gridW, (clientHeight - paddingY) / gridH, 1.2);
                     setBaseScale(scale);
-                    if (viewMode === 'overview') setZoomTransform({ scale, x: 0, y: 0 });
+                    
+                    if (viewMode === 'overview') {
+                        setZoomTransform({ scale, x: 0, y: 0 });
+                    }
                 };
                 
                 calculateOverviewScale();
                 window.addEventListener('resize', calculateOverviewScale);
                 return () => window.removeEventListener('resize', calculateOverviewScale);
-            }, [layout, viewMode, gameStarted]);
+            }, [layout, viewMode, gameStarted, isMobile, cellSize]);
 
+            // Cámara Cinematográfica (Enfocar palabra esquivando el teclado)
             useEffect(() => {
                 if (viewMode === 'focused' && activePlacementId && layout && containerRef.current) {
                     const activePlacement = layout.clues.across.concat(layout.clues.down).find(p => p.id === activePlacementId);
                     if (!activePlacement) return;
-                    const cellSize = window.innerWidth < 768 ? 40 : 48;
                     
                     const wordCenterX = (activePlacement.normX + (activePlacement.isHoriz ? activePlacement.wordStr.length / 2 : 0.5)) * cellSize;
                     const wordCenterY = (activePlacement.normY + (activePlacement.isHoriz ? 0.5 : activePlacement.wordStr.length / 2)) * cellSize;
                     
                     const gridW = layout.width * cellSize;
                     const gridH = layout.height * cellSize;
-                    const naturalCenterX = gridW / 2;
-                    const naturalCenterY = gridH / 2;
+                    
+                    // Distancia desde el centro del Grid hasta el centro de la palabra (en píxeles reales)
+                    const tx = (gridW / 2) - wordCenterX;
+                    const ty = (gridH / 2) - wordCenterY;
 
-                    const focusScale = window.innerWidth < 768 ? 1.5 : 1.8;
-                    const tx = (naturalCenterX - wordCenterX) * focusScale;
-                    const ty = (naturalCenterY - wordCenterY) * focusScale;
+                    const focusScale = isMobile ? 1.4 : 1.8;
+                    
+                    // Elevamos la vista en móvil para que el teclado virtual no tape la palabra
+                    const keyboardOffset = isMobile ? (120 / focusScale) : 0;
 
-                    setZoomTransform({ scale: focusScale, x: tx, y: ty });
+                    setZoomTransform({ scale: focusScale, x: tx, y: ty - keyboardOffset });
                 } else if (viewMode === 'overview') {
                     setZoomTransform({ scale: baseScale, x: 0, y: 0 });
                 }
-            }, [viewMode, activePlacementId, layout, baseScale]);
+            }, [viewMode, activePlacementId, layout, baseScale, isMobile, cellSize]);
 
             useEffect(() => {
                 if (activePlacementId) {
@@ -609,7 +633,7 @@
                                 )}
                                 <div className={!isStudent ? "ml-2" : ""}>
                                     <h1 className="text-lg font-black text-amber-500 leading-none tracking-tight">{quizData?.title || 'Actividad Periplo'}</h1>
-                                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Modo: Crossword • 15 Palabras</p>
+                                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Modo: Crossword • {layout.totalWords} Palabras</p>
                                 </div>
                             </div>
                             {!isStudent && (
@@ -674,10 +698,11 @@
                     </header>
 
                     <div className="flex-1 w-full relative flex min-h-0">
+                        {/* AREA SEGURA PARA EL TABLERO */}
                         <div 
                             className="flex-1 relative overflow-hidden bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-zinc-900 to-black cursor-default"
                             onClick={(e) => { 
-                                if (e.target === e.currentTarget || e.target.classList.contains('crossword-container')) {
+                                if (e.target === e.currentTarget) {
                                     if(viewMode==='focused') {
                                         setViewMode('overview'); setActivePlacementId(null); setSelectedCell(null);
                                         setShowAcrossPop(false); setShowDownPop(false);
@@ -685,80 +710,90 @@
                                 }
                             }}
                         >
-                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            {/* CONTENEDOR DE CENTRADO ABSOLUTO (NO SE DEFORMA) */}
+                            <div className="absolute inset-0 pointer-events-none overflow-hidden">
                                 <div 
-                                    className="relative grid gap-[2px] bg-zinc-900/80 p-3 rounded-3xl pointer-events-auto shadow-2xl border border-zinc-800 crossword-container"
+                                    className="absolute top-1/2 left-1/2 pointer-events-auto shadow-2xl border border-zinc-800 bg-zinc-900/80 p-2 sm:p-3 rounded-3xl crossword-container"
                                     style={{ 
-                                        gridTemplateColumns: `repeat(${layout.width}, minmax(0, 1fr))`, 
-                                        gridTemplateRows: `repeat(${layout.height}, minmax(0, 1fr))`,
-                                        transform: `translate(${zoomTransform.x}px, ${zoomTransform.y}px) scale(${zoomTransform.scale})`,
+                                        transform: `translate(-50%, -50%) scale(${zoomTransform.scale}) translate(${zoomTransform.x}px, ${zoomTransform.y}px)`,
+                                        transformOrigin: 'center center'
                                     }}
                                 >
-                                    {viewMode === 'focused' && activePlacementObj && (
-                                        <div 
-                                            className="absolute z-50 text-4xl sm:text-5xl animate-bounce drop-shadow-xl pointer-events-none flex justify-center"
-                                            style={{ 
-                                                left: `${(activePlacementObj.normX + (activePlacementObj.isHoriz ? activePlacementObj.wordStr.length/2 : 0.5)) * (window.innerWidth < 768 ? 40 : 48)}px`,
-                                                top: `${activePlacementObj.normY * (window.innerWidth < 768 ? 40 : 48) - 55}px`,
-                                                transform: 'translateX(-50%)'
-                                            }}
-                                        >
-                                            <div className="bg-zinc-900/90 backdrop-blur-xl px-5 py-2.5 rounded-[2rem] border-2 border-zinc-700 shadow-2xl">
-                                                {activePlacementObj.emojis}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {layout.grid.map((row, y) => 
-                                        row.map((cell, x) => {
-                                            if (!cell) return <div key={`${x}-${y}`} className="w-10 h-10 sm:w-12 sm:h-12 bg-transparent pointer-events-none"></div>;
-
-                                            const isProtected = cell.placements.some(p => solvedWords.includes(p.id));
-                                            const isSelected = selectedCell?.x === x && selectedCell?.y === y;
-                                            const isWordActive = cell.placements.some(p => p.id === activePlacementId);
-                                            
-                                            const userVal = isProtected ? cell.answer : (inputs[`${x},${y}`] || '');
-                                            
-                                            let containerClasses = "crossword-cell w-10 h-10 sm:w-12 sm:h-12 relative flex items-center justify-center transition-all duration-300 rounded-lg shadow-sm ";
-                                            
-                                            if (isProtected) containerClasses += "bg-emerald-500 text-black ring-1 ring-emerald-400 z-10 shadow-emerald-500/50 font-black";
-                                            else if (wordFeedback === 'error' && userVal !== '' && isWordActive) containerClasses += "bg-rose-500 text-white animate-shake";
-                                            else if (isSelected && viewMode === 'focused') containerClasses += "bg-amber-400 text-black z-30 ring-4 ring-white shadow-xl shadow-amber-500/50 scale-110";
-                                            else if (isWordActive && viewMode === 'focused') containerClasses += "bg-amber-500/30 text-amber-100 z-20 border border-amber-500/50";
-                                            else containerClasses += "bg-zinc-800 text-white hover:bg-zinc-700 cursor-pointer border border-zinc-700/50";
-
-                                            if (viewMode === 'focused' && !isWordActive && !isProtected) containerClasses += " opacity-20";
-
-                                            return (
-                                                <div 
-                                                    key={`${x}-${y}`} 
-                                                    className={containerClasses}
-                                                    onClick={() => handleCellClick(x, y)}
-                                                >
-                                                    {cell.starts && cell.starts.map((s, idx) => (
-                                                        <span key={idx} className={`absolute w-5 h-5 bg-amber-500 text-black rounded-full flex items-center justify-center text-[10px] font-black z-40 shadow-sm pointer-events-none ${s.isHoriz ? '-left-6 top-1/2 -translate-y-1/2' : '-top-6 left-1/2 -translate-x-1/2'}`}>
-                                                            {s.number}
-                                                        </span>
-                                                    ))}
-                                                    <input
-                                                        ref={el => inputRefs.current[`${x},${y}`] = el}
-                                                        className={`w-full h-full bg-transparent text-center uppercase font-black text-xl md:text-2xl outline-none m-0 p-0 z-20 cell-input caret-transparent ${!isWordActive || isProtected ? 'pointer-events-none' : 'cursor-pointer'}`}
-                                                        maxLength={2}
-                                                        value={userVal}
-                                                        autoCapitalize="characters"
-                                                        autoComplete="off"
-                                                        autoCorrect="off"
-                                                        spellCheck="false"
-                                                        readOnly={!isWordActive || viewMode === 'overview' || isProtected}
-                                                        tabIndex={isWordActive && !isProtected ? 0 : -1}
-                                                        onChange={(e) => handleInput(e, x, y)}
-                                                        onKeyDown={(e) => handleKeyDown(e, x, y)}
-                                                        onFocus={(e) => { e.target.select(); }}
-                                                    />
+                                    {/* EL GRID MATEMÁTICAMENTE EXACTO (PÍXELES, NO PORCENTAJES) */}
+                                    <div 
+                                        className="relative grid gap-[2px]"
+                                        style={{ 
+                                            gridTemplateColumns: `repeat(${layout.width}, ${cellSize}px)`, 
+                                            gridTemplateRows: `repeat(${layout.height}, ${cellSize}px)`
+                                        }}
+                                    >
+                                        {viewMode === 'focused' && activePlacementObj && (
+                                            <div 
+                                                className="absolute z-50 text-4xl sm:text-5xl animate-bounce drop-shadow-xl pointer-events-none flex justify-center"
+                                                style={{ 
+                                                    left: `${(activePlacementObj.normX + (activePlacementObj.isHoriz ? activePlacementObj.wordStr.length/2 : 0.5)) * cellSize}px`,
+                                                    top: `${activePlacementObj.normY * cellSize - 55}px`,
+                                                    transform: 'translateX(-50%)'
+                                                }}
+                                            >
+                                                <div className="bg-zinc-900/90 backdrop-blur-xl px-5 py-2.5 rounded-[2rem] border-2 border-zinc-700 shadow-2xl">
+                                                    {activePlacementObj.emojis}
                                                 </div>
-                                            );
-                                        })
-                                    )}
+                                            </div>
+                                        )}
+
+                                        {layout.grid.map((row, y) => 
+                                            row.map((cell, x) => {
+                                                if (!cell) return <div key={`${x}-${y}`} style={{ width: cellSize, height: cellSize }} className="bg-transparent pointer-events-none shrink-0"></div>;
+
+                                                const isProtected = cell.placements.some(p => solvedWords.includes(p.id));
+                                                const isSelected = selectedCell?.x === x && selectedCell?.y === y;
+                                                const isWordActive = cell.placements.some(p => p.id === activePlacementId);
+                                                
+                                                const userVal = isProtected ? cell.answer : (inputs[`${x},${y}`] || '');
+                                                
+                                                let containerClasses = "crossword-cell relative flex items-center justify-center transition-all duration-300 rounded-lg shadow-sm shrink-0 ";
+                                                
+                                                if (isProtected) containerClasses += "bg-emerald-500 text-black ring-1 ring-emerald-400 z-10 shadow-emerald-500/50 font-black";
+                                                else if (wordFeedback === 'error' && userVal !== '' && isWordActive) containerClasses += "bg-rose-500 text-white animate-shake";
+                                                else if (isSelected && viewMode === 'focused') containerClasses += "bg-amber-400 text-black z-30 ring-4 ring-white shadow-xl shadow-amber-500/50 scale-110";
+                                                else if (isWordActive && viewMode === 'focused') containerClasses += "bg-amber-500/30 text-amber-100 z-20 border border-amber-500/50";
+                                                else containerClasses += "bg-zinc-800 text-white hover:bg-zinc-700 cursor-pointer border border-zinc-700/50";
+
+                                                if (viewMode === 'focused' && !isWordActive && !isProtected) containerClasses += " opacity-20";
+
+                                                return (
+                                                    <div 
+                                                        key={`${x}-${y}`} 
+                                                        className={containerClasses}
+                                                        style={{ width: cellSize, height: cellSize }}
+                                                        onClick={() => handleCellClick(x, y)}
+                                                    >
+                                                        {cell.starts && cell.starts.map((s, idx) => (
+                                                            <span key={idx} className={`absolute w-5 h-5 bg-amber-500 text-black rounded-full flex items-center justify-center text-[10px] font-black z-40 shadow-sm pointer-events-none ${s.isHoriz ? '-left-6 top-1/2 -translate-y-1/2' : '-top-6 left-1/2 -translate-x-1/2'}`}>
+                                                                {s.number}
+                                                            </span>
+                                                        ))}
+                                                        <input
+                                                            ref={el => inputRefs.current[`${x},${y}`] = el}
+                                                            className={`w-full h-full bg-transparent text-center uppercase font-black text-xl md:text-2xl outline-none m-0 p-0 z-20 cell-input caret-transparent ${!isWordActive || isProtected ? 'pointer-events-none' : 'cursor-pointer'}`}
+                                                            maxLength={2}
+                                                            value={userVal}
+                                                            autoCapitalize="characters"
+                                                            autoComplete="off"
+                                                            autoCorrect="off"
+                                                            spellCheck="false"
+                                                            readOnly={!isWordActive || viewMode === 'overview' || isProtected}
+                                                            tabIndex={isWordActive && !isProtected ? 0 : -1}
+                                                            onChange={(e) => handleInput(e, x, y)}
+                                                            onKeyDown={(e) => handleKeyDown(e, x, y)}
+                                                            onFocus={(e) => { e.target.select(); }}
+                                                        />
+                                                    </div>
+                                                );
+                                            })
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </div>
