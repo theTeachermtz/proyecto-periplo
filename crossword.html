@@ -49,7 +49,7 @@
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Check, RotateCcw, Award, Home, ArrowRight, ArrowDown, Edit2, X, Share2, Info } from 'lucide-react';
+        import { Check, RotateCcw, Award, Home, ArrowRight, ArrowDown, Edit2, X, LocateFixed, Plus, Minus, Share2, User } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -198,12 +198,14 @@
             const [baseScale, setBaseScale] = useState(1);
             const [zoomTransform, setZoomTransform] = useState({ scale: 1, x: 0, y: 0 });
 
+            // Detectar celular
             useEffect(() => {
                 const handleResize = () => setIsMobile(window.innerWidth < 768);
                 window.addEventListener('resize', handleResize);
                 return () => window.removeEventListener('resize', handleResize);
             }, []);
 
+            // Tamaño rígido en píxeles
             const cellSize = isMobile ? 40 : 48;
 
             useEffect(() => {
@@ -232,7 +234,7 @@
                 return () => unsub();
             }, [quizId]);
 
-            // --- ESCALA DE LA VISTA GENERAL BLINDADA ---
+            // Calcular escala base (PERFECTO CENTRADO ABSOLUTO USANDO EL WINDOW)
             useEffect(() => {
                 if (!layout || !gameStarted) return;
                 
@@ -245,8 +247,8 @@
                     const gridW = layout.width * cellSize;
                     const gridH = layout.height * cellSize;
                     
-                    // Aumentamos muchísimo el margen en móviles para que números como -left-6 no se recorten
-                    const paddingX = isMobile ? 120 : 160; 
+                    // AUMENTÉ EL MARGEN aún más para que los números sueltos (como el 3) jamás toquen los bordes
+                    const paddingX = isMobile ? 100 : 160; 
                     const paddingY = isMobile ? 240 : 300;
                     
                     const scaleX = (viewportW - paddingX) / gridW;
@@ -265,26 +267,36 @@
                 return () => window.removeEventListener('resize', calculateOverviewScale);
             }, [layout, viewMode, gameStarted, isMobile, cellSize]);
 
-            // --- CÁMARA DE ZOOM (ESQUIVANDO EL TECLADO) ---
+            // --- CÁMARA INTELIGENTE ANTI-TECLADO Y ANTI-HEADER ---
             useEffect(() => {
                 if (viewMode === 'focused' && activePlacementId && layout) {
                     const activePlacement = layout.clues.across.concat(layout.clues.down).find(p => p.id === activePlacementId);
                     if (!activePlacement) return;
                     
-                    const wordCenterX = (activePlacement.normX + (activePlacement.isHoriz ? activePlacement.wordStr.length / 2 : 0.5)) * cellSize;
-                    const wordCenterY = (activePlacement.normY + (activePlacement.isHoriz ? 0.5 : activePlacement.wordStr.length / 2)) * cellSize;
+                    // Coordenada X siempre centrada en la palabra
+                    const targetX = (activePlacement.normX + (activePlacement.isHoriz ? activePlacement.wordStr.length / 2 : 0.5)) * cellSize;
+                    
+                    // LÓGICA MÁGICA PARA Y
+                    let targetY;
+                    if (activePlacement.isHoriz) {
+                        targetY = (activePlacement.normY + 0.5) * cellSize;
+                    } else {
+                        // Si es vertical, NO centramos la palabra entera. 
+                        // Le apuntamos a la letra 2 o 3 para empujar la palabra hacia abajo y que el "Banner" quepa libre arriba.
+                        const focusLetter = Math.min(activePlacement.wordStr.length, 3);
+                        targetY = (activePlacement.normY + (focusLetter / 2)) * cellSize;
+                    }
                     
                     const gridW = layout.width * cellSize;
                     const gridH = layout.height * cellSize;
                     
-                    const tx = (gridW / 2) - wordCenterX;
-                    const ty = (gridH / 2) - wordCenterY;
+                    const tx = (gridW / 2) - targetX;
+                    const ty = (gridH / 2) - targetY;
 
-                    // Ajustamos el zoom para que se vea claro pero no gigante
-                    const focusScale = isMobile ? 1.3 : 1.8;
+                    const focusScale = isMobile ? 1.4 : 1.8;
                     
-                    // MAGIA: Empujamos la palabra muy arriba en celulares para que el teclado no tape
-                    const keyboardOffset = isMobile ? (160 / focusScale) : 0;
+                    // Compensación adicional para el teclado virtual (sube un poco el tablero)
+                    const keyboardOffset = isMobile ? (100 / focusScale) : 0;
 
                     setZoomTransform({ scale: focusScale, x: tx, y: ty - keyboardOffset });
                 } else if (viewMode === 'overview') {
@@ -516,6 +528,17 @@
                 setTimeout(() => inputRefs.current[`${focusX},${focusY}`]?.focus(), 600);
             };
 
+            // Para deseleccionar al picar en espacio negro vacío
+            const handleEmptyClick = () => {
+                if (viewMode === 'focused') {
+                    setViewMode('overview'); 
+                    setActivePlacementId(null); 
+                    setSelectedCell(null);
+                    setShowAcrossPop(false); 
+                    setShowDownPop(false);
+                }
+            };
+
             const isClueActive = (placement) => placement.id === activePlacementId;
 
             if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-amber-500 font-black animate-pulse">Generando Malla...</div>;
@@ -644,115 +667,82 @@
                             )}
                         </div>
 
-                        {/* MODO FOCUS VS MODO OVERVIEW: Cambiamos los botones de Header */}
-                        {viewMode === 'overview' ? (
-                            <div className="flex items-center gap-4 w-full sm:w-auto relative z-50">
-                                <div className="relative group w-1/2 sm:w-32">
-                                    <div className="absolute inset-0 bg-amber-500 blur-md opacity-20 animate-pulse rounded-xl pointer-events-none glow-beat-1"></div>
-                                    <button onClick={() => {setShowAcrossPop(!showAcrossPop); setShowDownPop(false);}} className={`relative w-full flex justify-center items-center gap-2 px-4 py-3 rounded-xl font-black text-sm uppercase tracking-widest transition-all border border-transparent shadow-md ${showAcrossPop ? 'bg-amber-600 text-black' : 'bg-zinc-800 text-amber-500 hover:bg-zinc-700 hover:text-amber-400 active:scale-95'}`}>
-                                        <ArrowRight size={16} className={showAcrossPop ? 'text-black' : 'text-amber-500'}/> HOR
-                                    </button>
-                                    {showAcrossPop && (
-                                        <div className="absolute top-full left-0 sm:left-auto sm:right-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 animate-in slide-in-from-top-2 z-50">
-                                            <div className="flex justify-between items-center p-2 mb-1 border-b border-zinc-700">
-                                                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Elige una pista</span>
-                                                <button onClick={()=>setShowAcrossPop(false)} className="text-zinc-500 hover:text-white"><X size={14}/></button>
-                                            </div>
-                                            {layout.clues.across.map(c => {
-                                                const isSolved = solvedWords.includes(c.id);
-                                                const isActive = isClueActive(c);
-                                                return (
-                                                    <button key={c.id} id={`clue-across-${c.id}`} disabled={isSolved} onClick={() => handleClueClick(c)} className={`w-full text-left p-3 rounded-xl mb-1 text-sm font-bold flex items-start gap-2 transition-colors ${isSolved ? 'opacity-50 line-through text-zinc-500' : isActive ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/50' : 'hover:bg-zinc-700 text-zinc-200'}`}>
-                                                        {isActive && <Edit2 size={14} className="text-amber-500 shrink-0 mt-0.5" />}
-                                                        <span className="text-amber-500 shrink-0">{c.number}.</span> <span>{c.clueText}</span>
-                                                    </button>
-                                                )
-                                            })}
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="relative group w-1/2 sm:w-32">
-                                    <div className="absolute inset-0 bg-amber-500 blur-md opacity-20 animate-pulse rounded-xl pointer-events-none glow-beat-2"></div>
-                                    <button onClick={() => {setShowDownPop(!showDownPop); setShowAcrossPop(false);}} className={`relative w-full flex justify-center items-center gap-2 px-4 py-3 rounded-xl font-black text-sm uppercase tracking-widest transition-all border border-transparent shadow-md ${showDownPop ? 'bg-amber-600 text-black' : 'bg-zinc-800 text-amber-500 hover:bg-zinc-700 hover:text-amber-400 active:scale-95'}`}>
-                                        <ArrowDown size={16} className={showDownPop ? 'text-black' : 'text-amber-500'}/> VER
-                                    </button>
-                                    {showDownPop && (
-                                        <div className="absolute top-full right-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 animate-in slide-in-from-top-2 z-50">
-                                            <div className="flex justify-between items-center p-2 mb-1 border-b border-zinc-700">
-                                                <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Elige una pista</span>
-                                                <button onClick={()=>setShowDownPop(false)} className="text-zinc-500 hover:text-white"><X size={14}/></button>
-                                            </div>
-                                            {layout.clues.down.map(c => {
-                                                const isSolved = solvedWords.includes(c.id);
-                                                const isActive = isClueActive(c);
-                                                return (
-                                                    <button key={c.id} id={`clue-down-${c.id}`} disabled={isSolved} onClick={() => handleClueClick(c)} className={`w-full text-left p-3 rounded-xl mb-1 text-sm font-bold flex items-start gap-2 transition-colors ${isSolved ? 'opacity-50 line-through text-zinc-500' : isActive ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/50' : 'hover:bg-zinc-700 text-zinc-200'}`}>
-                                                        {isActive && <Edit2 size={14} className="text-amber-500 shrink-0 mt-0.5" />}
-                                                        <span className="text-amber-500 shrink-0">{c.number}.</span> <span>{c.clueText}</span>
-                                                    </button>
-                                                )
-                                            })}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="flex items-center gap-4 w-full sm:w-auto">
-                                <button 
-                                    onClick={() => {
-                                        setViewMode('overview');
-                                        setActivePlacementId(null);
-                                        setSelectedCell(null);
-                                        setShowAcrossPop(false);
-                                        setShowDownPop(false);
-                                    }} 
-                                    className="w-full sm:w-auto bg-zinc-800 hover:bg-zinc-700 text-white px-6 py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 border border-zinc-700 shadow-md active:scale-95 transition-all"
-                                >
-                                    <RotateCcw size={18}/> Alejar Vista
+                        <div className="flex items-center gap-4 w-full sm:w-auto relative z-50">
+                            
+                            <div className="relative group w-1/2 sm:w-32">
+                                <div className="absolute inset-0 bg-amber-500 blur-md opacity-20 animate-pulse rounded-xl pointer-events-none glow-beat-1"></div>
+                                <button onClick={() => {setShowAcrossPop(!showAcrossPop); setShowDownPop(false);}} className={`relative w-full flex justify-center items-center gap-2 px-4 py-3 rounded-xl font-black text-sm uppercase tracking-widest transition-all border border-transparent shadow-md ${showAcrossPop ? 'bg-amber-600 text-black' : 'bg-zinc-800 text-amber-500 hover:bg-zinc-700 hover:text-amber-400 active:scale-95'}`}>
+                                    <ArrowRight size={16} className={showAcrossPop ? 'text-black' : 'text-amber-500'}/> HOR
                                 </button>
+                                {showAcrossPop && (
+                                    <div className="absolute top-full left-0 sm:left-auto sm:right-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 animate-in slide-in-from-top-2 z-50">
+                                        <div className="flex justify-between items-center p-2 mb-1 border-b border-zinc-700">
+                                            <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Elige una pista</span>
+                                            <button onClick={()=>setShowAcrossPop(false)} className="text-zinc-500 hover:text-white"><X size={14}/></button>
+                                        </div>
+                                        {layout.clues.across.map(c => {
+                                            const isSolved = solvedWords.includes(c.id);
+                                            const isActive = isClueActive(c);
+                                            return (
+                                                <button key={c.id} id={`clue-across-${c.id}`} disabled={isSolved} onClick={() => handleClueClick(c)} className={`w-full text-left p-3 rounded-xl mb-1 text-sm font-bold flex items-start gap-2 transition-colors ${isSolved ? 'opacity-50 line-through text-zinc-500' : isActive ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/50' : 'hover:bg-zinc-700 text-zinc-200'}`}>
+                                                    {isActive && <Edit2 size={14} className="text-amber-500 shrink-0 mt-0.5" />}
+                                                    <span className="text-amber-500 shrink-0">{c.number}.</span> <span>{c.clueText}</span>
+                                                </button>
+                                            )
+                                        })}
+                                    </div>
+                                )}
                             </div>
-                        )}
+
+                            <div className="relative group w-1/2 sm:w-32">
+                                <div className="absolute inset-0 bg-amber-500 blur-md opacity-20 animate-pulse rounded-xl pointer-events-none glow-beat-2"></div>
+                                <button onClick={() => {setShowDownPop(!showDownPop); setShowAcrossPop(false);}} className={`relative w-full flex justify-center items-center gap-2 px-4 py-3 rounded-xl font-black text-sm uppercase tracking-widest transition-all border border-transparent shadow-md ${showDownPop ? 'bg-amber-600 text-black' : 'bg-zinc-800 text-amber-500 hover:bg-zinc-700 hover:text-amber-400 active:scale-95'}`}>
+                                    <ArrowDown size={16} className={showDownPop ? 'text-black' : 'text-amber-500'}/> VER
+                                </button>
+                                {showDownPop && (
+                                    <div className="absolute top-full right-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 animate-in slide-in-from-top-2 z-50">
+                                        <div className="flex justify-between items-center p-2 mb-1 border-b border-zinc-700">
+                                            <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Elige una pista</span>
+                                            <button onClick={()=>setShowDownPop(false)} className="text-zinc-500 hover:text-white"><X size={14}/></button>
+                                        </div>
+                                        {layout.clues.down.map(c => {
+                                            const isSolved = solvedWords.includes(c.id);
+                                            const isActive = isClueActive(c);
+                                            return (
+                                                <button key={c.id} id={`clue-down-${c.id}`} disabled={isSolved} onClick={() => handleClueClick(c)} className={`w-full text-left p-3 rounded-xl mb-1 text-sm font-bold flex items-start gap-2 transition-colors ${isSolved ? 'opacity-50 line-through text-zinc-500' : isActive ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/50' : 'hover:bg-zinc-700 text-zinc-200'}`}>
+                                                    {isActive && <Edit2 size={14} className="text-amber-500 shrink-0 mt-0.5" />}
+                                                    <span className="text-amber-500 shrink-0">{c.number}.</span> <span>{c.clueText}</span>
+                                                </button>
+                                            )
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </header>
 
                     <div className="flex-1 w-full relative flex min-h-0">
-                        
-                        {/* EL BANNER FIJO CON LA PISTA ACTIVA (NUEVO) */}
-                        {viewMode === 'focused' && activePlacementObj && (
-                            <div className="absolute top-4 left-1/2 -translate-x-1/2 w-11/12 max-w-md z-[60] bg-zinc-900/95 border-2 border-amber-500/50 p-3 sm:p-4 rounded-2xl shadow-2xl flex items-center gap-4 backdrop-blur-md animate-in slide-in-from-top-4 pointer-events-none">
-                                <div className="text-3xl sm:text-4xl bg-zinc-950 p-2 sm:p-3 rounded-xl flex-shrink-0 shadow-inner">
-                                    {activePlacementObj.emojis}
-                                </div>
-                                <div className="flex flex-col text-left">
-                                    <span className="text-[10px] sm:text-xs text-amber-500 font-black uppercase tracking-widest mb-0.5 flex items-center gap-1">
-                                        {activePlacementObj.isHoriz ? <ArrowRight size={12}/> : <ArrowDown size={12}/>}
-                                        {activePlacementObj.isHoriz ? 'Horizontal' : 'Vertical'} {activePlacementObj.number}
-                                    </span>
-                                    <span className="text-sm sm:text-base font-bold text-white leading-tight">{activePlacementObj.clueText}</span>
-                                </div>
-                            </div>
-                        )}
-
+                        {/* AREA DE JUEGO (Click vacío cierra menú y des-selecciona) */}
                         <div 
                             className="flex-1 relative overflow-hidden bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-zinc-900 to-black cursor-default"
                             onClick={(e) => { 
-                                if (e.target === e.currentTarget) {
-                                    if(viewMode==='focused') {
-                                        setViewMode('overview'); setActivePlacementId(null); setSelectedCell(null);
-                                        setShowAcrossPop(false); setShowDownPop(false);
-                                    }
+                                // Si clickean la zona negra fuera de los cuadros
+                                if (e.target === e.currentTarget || e.target.classList.contains('crossword-container')) {
+                                    handleEmptyClick();
                                 }
                             }}
                         >
                             <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden">
-                                {/* CONTENEDOR CON CENTRADO ABSOLUTO MATEMÁTICO */}
                                 <div 
-                                    className="absolute top-1/2 left-1/2 pointer-events-auto shadow-2xl border border-zinc-800 bg-zinc-900/80 p-3 sm:p-4 rounded-3xl crossword-container"
+                                    className="relative pointer-events-auto shadow-2xl border border-zinc-800 bg-zinc-900/80 p-3 sm:p-4 rounded-3xl crossword-container"
                                     style={{ 
                                         transform: `translate(-50%, -50%) scale(${zoomTransform.scale}) translate(${zoomTransform.x}px, ${zoomTransform.y}px)`,
+                                        transformOrigin: 'center center'
+                                    }}
+                                    onClick={(e) => {
+                                        if (e.target === e.currentTarget) handleEmptyClick();
                                     }}
                                 >
-                                    {/* EL GRID (MEDIDAS EXACTAS, IMPOSIBLE DE DEFORMAR) */}
                                     <div 
                                         className="relative grid gap-[2px]"
                                         style={{ 
@@ -760,15 +750,51 @@
                                             gridTemplateRows: `repeat(${layout.height}, ${cellSize}px)`
                                         }}
                                     >
+                                        {/* BANNER FLOTANTE DENTRO DEL TABLERO */}
+                                        {viewMode === 'focused' && activePlacementObj && (
+                                            <div 
+                                                className="absolute z-50 flex justify-center pointer-events-none animate-in zoom-in duration-300"
+                                                style={{ 
+                                                    left: `${(activePlacementObj.normX + (activePlacementObj.isHoriz ? activePlacementObj.wordStr.length / 2 : 0.5)) * cellSize}px`,
+                                                    top: `${activePlacementObj.normY * cellSize - 30}px`,
+                                                    transform: 'translate(-50%, -100%)',
+                                                    width: 'max-content'
+                                                }}
+                                            >
+                                                <div className="bg-zinc-900/95 border-2 border-amber-500/50 p-2 sm:p-3 rounded-2xl shadow-2xl flex items-center gap-2 sm:gap-3 backdrop-blur-md">
+                                                    <div className="text-2xl sm:text-3xl bg-zinc-950 p-1.5 sm:p-2 rounded-xl flex-shrink-0 shadow-inner">
+                                                        {activePlacementObj.emojis}
+                                                    </div>
+                                                    <div className="flex flex-col text-left">
+                                                        <span className="text-[9px] sm:text-[10px] text-amber-500 font-black uppercase tracking-widest mb-0.5 flex items-center gap-1">
+                                                            {activePlacementObj.isHoriz ? <ArrowRight size={10}/> : <ArrowDown size={10}/>}
+                                                            {activePlacementObj.isHoriz ? 'Horizontal' : 'Vertical'} {activePlacementObj.number}
+                                                        </span>
+                                                        <span className="text-xs sm:text-sm font-bold text-white leading-tight pr-2">{activePlacementObj.clueText}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
                                         {layout.grid.map((row, y) => 
                                             row.map((cell, x) => {
-                                                if (!cell) return <div key={`${x}-${y}`} style={{ width: cellSize, height: cellSize }} className="bg-transparent pointer-events-none shrink-0"></div>;
+                                                // Si la celda está vacía, la hacemos clickeable para hacer zoom out
+                                                if (!cell) {
+                                                    return (
+                                                        <div 
+                                                            key={`${x}-${y}`} 
+                                                            style={{ width: cellSize, height: cellSize }} 
+                                                            className="bg-transparent pointer-events-auto cursor-pointer shrink-0"
+                                                            onClick={handleEmptyClick}
+                                                        ></div>
+                                                    );
+                                                }
 
                                                 const isProtected = cell.placements.some(p => solvedWords.includes(p.id));
                                                 const isSelected = selectedCell?.x === x && selectedCell?.y === y;
                                                 const isWordActive = cell.placements.some(p => p.id === activePlacementId);
                                                 
-                                                const userVal = isProtected ? cell.answer : (inputs[`${x},${y}`] || '');
+                                                const userVal = isProtected ? cell.answer : (inputs[`x},${y}`] || inputs[`${x},${y}`] || '');
                                                 
                                                 let containerClasses = "crossword-cell relative flex items-center justify-center transition-all duration-300 rounded-lg shadow-sm shrink-0 ";
                                                 
