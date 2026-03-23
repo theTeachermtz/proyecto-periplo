@@ -197,19 +197,6 @@
             const [baseScale, setBaseScale] = useState(1);
             const [zoomTransform, setZoomTransform] = useState({ scale: 1, x: 0, y: 0 });
 
-            // --- ESTADOS PARA NAVEGACIÓN EN CRUZ Y ZOOM (REFS PARA EVITAR BUGS DE RENDER) ---
-            const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
-            const [manualZoom, setManualZoom] = useState(1);
-
-            const pointers = useRef(new Map());
-            const dragStart = useRef({ x: 0, y: 0 });
-            const pinchStartDist = useRef(null);
-            const dragState = useRef({
-                isDragging: false,
-                hasDragged: false,
-                axis: null
-            });
-
             const cellSize = isMobile ? 40 : 48;
             const gap = 2; 
             const gridPadding = 16;
@@ -287,9 +274,9 @@
                 return () => window.removeEventListener('resize', handleResize);
             }, [layout, gameStarted, boardW, boardH]);
 
-            // CÁMARA TRACKING: Siempre al inicio de la palabra
+            // CÁMARA TRACKING (Enfoca siempre el INICIO de la palabra)
             useEffect(() => {
-                if (viewMode === 'focused' && selectedCell && layout) {
+                if (viewMode === 'focused' && activePlacementId && layout) {
                     const activePlacement = layout.clues.across.concat(layout.clues.down).find(p => p.id === activePlacementId);
                     if (!activePlacement) return;
 
@@ -303,102 +290,18 @@
                     const keyboardOffset = isMobile ? (100 / focusScale) : 0;
 
                     setZoomTransform({ scale: focusScale, x: tx, y: ty - keyboardOffset });
-                    setPanOffset({ x: 0, y: 0 });
-                    setManualZoom(1); // Reseteamos el zoom manual al enfocar
                 } else if (viewMode === 'overview') {
                     setZoomTransform({ scale: baseScale, x: 0, y: 0 });
-                    setPanOffset({ x: 0, y: 0 });
-                    setManualZoom(1);
                 }
-            }, [viewMode, selectedCell, layout, baseScale, isMobile, cellSize, boardW, boardH, activePlacementId]);
-
-            // --- LÓGICA TÁCTIL (DRAG AXIS-LOCKED Y PINCH TO ZOOM) ---
-            const handlePointerDown = (e) => {
-                if (viewMode !== 'focused') return;
-                
-                // Evitamos interceptar el toque si están tecleando en el input
-                if (e.target.tagName.toLowerCase() === 'input') return;
-
-                pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-                if (pointers.current.size === 1) {
-                    dragStart.current = { x: e.clientX, y: e.clientY };
-                    dragState.current.isDragging = true;
-                    dragState.current.hasDragged = false;
-                    dragState.current.axis = null;
-                }
-                if (e.target.setPointerCapture) e.target.setPointerCapture(e.pointerId);
-            };
-
-            const handlePointerMove = (e) => {
-                if (viewMode !== 'focused') return;
-                if (!pointers.current.has(e.pointerId)) return;
-
-                pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-                if (pointers.current.size === 1 && dragState.current.isDragging) {
-                    const dx = e.clientX - dragStart.current.x;
-                    const dy = e.clientY - dragStart.current.y;
-
-                    // Decidimos el eje de bloqueo en los primeros pixeles de arrastre
-                    if (!dragState.current.hasDragged) {
-                        if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
-                            dragState.current.hasDragged = true;
-                            dragState.current.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
-                        }
-                    }
-
-                    if (dragState.current.hasDragged) {
-                        setPanOffset(prev => ({ 
-                            x: dragState.current.axis === 'x' ? prev.x + (dx / (zoomTransform.scale * manualZoom)) : prev.x, 
-                            y: dragState.current.axis === 'y' ? prev.y + (dy / (zoomTransform.scale * manualZoom)) : prev.y 
-                        }));
-                        dragStart.current = { x: e.clientX, y: e.clientY };
-                    }
-                } 
-                // LÓGICA DE PINCH-TO-ZOOM (Poquito zoom)
-                else if (pointers.current.size === 2) {
-                    const pts = Array.from(pointers.current.values());
-                    const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-                    
-                    if (pinchStartDist.current !== null) {
-                        const delta = dist - pinchStartDist.current;
-                        setManualZoom(prev => {
-                            let newZoom = prev + (delta * 0.005);
-                            return Math.min(Math.max(0.6, newZoom), 1.8); // Clamp: Poquito pa atrás, poquito pa'l frente
-                        });
-                    }
-                    pinchStartDist.current = dist;
-                }
-            };
-
-            const handlePointerUp = (e) => {
-                pointers.current.delete(e.pointerId);
-                
-                if (pointers.current.size < 2) {
-                    pinchStartDist.current = null;
-                }
-                
-                if (pointers.current.size === 1) {
-                    const pt = Array.from(pointers.current.values())[0];
-                    dragStart.current = { x: pt.x, y: pt.y };
-                } else if (pointers.current.size === 0) {
-                    // Damos un pequeño delay antes de apagar el estado de drag, para que onClick alcance a leerlo
-                    setTimeout(() => { dragState.current.isDragging = false; }, 50);
-                }
-                
-                if (e.target.releasePointerCapture) e.target.releasePointerCapture(e.pointerId);
-            };
+            }, [viewMode, activePlacementId, layout, baseScale, isMobile, cellSize, boardW, boardH]);
 
             const handleEmptySpaceClick = () => {
-                if (dragState.current.hasDragged || pointers.current.size > 1) return; 
                 if (viewMode === 'focused') {
                     setViewMode('overview'); 
                     setActivePlacementId(null); 
                     setSelectedCell(null);
                     setShowAcrossPop(false); 
                     setShowDownPop(false);
-                    setManualZoom(1);
                 }
             };
 
@@ -471,7 +374,6 @@
                         setTimeout(() => inputRefs.current[`${prevX},${prevY}`]?.focus(), 10);
                     }
                 } 
-                // INTERCEPTAMOS LAS LETRAS EN CELDAS PROTEGIDAS (EL PUENTE)
                 else if (/^[a-zA-ZñÑ]$/.test(e.key) && e.key.length === 1) {
                     if (isProtected) {
                         e.preventDefault(); 
@@ -525,7 +427,6 @@
                         setTimeout(() => {
                             setWordFeedback(null); setViewMode('overview'); setActivePlacementId(null); setSelectedCell(null);
                             setShowAcrossPop(false); setShowDownPop(false);
-                            setManualZoom(1);
                             if (newSolved.length === layout.totalWords) setGlobalWin(true);
                         }, 1200);
                     } else if (!isCorrect) {
@@ -534,13 +435,9 @@
                 }
             };
 
-            // SELECCIÓN DIRECTA CON CLICK (BURLA EL BUG DE TECLADO Y RESPETA DRAG)
             const handleCellClick = (e, x, y) => {
                 e.stopPropagation(); 
-                if (dragState.current.hasDragged || globalWin || pointers.current.size > 1) {
-                    dragState.current.hasDragged = false; // Reset 
-                    return; 
-                }
+                if (globalWin) return;
                 
                 const cell = layout.grid[y][x];
                 const unsolvedPlacements = cell.placements.filter(p => !solvedWords.includes(p.id));
@@ -552,7 +449,6 @@
                 setActivePlacementId(newActive.id);
                 setDirection(newActive.isHoriz ? 'across' : 'down');
 
-                // FOCO FORZADO AL INICIO: Siempre te manda a la casilla número 1 de la palabra
                 let focusX = newActive.normX; 
                 let focusY = newActive.normY;
                 
@@ -560,8 +456,6 @@
                 setViewMode('focused');
                 setShowAcrossPop(false); 
                 setShowDownPop(false);
-                setPanOffset({ x: 0, y: 0 });
-                setManualZoom(1);
 
                 setTimeout(() => inputRefs.current[`${focusX},${focusY}`]?.focus(), 100); 
             };
@@ -573,8 +467,6 @@
                 setViewMode('focused');
                 setShowAcrossPop(false); 
                 setShowDownPop(false);
-                setPanOffset({ x: 0, y: 0 });
-                setManualZoom(1);
 
                 let focusX = placement.normX; let focusY = placement.normY;
                 setSelectedCell({ x: focusX, y: focusY });
@@ -769,26 +661,22 @@
                     <div className="flex-1 w-full relative flex min-h-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-zinc-900 to-black overflow-hidden">
                         
                         <div 
-                            className="absolute inset-0 touch-none cursor-default"
-                            onPointerDown={handlePointerDown}
-                            onPointerMove={handlePointerMove}
-                            onPointerUp={handlePointerUp}
-                            onPointerCancel={handlePointerUp}
-                            onPointerLeave={handlePointerUp}
+                            className="absolute inset-0 cursor-default"
                             onClick={handleEmptySpaceClick}
                         >
                             <div 
-                                className={`absolute shadow-2xl border border-zinc-800 bg-zinc-900/80 rounded-3xl ${!isDragging ? 'camera-transition' : ''}`}
+                                className="absolute shadow-2xl border border-zinc-800 bg-zinc-900/80 rounded-3xl camera-transition"
                                 style={{
                                     width: boardW,
                                     height: boardH,
                                     top: '50%',
                                     left: '50%',
-                                    transform: `translate(-50%, -50%) scale(${zoomTransform.scale * manualZoom}) translate(${zoomTransform.x + panOffset.x}px, ${zoomTransform.y + panOffset.y}px)`,
+                                    transform: `translate(-50%, -50%) scale(${zoomTransform.scale}) translate(${zoomTransform.x}px, ${zoomTransform.y}px)`,
                                     transformOrigin: 'center center'
                                 }}
                             >
                                 <div className="relative w-full h-full">
+                                    {/* BANNER FLOTANTE (Anclado al número de la palabra) */}
                                     {viewMode === 'focused' && activePlacementObj && (
                                         <div 
                                             className="absolute z-50 flex justify-center pointer-events-none animate-in zoom-in duration-300"
@@ -814,6 +702,7 @@
                                         </div>
                                     )}
 
+                                    {/* CASILLAS EN POSICIÓN ABSOLUTA */}
                                     {layout.grid.map((row, y) => 
                                         row.map((cell, x) => {
                                             if (!cell) {
@@ -830,8 +719,7 @@
                                             const isPartOfSolved = cell.placements.some(p => solvedWords.includes(p.id));
                                             const rawInput = inputs[`${x},${y}`];
                                             
-                                            // EL PUENTE VERDE: Si la casilla es parte de una palabra resuelta
-                                            // Y el alumno no ha escrito nada equivocado ahí, se pinta de verde.
+                                            // EL PUENTE VERDE:
                                             const isGreen = isPartOfSolved && (rawInput === undefined || rawInput === '' || rawInput === cell.answer);
                                             
                                             let userVal = '';
