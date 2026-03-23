@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Memorama | Periplo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' };
+        document.documentElement.classList.add('dark');
+    </script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap'); 
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow: hidden; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        
+        .perspective { perspective: 1000px; }
+        .preserve-3d { transform-style: preserve-3d; }
+        .backface-hidden { backface-visibility: hidden; }
+        .rotate-y-180 { transform: rotateY(180deg); }
+    </style>
+</head>
+<body class="text-zinc-100 h-[100dvh] flex flex-col">
+    <div id="root" class="h-full flex flex-col"></div>
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+        import { Check, X, Award, Home, Share2, Layers } from 'lucide-react';
+
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Mezclar array (Fisher-Yates)
+        const shuffleArray = (array) => {
+            const newArray = [...array];
+            for (let i = newArray.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+            }
+            return newArray;
+        };
+
+        const MemoryApp = () => {
+            const [user, setUser] = useState(null);
+            const [quizId, setQuizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [isStudent, setIsStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
+            const [quizData, setQuizData] = useState(null);
+            const [loading, setLoading] = useState(true);
+
+            const [gameStarted, setGameStarted] = useState(false);
+            const [playerName, setPlayerName] = useState('');
+            const [toastMsg, setToastMsg] = useState(null);
+
+            const [fullWordList, setFullWordList] = useState([]);
+            const [showWordList, setShowWordList] = useState(false);
+
+            // --- ESTADOS DEL JUEGO DE MEMORIA ---
+            const [deck, setDeck] = useState([]);
+            const [flippedIndices, setFlippedIndices] = useState([]);
+            const [matchedPairs, setMatchedPairs] = useState([]);
+            const [moves, setMoves] = useState(0);
+            const [isLocked, setIsLocked] = useState(false);
+
+            useEffect(() => {
+                signInAnonymously(auth);
+                const unsub = onAuthStateChanged(auth, setUser);
+                if (quizId) {
+                    getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId)).then(snap => {
+                        if(snap.exists()) {
+                            const data = snap.data();
+                            setQuizData(data);
+                            
+                            const rawWords = data.content?.cards || data.content?.pairs || [];
+                            const cleanWords = rawWords.map((w, i) => ({
+                                id: w.id || `word-${i}`, wordEn: w.wordEn || w.c1 || '', wordEs: w.wordEs || w.c3 || '',
+                                exampleEn: w.exampleEn || w.c2 || '', emojis: w.emojis || w.c2 || '🎯'
+                            })).filter(w => w.wordEn);
+                            
+                            setFullWordList(cleanWords);
+                            // Tomamos hasta 25 pares máximo (50 cartas)
+                            prepareDeck(cleanWords.slice(0, 25));
+                        } else { alert("Juego no encontrado"); }
+                        setLoading(false);
+                    });
+                } else { setLoading(false); }
+                return () => unsub();
+            }, [quizId]);
+
+            const prepareDeck = (wordsArray) => {
+                let initialDeck = [];
+                wordsArray.forEach((item) => {
+                    initialDeck.push({ uniqueId: `${item.id}-en`, pairId: item.id, text: item.wordEn, type: 'en', audioText: item.wordEn });
+                    initialDeck.push({ uniqueId: `${item.id}-es`, pairId: item.id, text: item.wordEs, emoji: item.emojis, type: 'es', audioText: item.wordEn });
+                });
+                setDeck(shuffleArray(initialDeck));
+                setFlippedIndices([]);
+                setMatchedPairs([]);
+                setMoves(0);
+                setIsLocked(false);
+            };
+
+            const playAudio = (text) => {
+                if ('speechSynthesis' in window && text) {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.lang = 'en-US';
+                    utterance.rate = 0.9;
+                    window.speechSynthesis.speak(utterance);
+                }
+            };
+
+            const handleCardClick = (index) => {
+                if (!gameStarted || isLocked || flippedIndices.includes(index) || matchedPairs.includes(deck[index].pairId)) return;
+
+                const newFlipped = [...flippedIndices, index];
+                setFlippedIndices(newFlipped);
+
+                if (newFlipped.length === 2) {
+                    setIsLocked(true);
+                    setMoves(m => m + 1);
+                    const [idx1, idx2] = newFlipped;
+                    
+                    if (deck[idx1].pairId === deck[idx2].pairId) {
+                        // ¡ACIERTO!
+                        playAudio(deck[idx1].audioText);
+                        setTimeout(() => {
+                            setMatchedPairs(prev => [...prev, deck[idx1].pairId]);
+                            setFlippedIndices([]);
+                            setIsLocked(false);
+                        }, 500); // 0.5s para apreciar la carta antes de ponerla verde
+                    } else {
+                        // FALLO
+                        setTimeout(() => {
+                            setFlippedIndices([]);
+                            setIsLocked(false);
+                        }, 1200); // 1.2s para que traten de memorizar dónde estaban
+                    }
+                }
+            };
+
+            const handleRestart = () => {
+                prepareDeck([...fullWordList].sort(() => 0.5 - Math.random()).slice(0, 25));
+            };
+
+            const copyLink = () => {
+                const studentUrl = `${window.location.origin}${window.location.pathname}?id=${quizId}&student=true`;
+                navigator.clipboard.writeText(studentUrl).then(() => {
+                    setToastMsg('¡Link copiado!');
+                    setTimeout(() => setToastMsg(null), 3000);
+                });
+            };
+
+            const globalWin = matchedPairs.length > 0 && matchedPairs.length === (deck.length / 2);
+
+            if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-emerald-500 font-black animate-pulse">Generando Memorama...</div>;
+            if (!fullWordList || fullWordList.length === 0) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-bold p-6 text-center">El banco de palabras está vacío.</div>;
+
+            // --- PANTALLA DE INICIO ---
+            if (!gameStarted) {
+                return (
+                    <div className="h-[100dvh] bg-zinc-950 flex flex-col items-center justify-center p-4 relative overflow-hidden">
+                        <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[2.5rem] shadow-2xl max-w-md w-full text-center z-10 animate-in zoom-in-95">
+                            <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center text-white text-4xl font-black shadow-lg shadow-indigo-600/20 mx-auto mb-6">P</div>
+                            <h1 className="text-3xl font-black text-emerald-500 mb-2 leading-tight">{quizData?.title || 'Memorama'}</h1>
+                            <p className="text-zinc-400 mb-8 font-medium">Encuentra los {deck.length / 2} pares para ganar.</p>
+                            
+                            <input 
+                                type="text" 
+                                placeholder="Tu nombre..." 
+                                value={playerName}
+                                onChange={(e) => setPlayerName(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && playerName.trim() && setGameStarted(true)}
+                                className="w-full bg-zinc-950 border-2 border-zinc-800 rounded-xl p-4 text-center text-xl font-bold text-white mb-6 outline-none focus:border-emerald-500 transition-colors"
+                            />
+                            
+                            <button 
+                                disabled={!playerName.trim()}
+                                onClick={() => setGameStarted(true)}
+                                className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-black font-black text-lg py-4 rounded-xl transition-all shadow-lg active:scale-95 uppercase tracking-widest"
+                            >
+                                Empezar Juego
+                            </button>
+                            
+                            {!isStudent && (
+                                <button onClick={() => window.location.href='index.html'} className="mt-6 text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-widest">
+                                    Volver al Hub (Maestro)
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="h-[100dvh] bg-zinc-950 text-zinc-100 font-sans flex flex-col overflow-hidden relative">
+                    
+                    {toastMsg && (
+                        <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-emerald-500 text-black px-6 py-3 rounded-full font-black text-sm shadow-xl z-[120] animate-in slide-in-from-top-4 flex items-center gap-2">
+                            <Check size={16} /> {toastMsg}
+                        </div>
+                    )}
+
+                    {/* CONFETI GLOBAL & MENU DE VICTORIA */}
+                    {globalWin && (
+                        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in p-4">
+                            <div className="bg-zinc-900 border border-zinc-700 text-white p-8 rounded-[2rem] text-center shadow-2xl w-full max-w-md">
+                                <Award className="w-24 h-24 text-emerald-500 mx-auto mb-6 animate-bounce"/>
+                                <h2 className="text-4xl font-black mb-2">¡Completado, {playerName}!</h2>
+                                <p className="text-zinc-400 font-bold uppercase tracking-widest mb-8">Lo lograste en {moves} movimientos.</p>
+                                
+                                <div className="flex flex-col gap-4 w-full">
+                                    <button onClick={() => setShowWordList(true)} className="w-full bg-zinc-800 border-2 border-zinc-700 hover:bg-zinc-700 text-white font-black px-6 py-4 rounded-xl transition-all shadow-md active:scale-95 text-sm sm:text-base">
+                                        📖 REPASAR VOCABULARIO
+                                    </button>
+                                    <button onClick={handleRestart} className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-black px-6 py-4 rounded-xl transition-all shadow-md active:scale-95 text-sm sm:text-base">
+                                        🔄 JUGAR OTRO TABLERO
+                                    </button>
+                                    {!isStudent && (
+                                        <button onClick={() => window.location.href='index.html'} className="mt-2 text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-widest">
+                                            SALIR AL HUB
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* OVERLAY DE LISTA DE PALABRAS */}
+                    {showWordList && (
+                        <div className="absolute inset-0 z-[110] bg-zinc-950 flex flex-col p-4 sm:p-8 animate-in slide-in-from-bottom-10">
+                            <div className="max-w-3xl mx-auto w-full flex flex-col h-full bg-zinc-900 rounded-[2rem] border border-zinc-800 p-6 shadow-2xl">
+                                <div className="flex items-center justify-between mb-6 shrink-0">
+                                    <h2 className="text-2xl sm:text-3xl font-black text-white">Vocabulario</h2>
+                                    <button onClick={() => setShowWordList(false)} className="p-3 bg-zinc-800 text-zinc-400 rounded-full hover:bg-zinc-700 hover:text-white transition-colors">
+                                        <X size={20} />
+                                    </button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar pb-6">
+                                    {fullWordList.map(card => (
+                                        <div key={card.id} className="flex flex-col sm:flex-row items-start sm:items-center p-4 bg-zinc-950/50 rounded-2xl border border-zinc-800 gap-4">
+                                            <div className="text-4xl bg-zinc-900 w-16 h-16 flex items-center justify-center rounded-xl shadow-sm border border-zinc-800 flex-shrink-0">
+                                                {card.emojis}
+                                            </div>
+                                            <div className="flex-grow w-full">
+                                                <h4 className="text-lg font-black text-white">{card.wordEn}</h4>
+                                                <p className="text-emerald-500 font-bold text-sm mb-1">{card.wordEs}</p>
+                                                {card.exampleEn && <p className="text-zinc-500 text-xs italic">"{card.exampleEn}"</p>}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* HEADER */}
+                    <header className="p-4 sm:p-6 w-full flex justify-between items-center shrink-0 border-b border-zinc-800/50 bg-zinc-900/50 backdrop-blur-md z-40">
+                        <div className="flex items-center gap-3">
+                            {!isStudent && (
+                                <button onClick={() => window.location.href='index.html'} className="p-2.5 bg-zinc-800 text-zinc-400 rounded-xl hover:bg-zinc-700 hover:text-white transition-colors border border-zinc-700">
+                                    <Home size={20}/>
+                                </button>
+                            )}
+                            {!isStudent && <div className="w-px h-8 bg-zinc-800 mx-1 hidden sm:block"></div>}
+                            {!isStudent && (
+                                <button onClick={copyLink} className="p-2.5 bg-zinc-800 text-sky-400 rounded-xl hover:bg-zinc-700 hover:text-sky-300 transition-colors border border-zinc-700" title="Copiar link para alumnos">
+                                    <Share2 size={20}/>
+                                </button>
+                            )}
+                            <div className={!isStudent ? "ml-2" : ""}>
+                                <h1 className="text-lg font-black text-emerald-500 leading-none tracking-tight">{quizData?.title || 'Actividad Periplo'}</h1>
+                                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Modo: Memorama</p>
+                            </div>
+                        </div>
+
+                        {/* ESTADÍSTICAS */}
+                        <div className="flex items-center gap-3">
+                            <div className="flex flex-col items-end sm:items-center sm:flex-row gap-1 sm:gap-3 bg-zinc-900 border border-zinc-800 px-3 sm:px-4 py-2 rounded-xl">
+                                <span className="text-zinc-400 font-black text-[10px] sm:text-xs uppercase tracking-widest">
+                                    Pares: <span className="text-emerald-500">{matchedPairs.length}/{deck.length/2}</span>
+                                </span>
+                                <div className="w-1 h-1 bg-zinc-700 rounded-full hidden sm:block"></div>
+                                <span className="text-zinc-400 font-black text-[10px] sm:text-xs uppercase tracking-widest">
+                                    Movimientos: <span className="text-white">{moves}</span>
+                                </span>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* ÁREA PRINCIPAL DEL TABLERO (SCROLLABLE EN MÓVIL) */}
+                    <div className="flex-1 w-full overflow-y-auto custom-scrollbar p-2 sm:p-4 md:p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-zinc-900 to-black">
+                        <div className="max-w-7xl mx-auto w-full pb-10">
+                            <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-8 lg:grid-cols-10 gap-2 sm:gap-3 w-full">
+                                {deck.map((card, index) => {
+                                    const isFlipped = flippedIndices.includes(index);
+                                    const isMatched = matchedPairs.includes(card.pairId);
+                                    const isVisible = isFlipped || isMatched;
+
+                                    return (
+                                        <div 
+                                            key={`${card.uniqueId}-${index}`}
+                                            onClick={() => handleCardClick(index)}
+                                            className={`perspective aspect-[3/4] w-full ${!isMatched && !isFlipped && !isLocked ? 'cursor-pointer group' : 'cursor-default'}`}
+                                        >
+                                            <div className={`relative w-full h-full duration-300 preserve-3d transition-transform ease-out ${isVisible ? 'rotate-y-180' : ''}`}>
+                                                
+                                                {/* REVERSO DE LA CARTA */}
+                                                <div className={`absolute inset-0 backface-hidden bg-zinc-800 rounded-xl sm:rounded-2xl border border-zinc-700 flex flex-col items-center justify-center shadow-lg transition-colors ${!isMatched && !isFlipped && !isLocked ? 'group-hover:bg-zinc-700 group-hover:border-emerald-500/30' : ''}`}>
+                                                    <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-zinc-900/50 flex items-center justify-center border border-zinc-700/50 shadow-inner">
+                                                        <span className="font-black text-zinc-600 text-lg sm:text-xl">P</span>
+                                                    </div>
+                                                </div>
+
+                                                {/* FRENTE DE LA CARTA */}
+                                                <div className={`absolute inset-0 backface-hidden rotate-y-180 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center p-2 text-center transition-all duration-300 ${isMatched ? 'bg-emerald-950/60 border-emerald-500/50 opacity-60 shadow-none' : 'bg-zinc-900 border-zinc-600 shadow-xl shadow-black/50'}`}>
+                                                    {card.type === 'es' && (
+                                                        <span className="text-2xl sm:text-3xl mb-1 sm:mb-2 drop-shadow-md">
+                                                            {card.emoji}
+                                                        </span>
+                                                    )}
+                                                    <span className={`font-bold tracking-tight leading-tight break-words w-full px-0.5 sm:px-1 ${card.text.length > 12 ? 'text-[9px] sm:text-[10px]' : 'text-[10px] sm:text-xs'} ${isMatched ? 'text-emerald-400' : 'text-zinc-200'}`}>
+                                                        {card.text}
+                                                    </span>
+                                                </div>
+
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<MemoryApp />);
+    </script>
+</body>
+</html>
