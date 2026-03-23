@@ -37,7 +37,7 @@
 <body class="text-zinc-100 h-[100dvh] flex flex-col">
     <div id="root" class="h-full flex flex-col"></div>
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef } from 'react';
+        import React, { useState, useEffect } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
@@ -73,7 +73,12 @@
             const [fullWordList, setFullWordList] = useState([]);
             const [showWordList, setShowWordList] = useState(false);
 
-            // --- ESTADOS DEL JUEGO DE MEMORIA ---
+            // --- ESTADOS DE RONDAS Y JUEGO ---
+            const [roundsData, setRoundsData] = useState([]); // Arreglo con 2 arrays de 15 pares
+            const [currentRound, setCurrentRound] = useState(0);
+            const [roundTransition, setRoundTransition] = useState(false);
+            const [globalWin, setGlobalWin] = useState(false);
+
             const [deck, setDeck] = useState([]);
             const [flippedIndices, setFlippedIndices] = useState([]);
             const [matchedPairs, setMatchedPairs] = useState([]);
@@ -96,8 +101,7 @@
                             })).filter(w => w.wordEn);
                             
                             setFullWordList(cleanWords);
-                            // Tomamos hasta 25 pares máximo (50 cartas)
-                            prepareDeck(cleanWords.slice(0, 25));
+                            generateRounds(cleanWords);
                         } else { alert("Juego no encontrado"); }
                         setLoading(false);
                     });
@@ -105,16 +109,49 @@
                 return () => unsub();
             }, [quizId]);
 
+            // MOTOR INTELIGENTE: Crea 2 rondas de 15 pares usando todas las palabras y rellenando al azar si faltan
+            const generateRounds = (wordsArray) => {
+                let pool = [...wordsArray];
+                
+                // Si mandan un banco masivo (>30), lo cortamos a 30.
+                if (pool.length > 30) {
+                    pool = shuffleArray(pool).slice(0, 30);
+                } else {
+                    // Si es menor a 30 (ej. 25), rellenamos repitiendo al azar hasta llegar a 30
+                    let fillIndex = 0;
+                    const shuffledClean = shuffleArray([...wordsArray]);
+                    while (pool.length < 30) {
+                        pool.push({ ...shuffledClean[fillIndex % shuffledClean.length] });
+                        fillIndex++;
+                    }
+                }
+
+                // Barajeamos el pool final de 30 y le asignamos un ID único de instancia a cada uno
+                // Esto es crucial para que si una palabra se repite, el sistema sepa qué par es cuál.
+                pool = shuffleArray(pool);
+                const finalPool = pool.map((w, idx) => ({ ...w, instanceId: `inst-${idx}` }));
+
+                const r1 = finalPool.slice(0, 15);
+                const r2 = finalPool.slice(15, 30);
+
+                setRoundsData([r1, r2]);
+                setCurrentRound(0);
+                setMoves(0);
+                setGlobalWin(false);
+                setRoundTransition(false);
+                prepareDeck(r1);
+            };
+
             const prepareDeck = (wordsArray) => {
                 let initialDeck = [];
                 wordsArray.forEach((item) => {
-                    initialDeck.push({ uniqueId: `${item.id}-en`, pairId: item.id, text: item.wordEn, type: 'en', audioText: item.wordEn });
-                    initialDeck.push({ uniqueId: `${item.id}-es`, pairId: item.id, text: item.wordEs, emoji: item.emojis, type: 'es', audioText: item.wordEn });
+                    // AMBAS cartas llevan emoji ahora
+                    initialDeck.push({ uniqueId: `${item.instanceId}-en`, pairId: item.instanceId, text: item.wordEn, emoji: item.emojis, type: 'en', audioText: item.wordEn });
+                    initialDeck.push({ uniqueId: `${item.instanceId}-es`, pairId: item.instanceId, text: item.wordEs, emoji: item.emojis, type: 'es', audioText: item.wordEn });
                 });
                 setDeck(shuffleArray(initialDeck));
                 setFlippedIndices([]);
                 setMatchedPairs([]);
-                setMoves(0);
                 setIsLocked(false);
             };
 
@@ -143,22 +180,38 @@
                         // ¡ACIERTO!
                         playAudio(deck[idx1].audioText);
                         setTimeout(() => {
-                            setMatchedPairs(prev => [...prev, deck[idx1].pairId]);
+                            const newMatched = [...matchedPairs, deck[idx1].pairId];
+                            setMatchedPairs(newMatched);
                             setFlippedIndices([]);
                             setIsLocked(false);
-                        }, 500); // 0.5s para apreciar la carta antes de ponerla verde
+
+                            // LÓGICA DE RONDAS
+                            if (newMatched.length === 15) {
+                                if (currentRound === 0) {
+                                    setRoundTransition(true);
+                                } else {
+                                    setGlobalWin(true);
+                                }
+                            }
+                        }, 500); 
                     } else {
                         // FALLO
                         setTimeout(() => {
                             setFlippedIndices([]);
                             setIsLocked(false);
-                        }, 1200); // 1.2s para que traten de memorizar dónde estaban
+                        }, 1200); 
                     }
                 }
             };
 
+            const startRound2 = () => {
+                setCurrentRound(1);
+                setRoundTransition(false);
+                prepareDeck(roundsData[1]);
+            };
+
             const handleRestart = () => {
-                prepareDeck([...fullWordList].sort(() => 0.5 - Math.random()).slice(0, 25));
+                generateRounds(fullWordList);
             };
 
             const copyLink = () => {
@@ -168,8 +221,6 @@
                     setTimeout(() => setToastMsg(null), 3000);
                 });
             };
-
-            const globalWin = matchedPairs.length > 0 && matchedPairs.length === (deck.length / 2);
 
             if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-emerald-500 font-black animate-pulse">Generando Memorama...</div>;
             if (!fullWordList || fullWordList.length === 0) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-bold p-6 text-center">El banco de palabras está vacío.</div>;
@@ -181,7 +232,7 @@
                         <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[2.5rem] shadow-2xl max-w-md w-full text-center z-10 animate-in zoom-in-95">
                             <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center text-white text-4xl font-black shadow-lg shadow-indigo-600/20 mx-auto mb-6">P</div>
                             <h1 className="text-3xl font-black text-emerald-500 mb-2 leading-tight">{quizData?.title || 'Memorama'}</h1>
-                            <p className="text-zinc-400 mb-8 font-medium">Encuentra los {deck.length / 2} pares para ganar.</p>
+                            <p className="text-zinc-400 mb-8 font-medium">Encuentra los 30 pares en dos rondas para ganar.</p>
                             
                             <input 
                                 type="text" 
@@ -219,20 +270,35 @@
                         </div>
                     )}
 
-                    {/* CONFETI GLOBAL & MENU DE VICTORIA */}
+                    {/* INTERMEDIO: TRANSICIÓN DE RONDAS */}
+                    {roundTransition && (
+                        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in p-4">
+                            <div className="bg-zinc-900 border border-emerald-500/30 text-white p-8 rounded-[2rem] text-center shadow-2xl w-full max-w-md">
+                                <Layers className="w-24 h-24 text-emerald-500 mx-auto mb-6 animate-bounce"/>
+                                <h2 className="text-4xl font-black mb-2">¡Ronda 1 Superada!</h2>
+                                <p className="text-zinc-400 font-bold uppercase tracking-widest mb-8">Gran trabajo, {playerName}. ¡Vamos por los últimos 15 pares!</p>
+                                
+                                <button onClick={startRound2} className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-black px-6 py-4 rounded-xl transition-all shadow-md active:scale-95 text-base uppercase tracking-widest">
+                                    Siguiente Ronda ➡️
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* CONFETI GLOBAL & MENU DE VICTORIA FINAL */}
                     {globalWin && (
                         <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in p-4">
                             <div className="bg-zinc-900 border border-zinc-700 text-white p-8 rounded-[2rem] text-center shadow-2xl w-full max-w-md">
                                 <Award className="w-24 h-24 text-emerald-500 mx-auto mb-6 animate-bounce"/>
                                 <h2 className="text-4xl font-black mb-2">¡Completado, {playerName}!</h2>
-                                <p className="text-zinc-400 font-bold uppercase tracking-widest mb-8">Lo lograste en {moves} movimientos.</p>
+                                <p className="text-zinc-400 font-bold uppercase tracking-widest mb-8">Lo lograste en {moves} movimientos totales.</p>
                                 
                                 <div className="flex flex-col gap-4 w-full">
                                     <button onClick={() => setShowWordList(true)} className="w-full bg-zinc-800 border-2 border-zinc-700 hover:bg-zinc-700 text-white font-black px-6 py-4 rounded-xl transition-all shadow-md active:scale-95 text-sm sm:text-base">
                                         📖 REPASAR VOCABULARIO
                                     </button>
                                     <button onClick={handleRestart} className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-black px-6 py-4 rounded-xl transition-all shadow-md active:scale-95 text-sm sm:text-base">
-                                        🔄 JUGAR OTRO TABLERO
+                                        🔄 JUGAR OTRA VEZ
                                     </button>
                                     {!isStudent && (
                                         <button onClick={() => window.location.href='index.html'} className="mt-2 text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-widest">
@@ -288,7 +354,7 @@
                             )}
                             <div className={!isStudent ? "ml-2" : ""}>
                                 <h1 className="text-lg font-black text-emerald-500 leading-none tracking-tight">{quizData?.title || 'Actividad Periplo'}</h1>
-                                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Modo: Memorama</p>
+                                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Ronda {currentRound + 1} de 2</p>
                             </div>
                         </div>
 
@@ -296,7 +362,7 @@
                         <div className="flex items-center gap-3">
                             <div className="flex flex-col items-end sm:items-center sm:flex-row gap-1 sm:gap-3 bg-zinc-900 border border-zinc-800 px-3 sm:px-4 py-2 rounded-xl">
                                 <span className="text-zinc-400 font-black text-[10px] sm:text-xs uppercase tracking-widest">
-                                    Pares: <span className="text-emerald-500">{matchedPairs.length}/{deck.length/2}</span>
+                                    Pares: <span className="text-emerald-500">{matchedPairs.length}/15</span>
                                 </span>
                                 <div className="w-1 h-1 bg-zinc-700 rounded-full hidden sm:block"></div>
                                 <span className="text-zinc-400 font-black text-[10px] sm:text-xs uppercase tracking-widest">
@@ -309,7 +375,8 @@
                     {/* ÁREA PRINCIPAL DEL TABLERO (SCROLLABLE EN MÓVIL) */}
                     <div className="flex-1 w-full overflow-y-auto custom-scrollbar p-2 sm:p-4 md:p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-zinc-900 to-black">
                         <div className="max-w-7xl mx-auto w-full pb-10">
-                            <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-8 lg:grid-cols-10 gap-2 sm:gap-3 w-full">
+                            {/* GRID PERFECTO: 5 columnas (móviles) = 6 filas (30 cartas exactas) */}
+                            <div className="grid grid-cols-5 md:grid-cols-6 lg:grid-cols-10 gap-2 sm:gap-3 w-full">
                                 {deck.map((card, index) => {
                                     const isFlipped = flippedIndices.includes(index);
                                     const isMatched = matchedPairs.includes(card.pairId);
@@ -323,16 +390,16 @@
                                         >
                                             <div className={`relative w-full h-full duration-300 preserve-3d transition-transform ease-out ${isVisible ? 'rotate-y-180' : ''}`}>
                                                 
-                                                {/* REVERSO DE LA CARTA */}
+                                                {/* REVERSO DE LA CARTA CON EL NÚMERO */}
                                                 <div className={`absolute inset-0 backface-hidden bg-zinc-800 rounded-xl sm:rounded-2xl border border-zinc-700 flex flex-col items-center justify-center shadow-lg transition-colors ${!isMatched && !isFlipped && !isLocked ? 'group-hover:bg-zinc-700 group-hover:border-emerald-500/30' : ''}`}>
                                                     <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-zinc-900/50 flex items-center justify-center border border-zinc-700/50 shadow-inner">
-                                                        <span className="font-black text-zinc-600 text-lg sm:text-xl">P</span>
+                                                        <span className="font-black text-zinc-500 text-lg sm:text-xl">{index + 1}</span>
                                                     </div>
                                                 </div>
 
-                                                {/* FRENTE DE LA CARTA */}
+                                                {/* FRENTE DE LA CARTA (AHORA AMBOS LLEVAN EMOJI) */}
                                                 <div className={`absolute inset-0 backface-hidden rotate-y-180 rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center p-2 text-center transition-all duration-300 ${isMatched ? 'bg-emerald-950/60 border-emerald-500/50 opacity-60 shadow-none' : 'bg-zinc-900 border-zinc-600 shadow-xl shadow-black/50'}`}>
-                                                    {card.type === 'es' && (
+                                                    {card.emoji && (
                                                         <span className="text-2xl sm:text-3xl mb-1 sm:mb-2 drop-shadow-md">
                                                             {card.emoji}
                                                         </span>
