@@ -25,46 +25,48 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; user-select: none; -webkit-user-select: none; overflow: hidden; height: 100dvh; }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-        @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(5px)} }
-        .animate-shake { animation: shake 0.4s ease-in-out; }
+        @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-6px)} 40%{transform:translateX(6px)} 60%{transform:translateX(-6px)} 80%{transform:translateX(6px)} }
+        .animate-shake { animation: shake 0.35s ease-in-out; }
 
-        @keyframes popOut { 0%{transform:scale(1);opacity:1} 50%{transform:scale(1.1);opacity:0.8} 100%{transform:scale(0.5);opacity:0} }
-        .animate-pop-out { animation: popOut 0.25s forwards ease-in; }
+        @keyframes fadeOutShrink {
+            0% { opacity:1; transform:scale(1); }
+            100% { opacity:0; transform:scale(0.8); }
+        }
+        .animate-matched { animation: fadeOutShrink 0.4s ease-in forwards; }
 
-        @keyframes popIn { 0%{transform:scale(0.5);opacity:0} 70%{transform:scale(1.05);opacity:1} 100%{transform:scale(1);opacity:1} }
-        .animate-pop-in { animation: popIn 0.25s forwards ease-out; }
+        @keyframes popIn { 0%{transform:scale(0.7);opacity:0} 70%{transform:scale(1.03);opacity:1} 100%{transform:scale(1)} }
+        .animate-pop-in { animation: popIn 0.3s ease-out forwards; }
 
-        @keyframes emojiPop { 0%{transform:scale(0);opacity:0} 50%{transform:scale(1.3);opacity:1} 100%{transform:scale(1);opacity:1} }
-        .animate-emoji-pop { animation: emojiPop 0.35s ease-out forwards; }
+        @keyframes bounceIn {
+            0% { transform: scale(0); opacity: 0; }
+            50% { transform: scale(1.15); }
+            70% { transform: scale(0.95); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-bounce-in { animation: bounceIn 0.5s ease-out forwards; }
 
-        @keyframes emojiFade { 0%{opacity:1;transform:translateY(0) scale(1)} 100%{opacity:0;transform:translateY(-30px) scale(1.2)} }
-        .animate-emoji-fade { animation: emojiFade 0.6s ease-out forwards; }
+        @keyframes pulseGlow {
+            0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,0.4); }
+            50% { box-shadow: 0 0 16px 4px rgba(16,185,129,0.2); }
+        }
 
-        .btn-juicy { transition: transform 0.1s, background-color 0.2s, border-color 0.2s; }
+        .btn-juicy { transition: transform 0.1s, background-color 0.15s, border-color 0.15s; }
         .btn-juicy:active:not(:disabled) { transform: translateY(3px); border-bottom-width: 1px !important; }
     </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100">
     <div id="root"></div>
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef, useCallback } from 'react';
+        import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { ArrowLeft, Loader2, Play, RotateCcw, ArrowRight, Trophy, Zap } from 'lucide-react';
+        import { ArrowLeft, Loader2, Play, RotateCcw, ArrowRight, Trophy, X } from 'lucide-react';
         import confetti from 'canvas-confetti';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
-
-        const ROUNDS = [
-            { round: 1, pairsToWin: 15, timeSeconds: 60, title: "Calentamiento", emoji: "🔥" },
-            { round: 2, pairsToWin: 20, timeSeconds: 55, title: "Acelerando", emoji: "⚡" },
-            { round: 3, pairsToWin: 25, timeSeconds: 50, title: "Avanzado", emoji: "🚀" },
-            { round: 4, pairsToWin: 30, timeSeconds: 45, title: "Experto", emoji: "🧠" },
-            { round: 5, pairsToWin: 35, timeSeconds: 40, title: "Jefe Final", emoji: "👑" },
-        ];
 
         const shuffle = (arr) => {
             const a = [...arr];
@@ -73,26 +75,23 @@
         };
 
         /*
-         * ANTI-CHEAT BOARD LOGIC
-         *
-         * The board always shows 5 words on each side.
-         * When a pair is matched, BOTH slots are emptied and TWO NEW DIFFERENT
-         * words fill those slots. The two new words are NOT a pair with each other.
-         *
-         * This means after a match:
-         * - Left slot gets word A (español)
-         * - Right slot gets word B (español's pair is somewhere else, NOT in that right slot)
-         *
-         * So you can never cheat by just clicking the two new ones.
-         *
-         * Implementation:
-         * We maintain a "pool queue" of words not yet on the board.
-         * When we need 2 replacements, we pick 2 different words from the queue.
-         * Word A goes to the left slot, Word B goes to the right slot.
-         * Their PAIRS (A's english, B's english) must already be findable —
-         * but since the board reshuffles right-side positions, the student
-         * has to actually READ to find the match.
+         * DUOLINGO-STYLE MATCH:
+         * - Show 5 pairs (10 buttons total, mixed in 2 columns)
+         * - Both columns contain BOTH languages mixed
+         * - When matched, pair fades out and stays ghost
+         * - When all 5 are matched → "Continue" screen → load next 5
+         * - Single timer for all pairs
+         * - Progress bar shows total matched out of total needed
+         * - NO replacement = NO cheat possible
          */
+
+        const LEVELS = [
+            { id: 1, title: "Calentamiento", emoji: "🔥", totalPairs: 10, timeSec: 80 },
+            { id: 2, title: "Acelerando", emoji: "⚡", totalPairs: 15, timeSec: 90 },
+            { id: 3, title: "Avanzado", emoji: "🚀", totalPairs: 20, timeSec: 100 },
+            { id: 4, title: "Experto", emoji: "🧠", totalPairs: 25, timeSec: 100 },
+            { id: 5, title: "Jefe Final", emoji: "👑", totalPairs: 30, timeSec: 110 },
+        ];
 
         const MatchGame = () => {
             const [loading, setLoading] = useState(true);
@@ -100,28 +99,25 @@
             const [wordPool, setWordPool] = useState([]);
             const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
 
-            const [gameState, setGameState] = useState('menu');
-            const [currentRoundIdx, setCurrentRoundIdx] = useState(0);
+            const [gameState, setGameState] = useState('menu'); // menu | playing | batchDone | levelWon | gameWon | gameOver
+            const [currentLevelIdx, setCurrentLevelIdx] = useState(0);
             const [timeLeft, setTimeLeft] = useState(0);
-            const [score, setScore] = useState(0);
+            const [totalMatched, setTotalMatched] = useState(0);
 
-            // Board: arrays of { id, textLeft, textRight, status, animKey }
-            // Each "row" has a left word and right word that are NOT necessarily pairs
-            const [board, setBoard] = useState([]); // 5 items
-            const [selectedLeft, setSelectedLeft] = useState(null);
-            const [selectedRight, setSelectedRight] = useState(null);
+            // Board: 10 buttons (5 pairs worth), mixed languages in 2 columns
+            // Each button: { id, text, pairId, lang, status: idle|selected|matched|wrong }
+            const [buttons, setButtons] = useState([]);
+            const [selectedId, setSelectedId] = useState(null);
+            const [batchIndex, setBatchIndex] = useState(0); // Which batch of 5 we're on
+            const [batchMatched, setBatchMatched] = useState(0); // How many matched in current batch
 
-            // Emoji feedback
-            const [feedbackEmoji, setFeedbackEmoji] = useState(null); // { emoji, type }
-            const [feedbackFlies, setFeedbackFlies] = useState([]);
-
-            const poolQueueRef = useRef([]); // Words waiting to enter the board
-            const scoreRef = useRef(0);
             const lockedRef = useRef(false);
+            const totalMatchedRef = useRef(0);
+            const allPairsRef = useRef([]); // All pairs for this level, pre-shuffled
 
-            const currentRoundData = ROUNDS[currentRoundIdx];
+            const currentLevel = LEVELS[currentLevelIdx];
 
-            // ====== LOAD ======
+            // Load
             useEffect(() => {
                 const init = async () => {
                     const id = new URLSearchParams(window.location.search).get('id');
@@ -137,64 +133,72 @@
                 init();
             }, []);
 
-            // ====== BUILD INITIAL BOARD ======
-            // Board is 5 rows. Left col = español, Right col = english.
-            // Right col is shuffled so no row is a pair.
-            const buildBoard = useCallback((pool) => {
-                // Pick first 5 for left, shuffle their english for right
-                const first5 = pool.slice(0, 5);
-                const restQueue = pool.slice(5);
-                poolQueueRef.current = restQueue;
-
-                // Left side: first5 in order
-                // Right side: shuffled so no position matches
-                let rightOrder = shuffle(first5);
-                // Ensure NO row has matching pair (derangement)
+            // Build a batch of 10 buttons from 5 pairs
+            const buildBatch = useCallback((pairs) => {
+                // Left column: 5 items (mix of es and en)
+                // Right column: 5 items (the other side of each pair)
+                // Actually, Duolingo mixes BOTH languages across BOTH columns
+                const items = [];
+                pairs.forEach((p, i) => {
+                    items.push({ uid: `${p.id}-es-${Date.now()}-${i}`, text: p.es, pairId: p.id, lang: 'es', status: 'idle' });
+                    items.push({ uid: `${p.id}-en-${Date.now()}-${i}`, text: p.en, pairId: p.id, lang: 'en', status: 'idle' });
+                });
+                // Split into 2 columns of 5, shuffled
+                const shuffled = shuffle(items);
+                // Ensure no pair ends up side by side in same row (same index in left/right)
+                const left = shuffled.slice(0, 5);
+                const right = shuffled.slice(5, 10);
+                // Check: no left[i].pairId === right[i].pairId
                 let attempts = 0;
-                while (rightOrder.some((w, i) => w.id === first5[i].id) && attempts < 50) {
-                    rightOrder = shuffle(first5);
+                let r = [...right];
+                while (r.some((item, i) => item.pairId === left[i].pairId) && attempts < 50) {
+                    r = shuffle(r);
                     attempts++;
                 }
-
-                const newBoard = first5.map((w, i) => ({
-                    leftId: w.id,
-                    leftText: w.es,
-                    rightId: rightOrder[i].id,
-                    rightText: rightOrder[i].en,
-                    leftStatus: 'idle',
-                    rightStatus: 'idle',
-                    animKey: Date.now() + i,
-                }));
-
-                return newBoard;
+                return { left, right: r };
             }, []);
 
-            // ====== START ROUND ======
-            const startRound = useCallback((roundIdx = 0) => {
-                const roundData = ROUNDS[roundIdx];
-                const shuffledPool = shuffle(wordPool);
-                // Extend pool if needed (cycle)
-                let extPool = [...shuffledPool];
-                while (extPool.length < roundData.pairsToWin + 10) {
-                    extPool = [...extPool, ...shuffle(wordPool)];
-                }
+            // Start level
+            const startLevel = useCallback((levelIdx) => {
+                const level = LEVELS[levelIdx];
+                let pool = shuffle([...wordPool]);
+                // Extend if needed
+                while (pool.length < level.totalPairs) pool = [...pool, ...shuffle([...wordPool])];
+                // Dedupe by slicing
+                const allPairs = pool.slice(0, level.totalPairs);
+                allPairsRef.current = allPairs;
 
-                const newBoard = buildBoard(extPool);
-                setBoard(newBoard);
-                setScore(0);
-                scoreRef.current = 0;
-                setTimeLeft(roundData.timeSeconds);
-                setSelectedLeft(null);
-                setSelectedRight(null);
-                setCurrentRoundIdx(roundIdx);
-                setFeedbackEmoji(null);
+                const firstBatch = allPairs.slice(0, 5);
+                const batch = buildBatch(firstBatch);
+
+                setButtons(batch);
+                setCurrentLevelIdx(levelIdx);
+                setTimeLeft(level.timeSec);
+                setTotalMatched(0);
+                totalMatchedRef.current = 0;
+                setBatchIndex(0);
+                setBatchMatched(0);
+                setSelectedId(null);
                 lockedRef.current = false;
                 setGameState('playing');
-            }, [wordPool, buildBoard]);
+            }, [wordPool, buildBatch]);
 
-            const resetGame = () => { setCurrentRoundIdx(0); setGameState('menu'); };
+            // Load next batch
+            const loadNextBatch = useCallback(() => {
+                const nextBatchIdx = batchIndex + 1;
+                const start = nextBatchIdx * 5;
+                const pairs = allPairsRef.current.slice(start, start + 5);
+                if (pairs.length === 0) return; // shouldn't happen
+                const batch = buildBatch(pairs);
+                setButtons(batch);
+                setBatchIndex(nextBatchIdx);
+                setBatchMatched(0);
+                setSelectedId(null);
+                lockedRef.current = false;
+                setGameState('playing');
+            }, [batchIndex, buildBatch]);
 
-            // ====== TIMER ======
+            // Timer
             useEffect(() => {
                 let timer;
                 if (gameState === 'playing' && timeLeft > 0) {
@@ -202,7 +206,7 @@
                         setTimeLeft(prev => {
                             if (prev <= 0.1) {
                                 clearInterval(timer);
-                                if (scoreRef.current < ROUNDS[currentRoundIdx].pairsToWin) setGameState('game_over');
+                                setGameState('gameOver');
                                 return 0;
                             }
                             return +(prev - 0.1).toFixed(1);
@@ -210,225 +214,168 @@
                     }, 100);
                 }
                 return () => clearInterval(timer);
-            }, [gameState, currentRoundIdx]);
+            }, [gameState]);
 
-            // ====== WIN CHECK ======
-            useEffect(() => {
-                if (gameState === 'playing' && score >= currentRoundData.pairsToWin) {
-                    confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
-                    if (currentRoundIdx === ROUNDS.length - 1) setGameState('game_won');
-                    else setGameState('round_won');
-                }
-            }, [score, gameState, currentRoundIdx, currentRoundData]);
-
-            // ====== GET NEXT WORD FROM QUEUE ======
-            const getNextWord = useCallback(() => {
-                const q = poolQueueRef.current;
-                if (q.length === 0) {
-                    // Refill from wordPool
-                    poolQueueRef.current = shuffle(wordPool);
-                    return poolQueueRef.current.shift();
-                }
-                return q.shift();
-            }, [wordPool]);
-
-            // ====== REPLACE TWO SLOTS ======
-            // After a correct match, we replace the left slot and right slot
-            // with TWO DIFFERENT new words. Word A → left, Word B → right.
-            // This means the new left and new right are NOT pairs.
-            const replaceTwoSlots = useCallback((leftIdx, rightIdx, currentBoard) => {
-                const wordA = getNextWord();
-                let wordB = getNextWord();
-                // Make sure A and B are different words
-                let safety = 0;
-                while (wordB.id === wordA.id && safety < 20) {
-                    poolQueueRef.current.push(wordB);
-                    wordB = getNextWord();
-                    safety++;
-                }
-
-                const newBoard = [...currentBoard];
-                const ak = Date.now() + Math.random();
-
-                // Word A's español goes to left slot at leftIdx
-                // Word B's english goes to right slot at rightIdx
-                // This guarantees the new pair visible is NOT a match
-                newBoard[leftIdx] = {
-                    ...newBoard[leftIdx],
-                    leftId: wordA.id,
-                    leftText: wordA.es,
-                    leftStatus: 'entering',
-                    animKey: ak,
-                };
-                newBoard[rightIdx] = {
-                    ...newBoard[rightIdx],
-                    rightId: wordB.id,
-                    rightText: wordB.en,
-                    rightStatus: 'entering',
-                    animKey: ak + 1,
-                };
-
-                return newBoard;
-            }, [getNextWord]);
-
-            // ====== PROCESS MATCH ======
-            const processMatch = useCallback((lIdx, rIdx) => {
-                const row = board;
-                const leftItem = row[lIdx];
-                const rightItem = row[rIdx];
-                const isMatch = leftItem.leftId === rightItem.rightId;
-
-                if (isMatch) {
-                    // Mark correct
-                    lockedRef.current = true;
-                    setBoard(prev => {
-                        const n = [...prev];
-                        n[lIdx] = { ...n[lIdx], leftStatus: 'correct' };
-                        n[rIdx] = { ...n[rIdx], rightStatus: 'correct' };
-                        return n;
-                    });
-
-                    const ns = scoreRef.current + 1;
-                    scoreRef.current = ns;
-                    setScore(ns);
-
-                    // Mini confetti
-                    confetti({ particleCount: 15, spread: 40, origin: { y: 0.5 }, gravity: 1.5, scalar: 0.7 });
-
-                    // Show emoji
-                    const id = Date.now();
-                    setFeedbackFlies(prev => [...prev, { id, emoji: '✅', type: 'correct' }]);
-                    setTimeout(() => setFeedbackFlies(prev => prev.filter(f => f.id !== id)), 700);
-
-                    // After pop-out animation, replace
-                    setTimeout(() => {
-                        setBoard(prev => {
-                            const replaced = replaceTwoSlots(lIdx, rIdx, prev);
-                            return replaced;
-                        });
-                        // After pop-in, set to idle
-                        setTimeout(() => {
-                            setBoard(prev => prev.map((item, i) => {
-                                if (i === lIdx) return { ...item, leftStatus: 'idle' };
-                                if (i === rIdx) return { ...item, rightStatus: 'idle' };
-                                return item;
-                            }));
-                            lockedRef.current = false;
-                        }, 280);
-                    }, 280);
-                } else {
-                    // Wrong
-                    lockedRef.current = true;
-                    setBoard(prev => {
-                        const n = [...prev];
-                        n[lIdx] = { ...n[lIdx], leftStatus: 'wrong' };
-                        n[rIdx] = { ...n[rIdx], rightStatus: 'wrong' };
-                        return n;
-                    });
-
-                    const id = Date.now();
-                    setFeedbackFlies(prev => [...prev, { id, emoji: '😬', type: 'wrong' }]);
-                    setTimeout(() => setFeedbackFlies(prev => prev.filter(f => f.id !== id)), 700);
-
-                    setTimeout(() => {
-                        setBoard(prev => prev.map((item, i) => {
-                            if (i === lIdx) return { ...item, leftStatus: 'idle' };
-                            if (i === rIdx) return { ...item, rightStatus: 'idle' };
-                            return item;
-                        }));
-                        lockedRef.current = false;
-                    }, 450);
-                }
-            }, [board, replaceTwoSlots]);
-
-            // ====== CLICK HANDLER ======
+            // Click handler
             const handleClick = useCallback((side, index) => {
                 if (lockedRef.current) return;
-                if (side === 'left') {
-                    if (board[index].leftStatus !== 'idle' && board[index].leftStatus !== 'entering') return;
-                    if (selectedLeft === index) {
-                        // Deselect
-                        setSelectedLeft(null);
-                        setBoard(prev => prev.map((r, i) => i === index ? { ...r, leftStatus: 'idle' } : r));
-                        return;
-                    }
-                    // Select
-                    setBoard(prev => prev.map((r, i) => {
-                        if (i === index) return { ...r, leftStatus: 'selected' };
-                        if (i === selectedLeft) return { ...r, leftStatus: 'idle' };
-                        return r;
+                const col = side === 'left' ? buttons.left : buttons.right;
+                const item = col[index];
+                if (item.status === 'matched' || item.status === 'wrong') return;
+
+                const itemUid = item.uid;
+
+                // If clicking same item, deselect
+                if (selectedId === itemUid) {
+                    setSelectedId(null);
+                    setButtons(prev => ({
+                        left: prev.left.map(b => b.uid === itemUid ? { ...b, status: 'idle' } : b),
+                        right: prev.right.map(b => b.uid === itemUid ? { ...b, status: 'idle' } : b),
                     }));
-                    setSelectedLeft(index);
-                    if (selectedRight !== null) {
-                        processMatch(index, selectedRight);
-                        setSelectedLeft(null); setSelectedRight(null);
-                    }
-                } else {
-                    if (board[index].rightStatus !== 'idle' && board[index].rightStatus !== 'entering') return;
-                    if (selectedRight === index) {
-                        setSelectedRight(null);
-                        setBoard(prev => prev.map((r, i) => i === index ? { ...r, rightStatus: 'idle' } : r));
-                        return;
-                    }
-                    setBoard(prev => prev.map((r, i) => {
-                        if (i === index) return { ...r, rightStatus: 'selected' };
-                        if (i === selectedRight) return { ...r, rightStatus: 'idle' };
-                        return r;
-                    }));
-                    setSelectedRight(index);
-                    if (selectedLeft !== null) {
-                        processMatch(selectedLeft, index);
-                        setSelectedLeft(null); setSelectedRight(null);
-                    }
+                    return;
                 }
-            }, [board, selectedLeft, selectedRight, processMatch]);
 
-            // ====== WORD BUTTON ======
-            const WordBtn = ({ text, status, onClick }) => {
+                // If nothing selected, just select this one
+                if (!selectedId) {
+                    setSelectedId(itemUid);
+                    setButtons(prev => ({
+                        left: prev.left.map(b => b.uid === itemUid ? { ...b, status: 'selected' } : b),
+                        right: prev.right.map(b => b.uid === itemUid ? { ...b, status: 'selected' } : b),
+                    }));
+                    return;
+                }
+
+                // Something is already selected — check match
+                const allItems = [...buttons.left, ...buttons.right];
+                const prevItem = allItems.find(b => b.uid === selectedId);
+                if (!prevItem) { setSelectedId(null); return; }
+
+                // Can't match same language
+                if (prevItem.lang === item.lang) {
+                    // Just switch selection
+                    setSelectedId(itemUid);
+                    setButtons(prev => ({
+                        left: prev.left.map(b => {
+                            if (b.uid === itemUid) return { ...b, status: 'selected' };
+                            if (b.uid === selectedId) return { ...b, status: 'idle' };
+                            return b;
+                        }),
+                        right: prev.right.map(b => {
+                            if (b.uid === itemUid) return { ...b, status: 'selected' };
+                            if (b.uid === selectedId) return { ...b, status: 'idle' };
+                            return b;
+                        }),
+                    }));
+                    return;
+                }
+
+                // Check if same pairId
+                const isMatch = prevItem.pairId === item.pairId;
+                lockedRef.current = true;
+
+                if (isMatch) {
+                    // Mark both as matched
+                    setButtons(prev => ({
+                        left: prev.left.map(b => (b.uid === itemUid || b.uid === selectedId) ? { ...b, status: 'matched' } : b),
+                        right: prev.right.map(b => (b.uid === itemUid || b.uid === selectedId) ? { ...b, status: 'matched' } : b),
+                    }));
+
+                    confetti({ particleCount: 12, spread: 30, origin: { y: 0.5 }, gravity: 1.8, scalar: 0.6 });
+
+                    const newTotal = totalMatchedRef.current + 1;
+                    totalMatchedRef.current = newTotal;
+                    setTotalMatched(newTotal);
+                    const newBatchMatched = batchMatched + 1;
+                    setBatchMatched(newBatchMatched);
+
+                    setSelectedId(null);
+
+                    setTimeout(() => {
+                        lockedRef.current = false;
+                        // Check if batch complete
+                        if (newBatchMatched >= 5) {
+                            // Check if level complete
+                            if (newTotal >= currentLevel.totalPairs) {
+                                confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+                                if (currentLevelIdx >= LEVELS.length - 1) {
+                                    setGameState('gameWon');
+                                } else {
+                                    setGameState('levelWon');
+                                }
+                            } else {
+                                setGameState('batchDone');
+                            }
+                        }
+                    }, 500);
+                } else {
+                    // Wrong — shake both, then reset
+                    setButtons(prev => ({
+                        left: prev.left.map(b => (b.uid === itemUid || b.uid === selectedId) ? { ...b, status: 'wrong' } : b),
+                        right: prev.right.map(b => (b.uid === itemUid || b.uid === selectedId) ? { ...b, status: 'wrong' } : b),
+                    }));
+
+                    setSelectedId(null);
+                    setTimeout(() => {
+                        setButtons(prev => ({
+                            left: prev.left.map(b => b.status === 'wrong' ? { ...b, status: 'idle' } : b),
+                            right: prev.right.map(b => b.status === 'wrong' ? { ...b, status: 'idle' } : b),
+                        }));
+                        lockedRef.current = false;
+                    }, 400);
+                }
+            }, [buttons, selectedId, batchMatched, currentLevel, currentLevelIdx]);
+
+            // Word button
+            const WordBtn = ({ item, onClick }) => {
+                if (item.status === 'matched') {
+                    return (
+                        <div className="h-14 sm:h-[4.2rem] animate-matched">
+                            <div className="w-full h-full rounded-2xl border-2 border-dashed border-zinc-800 opacity-20"/>
+                        </div>
+                    );
+                }
+
                 let bg = 'bg-zinc-800 border-zinc-700 text-zinc-200';
-                let anim = '';
                 let borderB = 'border-b-4';
+                let anim = '';
 
-                if (status === 'entering') { bg = 'bg-zinc-800 border-zinc-700 text-zinc-200'; anim = 'animate-pop-in'; }
-                else if (status === 'selected') { bg = 'bg-indigo-600 border-indigo-800 text-white'; }
-                else if (status === 'correct') { bg = 'bg-emerald-500 border-emerald-700 text-white'; anim = 'animate-pop-out'; }
-                else if (status === 'wrong') { bg = 'bg-rose-500 border-rose-700 text-white'; anim = 'animate-shake'; }
+                if (item.status === 'selected') { bg = 'bg-emerald-600 border-emerald-800 text-white'; }
+                else if (item.status === 'wrong') { bg = 'bg-rose-500 border-rose-700 text-white'; anim = 'animate-shake'; }
 
                 return (
-                    <div className="h-14 sm:h-16">
+                    <div className="h-14 sm:h-[4.2rem]">
                         <button
-                            className={`btn-juicy w-full h-full rounded-2xl border-2 ${borderB} font-bold text-sm sm:text-base flex items-center justify-center px-2 leading-tight ${bg} ${anim}`}
-                            onClick={onClick}
-                            disabled={status === 'correct' || status === 'wrong'}>
-                            {text}
+                            className={`btn-juicy w-full h-full rounded-2xl border-2 ${borderB} font-bold text-sm sm:text-base flex items-center justify-center px-3 leading-tight ${bg} ${anim}`}
+                            onClick={onClick}>
+                            {item.text}
                         </button>
                     </div>
                 );
             };
 
-            // ====== RENDER ======
+            // Render
             if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-zinc-500" size={32}/></div>;
             if (!gameData || wordPool.length < 5) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-bold p-6 text-center">Error: No hay suficientes palabras.</div>;
 
             // ====== MENU ======
             if (gameState === 'menu') return (
-                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
-                    <div className="max-w-sm w-full text-center">
-                        <div className="text-7xl mb-6">⚡</div>
-                        <h1 className="text-4xl font-black text-white mb-2">Match<br/>Madness</h1>
-                        <p className="text-zinc-400 font-medium mb-2">{gameData.title}</p>
-                        <p className="text-zinc-500 text-sm mb-8">Empareja palabras a la velocidad de la luz.</p>
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950 overflow-auto">
+                    <div className="max-w-sm w-full text-center my-auto">
+                        <div className="text-7xl mb-4">⚡</div>
+                        <h1 className="text-4xl font-black text-white mb-1">Match Madness</h1>
+                        <p className="text-zinc-400 font-medium mb-1">{gameData.title}</p>
+                        <p className="text-zinc-500 text-sm mb-8">Empareja palabras contra reloj. ¡Sin trampa!</p>
 
-                        <div className="space-y-3 mb-8">
-                            {ROUNDS.map((r, i) => (
+                        <div className="space-y-2 mb-8">
+                            {LEVELS.map((l, i) => (
                                 <div key={i} className="flex items-center justify-between bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm">
-                                    <span className="font-bold text-zinc-300">{r.emoji} R{r.round}: {r.title}</span>
-                                    <span className="text-zinc-500 font-bold">{r.pairsToWin} pares · {r.timeSeconds}s</span>
+                                    <span className="font-bold text-zinc-300">{l.emoji} {l.title}</span>
+                                    <span className="text-zinc-500 font-bold">{l.totalPairs} pares · {l.timeSec}s</span>
                                 </div>
                             ))}
                         </div>
 
-                        <button onClick={() => startRound(0)} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-emerald-700 text-xl uppercase tracking-widest flex items-center justify-center gap-2">
+                        <button onClick={() => startLevel(0)} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-emerald-700 text-xl uppercase tracking-widest flex items-center justify-center gap-2">
                             <Play fill="currentColor" size={24}/> JUGAR
                         </button>
                         {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-6 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">Volver al Hub</button>}
@@ -436,60 +383,70 @@
                 </div>
             );
 
+            // ====== BATCH DONE (Duolingo "continue" screen) ======
+            if (gameState === 'batchDone') return (
+                <div className="h-[100dvh] flex flex-col bg-zinc-950">
+                    {/* Keep header visible */}
+                    <header className="px-4 py-3 flex items-center justify-between shrink-0 bg-zinc-900 border-b border-zinc-800">
+                        <div className="flex items-center gap-3">
+                            <button onClick={() => setGameState('menu')} className="p-2 text-zinc-400 hover:text-white rounded-xl"><X size={20}/></button>
+                            <p className="text-sm font-black text-zinc-400">{currentLevel.emoji} Nivel {currentLevelIdx + 1}</p>
+                        </div>
+                        <div className={`font-black text-xl tabular-nums ${timeLeft < 15 ? 'text-rose-500' : 'text-amber-500'}`}>{Math.ceil(timeLeft)}s</div>
+                    </header>
+                    <div className="h-1.5 w-full bg-zinc-800 shrink-0">
+                        <div className="h-full bg-amber-500 rounded-r-full transition-all" style={{ width: `${(totalMatched / currentLevel.totalPairs) * 100}%` }}/>
+                    </div>
+
+                    <div className="flex-1 flex flex-col items-center justify-center p-6">
+                        <div className="text-6xl mb-4 animate-bounce-in">🎯</div>
+                        <h2 className="text-2xl font-black text-white mb-1">¡Bien hecho!</h2>
+                        <p className="text-zinc-400 font-bold mb-8">{totalMatched} de {currentLevel.totalPairs} pares</p>
+                        <button onClick={loadNextBatch} className="btn-juicy w-full max-w-xs bg-emerald-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-emerald-700 text-lg uppercase tracking-widest">
+                            CONTINUAR
+                        </button>
+                    </div>
+                </div>
+            );
+
             // ====== PLAYING ======
             if (gameState === 'playing') {
-                const pct = (timeLeft / currentRoundData.timeSeconds) * 100;
-                const isLow = timeLeft < 10;
+                const pct = (timeLeft / currentLevel.timeSec) * 100;
+                const progressPct = (totalMatched / currentLevel.totalPairs) * 100;
+                const isLow = timeLeft < 15;
 
                 return (
-                    <div className="h-[100dvh] flex flex-col bg-zinc-950 relative overflow-hidden">
-
-                        {/* Floating feedback emojis */}
-                        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-50">
-                            {feedbackFlies.map(f => (
-                                <div key={f.id} className="text-5xl animate-emoji-fade">{f.emoji}</div>
-                            ))}
-                        </div>
-
+                    <div className="h-[100dvh] flex flex-col bg-zinc-950 overflow-hidden">
                         {/* Header */}
                         <header className="px-4 py-3 flex items-center justify-between shrink-0 bg-zinc-900 border-b border-zinc-800">
                             <div className="flex items-center gap-3">
-                                <button onClick={() => { setGameState('menu'); }} className="p-2 text-zinc-400 hover:text-white rounded-xl hover:bg-zinc-800">
-                                    <ArrowLeft size={20}/>
-                                </button>
-                                <div>
-                                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">{currentRoundData.emoji} Ronda {currentRoundIdx + 1}</p>
-                                    <p className="text-lg font-black text-white leading-none">{score} / {currentRoundData.pairsToWin}</p>
-                                </div>
+                                <button onClick={() => setGameState('menu')} className="p-2 text-zinc-400 hover:text-white rounded-xl"><X size={20}/></button>
+                                <p className="text-sm font-black text-zinc-400">{currentLevel.emoji} Nivel {currentLevelIdx + 1}</p>
                             </div>
-                            <div className={`font-black text-2xl tabular-nums ${isLow ? 'text-rose-500 animate-pulse' : 'text-amber-500'}`}>
-                                {Math.ceil(timeLeft)}s
+                            <div className="flex items-center gap-3">
+                                <span className="text-xs font-bold text-zinc-500">{totalMatched}/{currentLevel.totalPairs}</span>
+                                <div className={`font-black text-xl tabular-nums ${isLow ? 'text-rose-500 animate-pulse' : 'text-amber-500'}`}>{Math.ceil(timeLeft)}s</div>
                             </div>
                         </header>
 
-                        {/* Timer bar */}
-                        <div className="h-2 w-full bg-zinc-800 shrink-0">
-                            <div className={`h-full transition-all duration-100 ease-linear rounded-r-full ${isLow ? 'bg-rose-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }}/>
+                        {/* Progress bar (total) */}
+                        <div className="h-1.5 w-full bg-zinc-800 shrink-0">
+                            <div className={`h-full rounded-r-full transition-all duration-300 ${isLow ? 'bg-rose-500' : 'bg-amber-500'}`} style={{ width: `${progressPct}%` }}/>
                         </div>
 
+                        {/* Instruction */}
+                        <p className="text-center text-zinc-500 font-bold text-xs uppercase tracking-widest py-2 shrink-0">Selecciona los pares</p>
+
                         {/* Board */}
-                        <main className="flex-1 flex gap-3 sm:gap-5 p-3 sm:p-6 max-w-3xl mx-auto w-full items-center">
-                            {/* Left column (español) */}
-                            <div className="flex-1 flex flex-col gap-2 sm:gap-3">
-                                {board.map((row, i) => (
-                                    <WordBtn key={`l-${row.animKey}`} text={row.leftText} status={row.leftStatus} onClick={() => handleClick('left', i)}/>
+                        <main className="flex-1 flex gap-3 sm:gap-4 px-4 sm:px-8 pb-6 max-w-2xl mx-auto w-full items-center">
+                            <div className="flex-1 flex flex-col gap-2.5 sm:gap-3">
+                                {buttons.left?.map((item, i) => (
+                                    <WordBtn key={item.uid} item={item} onClick={() => handleClick('left', i)}/>
                                 ))}
                             </div>
-
-                            {/* Center divider */}
-                            <div className="flex flex-col items-center justify-center gap-4 opacity-20">
-                                {[...Array(5)].map((_, i) => <div key={i} className="w-px h-10 bg-zinc-700"/>)}
-                            </div>
-
-                            {/* Right column (english) */}
-                            <div className="flex-1 flex flex-col gap-2 sm:gap-3">
-                                {board.map((row, i) => (
-                                    <WordBtn key={`r-${row.animKey}`} text={row.rightText} status={row.rightStatus} onClick={() => handleClick('right', i)}/>
+                            <div className="flex-1 flex flex-col gap-2.5 sm:gap-3">
+                                {buttons.right?.map((item, i) => (
+                                    <WordBtn key={item.uid} item={item} onClick={() => handleClick('right', i)}/>
                                 ))}
                             </div>
                         </main>
@@ -498,48 +455,47 @@
             }
 
             // ====== RESULT SCREENS ======
-            const isWin = gameState === 'round_won' || gameState === 'game_won';
-
             return (
-                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
-                    <div className="max-w-sm w-full text-center">
-                        <div className={`text-7xl mb-4 ${isWin ? '' : ''}`}>
-                            {gameState === 'game_won' ? '👑' : gameState === 'round_won' ? '🎉' : '⏱️'}
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950 overflow-auto">
+                    <div className="max-w-sm w-full text-center my-auto">
+                        <div className="text-7xl mb-4">
+                            {gameState === 'gameWon' ? '👑' : gameState === 'levelWon' ? '🎉' : '⏱️'}
                         </div>
 
-                        {gameState === 'round_won' && (
+                        {gameState === 'levelWon' && (
                             <>
-                                <h2 className="text-3xl font-black text-emerald-400 mb-2">¡Ronda {currentRoundIdx + 1} Superada!</h2>
-                                <p className="text-zinc-400 font-bold mb-8">Reflejos impresionantes.</p>
-                                <button onClick={() => startRound(currentRoundIdx + 1)}
+                                <h2 className="text-3xl font-black text-emerald-400 mb-2">¡Nivel {currentLevelIdx + 1} Superado!</h2>
+                                <p className="text-zinc-400 font-bold mb-2">{totalMatched} pares en {currentLevel.timeSec - Math.ceil(timeLeft)}s</p>
+                                <p className="text-zinc-500 text-sm mb-8">Siguiente: {LEVELS[currentLevelIdx + 1]?.emoji} {LEVELS[currentLevelIdx + 1]?.title}</p>
+                                <button onClick={() => startLevel(currentLevelIdx + 1)}
                                     className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-indigo-800 text-lg uppercase tracking-widest flex items-center justify-center gap-2">
-                                    <ArrowRight size={20}/> Siguiente Ronda
+                                    <ArrowRight size={20}/> Siguiente Nivel
                                 </button>
                             </>
                         )}
 
-                        {gameState === 'game_won' && (
+                        {gameState === 'gameWon' && (
                             <>
                                 <h2 className="text-3xl font-black text-amber-400 mb-2">¡VICTORIA TOTAL!</h2>
-                                <p className="text-zinc-400 font-bold mb-8">Has dominado la locura de las palabras.</p>
-                                <button onClick={resetGame}
+                                <p className="text-zinc-400 font-bold mb-8">Dominaste todos los niveles.</p>
+                                <button onClick={() => { setCurrentLevelIdx(0); setGameState('menu'); }}
                                     className="btn-juicy w-full bg-amber-500 text-black font-black py-4 rounded-2xl border-2 border-b-4 border-amber-700 text-lg uppercase tracking-widest flex items-center justify-center gap-2">
                                     <RotateCcw size={20}/> Volver al Menú
                                 </button>
                             </>
                         )}
 
-                        {gameState === 'game_over' && (
+                        {gameState === 'gameOver' && (
                             <>
                                 <h2 className="text-3xl font-black text-rose-400 mb-2">Se acabó el tiempo</h2>
-                                <p className="text-zinc-400 font-bold mb-2">Lograste {score} de {currentRoundData.pairsToWin} pares.</p>
+                                <p className="text-zinc-400 font-bold mb-2">Lograste {totalMatched} de {currentLevel.totalPairs} pares.</p>
                                 <p className="text-zinc-500 text-sm mb-8">¡Inténtalo otra vez!</p>
                                 <div className="space-y-3">
-                                    <button onClick={() => startRound(currentRoundIdx)}
+                                    <button onClick={() => startLevel(currentLevelIdx)}
                                         className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-indigo-800 text-lg uppercase tracking-widest flex items-center justify-center gap-2">
-                                        <RotateCcw size={20}/> Reintentar Ronda
+                                        <RotateCcw size={20}/> Reintentar
                                     </button>
-                                    <button onClick={resetGame}
+                                    <button onClick={() => { setCurrentLevelIdx(0); setGameState('menu'); }}
                                         className="btn-juicy w-full bg-zinc-800 text-zinc-300 font-black py-4 rounded-2xl border-2 border-b-4 border-zinc-900 text-sm uppercase tracking-widest">
                                         Volver al Menú
                                     </button>
