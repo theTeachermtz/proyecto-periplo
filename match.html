@@ -28,40 +28,37 @@
         @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-6px)} 40%{transform:translateX(6px)} 60%{transform:translateX(-6px)} 80%{transform:translateX(6px)} }
         .animate-shake { animation: shake 0.35s ease-in-out; }
 
-        @keyframes fadeOutShrink {
+        @keyframes popIn { 0%{transform:scale(0.8);opacity:0} 100%{transform:scale(1);opacity:1} }
+        .animate-pop-in { animation: popIn 0.2s ease-out forwards; }
+
+        @keyframes slowFade {
             0% { opacity:1; transform:scale(1); }
-            100% { opacity:0; transform:scale(0.8); }
+            100% { opacity:0; transform:scale(0.92); pointer-events:none; }
         }
-        .animate-matched { animation: fadeOutShrink 0.4s ease-in forwards; }
+        /* 2.5 second slow fade — the anti-cheat */
+        .animate-slow-fade { animation: slowFade 2.5s ease-in forwards; pointer-events: none; }
+        /* Instant appear when user moves elsewhere */
+        .animate-instant-in { animation: popIn 0.15s ease-out forwards; }
 
-        @keyframes popIn { 0%{transform:scale(0.7);opacity:0} 70%{transform:scale(1.03);opacity:1} 100%{transform:scale(1)} }
-        .animate-pop-in { animation: popIn 0.3s ease-out forwards; }
-
-        @keyframes bounceIn {
-            0% { transform: scale(0); opacity: 0; }
-            50% { transform: scale(1.15); }
-            70% { transform: scale(0.95); }
-            100% { transform: scale(1); opacity: 1; }
+        @keyframes milestoneIn {
+            0% { transform: scale(0) rotate(-10deg); opacity: 0; }
+            60% { transform: scale(1.15) rotate(3deg); opacity: 1; }
+            100% { transform: scale(1) rotate(0deg); opacity: 1; }
         }
-        .animate-bounce-in { animation: bounceIn 0.5s ease-out forwards; }
+        .animate-milestone { animation: milestoneIn 0.5s ease-out forwards; }
 
-        @keyframes pulseGlow {
-            0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,0.4); }
-            50% { box-shadow: 0 0 16px 4px rgba(16,185,129,0.2); }
-        }
-
-        .btn-juicy { transition: transform 0.1s, background-color 0.15s, border-color 0.15s; }
+        .btn-juicy { transition: transform 0.08s, background-color 0.15s, border-color 0.15s; }
         .btn-juicy:active:not(:disabled) { transform: translateY(3px); border-bottom-width: 1px !important; }
     </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100">
     <div id="root"></div>
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+        import React, { useState, useEffect, useRef, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { ArrowLeft, Loader2, Play, RotateCcw, ArrowRight, Trophy, X } from 'lucide-react';
+        import { Loader2, Play, RotateCcw, X } from 'lucide-react';
         import confetti from 'canvas-confetti';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
@@ -69,29 +66,33 @@
         const db = getFirestore(app);
 
         const shuffle = (arr) => {
-            const a = [...arr];
-            for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
-            return a;
+            const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a;
         };
 
         /*
-         * DUOLINGO-STYLE MATCH:
-         * - Show 5 pairs (10 buttons total, mixed in 2 columns)
-         * - Both columns contain BOTH languages mixed
-         * - When matched, pair fades out and stays ghost
-         * - When all 5 are matched → "Continue" screen → load next 5
-         * - Single timer for all pairs
-         * - Progress bar shows total matched out of total needed
-         * - NO replacement = NO cheat possible
+         * TRUE DUOLINGO MECHANIC:
+         *
+         * Board: 5 rows. Left = español (native), Right = english (target).
+         * No pair is ever on the same row.
+         *
+         * On correct match:
+         *   1. Both cells start a SLOW FADE (2.5 seconds).
+         *   2. During the fade, a new pair is "queued" for those slots.
+         *   3. If the player clicks ANY other cell before fade completes,
+         *      the fading cells instantly get replaced with the new pair (pop-in).
+         *   4. If the player just waits, the new pair appears after fade completes.
+         *
+         * Anti-cheat: You CAN just wait for the new pair to appear and click it,
+         * but you'll burn 2.5 seconds per pair. With 90 pairs and 105 seconds,
+         * that's 225 seconds of waiting vs 105 available. You're forced to play legit.
+         *
+         * Milestones: At 20 and 30 pairs, show a brief celebration toast.
+         * At 90 (or target), win!
          */
 
-        const LEVELS = [
-            { id: 1, title: "Calentamiento", emoji: "🔥", totalPairs: 10, timeSec: 80 },
-            { id: 2, title: "Acelerando", emoji: "⚡", totalPairs: 15, timeSec: 90 },
-            { id: 3, title: "Avanzado", emoji: "🚀", totalPairs: 20, timeSec: 100 },
-            { id: 4, title: "Experto", emoji: "🧠", totalPairs: 25, timeSec: 100 },
-            { id: 5, title: "Jefe Final", emoji: "👑", totalPairs: 30, timeSec: 110 },
-        ];
+        const TOTAL_PAIRS = 90;
+        const TIME_SECONDS = 105; // 1:45
+        const MILESTONES = [20, 30]; // Celebration checkpoints
 
         const MatchGame = () => {
             const [loading, setLoading] = useState(true);
@@ -99,23 +100,29 @@
             const [wordPool, setWordPool] = useState([]);
             const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
 
-            const [gameState, setGameState] = useState('menu'); // menu | playing | batchDone | levelWon | gameWon | gameOver
-            const [currentLevelIdx, setCurrentLevelIdx] = useState(0);
+            const [gameState, setGameState] = useState('menu'); // menu | playing | won | lost
             const [timeLeft, setTimeLeft] = useState(0);
-            const [totalMatched, setTotalMatched] = useState(0);
+            const [score, setScore] = useState(0);
+            const [milestone, setMilestone] = useState(null); // { text, emoji } shown briefly
 
-            // Board: 10 buttons (5 pairs worth), mixed languages in 2 columns
-            // Each button: { id, text, pairId, lang, status: idle|selected|matched|wrong }
-            const [buttons, setButtons] = useState([]);
-            const [selectedId, setSelectedId] = useState(null);
-            const [batchIndex, setBatchIndex] = useState(0); // Which batch of 5 we're on
-            const [batchMatched, setBatchMatched] = useState(0); // How many matched in current batch
+            /*
+             * Board: 5 slots. Each slot has:
+             *   leftId, leftText (español)
+             *   rightId, rightText (english)
+             *   leftStatus: idle | selected | fading | entering
+             *   rightStatus: idle | selected | fading | entering
+             *
+             * "fading" = slow fade after correct match (slot is dying)
+             * A fading slot has a pendingPair queued to replace it
+             */
+            const [board, setBoard] = useState([]);
+            const [selectedSide, setSelectedSide] = useState(null); // { side: 'left'|'right', index: 0-4 }
 
+            const scoreRef = useRef(0);
             const lockedRef = useRef(false);
-            const totalMatchedRef = useRef(0);
-            const allPairsRef = useRef([]); // All pairs for this level, pre-shuffled
-
-            const currentLevel = LEVELS[currentLevelIdx];
+            const poolQueueRef = useRef([]);
+            // Track which slots are fading and their pending replacements
+            const fadingSlotsRef = useRef({}); // { [slotIndex]: { left: {id,text}, right: {id,text}, timer } }
 
             // Load
             useEffect(() => {
@@ -133,70 +140,49 @@
                 init();
             }, []);
 
-            // Build a batch of 10 buttons from 5 pairs
-            const buildBatch = useCallback((pairs) => {
-                // Left column: 5 items (mix of es and en)
-                // Right column: 5 items (the other side of each pair)
-                // Actually, Duolingo mixes BOTH languages across BOTH columns
-                const items = [];
-                pairs.forEach((p, i) => {
-                    items.push({ uid: `${p.id}-es-${Date.now()}-${i}`, text: p.es, pairId: p.id, lang: 'es', status: 'idle' });
-                    items.push({ uid: `${p.id}-en-${Date.now()}-${i}`, text: p.en, pairId: p.id, lang: 'en', status: 'idle' });
-                });
-                // Split into 2 columns of 5, shuffled
-                const shuffled = shuffle(items);
-                // Ensure no pair ends up side by side in same row (same index in left/right)
-                const left = shuffled.slice(0, 5);
-                const right = shuffled.slice(5, 10);
-                // Check: no left[i].pairId === right[i].pairId
-                let attempts = 0;
-                let r = [...right];
-                while (r.some((item, i) => item.pairId === left[i].pairId) && attempts < 50) {
-                    r = shuffle(r);
-                    attempts++;
+            // Build initial board
+            const buildInitialBoard = useCallback((pool) => {
+                const first5 = pool.slice(0, 5);
+                const rest = pool.slice(5);
+                poolQueueRef.current = rest;
+
+                // Left: español in order, Right: english shuffled (deranged)
+                let rightOrder = shuffle(first5);
+                let att = 0;
+                while (rightOrder.some((w, i) => w.id === first5[i].id) && att < 100) {
+                    rightOrder = shuffle(first5); att++;
                 }
-                return { left, right: r };
+
+                return first5.map((w, i) => ({
+                    leftId: w.id, leftText: w.es, leftStatus: 'idle',
+                    rightId: rightOrder[i].id, rightText: rightOrder[i].en, rightStatus: 'idle',
+                    key: Date.now() + i,
+                }));
             }, []);
 
-            // Start level
-            const startLevel = useCallback((levelIdx) => {
-                const level = LEVELS[levelIdx];
+            // Get next pair from queue (cycles)
+            const getNextPair = useCallback(() => {
+                if (poolQueueRef.current.length === 0) {
+                    poolQueueRef.current = shuffle([...wordPool]);
+                }
+                return poolQueueRef.current.shift();
+            }, [wordPool]);
+
+            // Start game
+            const startGame = useCallback(() => {
                 let pool = shuffle([...wordPool]);
-                // Extend if needed
-                while (pool.length < level.totalPairs) pool = [...pool, ...shuffle([...wordPool])];
-                // Dedupe by slicing
-                const allPairs = pool.slice(0, level.totalPairs);
-                allPairsRef.current = allPairs;
+                while (pool.length < TOTAL_PAIRS + 10) pool = [...pool, ...shuffle([...wordPool])];
 
-                const firstBatch = allPairs.slice(0, 5);
-                const batch = buildBatch(firstBatch);
-
-                setButtons(batch);
-                setCurrentLevelIdx(levelIdx);
-                setTimeLeft(level.timeSec);
-                setTotalMatched(0);
-                totalMatchedRef.current = 0;
-                setBatchIndex(0);
-                setBatchMatched(0);
-                setSelectedId(null);
+                const b = buildInitialBoard(pool);
+                setBoard(b);
+                setScore(0); scoreRef.current = 0;
+                setTimeLeft(TIME_SECONDS);
+                setSelectedSide(null);
+                setMilestone(null);
                 lockedRef.current = false;
+                fadingSlotsRef.current = {};
                 setGameState('playing');
-            }, [wordPool, buildBatch]);
-
-            // Load next batch
-            const loadNextBatch = useCallback(() => {
-                const nextBatchIdx = batchIndex + 1;
-                const start = nextBatchIdx * 5;
-                const pairs = allPairsRef.current.slice(start, start + 5);
-                if (pairs.length === 0) return; // shouldn't happen
-                const batch = buildBatch(pairs);
-                setButtons(batch);
-                setBatchIndex(nextBatchIdx);
-                setBatchMatched(0);
-                setSelectedId(null);
-                lockedRef.current = false;
-                setGameState('playing');
-            }, [batchIndex, buildBatch]);
+            }, [wordPool, buildInitialBoard]);
 
             // Timer
             useEffect(() => {
@@ -204,11 +190,7 @@
                 if (gameState === 'playing' && timeLeft > 0) {
                     timer = setInterval(() => {
                         setTimeLeft(prev => {
-                            if (prev <= 0.1) {
-                                clearInterval(timer);
-                                setGameState('gameOver');
-                                return 0;
-                            }
+                            if (prev <= 0.1) { clearInterval(timer); setGameState('lost'); return 0; }
                             return +(prev - 0.1).toFixed(1);
                         });
                     }, 100);
@@ -216,138 +198,240 @@
                 return () => clearInterval(timer);
             }, [gameState]);
 
+            // Force-resolve any fading slots (called when user clicks something else)
+            const resolveAllFading = useCallback(() => {
+                const fading = fadingSlotsRef.current;
+                const keys = Object.keys(fading);
+                if (keys.length === 0) return;
+
+                setBoard(prev => {
+                    const next = [...prev];
+                    keys.forEach(idxStr => {
+                        const idx = parseInt(idxStr);
+                        const pending = fading[idx];
+                        if (pending) {
+                            clearTimeout(pending.timer);
+                            next[idx] = {
+                                ...next[idx],
+                                leftId: pending.left.id, leftText: pending.left.text, leftStatus: 'entering',
+                                rightId: pending.right.id, rightText: pending.right.text, rightStatus: 'entering',
+                                key: Date.now() + idx,
+                            };
+                        }
+                    });
+                    return next;
+                });
+                fadingSlotsRef.current = {};
+
+                // After brief pop-in, set to idle
+                setTimeout(() => {
+                    setBoard(prev => prev.map(slot =>
+                        (slot.leftStatus === 'entering' || slot.rightStatus === 'entering')
+                            ? { ...slot, leftStatus: 'idle', rightStatus: 'idle' }
+                            : slot
+                    ));
+                }, 200);
+            }, []);
+
+            // Schedule a slow replacement for a matched slot
+            const scheduleFadeReplacement = useCallback((slotIndex, leftPair, rightPair) => {
+                // After 2.5 seconds (if not resolved early), replace
+                const timer = setTimeout(() => {
+                    delete fadingSlotsRef.current[slotIndex];
+                    setBoard(prev => {
+                        const next = [...prev];
+                        next[slotIndex] = {
+                            ...next[slotIndex],
+                            leftId: leftPair.id, leftText: leftPair.text, leftStatus: 'entering',
+                            rightId: rightPair.id, rightText: rightPair.text, rightStatus: 'entering',
+                            key: Date.now() + slotIndex,
+                        };
+                        return next;
+                    });
+                    setTimeout(() => {
+                        setBoard(prev => prev.map((s, i) =>
+                            i === slotIndex && (s.leftStatus === 'entering' || s.rightStatus === 'entering')
+                                ? { ...s, leftStatus: 'idle', rightStatus: 'idle' }
+                                : s
+                        ));
+                    }, 200);
+                }, 2500);
+
+                fadingSlotsRef.current[slotIndex] = {
+                    left: leftPair, right: rightPair, timer
+                };
+            }, []);
+
             // Click handler
             const handleClick = useCallback((side, index) => {
-                if (lockedRef.current) return;
-                const col = side === 'left' ? buttons.left : buttons.right;
-                const item = col[index];
-                if (item.status === 'matched' || item.status === 'wrong') return;
+                if (lockedRef.current || gameState !== 'playing') return;
+                const slot = board[index];
+                const status = side === 'left' ? slot.leftStatus : slot.rightStatus;
+                if (status === 'fading' || status === 'entering' || status === 'wrong') return;
 
-                const itemUid = item.uid;
+                // Any click on a non-fading cell resolves all fading slots instantly
+                resolveAllFading();
 
-                // If clicking same item, deselect
-                if (selectedId === itemUid) {
-                    setSelectedId(null);
-                    setButtons(prev => ({
-                        left: prev.left.map(b => b.uid === itemUid ? { ...b, status: 'idle' } : b),
-                        right: prev.right.map(b => b.uid === itemUid ? { ...b, status: 'idle' } : b),
+                const clickedId = side === 'left' ? slot.leftId : slot.rightId;
+
+                // If clicking same selected, deselect
+                if (selectedSide && selectedSide.side === side && selectedSide.index === index) {
+                    setSelectedSide(null);
+                    setBoard(prev => prev.map((s, i) => {
+                        if (i !== index) return s;
+                        return side === 'left'
+                            ? { ...s, leftStatus: 'idle' }
+                            : { ...s, rightStatus: 'idle' };
                     }));
                     return;
                 }
 
-                // If nothing selected, just select this one
-                if (!selectedId) {
-                    setSelectedId(itemUid);
-                    setButtons(prev => ({
-                        left: prev.left.map(b => b.uid === itemUid ? { ...b, status: 'selected' } : b),
-                        right: prev.right.map(b => b.uid === itemUid ? { ...b, status: 'selected' } : b),
+                // If clicking same side as current selection, switch
+                if (selectedSide && selectedSide.side === side) {
+                    setBoard(prev => prev.map((s, i) => {
+                        if (i === selectedSide.index) return side === 'left' ? { ...s, leftStatus: 'idle' } : { ...s, rightStatus: 'idle' };
+                        if (i === index) return side === 'left' ? { ...s, leftStatus: 'selected' } : { ...s, rightStatus: 'selected' };
+                        return s;
                     }));
+                    setSelectedSide({ side, index });
                     return;
                 }
 
-                // Something is already selected — check match
-                const allItems = [...buttons.left, ...buttons.right];
-                const prevItem = allItems.find(b => b.uid === selectedId);
-                if (!prevItem) { setSelectedId(null); return; }
-
-                // Can't match same language
-                if (prevItem.lang === item.lang) {
-                    // Just switch selection
-                    setSelectedId(itemUid);
-                    setButtons(prev => ({
-                        left: prev.left.map(b => {
-                            if (b.uid === itemUid) return { ...b, status: 'selected' };
-                            if (b.uid === selectedId) return { ...b, status: 'idle' };
-                            return b;
-                        }),
-                        right: prev.right.map(b => {
-                            if (b.uid === itemUid) return { ...b, status: 'selected' };
-                            if (b.uid === selectedId) return { ...b, status: 'idle' };
-                            return b;
-                        }),
+                // If nothing selected, select
+                if (!selectedSide) {
+                    setBoard(prev => prev.map((s, i) => {
+                        if (i !== index) return s;
+                        return side === 'left'
+                            ? { ...s, leftStatus: 'selected' }
+                            : { ...s, rightStatus: 'selected' };
                     }));
+                    setSelectedSide({ side, index });
                     return;
                 }
 
-                // Check if same pairId
-                const isMatch = prevItem.pairId === item.pairId;
+                // We have a selection on the OTHER side — check match
+                const prevSlot = board[selectedSide.index];
+                const prevId = selectedSide.side === 'left' ? prevSlot.leftId : prevSlot.rightId;
+                const isMatch = prevId === clickedId;
+
                 lockedRef.current = true;
 
                 if (isMatch) {
-                    // Mark both as matched
-                    setButtons(prev => ({
-                        left: prev.left.map(b => (b.uid === itemUid || b.uid === selectedId) ? { ...b, status: 'matched' } : b),
-                        right: prev.right.map(b => (b.uid === itemUid || b.uid === selectedId) ? { ...b, status: 'matched' } : b),
+                    // Mark both as matched (start slow fade)
+                    const leftIdx = selectedSide.side === 'left' ? selectedSide.index : index;
+                    const rightIdx = selectedSide.side === 'right' ? selectedSide.index : index;
+
+                    setBoard(prev => prev.map((s, i) => {
+                        if (i === leftIdx) return { ...s, leftStatus: 'fading' };
+                        if (i === rightIdx) return { ...s, rightStatus: 'fading' };
+                        // If same slot has both (rare edge), fade both
+                        if (i === leftIdx && i === rightIdx) return { ...s, leftStatus: 'fading', rightStatus: 'fading' };
+                        return s;
                     }));
 
-                    confetti({ particleCount: 12, spread: 30, origin: { y: 0.5 }, gravity: 1.8, scalar: 0.6 });
+                    confetti({ particleCount: 10, spread: 25, origin: { y: 0.5 }, gravity: 2, scalar: 0.6 });
 
-                    const newTotal = totalMatchedRef.current + 1;
-                    totalMatchedRef.current = newTotal;
-                    setTotalMatched(newTotal);
-                    const newBatchMatched = batchMatched + 1;
-                    setBatchMatched(newBatchMatched);
+                    const ns = scoreRef.current + 1;
+                    scoreRef.current = ns;
+                    setScore(ns);
 
-                    setSelectedId(null);
+                    // Check milestones
+                    if (MILESTONES.includes(ns)) {
+                        setMilestone({ text: ns === 20 ? '¡Vas volando!' : '¡Imparable!', emoji: ns === 20 ? '🔥' : '⚡', count: ns });
+                        setTimeout(() => setMilestone(null), 2000);
+                    }
 
-                    setTimeout(() => {
+                    // Check win
+                    if (ns >= TOTAL_PAIRS) {
+                        setTimeout(() => {
+                            confetti({ particleCount: 200, spread: 100, origin: { y: 0.5 } });
+                            setGameState('won');
+                        }, 400);
                         lockedRef.current = false;
-                        // Check if batch complete
-                        if (newBatchMatched >= 5) {
-                            // Check if level complete
-                            if (newTotal >= currentLevel.totalPairs) {
-                                confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
-                                if (currentLevelIdx >= LEVELS.length - 1) {
-                                    setGameState('gameWon');
-                                } else {
-                                    setGameState('levelWon');
-                                }
-                            } else {
-                                setGameState('batchDone');
-                            }
-                        }
-                    }, 500);
+                        setSelectedSide(null);
+                        return;
+                    }
+
+                    // Queue replacement pairs for the fading slots
+                    // Left slot gets a new español, right slot gets a new english
+                    // They must NOT be from the same pair
+                    const newPairForLeft = getNextPair();
+                    let newPairForRight = getNextPair();
+                    let safety = 0;
+                    while (newPairForRight.id === newPairForLeft.id && safety < 20) {
+                        poolQueueRef.current.push(newPairForRight);
+                        newPairForRight = getNextPair();
+                        safety++;
+                    }
+
+                    // Also make sure new pairs don't match what's already visible in their row
+                    scheduleFadeReplacement(leftIdx, { id: newPairForLeft.id, text: newPairForLeft.es }, board[leftIdx] ? { id: board[leftIdx].rightId, text: board[leftIdx].rightText } : { id: newPairForRight.id, text: newPairForRight.en });
+
+                    if (rightIdx !== leftIdx) {
+                        scheduleFadeReplacement(rightIdx, { id: board[rightIdx].leftId, text: board[rightIdx].leftText }, { id: newPairForRight.id, text: newPairForRight.en });
+                    }
+
+                    setSelectedSide(null);
+                    lockedRef.current = false;
                 } else {
-                    // Wrong — shake both, then reset
-                    setButtons(prev => ({
-                        left: prev.left.map(b => (b.uid === itemUid || b.uid === selectedId) ? { ...b, status: 'wrong' } : b),
-                        right: prev.right.map(b => (b.uid === itemUid || b.uid === selectedId) ? { ...b, status: 'wrong' } : b),
+                    // Wrong
+                    const leftIdx = selectedSide.side === 'left' ? selectedSide.index : index;
+                    const rightIdx = selectedSide.side === 'right' ? selectedSide.index : index;
+
+                    setBoard(prev => prev.map((s, i) => {
+                        if (i === leftIdx && (selectedSide.side === 'left' ? selectedSide.index === i : index === i))
+                            return selectedSide.side === 'left'
+                                ? { ...s, leftStatus: 'wrong' }
+                                : { ...s, leftStatus: s.leftStatus === 'selected' ? 'wrong' : s.leftStatus };
+                        if (i === rightIdx)
+                            return selectedSide.side === 'right'
+                                ? { ...s, rightStatus: 'wrong' }
+                                : { ...s, rightStatus: side === 'right' ? 'wrong' : s.rightStatus };
+                        return s;
                     }));
 
-                    setSelectedId(null);
+                    // Simpler: just mark both clicked cells as wrong
+                    setBoard(prev => {
+                        const next = [...prev];
+                        if (selectedSide.side === 'left') next[selectedSide.index] = { ...next[selectedSide.index], leftStatus: 'wrong' };
+                        else next[selectedSide.index] = { ...next[selectedSide.index], rightStatus: 'wrong' };
+                        if (side === 'left') next[index] = { ...next[index], leftStatus: 'wrong' };
+                        else next[index] = { ...next[index], rightStatus: 'wrong' };
+                        return next;
+                    });
+
+                    setSelectedSide(null);
                     setTimeout(() => {
-                        setButtons(prev => ({
-                            left: prev.left.map(b => b.status === 'wrong' ? { ...b, status: 'idle' } : b),
-                            right: prev.right.map(b => b.status === 'wrong' ? { ...b, status: 'idle' } : b),
-                        }));
+                        setBoard(prev => prev.map(s => ({
+                            ...s,
+                            leftStatus: s.leftStatus === 'wrong' ? 'idle' : s.leftStatus,
+                            rightStatus: s.rightStatus === 'wrong' ? 'idle' : s.rightStatus,
+                        })));
                         lockedRef.current = false;
                     }, 400);
                 }
-            }, [buttons, selectedId, batchMatched, currentLevel, currentLevelIdx]);
+            }, [board, selectedSide, gameState, resolveAllFading, getNextPair, scheduleFadeReplacement]);
 
-            // Word button
-            const WordBtn = ({ item, onClick }) => {
-                if (item.status === 'matched') {
-                    return (
-                        <div className="h-14 sm:h-[4.2rem] animate-matched">
-                            <div className="w-full h-full rounded-2xl border-2 border-dashed border-zinc-800 opacity-20"/>
-                        </div>
-                    );
-                }
-
+            // Word button component
+            const WordBtn = ({ text, status, onClick, side }) => {
                 let bg = 'bg-zinc-800 border-zinc-700 text-zinc-200';
-                let borderB = 'border-b-4';
                 let anim = '';
+                const isLeft = side === 'left';
 
-                if (item.status === 'selected') { bg = 'bg-emerald-600 border-emerald-800 text-white'; }
-                else if (item.status === 'wrong') { bg = 'bg-rose-500 border-rose-700 text-white'; anim = 'animate-shake'; }
+                if (status === 'selected') bg = 'bg-emerald-600 border-emerald-800 text-white';
+                else if (status === 'wrong') { bg = 'bg-rose-500/80 border-rose-700 text-white'; anim = 'animate-shake'; }
+                else if (status === 'fading') { bg = 'bg-emerald-500/50 border-emerald-700/50 text-emerald-300'; anim = 'animate-slow-fade'; }
+                else if (status === 'entering') { bg = 'bg-zinc-800 border-zinc-700 text-zinc-200'; anim = 'animate-instant-in'; }
+
+                const disabled = status === 'fading' || status === 'wrong' || status === 'entering';
 
                 return (
-                    <div className="h-14 sm:h-[4.2rem]">
+                    <div className="h-[3.6rem] sm:h-[4.2rem]">
                         <button
-                            className={`btn-juicy w-full h-full rounded-2xl border-2 ${borderB} font-bold text-sm sm:text-base flex items-center justify-center px-3 leading-tight ${bg} ${anim}`}
-                            onClick={onClick}>
-                            {item.text}
+                            className={`btn-juicy w-full h-full rounded-2xl border-2 border-b-4 font-bold text-sm sm:text-base flex items-center justify-center px-3 leading-tight ${bg} ${anim}`}
+                            onClick={onClick}
+                            disabled={disabled}>
+                            {text}
                         </button>
                     </div>
                 );
@@ -357,25 +441,31 @@
             if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-zinc-500" size={32}/></div>;
             if (!gameData || wordPool.length < 5) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-bold p-6 text-center">Error: No hay suficientes palabras.</div>;
 
-            // ====== MENU ======
+            // Menu
             if (gameState === 'menu') return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950 overflow-auto">
                     <div className="max-w-sm w-full text-center my-auto">
                         <div className="text-7xl mb-4">⚡</div>
                         <h1 className="text-4xl font-black text-white mb-1">Match Madness</h1>
                         <p className="text-zinc-400 font-medium mb-1">{gameData.title}</p>
-                        <p className="text-zinc-500 text-sm mb-8">Empareja palabras contra reloj. ¡Sin trampa!</p>
+                        <p className="text-zinc-500 text-sm mb-8">Empareja {TOTAL_PAIRS} pares en {Math.floor(TIME_SECONDS/60)}:{(TIME_SECONDS%60).toString().padStart(2,'0')}</p>
 
-                        <div className="space-y-2 mb-8">
-                            {LEVELS.map((l, i) => (
-                                <div key={i} className="flex items-center justify-between bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm">
-                                    <span className="font-bold text-zinc-300">{l.emoji} {l.title}</span>
-                                    <span className="text-zinc-500 font-bold">{l.totalPairs} pares · {l.timeSec}s</span>
-                                </div>
-                            ))}
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 mb-8 text-left space-y-3">
+                            <div className="flex items-center gap-3">
+                                <span className="text-2xl">🔥</span>
+                                <div><p className="font-black text-white text-sm">20 pares</p><p className="text-zinc-500 text-xs">Primer milestone</p></div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <span className="text-2xl">⚡</span>
+                                <div><p className="font-black text-white text-sm">30 pares</p><p className="text-zinc-500 text-xs">Segundo milestone</p></div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <span className="text-2xl">👑</span>
+                                <div><p className="font-black text-amber-400 text-sm">{TOTAL_PAIRS} pares</p><p className="text-zinc-500 text-xs">¡Victoria total!</p></div>
+                            </div>
                         </div>
 
-                        <button onClick={() => startLevel(0)} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-emerald-700 text-xl uppercase tracking-widest flex items-center justify-center gap-2">
+                        <button onClick={startGame} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-emerald-700 text-xl uppercase tracking-widest flex items-center justify-center gap-2">
                             <Play fill="currentColor" size={24}/> JUGAR
                         </button>
                         {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-6 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">Volver al Hub</button>}
@@ -383,70 +473,76 @@
                 </div>
             );
 
-            // ====== BATCH DONE (Duolingo "continue" screen) ======
-            if (gameState === 'batchDone') return (
-                <div className="h-[100dvh] flex flex-col bg-zinc-950">
-                    {/* Keep header visible */}
-                    <header className="px-4 py-3 flex items-center justify-between shrink-0 bg-zinc-900 border-b border-zinc-800">
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => setGameState('menu')} className="p-2 text-zinc-400 hover:text-white rounded-xl"><X size={20}/></button>
-                            <p className="text-sm font-black text-zinc-400">{currentLevel.emoji} Nivel {currentLevelIdx + 1}</p>
-                        </div>
-                        <div className={`font-black text-xl tabular-nums ${timeLeft < 15 ? 'text-rose-500' : 'text-amber-500'}`}>{Math.ceil(timeLeft)}s</div>
-                    </header>
-                    <div className="h-1.5 w-full bg-zinc-800 shrink-0">
-                        <div className="h-full bg-amber-500 rounded-r-full transition-all" style={{ width: `${(totalMatched / currentLevel.totalPairs) * 100}%` }}/>
-                    </div>
-
-                    <div className="flex-1 flex flex-col items-center justify-center p-6">
-                        <div className="text-6xl mb-4 animate-bounce-in">🎯</div>
-                        <h2 className="text-2xl font-black text-white mb-1">¡Bien hecho!</h2>
-                        <p className="text-zinc-400 font-bold mb-8">{totalMatched} de {currentLevel.totalPairs} pares</p>
-                        <button onClick={loadNextBatch} className="btn-juicy w-full max-w-xs bg-emerald-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-emerald-700 text-lg uppercase tracking-widest">
-                            CONTINUAR
-                        </button>
-                    </div>
-                </div>
-            );
-
-            // ====== PLAYING ======
+            // Playing
             if (gameState === 'playing') {
-                const pct = (timeLeft / currentLevel.timeSec) * 100;
-                const progressPct = (totalMatched / currentLevel.totalPairs) * 100;
-                const isLow = timeLeft < 15;
+                const pct = (score / TOTAL_PAIRS) * 100;
+                const isLow = timeLeft < 20;
+                const mins = Math.floor(Math.ceil(timeLeft) / 60);
+                const secs = Math.ceil(timeLeft) % 60;
+                const timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
+
+                // Milestone markers on progress bar
+                const ms20pct = (20 / TOTAL_PAIRS) * 100;
+                const ms30pct = (30 / TOTAL_PAIRS) * 100;
 
                 return (
-                    <div className="h-[100dvh] flex flex-col bg-zinc-950 overflow-hidden">
-                        {/* Header */}
-                        <header className="px-4 py-3 flex items-center justify-between shrink-0 bg-zinc-900 border-b border-zinc-800">
-                            <div className="flex items-center gap-3">
-                                <button onClick={() => setGameState('menu')} className="p-2 text-zinc-400 hover:text-white rounded-xl"><X size={20}/></button>
-                                <p className="text-sm font-black text-zinc-400">{currentLevel.emoji} Nivel {currentLevelIdx + 1}</p>
+                    <div className="h-[100dvh] flex flex-col bg-zinc-950 overflow-hidden relative">
+
+                        {/* Milestone toast */}
+                        {milestone && (
+                            <div className="fixed top-24 left-1/2 -translate-x-1/2 z-50 animate-milestone">
+                                <div className="bg-zinc-800 border-2 border-amber-500/50 px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3">
+                                    <span className="text-3xl">{milestone.emoji}</span>
+                                    <div>
+                                        <p className="font-black text-white text-lg">{milestone.count} pares</p>
+                                        <p className="text-amber-400 font-bold text-sm">{milestone.text}</p>
+                                    </div>
+                                </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                                <span className="text-xs font-bold text-zinc-500">{totalMatched}/{currentLevel.totalPairs}</span>
-                                <div className={`font-black text-xl tabular-nums ${isLow ? 'text-rose-500 animate-pulse' : 'text-amber-500'}`}>{Math.ceil(timeLeft)}s</div>
+                        )}
+
+                        {/* Header */}
+                        <header className="px-4 py-2.5 flex items-center justify-between shrink-0 bg-zinc-900 border-b border-zinc-800">
+                            <button onClick={() => setGameState('menu')} className="p-2 text-zinc-500 hover:text-white rounded-xl"><X size={20}/></button>
+
+                            {/* Progress bar with milestones */}
+                            <div className="flex-1 mx-4 relative">
+                                <div className="h-3 w-full bg-zinc-800 rounded-full overflow-visible relative">
+                                    <div className={`h-full rounded-full transition-all duration-300 ${isLow ? 'bg-rose-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }}/>
+                                    {/* Milestone dots */}
+                                    <div className="absolute top-1/2 -translate-y-1/2 flex items-center justify-center" style={{ left: `${ms20pct}%` }}>
+                                        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center text-[8px] font-black ${score >= 20 ? 'bg-amber-500 border-amber-400 text-black' : 'bg-zinc-700 border-zinc-600 text-zinc-400'}`}>20</div>
+                                    </div>
+                                    <div className="absolute top-1/2 -translate-y-1/2 flex items-center justify-center" style={{ left: `${ms30pct}%` }}>
+                                        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center text-[8px] font-black ${score >= 30 ? 'bg-amber-500 border-amber-400 text-black' : 'bg-zinc-700 border-zinc-600 text-zinc-400'}`}>30</div>
+                                    </div>
+                                    <div className="absolute top-1/2 -translate-y-1/2 right-0 flex items-center justify-center">
+                                        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center text-[8px] font-black ${score >= TOTAL_PAIRS ? 'bg-amber-500 border-amber-400 text-black' : 'bg-zinc-700 border-zinc-600 text-zinc-400'}`}>👑</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className={`font-black text-lg tabular-nums min-w-[50px] text-right ${isLow ? 'text-rose-500 animate-pulse' : 'text-amber-500'}`}>
+                                {timeStr}
                             </div>
                         </header>
 
-                        {/* Progress bar (total) */}
-                        <div className="h-1.5 w-full bg-zinc-800 shrink-0">
-                            <div className={`h-full rounded-r-full transition-all duration-300 ${isLow ? 'bg-rose-500' : 'bg-amber-500'}`} style={{ width: `${progressPct}%` }}/>
+                        {/* Labels */}
+                        <div className="flex px-4 sm:px-8 max-w-2xl mx-auto w-full pt-3 pb-1">
+                            <p className="flex-1 text-center text-zinc-500 font-bold text-[10px] uppercase tracking-widest">Español</p>
+                            <p className="flex-1 text-center text-zinc-500 font-bold text-[10px] uppercase tracking-widest">English</p>
                         </div>
 
-                        {/* Instruction */}
-                        <p className="text-center text-zinc-500 font-bold text-xs uppercase tracking-widest py-2 shrink-0">Selecciona los pares</p>
-
                         {/* Board */}
-                        <main className="flex-1 flex gap-3 sm:gap-4 px-4 sm:px-8 pb-6 max-w-2xl mx-auto w-full items-center">
-                            <div className="flex-1 flex flex-col gap-2.5 sm:gap-3">
-                                {buttons.left?.map((item, i) => (
-                                    <WordBtn key={item.uid} item={item} onClick={() => handleClick('left', i)}/>
+                        <main className="flex-1 flex gap-3 sm:gap-4 px-4 sm:px-8 pb-6 max-w-2xl mx-auto w-full">
+                            <div className="flex-1 flex flex-col gap-2.5 sm:gap-3 justify-center">
+                                {board.map((slot, i) => (
+                                    <WordBtn key={`l-${slot.key}`} text={slot.leftText} status={slot.leftStatus} side="left" onClick={() => handleClick('left', i)}/>
                                 ))}
                             </div>
-                            <div className="flex-1 flex flex-col gap-2.5 sm:gap-3">
-                                {buttons.right?.map((item, i) => (
-                                    <WordBtn key={item.uid} item={item} onClick={() => handleClick('right', i)}/>
+                            <div className="flex-1 flex flex-col gap-2.5 sm:gap-3 justify-center">
+                                {board.map((slot, i) => (
+                                    <WordBtn key={`r-${slot.key}`} text={slot.rightText} status={slot.rightStatus} side="right" onClick={() => handleClick('right', i)}/>
                                 ))}
                             </div>
                         </main>
@@ -454,55 +550,41 @@
                 );
             }
 
-            // ====== RESULT SCREENS ======
+            // Results
+            const isWin = gameState === 'won';
+            const timeTaken = TIME_SECONDS - Math.ceil(timeLeft);
+            const mins = Math.floor(timeTaken / 60);
+            const secs = timeTaken % 60;
+
             return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950 overflow-auto">
                     <div className="max-w-sm w-full text-center my-auto">
-                        <div className="text-7xl mb-4">
-                            {gameState === 'gameWon' ? '👑' : gameState === 'levelWon' ? '🎉' : '⏱️'}
-                        </div>
+                        <div className="text-7xl mb-4">{isWin ? '👑' : '⏱️'}</div>
 
-                        {gameState === 'levelWon' && (
+                        {isWin ? (
                             <>
-                                <h2 className="text-3xl font-black text-emerald-400 mb-2">¡Nivel {currentLevelIdx + 1} Superado!</h2>
-                                <p className="text-zinc-400 font-bold mb-2">{totalMatched} pares en {currentLevel.timeSec - Math.ceil(timeLeft)}s</p>
-                                <p className="text-zinc-500 text-sm mb-8">Siguiente: {LEVELS[currentLevelIdx + 1]?.emoji} {LEVELS[currentLevelIdx + 1]?.title}</p>
-                                <button onClick={() => startLevel(currentLevelIdx + 1)}
-                                    className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-indigo-800 text-lg uppercase tracking-widest flex items-center justify-center gap-2">
-                                    <ArrowRight size={20}/> Siguiente Nivel
-                                </button>
+                                <h2 className="text-3xl font-black text-amber-400 mb-2">¡VICTORIA!</h2>
+                                <p className="text-zinc-400 font-bold mb-1">{TOTAL_PAIRS} pares en {mins}:{secs.toString().padStart(2, '0')}</p>
+                                <p className="text-zinc-500 text-sm mb-8">Has dominado Match Madness.</p>
                             </>
-                        )}
-
-                        {gameState === 'gameWon' && (
-                            <>
-                                <h2 className="text-3xl font-black text-amber-400 mb-2">¡VICTORIA TOTAL!</h2>
-                                <p className="text-zinc-400 font-bold mb-8">Dominaste todos los niveles.</p>
-                                <button onClick={() => { setCurrentLevelIdx(0); setGameState('menu'); }}
-                                    className="btn-juicy w-full bg-amber-500 text-black font-black py-4 rounded-2xl border-2 border-b-4 border-amber-700 text-lg uppercase tracking-widest flex items-center justify-center gap-2">
-                                    <RotateCcw size={20}/> Volver al Menú
-                                </button>
-                            </>
-                        )}
-
-                        {gameState === 'gameOver' && (
+                        ) : (
                             <>
                                 <h2 className="text-3xl font-black text-rose-400 mb-2">Se acabó el tiempo</h2>
-                                <p className="text-zinc-400 font-bold mb-2">Lograste {totalMatched} de {currentLevel.totalPairs} pares.</p>
+                                <p className="text-zinc-400 font-bold mb-1">{score} de {TOTAL_PAIRS} pares</p>
                                 <p className="text-zinc-500 text-sm mb-8">¡Inténtalo otra vez!</p>
-                                <div className="space-y-3">
-                                    <button onClick={() => startLevel(currentLevelIdx)}
-                                        className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-indigo-800 text-lg uppercase tracking-widest flex items-center justify-center gap-2">
-                                        <RotateCcw size={20}/> Reintentar
-                                    </button>
-                                    <button onClick={() => { setCurrentLevelIdx(0); setGameState('menu'); }}
-                                        className="btn-juicy w-full bg-zinc-800 text-zinc-300 font-black py-4 rounded-2xl border-2 border-b-4 border-zinc-900 text-sm uppercase tracking-widest">
-                                        Volver al Menú
-                                    </button>
-                                </div>
                             </>
                         )}
 
+                        <div className="space-y-3">
+                            <button onClick={startGame}
+                                className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-emerald-700 text-lg uppercase tracking-widest flex items-center justify-center gap-2">
+                                <RotateCcw size={20}/> {isWin ? 'Jugar de Nuevo' : 'Reintentar'}
+                            </button>
+                            <button onClick={() => setGameState('menu')}
+                                className="btn-juicy w-full bg-zinc-800 text-zinc-300 font-black py-3 rounded-2xl border-2 border-b-4 border-zinc-900 text-sm uppercase tracking-widest">
+                                Menú
+                            </button>
+                        </div>
                         {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-8 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">Volver al Hub</button>}
                     </div>
                 </div>
