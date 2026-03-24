@@ -6,7 +6,7 @@
     <title>LingoMatch | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        tailwind.config = { darkMode: 'class' }; 
+        tailwind.config = { darkMode: 'class' };
         document.documentElement.classList.add('dark');
     </script>
     <script type="importmap">
@@ -24,25 +24,49 @@
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap'); 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
-        
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; user-select: none; -webkit-user-select: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
         .btn-juicy { transition: all 0.1s ease; border-bottom-width: 4px; }
         .btn-juicy:active:not(:disabled) { transform: translateY(4px); border-bottom-width: 0px; margin-top: 4px; }
-        
-        @keyframes shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-5px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-5px); } 80% { transform: translateX(5px); } }
+
+        @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(5px)} }
         .animate-shake { animation: shake 0.4s ease-in-out; }
 
-        @keyframes floatUp { 0% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-40px) scale(1.3); } }
+        @keyframes floatUp { 0%{opacity:1;transform:translateY(0) scale(1)} 100%{opacity:0;transform:translateY(-40px) scale(1.3)} }
         .animate-float { animation: floatUp 0.8s ease-out forwards; }
+
+        @keyframes diceRoll { 
+            0%{transform:rotate(0deg) scale(1)} 
+            25%{transform:rotate(15deg) scale(1.2)} 
+            50%{transform:rotate(-10deg) scale(1.1)} 
+            75%{transform:rotate(5deg) scale(1.05)} 
+            100%{transform:rotate(0deg) scale(1)} 
+        }
+        .animate-dice { animation: diceRoll 0.6s ease-out; }
+
+        @keyframes pulseGlow {
+            0%,100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.4); }
+            50% { box-shadow: 0 0 20px 6px rgba(99,102,241,0.3); }
+        }
+        .pulse-glow { animation: pulseGlow 1.5s ease-in-out infinite; }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .slide-up { animation: slideUp 0.3s ease-out forwards; }
     </style>
 </head>
 <body class="text-zinc-100">
     <div id="root"></div>
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef } from 'react';
+        import React, { useState, useEffect, useRef, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Users, Play, Plus, LogIn, CheckCircle2, XCircle, Trophy, User, Pause, Clock, Timer, AlertTriangle, BookOpen, X } from 'lucide-react';
+        import { Users, Play, Plus, LogIn, CheckCircle2, XCircle, Trophy, User, Pause, Clock, Timer, BookOpen, X, Dice5, Send, ArrowRight, Dices, RotateCcw } from 'lucide-react';
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
@@ -53,113 +77,102 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        const shuffle = (array) => [...array].sort(() => Math.random() - 0.5);
+        const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
         const genCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
-        const formatTime = (totalSecs) => `${Math.floor(totalSecs / 60).toString().padStart(2, '0')}:${(totalSecs % 60).toString().padStart(2, '0')}`;
+        const formatTime = (s) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+
+        // Dice faces: 1-6 points
+        const DICE_FACES = [1, 2, 3, 4, 5, 6];
+        const DICE_EMOJIS = ['⚀','⚁','⚂','⚃','⚄','⚅'];
 
         const LingoMatch = () => {
             const [user, setUser] = useState(null);
-            const [quizId, setQuizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [quizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
             const [quizData, setQuizData] = useState(null);
-            
-            const [modeSelected, setModeSelected] = useState(null); 
+            const [modeSelected, setModeSelected] = useState(null);
             const [isSinglePlayer, setIsSinglePlayer] = useState(false);
-            
             const [roomCode, setRoomCode] = useState('');
             const [inputCode, setInputCode] = useState('');
-            const [roomData, setRoomData] = useState(null); 
-            
+            const [roomData, setRoomData] = useState(null);
             const [playerName, setPlayerName] = useState('');
             const [leaderboard, setLeaderboard] = useState([]);
-            
+
+            // Game state
             const [selection, setSelection] = useState({ c1: null, c2: null, c3: null });
-            const [feedback, setFeedback] = useState('none');
+            const [feedback, setFeedback] = useState('none'); // none, success, error, partial
             const [locked, setLocked] = useState(false);
             const [isPaused, setIsPaused] = useState(false);
-            
-            const [showLeaderboard, setShowLeaderboard] = useState(false);
-            const [showLibrary, setShowLibrary] = useState(false);
-
             const [countdown, setCountdown] = useState(null);
             const [penaltyFlies, setPenaltyFlies] = useState([]);
             const [timerAnim, setTimerAnim] = useState(false);
-
             const [timer, setTimer] = useState(0);
             const timerRef = useRef(null);
 
+            // Arena new features
+            const [diceValue, setDiceValue] = useState(null);
+            const [diceRolling, setDiceRolling] = useState(false);
+            const [showSubmit, setShowSubmit] = useState(false);
+            const [showCorrectCards, setShowCorrectCards] = useState(false); // After correct match, show green + next
+            const [correctTriple, setCorrectTriple] = useState(null); // { c1, c2, c3 } uids
+
+            const [showLeaderboard, setShowLeaderboard] = useState(false);
+            const [showLibrary, setShowLibrary] = useState(false);
+
+            // ====== FIREBASE AUTH + QUIZ LOAD ======
             useEffect(() => {
                 signInAnonymously(auth);
                 const unsub = onAuthStateChanged(auth, setUser);
                 if (quizId) {
                     getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId)).then(snap => {
-                        if(snap.exists()) setQuizData(snap.data());
+                        if (snap.exists()) setQuizData(snap.data());
                         else alert("Juego no encontrado");
                     });
                 }
                 return () => unsub();
             }, [quizId]);
 
+            // ====== ROOM LISTENER (multiplayer) ======
             useEffect(() => {
                 if (!user || !roomCode || isSinglePlayer) return;
-                const unsub = onSnapshot(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), (docSnap) => {
-                    if (docSnap.exists()) setRoomData(docSnap.data());
-                    else { setRoomCode(''); setRoomData(null); alert("La sala ha sido cerrada."); }
+                const unsub = onSnapshot(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), (snap) => {
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        setRoomData(data);
+                        // Sync remote selections for other players
+                        if (data.liveSelections && user) {
+                            // We don't overwrite our own local selection
+                        }
+                    } else {
+                        setRoomCode(''); setRoomData(null); alert("La sala ha sido cerrada.");
+                    }
                 });
                 return () => unsub();
             }, [user, roomCode, isSinglePlayer]);
 
+            // ====== TIMER (single player) ======
             useEffect(() => {
                 if (roomData?.gameState === 'playing' && isSinglePlayer && !countdown && !isPaused) {
-                    timerRef.current = setInterval(() => setTimer(prev => prev + 1), 1000);
-                } else {
-                    clearInterval(timerRef.current);
-                }
+                    timerRef.current = setInterval(() => setTimer(p => p + 1), 1000);
+                } else { clearInterval(timerRef.current); }
                 return () => clearInterval(timerRef.current);
             }, [roomData?.gameState, isSinglePlayer, countdown, isPaused]);
 
             const myPlayer = roomData?.players?.find(p => p.uid === user?.uid);
             const myRole = isSinglePlayer ? 'p1' : (myPlayer ? myPlayer.id : null);
 
-            const triggerSequence = (steps, callback) => {
-                let i = 0;
-                setCountdown(steps[0]);
+            // ====== HELPERS ======
+            const triggerSequence = (steps, cb) => {
+                let i = 0; setCountdown(steps[0]);
                 const int = setInterval(() => {
                     i++;
-                    if (i < steps.length) {
-                        setCountdown(steps[i]);
-                    } else {
-                        clearInterval(int);
-                        setCountdown(null);
-                        if (callback) callback();
-                    }
+                    if (i < steps.length) setCountdown(steps[i]);
+                    else { clearInterval(int); setCountdown(null); if (cb) cb(); }
                 }, 800);
             };
 
-            const triggerPenalty = (pointsText, penaltySecs) => {
-                setLocked(true);
-                const isErr = penaltySecs > 2;
-                setFeedback(isErr ? 'error' : 'partial');
-                
-                const id = Date.now();
-                setPenaltyFlies(prev => [...prev, { id, text: pointsText, isErr }]);
-                setTimeout(() => setPenaltyFlies(prev => prev.filter(p => p.id !== id)), 800);
-
-                if (isSinglePlayer) {
-                    setTimer(prev => prev + penaltySecs);
-                    setTimerAnim(true);
-                    setTimeout(() => setTimerAnim(false), 500);
-                }
-
-                setTimeout(() => {
-                    setSelection({ c1: null, c2: null, c3: null });
-                    setFeedback('none');
-                    setLocked(false);
-                    if (!isSinglePlayer) processTurn(isErr ? 0 : 1, false);
-                }, 600);
-            };
-
             const updateGame = async (newData) => {
-                if (isSinglePlayer) setRoomData(prev => ({...prev, ...newData}));
+                if (isSinglePlayer) setRoomData(prev => ({ ...prev, ...newData }));
                 else await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), newData);
             };
 
@@ -167,6 +180,9 @@
                 setRoomData(null); setModeSelected(null); setIsSinglePlayer(false);
                 setTimer(0); setCountdown(null); setRoomCode('');
                 setShowLeaderboard(false); setShowLibrary(false);
+                setDiceValue(null); setDiceRolling(false); setShowSubmit(false);
+                setShowCorrectCards(false); setCorrectTriple(null);
+                setSelection({ c1: null, c2: null, c3: null }); setFeedback('none');
             };
 
             const loadLeaderboard = async () => {
@@ -175,32 +191,37 @@
                 setLeaderboard(snap.docs.map(d => d.data()));
             };
 
+            const generateBoardColumns = (pairs) => ({
+                c1: shuffle(pairs.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c1 }))),
+                c2: shuffle(pairs.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c2 }))),
+                c3: shuffle(pairs.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c3 }))),
+            });
+
+            // ====== SINGLE PLAYER SETUP ======
             const setupSinglePlayer = async () => {
                 setIsSinglePlayer(true); setModeSelected('single'); await loadLeaderboard();
             };
 
             const startSinglePlayer = () => {
-                if (!playerName.trim()) return alert("Por favor escribe tu nombre o apodo.");
-                
+                if (!playerName.trim()) return alert("Escribe tu nombre o apodo.");
                 const settings = quizData.content.settings || { rounds: 4, rowsPerRound: 6 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
                 let allPairs = shuffle([...quizData.content.pairs]);
                 if (allPairs.length < totalNeeded) {
                     const diff = totalNeeded - allPairs.length;
-                    for(let i=0; i<diff; i++) allPairs.push(allPairs[i % allPairs.length]);
+                    for (let i = 0; i < diff; i++) allPairs.push(allPairs[i % allPairs.length]);
                 }
-                const gamePool = allPairs.slice(0, totalNeeded);
-                
+                const gp = allPairs.slice(0, totalNeeded);
                 setRoomData({
-                    gameState: 'playing', mode: 'single', settings, gamePool, currentRound: 1,
-                    board: generateBoardColumns(gamePool.slice(0, settings.rowsPerRound)),
+                    gameState: 'playing', mode: 'single', settings, gamePool: gp, currentRound: 1,
+                    board: generateBoardColumns(gp.slice(0, settings.rowsPerRound)),
                     matchedIds: [],
                     players: [{ id: 'p1', name: playerName, score: 0, occupied: true, uid: user?.uid }]
                 });
-                
-                triggerSequence(['READY...', 'SET...', 'GO!'], () => { setTimer(0); });
+                triggerSequence(['READY...', 'SET...', 'GO!'], () => setTimer(0));
             };
 
+            // ====== MULTIPLAYER SETUP ======
             const setupMultiplayer = () => { setIsSinglePlayer(false); setModeSelected('multi'); };
 
             const createRoom = async () => {
@@ -212,218 +233,433 @@
                         { id: 'p2', name: 'Jugador 2', score: 0, color: 'bg-rose-500', occupied: false, uid: null },
                         { id: 'p3', name: 'Jugador 3', score: 0, color: 'bg-emerald-500', occupied: false, uid: null },
                         { id: 'p4', name: 'Jugador 4', score: 0, color: 'bg-amber-500', occupied: false, uid: null },
-                    ]
+                    ],
+                    liveSelections: {},
                 });
                 setRoomCode(code);
             };
 
             const joinRoom = async () => {
-                const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/rooms', inputCode.toUpperCase()));
-                if (snap.exists()) setRoomCode(inputCode.toUpperCase());
+                const code = inputCode.toUpperCase().trim();
+                if (code.length < 4) return alert('Código muy corto');
+                const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/rooms', code));
+                if (snap.exists()) setRoomCode(code);
                 else alert('Código inválido.');
             };
 
             const selectRole = async (roleId) => {
-                const updated = roomData.players.map(p => p.id === roleId ? { ...p, occupied: true, uid: user.uid } : (p.uid === user.uid ? { ...p, occupied: false, uid: null } : p));
+                const updated = roomData.players.map(p =>
+                    p.id === roleId ? { ...p, occupied: true, uid: user.uid } :
+                    (p.uid === user.uid ? { ...p, occupied: false, uid: null } : p)
+                );
                 await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), { players: updated });
             };
 
             const startMultiplayer = async () => {
-                const activePlayers = roomData.players.filter(p => p.occupied);
                 const settings = quizData.content.settings || { rounds: 4, rowsPerRound: 6 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
-                
                 let allPairs = shuffle([...quizData.content.pairs]);
                 if (allPairs.length < totalNeeded) {
                     const diff = totalNeeded - allPairs.length;
-                    for(let i=0; i<diff; i++) allPairs.push(allPairs[i % allPairs.length]);
+                    for (let i = 0; i < diff; i++) allPairs.push(allPairs[i % allPairs.length]);
                 }
-                const gamePool = allPairs.slice(0, totalNeeded);
+                const gp = allPairs.slice(0, totalNeeded);
+                const activePlayers = roomData.players.filter(p => p.occupied);
 
                 await updateGame({
-                    gameState: 'playing', mode: 'multi', settings, gamePool, currentRound: 1,
-                    board: generateBoardColumns(gamePool.slice(0, settings.rowsPerRound)),
-                    matchedIds: [], currentTurn: activePlayers[0].id,
-                    players: roomData.players.map(p => ({...p, score: 0, roundScore: 0}))
+                    gameState: 'playing', mode: 'multi', settings, gamePool: gp, currentRound: 1,
+                    board: generateBoardColumns(gp.slice(0, settings.rowsPerRound)),
+                    matchedIds: [], correctTriples: [],
+                    currentTurn: activePlayers[0].id,
+                    currentDice: null, dicePhase: 'roll', // roll → select → submit → result → next
+                    liveSelections: {},
+                    players: roomData.players.map(p => ({ ...p, score: 0, roundScore: 0 }))
                 });
             };
 
-            const generateBoardColumns = (pairsSubset) => ({
-                c1: shuffle(pairsSubset.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c1 }))),
-                c2: shuffle(pairsSubset.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c2 }))),
-                c3: shuffle(pairsSubset.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c3 })))
-            });
-
-            const handleSelect = (col, item) => {
-                if (locked || countdown) return;
-                if (!isSinglePlayer && myRole !== roomData.currentTurn) return;
-                setSelection(prev => ({ ...prev, [col]: prev[col]?.uid === item.uid ? null : item }));
+            // ====== DICE ROLL (Arena) ======
+            const rollDice = async () => {
+                setDiceRolling(true);
+                const result = DICE_FACES[Math.floor(Math.random() * DICE_FACES.length)];
+                // Animate for 600ms then show result
+                setTimeout(async () => {
+                    setDiceRolling(false);
+                    setDiceValue(result);
+                    await updateGame({ currentDice: result, dicePhase: 'select', liveSelections: {} });
+                }, 700);
             };
 
+            // ====== HANDLE SELECT ======
+            const handleSelect = async (col, item) => {
+                if (locked || countdown || showCorrectCards) return;
+
+                if (isSinglePlayer) {
+                    setSelection(prev => ({ ...prev, [col]: prev[col]?.uid === item.uid ? null : item }));
+                } else {
+                    // Arena: only active player can select, but everyone sees
+                    if (myRole !== roomData.currentTurn) return;
+                    if (roomData.dicePhase !== 'select') return;
+
+                    const newSel = { ...selection, [col]: selection[col]?.uid === item.uid ? null : item };
+                    setSelection(newSel);
+
+                    // Push live selections to Firebase
+                    const liveData = {};
+                    if (newSel.c1) liveData.c1 = newSel.c1.uid;
+                    if (newSel.c2) liveData.c2 = newSel.c2.uid;
+                    if (newSel.c3) liveData.c3 = newSel.c3.uid;
+                    try {
+                        await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), {
+                            liveSelections: liveData
+                        });
+                    } catch(e) { /* ignore race conditions */ }
+                }
+            };
+
+            // ====== AUTO-CHECK (Single Player) ======
             useEffect(() => {
+                if (!isSinglePlayer) return;
                 if (selection.c1 && selection.c2 && selection.c3) {
                     setLocked(true);
-                    
-                    // --- NUEVA LÓGICA DE VALIDACIÓN (TEXT MATCHING) ---
                     let maxMatches = 0;
-                    
                     roomData.gamePool.forEach(p => {
-                        let matches = 0;
-                        if (p.c1 === selection.c1.text) matches++;
-                        if (p.c2 === selection.c2.text) matches++;
-                        if (p.c3 === selection.c3.text) matches++;
-                        if (matches > maxMatches) maxMatches = matches;
+                        let m = 0;
+                        if (p.c1 === selection.c1.text) m++;
+                        if (p.c2 === selection.c2.text) m++;
+                        if (p.c3 === selection.c3.text) m++;
+                        if (m > maxMatches) maxMatches = m;
                     });
 
-                    const isPerfect = maxMatches === 3;
-                    const isPartial = maxMatches === 2;
-                    
-                    if (isPerfect) {
+                    if (maxMatches === 3) {
                         setFeedback('success');
-                        setTimeout(() => processTurn(3, true), 400); 
-                    } else if (isPartial) {
-                        triggerPenalty(isSinglePlayer ? "+2s" : "+1 Pt", 2);
+                        setTimeout(() => processTurnSingle(true), 400);
+                    } else if (maxMatches === 2) {
+                        triggerPenalty("+2s", 2);
                     } else {
-                        triggerPenalty(isSinglePlayer ? "+5s" : "Falló", 5);
+                        triggerPenalty("+5s", 5);
                     }
                 }
-            }, [selection]);
+            }, [selection, isSinglePlayer]);
 
-            const processTurn = async (pointsEarned, clearBoard) => {
-                setSelection({ c1: null, c2: null, c3: null });
+            // ====== SHOW SUBMIT (Arena) ======
+            useEffect(() => {
+                if (isSinglePlayer) return;
+                setShowSubmit(selection.c1 && selection.c2 && selection.c3 && roomData?.dicePhase === 'select');
+            }, [selection, isSinglePlayer, roomData?.dicePhase]);
+
+            // ====== SUBMIT (Arena) ======
+            const handleSubmitArena = async () => {
+                if (!selection.c1 || !selection.c2 || !selection.c3) return;
+                setLocked(true);
+
+                let maxMatches = 0;
+                roomData.gamePool.forEach(p => {
+                    let m = 0;
+                    if (p.c1 === selection.c1.text) m++;
+                    if (p.c2 === selection.c2.text) m++;
+                    if (p.c3 === selection.c3.text) m++;
+                    if (m > maxMatches) maxMatches = m;
+                });
+
+                const dice = roomData.currentDice || 1;
+                const isPerfect = maxMatches === 3;
+                const isPartial = maxMatches === 2;
+
+                if (isPerfect) {
+                    // Full dice points
+                    setFeedback('success');
+                    confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 } });
+                    setCorrectTriple({ c1: selection.c1.uid, c2: selection.c2.uid, c3: selection.c3.uid });
+                    setShowCorrectCards(true);
+
+                    const updatedPlayers = roomData.players.map(p =>
+                        p.id === roomData.currentTurn ? { ...p, score: p.score + dice, roundScore: (p.roundScore || 0) + dice } : p
+                    );
+                    const newMatched = [...(roomData.matchedIds || []), selection.c1.uid, selection.c2.uid, selection.c3.uid];
+                    const newTriples = [...(roomData.correctTriples || []), { c1: selection.c1.uid, c2: selection.c2.uid, c3: selection.c3.uid }];
+
+                    await updateGame({
+                        players: updatedPlayers,
+                        matchedIds: newMatched,
+                        correctTriples: newTriples,
+                        dicePhase: 'result',
+                        liveSelections: {}
+                    });
+                } else if (isPartial) {
+                    // Half dice points (rounded up)
+                    const pts = Math.ceil(dice / 2);
+                    setFeedback('partial');
+                    const id = Date.now();
+                    setPenaltyFlies(prev => [...prev, { id, text: `+${pts} (½)`, isErr: false }]);
+                    setTimeout(() => setPenaltyFlies(prev => prev.filter(f => f.id !== id)), 800);
+
+                    const updatedPlayers = roomData.players.map(p =>
+                        p.id === roomData.currentTurn ? { ...p, score: p.score + pts, roundScore: (p.roundScore || 0) + pts } : p
+                    );
+
+                    setTimeout(async () => {
+                        setFeedback('none'); setSelection({ c1: null, c2: null, c3: null }); setLocked(false);
+                        await advanceTurnArena(updatedPlayers, roomData.matchedIds);
+                    }, 800);
+                } else {
+                    // Zero points
+                    setFeedback('error');
+                    const id = Date.now();
+                    setPenaltyFlies(prev => [...prev, { id, text: '0 pts', isErr: true }]);
+                    setTimeout(() => setPenaltyFlies(prev => prev.filter(f => f.id !== id)), 800);
+
+                    setTimeout(async () => {
+                        setFeedback('none'); setSelection({ c1: null, c2: null, c3: null }); setLocked(false);
+                        await advanceTurnArena(roomData.players, roomData.matchedIds);
+                    }, 800);
+                }
+            };
+
+            // ====== "SIGUIENTE" button (Arena, after correct) ======
+            const handleNextArena = async () => {
+                setShowCorrectCards(false);
+                setCorrectTriple(null);
                 setFeedback('none');
+                setSelection({ c1: null, c2: null, c3: null });
                 setLocked(false);
 
-                let updatedPlayers = [...roomData.players];
-                let newMatched = [...roomData.matchedIds];
-                let nextTurn = roomData.currentTurn;
-
-                if (!isSinglePlayer) {
-                    updatedPlayers = updatedPlayers.map(p => p.id === roomData.currentTurn ? { ...p, score: p.score + pointsEarned, roundScore: (p.roundScore || 0) + pointsEarned } : p);
-                    const active = updatedPlayers.filter(p => p.occupied);
-                    const currIdx = active.findIndex(p => p.id === roomData.currentTurn);
-                    nextTurn = active[(currIdx + 1) % active.length].id;
-                }
-
-                // Usamos los UIDs físicos de los botones clickeados para ocultarlos, sin importar si eran de otros IDs originales
-                if (clearBoard) newMatched.push(selection.c1.uid, selection.c2.uid, selection.c3.uid);
-
+                const newMatched = roomData.matchedIds || [];
                 const isRoundOver = newMatched.length >= (roomData.settings.rowsPerRound * 3);
 
                 if (isRoundOver) {
-                    if (!isSinglePlayer) {
-                        const maxRoundScore = Math.max(...updatedPlayers.map(p => p.roundScore || 0));
-                        updatedPlayers = updatedPlayers.map(p => ({
-                            ...p, score: p.roundScore === maxRoundScore && p.roundScore > 0 ? p.score + 5 : p.score, roundScore: 0 
-                        }));
-                    }
-
-                    const nextRound = roomData.currentRound + 1;
-                    
-                    if (nextRound > roomData.settings.rounds) {
-                        confetti({ particleCount: 200, spread: 100, origin: { y: 0.6 } });
-                        if (isSinglePlayer) {
-                            await addDoc(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/leaderboard`), { playerName, time: timer, date: serverTimestamp() });
-                        }
-                        await updateGame({ gameState: 'end', players: updatedPlayers, finalTime: timer });
-                    } else {
-                        triggerSequence(['¡BIEN HECHO!', `RONDA ${nextRound}`, '3', '2', '1', 'GO!'], async () => {
-                            const startIndex = (nextRound - 1) * roomData.settings.rowsPerRound;
-                            const nextPairs = roomData.gamePool.slice(startIndex, startIndex + roomData.settings.rowsPerRound);
-                            await updateGame({ currentRound: nextRound, board: generateBoardColumns(nextPairs), matchedIds: [], players: updatedPlayers, currentTurn: nextTurn });
-                        });
-                    }
+                    await handleRoundEnd(roomData.players);
                 } else {
-                    await updateGame({ players: updatedPlayers, matchedIds: newMatched, currentTurn: nextTurn });
+                    await advanceTurnArena(roomData.players, newMatched);
                 }
             };
 
-            if (!quizData) return <div className="h-screen flex items-center justify-center font-black animate-pulse">Cargando Motor...</div>;
+            // ====== ADVANCE TURN (Arena) ======
+            const advanceTurnArena = async (players, matchedIds) => {
+                const active = players.filter(p => p.occupied);
+                const currIdx = active.findIndex(p => p.id === roomData.currentTurn);
+                const nextTurn = active[(currIdx + 1) % active.length].id;
+                setDiceValue(null);
+                await updateGame({
+                    players, matchedIds,
+                    currentTurn: nextTurn,
+                    currentDice: null,
+                    dicePhase: 'roll',
+                    liveSelections: {}
+                });
+            };
 
+            // ====== ROUND END ======
+            const handleRoundEnd = async (players) => {
+                let updatedPlayers = [...players];
+
+                if (!isSinglePlayer) {
+                    // Bonus for round winners — split if tie
+                    const maxRS = Math.max(...updatedPlayers.filter(p => p.occupied).map(p => p.roundScore || 0));
+                    if (maxRS > 0) {
+                        const winners = updatedPlayers.filter(p => p.occupied && (p.roundScore || 0) === maxRS);
+                        const bonusEach = Math.floor(5 / winners.length);
+                        updatedPlayers = updatedPlayers.map(p =>
+                            p.occupied && (p.roundScore || 0) === maxRS
+                                ? { ...p, score: p.score + bonusEach, roundScore: 0 }
+                                : { ...p, roundScore: 0 }
+                        );
+                    } else {
+                        updatedPlayers = updatedPlayers.map(p => ({ ...p, roundScore: 0 }));
+                    }
+                }
+
+                const nextRound = roomData.currentRound + 1;
+                if (nextRound > roomData.settings.rounds) {
+                    confetti({ particleCount: 200, spread: 100, origin: { y: 0.6 } });
+                    if (isSinglePlayer) {
+                        await addDoc(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/leaderboard`), { playerName, time: timer, date: serverTimestamp() });
+                    }
+                    await updateGame({ gameState: 'end', players: updatedPlayers, finalTime: timer });
+                } else {
+                    const bonusWinnerNames = !isSinglePlayer
+                        ? updatedPlayers.filter(p => p.occupied && (players.find(op => op.id === p.id)?.score || 0) < p.score).map(p => p.name.split(' ')[1] || p.name)
+                        : [];
+                    const bonusMsg = bonusWinnerNames.length > 0 ? `Bonus: ${bonusWinnerNames.join(', ')}` : '';
+
+                    triggerSequence(
+                        ['¡BIEN HECHO!', bonusMsg || `RONDA ${nextRound}`, `RONDA ${nextRound}`, '3', '2', '1', 'GO!'].filter(Boolean),
+                        async () => {
+                            const startIdx = (nextRound - 1) * roomData.settings.rowsPerRound;
+                            const nextPairs = roomData.gamePool.slice(startIdx, startIdx + roomData.settings.rowsPerRound);
+                            const active = updatedPlayers.filter(p => p.occupied);
+                            setDiceValue(null);
+                            await updateGame({
+                                currentRound: nextRound,
+                                board: generateBoardColumns(nextPairs),
+                                matchedIds: [], correctTriples: [],
+                                players: updatedPlayers,
+                                currentTurn: active[0].id,
+                                currentDice: null, dicePhase: 'roll',
+                                liveSelections: {}
+                            });
+                        }
+                    );
+                }
+            };
+
+            // ====== SINGLE PLAYER PENALTY ======
+            const triggerPenalty = (text, secs) => {
+                setLocked(true);
+                const isErr = secs > 2;
+                setFeedback(isErr ? 'error' : 'partial');
+                const id = Date.now();
+                setPenaltyFlies(prev => [...prev, { id, text, isErr }]);
+                setTimeout(() => setPenaltyFlies(prev => prev.filter(f => f.id !== id)), 800);
+                if (isSinglePlayer) { setTimer(prev => prev + secs); setTimerAnim(true); setTimeout(() => setTimerAnim(false), 500); }
+                setTimeout(() => {
+                    setSelection({ c1: null, c2: null, c3: null }); setFeedback('none'); setLocked(false);
+                    if (!isSinglePlayer) processTurnSingle(false);
+                }, 600);
+            };
+
+            const processTurnSingle = async (clearBoard) => {
+                setSelection({ c1: null, c2: null, c3: null }); setFeedback('none'); setLocked(false);
+                let newMatched = [...(roomData.matchedIds || [])];
+                if (clearBoard) newMatched.push(selection.c1.uid, selection.c2.uid, selection.c3.uid);
+
+                const isRoundOver = newMatched.length >= (roomData.settings.rowsPerRound * 3);
+                if (isRoundOver) {
+                    await updateGame({ matchedIds: newMatched });
+                    await handleRoundEnd(roomData.players);
+                } else {
+                    await updateGame({ matchedIds: newMatched });
+                }
+            };
+
+            // ====== Sync dice from firebase for non-active players ======
+            useEffect(() => {
+                if (!isSinglePlayer && roomData?.currentDice && !diceRolling) {
+                    setDiceValue(roomData.currentDice);
+                }
+                if (!isSinglePlayer && roomData?.dicePhase === 'roll') {
+                    setDiceValue(null); setShowCorrectCards(false); setCorrectTriple(null);
+                    setSelection({ c1: null, c2: null, c3: null }); setFeedback('none'); setLocked(false);
+                }
+                if (!isSinglePlayer && roomData?.dicePhase === 'result') {
+                    // Show correct cards
+                    const trips = roomData.correctTriples;
+                    if (trips && trips.length > 0) {
+                        const last = trips[trips.length - 1];
+                        setCorrectTriple(last);
+                        setShowCorrectCards(true);
+                        setFeedback('success');
+                    }
+                }
+            }, [roomData?.currentDice, roomData?.dicePhase, isSinglePlayer]);
+
+            // ====== Get live selections from others ======
+            const getLiveSelUid = (col) => {
+                if (!roomData?.liveSelections) return null;
+                return roomData.liveSelections[col] || null;
+            };
+
+            // ====== RENDER ======
+            if (!quizData) return <div className="h-[100dvh] flex items-center justify-center font-black animate-pulse text-xl">Cargando Motor...</div>;
+
+            // ====== MODE SELECTION ======
             if (!modeSelected) return (
-                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950 overflow-auto">
                     <div className="text-center mb-10">
-                        <h1 className="text-4xl font-black italic text-indigo-500 mb-2 tracking-tighter">LINGOMATCH <span className="text-amber-400">TRIPLE</span></h1>
+                        <h1 className="text-3xl sm:text-4xl font-black italic text-indigo-500 mb-2 tracking-tighter">LINGOMATCH <span className="text-amber-400">TRIPLE</span></h1>
                         <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">{quizData.title}</p>
                     </div>
                     <div className="w-full max-w-sm space-y-4">
-                        <button onClick={setupSinglePlayer} className="btn-juicy w-full bg-amber-500 text-zinc-950 font-black py-5 rounded-2xl border-amber-700 flex flex-col items-center justify-center gap-1 shadow-xl">
-                            <Timer size={32}/>
-                            <span className="text-xl tracking-widest uppercase">SPEEDRUN (1P)</span>
+                        <button onClick={setupSinglePlayer} className="btn-juicy w-full bg-amber-500 text-zinc-950 font-black py-5 rounded-2xl border-amber-700 flex flex-col items-center gap-1 shadow-xl">
+                            <Timer size={32}/><span className="text-xl tracking-widest uppercase">SPEEDRUN (1P)</span>
                             <span className="text-xs font-bold opacity-80">Juega local. Guarda tu récord.</span>
                         </button>
-                        <button onClick={setupMultiplayer} className="btn-juicy w-full bg-indigo-600 text-white font-black py-5 rounded-2xl border-indigo-800 flex flex-col items-center justify-center gap-1 shadow-xl mt-4">
-                            <Users size={32}/>
-                            <span className="text-xl tracking-widest uppercase">ARENA (VS)</span>
+                        <button onClick={setupMultiplayer} className="btn-juicy w-full bg-indigo-600 text-white font-black py-5 rounded-2xl border-indigo-800 flex flex-col items-center gap-1 shadow-xl">
+                            <Users size={32}/><span className="text-xl tracking-widest uppercase">ARENA (VS)</span>
                             <span className="text-xs font-bold opacity-80">Crea sala. Compite por turnos.</span>
                         </button>
                     </div>
+                    {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-8 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">Volver al Hub</button>}
                 </div>
             );
 
+            // ====== SINGLE PLAYER SETUP ======
             if (modeSelected === 'single' && !roomData) return (
-                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
-                    <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-6 rounded-3xl shadow-2xl">
-                        <div className="flex items-center gap-3 mb-6 border-b border-zinc-800 pb-4">
-                            <Trophy className="text-amber-400" size={28}/>
-                            <h2 className="text-xl font-black uppercase italic text-white tracking-widest">Mejores Tiempos</h2>
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-zinc-950 overflow-auto">
+                    <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-5 sm:p-6 rounded-3xl shadow-2xl my-auto">
+                        <div className="flex items-center gap-3 mb-5 border-b border-zinc-800 pb-4">
+                            <Trophy className="text-amber-400 flex-shrink-0" size={24}/>
+                            <h2 className="text-lg sm:text-xl font-black uppercase italic text-white tracking-widest">Mejores Tiempos</h2>
                         </div>
-                        
-                        <div className="space-y-3 mb-8">
+                        <div className="space-y-2 mb-6">
                             {leaderboard.length === 0 ? <p className="text-center text-zinc-500 font-bold text-sm py-4">Sé el primero en dejar tu marca.</p> :
                                 leaderboard.map((l, i) => (
                                     <div key={i} className="flex justify-between items-center bg-zinc-950 p-3 rounded-xl border border-zinc-800">
                                         <div className="flex items-center gap-3">
-                                            <span className={`font-black text-sm ${i===0?'text-amber-400':i===1?'text-zinc-400':i===2?'text-amber-700':'text-zinc-600'}`}>#{i+1}</span>
-                                            <span className="font-bold text-white uppercase">{l.playerName}</span>
+                                            <span className={`font-black text-sm ${i===0?'text-amber-400':i===1?'text-zinc-400':'text-zinc-600'}`}>#{i+1}</span>
+                                            <span className="font-bold text-white uppercase text-sm">{l.playerName}</span>
                                         </div>
                                         <span className="font-black text-indigo-400 tabular-nums">{formatTime(l.time)}</span>
                                     </div>
                                 ))
                             }
                         </div>
-
-                        <input value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="TU NOMBRE / APODO" className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-4 text-center text-lg font-black uppercase outline-none focus:border-amber-500 text-white mb-4"/>
+                        <input value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="TU NOMBRE / APODO"
+                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-3 text-center text-lg font-black uppercase outline-none focus:border-amber-500 text-white mb-4" style={{ fontSize: '16px' }}/>
                         <button onClick={startSinglePlayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2">
                             <Play fill="currentColor"/> EMPEZAR
                         </button>
-                        <button onClick={() => setModeSelected(null)} className="w-full text-zinc-500 font-bold text-xs mt-4 hover:text-white transition-colors">Volver a Selección</button>
+                        <button onClick={() => setModeSelected(null)} className="w-full text-zinc-500 font-bold text-xs mt-4 hover:text-white">Volver</button>
                     </div>
                 </div>
             );
 
+            // ====== MULTIPLAYER LOBBY ======
             if (modeSelected === 'multi' && !roomData) return (
-                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
-                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl w-full max-w-sm shadow-2xl z-10">
-                        <h2 className="text-center text-indigo-400 font-black italic text-2xl mb-6 uppercase tracking-widest">Lobby Arena</h2>
-                        <button onClick={createRoom} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 flex items-center justify-center gap-2 mb-6"><Plus/> CREAR SALA</button>
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-zinc-950 overflow-auto">
+                    <div className="bg-zinc-900 border border-zinc-800 p-6 sm:p-8 rounded-3xl w-full max-w-sm shadow-2xl my-auto">
+                        <h2 className="text-center text-indigo-400 font-black italic text-xl sm:text-2xl mb-6 uppercase tracking-widest">Lobby Arena</h2>
+                        <button onClick={createRoom} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 flex items-center justify-center gap-2 mb-6"><Plus size={20}/> CREAR SALA</button>
+                        <p className="text-center text-zinc-500 font-bold text-xs uppercase tracking-widest mb-3">ó únete con código</p>
                         <div className="flex gap-2">
-                            <input value={inputCode} onChange={e => setInputCode(e.target.value)} maxLength={6} placeholder="CÓDIGO" className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-center text-xl font-black uppercase outline-none focus:border-indigo-500 text-white"/>
-                            <button onClick={joinRoom} disabled={inputCode.length !== 6} className="btn-juicy bg-zinc-800 text-white font-black px-6 rounded-xl border-zinc-700 disabled:opacity-50"><LogIn/></button>
+                            <input value={inputCode} onChange={e => setInputCode(e.target.value.toUpperCase())} maxLength={6} placeholder="CÓDIGO"
+                                className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-center text-lg font-black uppercase outline-none focus:border-indigo-500 text-white" style={{ fontSize: '16px' }}/>
+                            <button onClick={joinRoom} disabled={inputCode.length < 4}
+                                className="btn-juicy bg-indigo-600 text-white font-black px-5 rounded-xl border-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center">
+                                <LogIn size={20}/>
+                            </button>
                         </div>
-                        <button onClick={() => setModeSelected(null)} className="w-full text-center text-zinc-500 font-bold text-xs mt-6 hover:text-white transition-colors">Volver a Selección</button>
+                        <button onClick={() => setModeSelected(null)} className="w-full text-center text-zinc-500 font-bold text-xs mt-6 hover:text-white">Volver</button>
                     </div>
                 </div>
             );
 
+            // ====== ROLE SELECTION ======
             if (roomData?.gameState === 'roles') return (
-                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950">
-                    <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[2rem] overflow-hidden shadow-2xl">
-                        <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950">
-                            <div><p className="text-xs text-zinc-500 font-bold uppercase tracking-widest">SALA ACTIVA</p><p className="text-3xl font-black text-indigo-400 tracking-widest">{roomCode}</p></div>
-                            <button onClick={() => setRoomData(null)} className="p-3 bg-rose-500/10 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white transition-colors"><XCircle/></button>
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950 overflow-auto">
+                    <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[2rem] overflow-hidden shadow-2xl my-auto">
+                        <div className="p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950">
+                            <div>
+                                <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">SALA ACTIVA</p>
+                                <p className="text-2xl sm:text-3xl font-black text-indigo-400 tracking-widest">{roomCode}</p>
+                            </div>
+                            <button onClick={() => setRoomData(null)} className="p-2.5 bg-rose-500/10 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white"><XCircle size={20}/></button>
                         </div>
-                        <div className="p-6">
-                            <div className="grid grid-cols-2 gap-4 mb-6">
+                        <div className="p-5">
+                            <p className="text-xs text-zinc-400 font-bold uppercase tracking-widest mb-3 text-center">Selecciona tu jugador</p>
+                            <div className="grid grid-cols-2 gap-3 mb-5">
                                 {roomData.players.map(p => (
-                                    <button key={p.id} onClick={() => selectRole(p.id)} disabled={p.occupied && p.uid !== user.uid} className={`btn-juicy p-4 rounded-xl border-b-4 font-black flex items-center gap-3 transition-all ${p.occupied && p.uid !== user.uid ? 'bg-zinc-950 border-zinc-900 text-zinc-600 opacity-50' : p.uid === user.uid ? `${p.color} border-black text-white ring-2 ring-white scale-105` : 'bg-zinc-800 border-zinc-950 text-zinc-300'}`}>
-                                        <User size={20}/> {p.name}
+                                    <button key={p.id} onClick={() => selectRole(p.id)} disabled={p.occupied && p.uid !== user?.uid}
+                                        className={`btn-juicy p-3 sm:p-4 rounded-xl border-b-4 font-black flex items-center gap-2 text-sm sm:text-base transition-all ${
+                                            p.occupied && p.uid !== user?.uid ? 'bg-zinc-950 border-zinc-900 text-zinc-600 opacity-50' :
+                                            p.uid === user?.uid ? `${p.color} border-black text-white ring-2 ring-white scale-105` :
+                                            'bg-zinc-800 border-zinc-950 text-zinc-300'}`}>
+                                        <User size={18}/> {p.name}
                                     </button>
                                 ))}
                             </div>
                             {roomData.players.some(p => p.occupied) && (
-                                <button onClick={startMultiplayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 flex items-center justify-center gap-2 text-xl mt-8">
-                                    <Play fill="currentColor"/> EMPEZAR PARTIDA
+                                <button onClick={startMultiplayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 flex items-center justify-center gap-2 text-lg">
+                                    <Play fill="currentColor"/> EMPEZAR
                                 </button>
                             )}
                         </div>
@@ -431,28 +667,50 @@
                 </div>
             );
 
+            // ====== PLAYING ======
             if (roomData?.gameState === 'playing') {
-                const activePlayer = roomData.players.find(p => p.id === roomData.currentTurn);
                 const isMyTurn = isSinglePlayer || myRole === roomData.currentTurn;
+                const activePlayerObj = !isSinglePlayer ? roomData.players.find(p => p.id === roomData.currentTurn) : null;
+                const needsRoll = !isSinglePlayer && roomData.dicePhase === 'roll' && isMyTurn;
+                const isSelectPhase = isSinglePlayer || roomData.dicePhase === 'select';
 
                 const renderCol = (items, colKey) => (
-                    <div className="flex-1 flex flex-col gap-2 relative">
+                    <div className="flex-1 flex flex-col gap-1.5 sm:gap-2">
                         {items.map(item => {
-                            const isMatched = roomData.matchedIds.includes(item.uid);
-                            const isSel = selection[colKey]?.uid === item.uid;
-                            
+                            const isMatched = (roomData.matchedIds || []).includes(item.uid);
+                            const isCorrectCard = correctTriple && (correctTriple.c1 === item.uid || correctTriple.c2 === item.uid || correctTriple.c3 === item.uid);
+                            const isMySel = selection[colKey]?.uid === item.uid;
+                            const isLiveSel = !isSinglePlayer && getLiveSelUid(colKey) === item.uid && !isMyTurn;
+
+                            if (isMatched && !isCorrectCard) {
+                                return <div key={item.uid} className="h-16 sm:h-20 border-2 border-dashed border-zinc-800 rounded-2xl flex items-center justify-center opacity-25"><CheckCircle2 className="text-zinc-700" size={18}/></div>;
+                            }
+
+                            if (isCorrectCard && showCorrectCards) {
+                                return (
+                                    <div key={item.uid} className="h-16 sm:h-20 rounded-2xl border-2 border-emerald-500 bg-emerald-500/20 flex items-center justify-center font-black text-sm sm:text-base text-emerald-300 px-2 text-center leading-tight slide-up">
+                                        {item.text}
+                                    </div>
+                                );
+                            }
+
                             let bg = "bg-zinc-900 border-zinc-800 text-zinc-300";
-                            if (isSel) {
+                            if (isMySel) {
                                 if (feedback === 'error') bg = "bg-rose-500 border-rose-700 text-white animate-shake";
                                 else if (feedback === 'partial') bg = "bg-amber-500 border-amber-700 text-white animate-shake";
                                 else if (feedback === 'success') bg = "bg-emerald-500 border-emerald-700 text-white scale-105";
-                                else bg = "bg-indigo-600 border-indigo-800 text-white scale-105";
+                                else bg = "bg-indigo-600 border-indigo-800 text-white scale-105 pulse-glow";
+                            } else if (isLiveSel) {
+                                // Other player's live selection — show with their color
+                                const turnColor = activePlayerObj?.color?.replace('bg-','border-') || 'border-indigo-500';
+                                bg = `bg-zinc-900 ${turnColor} border-2 text-zinc-100`;
                             }
 
-                            if (isMatched) return <div key={item.uid} className="h-[4.5rem] sm:h-20 border-2 border-dashed border-zinc-800 rounded-2xl flex items-center justify-center opacity-30"><CheckCircle2 className="text-zinc-700"/></div>;
-
                             return (
-                                <button key={item.uid} onClick={() => handleSelect(colKey, item)} className={`btn-juicy h-[4.5rem] sm:h-20 rounded-2xl border-2 font-black text-sm sm:text-base leading-tight px-2 transition-all ${bg}`}>
+                                <button key={item.uid}
+                                    onClick={() => handleSelect(colKey, item)}
+                                    disabled={!isSelectPhase || locked || (isMatched && !isCorrectCard)}
+                                    className={`btn-juicy h-16 sm:h-20 rounded-2xl border-2 font-black text-xs sm:text-sm leading-tight px-1.5 sm:px-2 transition-all ${bg} disabled:opacity-40`}>
                                     {item.text}
                                 </button>
                             );
@@ -461,129 +719,188 @@
                 );
 
                 return (
-                    <div className="h-[100dvh] flex flex-col bg-zinc-950 relative">
-                        
+                    <div className="h-[100dvh] flex flex-col bg-zinc-950 relative overflow-hidden">
+
+                        {/* COUNTDOWN / PAUSE OVERLAY */}
                         {(countdown || isPaused) && (
-                            <div className="fixed inset-0 bg-zinc-950/80 backdrop-blur-md z-50 flex items-center justify-center">
+                            <div className="fixed inset-0 bg-zinc-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
                                 {countdown ? (
-                                    <div className="text-7xl md:text-[10vw] font-black italic text-white animate-pulse drop-shadow-[0_0_30px_rgba(99,102,241,0.8)] tracking-tighter text-center">
+                                    <div className="text-5xl sm:text-7xl md:text-[10vw] font-black italic text-white animate-pulse drop-shadow-[0_0_30px_rgba(99,102,241,0.8)] text-center leading-tight px-4">
                                         {countdown}
                                     </div>
                                 ) : (
                                     <div className="bg-zinc-900 p-8 rounded-3xl border border-zinc-800 text-center max-w-sm w-full">
                                         <Pause size={48} className="text-zinc-500 mx-auto mb-4"/>
                                         <h2 className="text-2xl font-black text-white mb-6 uppercase tracking-widest">Pausa</h2>
-                                        <button onClick={() => { setIsPaused(false); triggerSequence(['3', '2', '1', 'GO!']); }} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 mb-3">Reanudar</button>
+                                        <button onClick={() => { setIsPaused(false); triggerSequence(['3','2','1','GO!']); }} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 mb-3">Reanudar</button>
                                         <button onClick={resetToMenu} className="btn-juicy w-full bg-zinc-800 text-zinc-400 font-black py-4 rounded-xl border-zinc-950">Abandonar</button>
                                     </div>
                                 )}
                             </div>
                         )}
 
-                        <header className="bg-zinc-900 border-b border-zinc-800 p-4 shrink-0 z-20 flex justify-between items-center shadow-lg relative">
+                        {/* DICE ROLL OVERLAY (Arena) */}
+                        {!isSinglePlayer && roomData.dicePhase === 'roll' && (
+                            <div className="fixed inset-0 bg-zinc-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 text-center max-w-sm w-full shadow-2xl">
+                                    <p className="text-xs text-zinc-400 font-bold uppercase tracking-widest mb-2">Turno de</p>
+                                    <p className={`text-2xl font-black uppercase mb-6 ${activePlayerObj?.color?.replace('bg-','text-') || 'text-white'}`}>
+                                        {activePlayerObj?.name || 'Jugador'}
+                                    </p>
+
+                                    <div className={`text-8xl sm:text-9xl mb-6 ${diceRolling ? 'animate-dice' : ''}`}>
+                                        {diceRolling ? '🎲' : (diceValue ? DICE_EMOJIS[diceValue - 1] : '🎲')}
+                                    </div>
+
+                                    {isMyTurn ? (
+                                        <button onClick={rollDice} disabled={diceRolling}
+                                            className="btn-juicy w-full bg-amber-500 text-black font-black py-4 rounded-xl border-amber-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2 disabled:opacity-50">
+                                            <Dices size={24}/> {diceRolling ? 'TIRANDO...' : 'TIRAR DADO'}
+                                        </button>
+                                    ) : (
+                                        <p className="text-zinc-500 font-bold uppercase tracking-widest animate-pulse">Esperando que tire el dado...</p>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* HEADER */}
+                        <header className="bg-zinc-900 border-b border-zinc-800 px-3 py-2.5 sm:p-4 shrink-0 z-20 flex justify-between items-center shadow-lg relative">
                             <div className="absolute top-full left-1/2 -translate-x-1/2 mt-4 pointer-events-none z-50 flex gap-10 w-full max-w-lg justify-around">
                                 {penaltyFlies.map(p => (
-                                    <div key={p.id} className={`text-3xl font-black italic animate-float drop-shadow-[0_0_10px_rgba(0,0,0,1)] ${p.isErr ? 'text-rose-500' : 'text-amber-500'}`}>
-                                        {p.text}
-                                    </div>
+                                    <div key={p.id} className={`text-2xl sm:text-3xl font-black italic animate-float drop-shadow-[0_0_10px_rgba(0,0,0,1)] ${p.isErr ? 'text-rose-500' : 'text-amber-500'}`}>{p.text}</div>
                                 ))}
                             </div>
 
-                            <div className="flex items-center gap-3">
-                                {!isSinglePlayer && <div className="bg-zinc-950 px-3 py-1.5 rounded-lg border border-zinc-800 font-black text-zinc-500 text-xs tracking-widest hidden sm:block">SALA {roomCode}</div>}
-                                <div className="font-black text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-lg uppercase text-xs">Ronda {roomData.currentRound} / {roomData.settings.rounds}</div>
+                            <div className="flex items-center gap-2">
+                                <div className="font-black text-indigo-400 bg-indigo-500/10 px-2.5 py-1.5 rounded-lg uppercase text-[10px] sm:text-xs">R{roomData.currentRound}/{roomData.settings.rounds}</div>
+                                {!isSinglePlayer && diceValue && roomData.dicePhase !== 'roll' && (
+                                    <div className="flex items-center gap-1 bg-amber-500/10 px-2.5 py-1.5 rounded-lg">
+                                        <span className="text-lg">{DICE_EMOJIS[diceValue - 1]}</span>
+                                        <span className="text-amber-500 font-black text-xs">×{diceValue}</span>
+                                    </div>
+                                )}
                             </div>
-                            
+
                             {!isSinglePlayer ? (
-                                <div className="flex gap-2">
-                                    {roomData.players.filter(p=>p.occupied).map(p => (
-                                        <div key={p.id} className={`flex flex-col items-center px-3 py-1 rounded-xl border-2 transition-all ${p.id === roomData.currentTurn ? 'border-indigo-500 bg-indigo-500/20 scale-110' : 'border-transparent bg-zinc-950'}`}>
-                                            <span className={`text-xs font-black uppercase ${p.color.replace('bg-','text-')}`}>{p.name.split(' ')[1] || p.name}</span>
-                                            <span className="text-lg font-black leading-none">{p.score}</span>
+                                <div className="flex gap-1.5">
+                                    {roomData.players.filter(p => p.occupied).map(p => (
+                                        <div key={p.id} className={`flex flex-col items-center px-2 py-1 rounded-lg border-2 transition-all ${p.id === roomData.currentTurn ? 'border-indigo-500 bg-indigo-500/20 scale-105' : 'border-transparent bg-zinc-950'}`}>
+                                            <span className={`text-[10px] sm:text-xs font-black uppercase ${p.color.replace('bg-','text-')}`}>{p.name.split(' ')[1] || p.name}</span>
+                                            <span className="text-base sm:text-lg font-black leading-none">{p.score}</span>
                                         </div>
                                     ))}
                                 </div>
                             ) : (
-                                <div className="flex items-center gap-3">
-                                    <div className={`flex items-center gap-2 bg-zinc-950 border px-4 py-2 rounded-xl transition-all ${timerAnim ? 'border-rose-500 bg-rose-500/20 text-rose-500 scale-110 animate-shake' : 'border-zinc-800 text-amber-500'}`}>
-                                        <Clock size={20}/>
-                                        <span className="font-black text-2xl tracking-wider tabular-nums">{formatTime(timer)}</span>
+                                <div className="flex items-center gap-2">
+                                    <div className={`flex items-center gap-1.5 bg-zinc-950 border px-3 py-1.5 rounded-xl transition-all ${timerAnim ? 'border-rose-500 bg-rose-500/20 text-rose-500 scale-110 animate-shake' : 'border-zinc-800 text-amber-500'}`}>
+                                        <Clock size={16}/><span className="font-black text-xl tabular-nums">{formatTime(timer)}</span>
                                     </div>
-                                    <button onClick={() => setIsPaused(true)} className="p-2.5 bg-zinc-800 rounded-xl hover:bg-zinc-700 transition-colors text-zinc-400"><Pause size={20}/></button>
+                                    <button onClick={() => setIsPaused(true)} className="p-2 bg-zinc-800 rounded-xl text-zinc-400"><Pause size={18}/></button>
                                 </div>
                             )}
                         </header>
 
-                        <main className={`flex-1 flex gap-2 sm:gap-4 p-2 sm:p-6 max-w-5xl mx-auto w-full transition-opacity duration-300 ${!isMyTurn ? 'opacity-50 pointer-events-none' : ''}`}>
+                        {/* BOARD */}
+                        <main className={`flex-1 flex gap-1.5 sm:gap-3 p-2 sm:p-4 max-w-5xl mx-auto w-full transition-opacity duration-300 overflow-y-auto ${(!isMyTurn && !showCorrectCards) ? 'opacity-50' : ''}`}>
                             {renderCol(roomData.board.c1, 'c1')}
                             {renderCol(roomData.board.c2, 'c2')}
                             {renderCol(roomData.board.c3, 'c3')}
                         </main>
-                        
-                        {!isMyTurn && !isSinglePlayer && (
-                            <div className="absolute bottom-10 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-6 py-3 rounded-full font-black tracking-widest uppercase shadow-2xl animate-pulse">
-                                Espera tu turno
+
+                        {/* SUBMIT BUTTON (Arena) */}
+                        {!isSinglePlayer && showSubmit && isMyTurn && !showCorrectCards && (
+                            <div className="shrink-0 p-3 border-t border-zinc-800 bg-zinc-900/90 backdrop-blur-sm">
+                                <button onClick={handleSubmitArena}
+                                    className="btn-juicy w-full max-w-lg mx-auto block bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 uppercase tracking-widest text-lg flex items-center justify-center gap-2 shadow-xl">
+                                    <Send size={20}/> CONFIRMAR
+                                </button>
+                            </div>
+                        )}
+
+                        {/* NEXT BUTTON (Arena, after correct) */}
+                        {!isSinglePlayer && showCorrectCards && (
+                            <div className="shrink-0 p-3 border-t border-emerald-800/50 bg-emerald-950/30 backdrop-blur-sm">
+                                {isMyTurn ? (
+                                    <button onClick={handleNextArena}
+                                        className="btn-juicy w-full max-w-lg mx-auto block bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2 shadow-xl">
+                                        <ArrowRight size={20}/> SIGUIENTE
+                                    </button>
+                                ) : (
+                                    <p className="text-center text-emerald-400 font-bold text-sm uppercase tracking-widest py-3 animate-pulse">¡Correcto! Esperando...</p>
+                                )}
+                            </div>
+                        )}
+
+                        {/* NOT MY TURN BADGE */}
+                        {!isMyTurn && !isSinglePlayer && !showCorrectCards && roomData.dicePhase !== 'roll' && (
+                            <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-5 py-2.5 rounded-full font-black tracking-widest uppercase text-sm shadow-2xl animate-pulse z-30">
+                                Turno de {activePlayerObj?.name || '...'}
                             </div>
                         )}
                     </div>
                 );
             }
 
-            if (roomData.gameState === 'end') {
-                const winner = !isSinglePlayer ? [...roomData.players].sort((a,b) => b.score - a.score)[0] : null;
+            // ====== END SCREEN ======
+            if (roomData?.gameState === 'end') {
+                const winner = !isSinglePlayer ? [...roomData.players].filter(p=>p.occupied).sort((a,b) => b.score - a.score)[0] : null;
 
                 return (
-                    <div className="h-[100dvh] flex flex-col bg-zinc-950">
-                        <div className="flex-1 overflow-y-auto custom-scrollbar flex items-center justify-center p-6 text-center">
-                            <div className="bg-zinc-900 p-8 rounded-[2.5rem] shadow-2xl border border-zinc-800 max-w-md w-full my-auto">
-                                <Trophy size={80} className="text-amber-400 mx-auto mb-6 drop-shadow-lg" />
-                                <h1 className="text-4xl font-black italic text-white mb-2 uppercase">¡Completado!</h1>
-                                <p className="text-zinc-500 font-bold uppercase tracking-widest text-xs mb-8">Dominaste {roomData.gamePool.length} conceptos</p>
-                                
+                    <div className="h-[100dvh] flex flex-col bg-zinc-950 overflow-auto">
+                        <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
+                            <div className="bg-zinc-900 p-6 sm:p-8 rounded-[2rem] shadow-2xl border border-zinc-800 max-w-md w-full text-center my-auto">
+                                <Trophy size={64} className="text-amber-400 mx-auto mb-4"/>
+                                <h1 className="text-3xl sm:text-4xl font-black italic text-white mb-1 uppercase">¡Completado!</h1>
+                                <p className="text-zinc-500 font-bold uppercase tracking-widest text-[10px] mb-6">Dominaste {roomData.gamePool.length} conceptos</p>
+
                                 {!isSinglePlayer ? (
-                                    <div className="bg-zinc-950 border border-zinc-800 p-6 rounded-2xl mb-8">
-                                        <p className="text-zinc-400 font-bold mb-1">Ganador Absoluto</p>
-                                        <p className={`text-3xl font-black uppercase ${winner.color.replace('bg-','text-')}`}>{winner.name}</p>
-                                        <p className="text-xl font-bold text-white mt-2">{winner.score} PTS</p>
+                                    <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-2xl mb-6">
+                                        <p className="text-zinc-400 font-bold text-xs mb-1 uppercase tracking-widest">Ganador</p>
+                                        <p className={`text-2xl sm:text-3xl font-black uppercase ${winner.color.replace('bg-','text-')}`}>{winner.name}</p>
+                                        <p className="text-lg font-bold text-white mt-1">{winner.score} PTS</p>
+                                        <div className="mt-3 pt-3 border-t border-zinc-800 flex flex-wrap justify-center gap-3">
+                                            {roomData.players.filter(p => p.occupied && p.id !== winner.id).map(p => (
+                                                <span key={p.id} className="text-xs font-bold text-zinc-500">{p.name}: {p.score}pts</span>
+                                            ))}
+                                        </div>
                                     </div>
                                 ) : (
-                                    <div className="bg-zinc-950 border border-zinc-800 p-6 rounded-2xl mb-8 relative overflow-hidden">
-                                        <div className="absolute -right-4 -top-4 opacity-10"><Clock size={100}/></div>
-                                        <p className="text-zinc-400 font-bold mb-1 uppercase tracking-widest text-xs">Tu Tiempo (Speedrun)</p>
-                                        <p className="text-5xl font-black text-amber-500 tabular-nums">{formatTime(roomData.finalTime)}</p>
+                                    <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-2xl mb-6 relative overflow-hidden">
+                                        <div className="absolute -right-4 -top-4 opacity-10"><Clock size={80}/></div>
+                                        <p className="text-zinc-400 font-bold uppercase tracking-widest text-[10px] mb-1">Tu Tiempo</p>
+                                        <p className="text-4xl sm:text-5xl font-black text-amber-500 tabular-nums">{formatTime(roomData.finalTime)}</p>
                                     </div>
                                 )}
-                                
+
                                 <div className="space-y-3">
                                     {isSinglePlayer && (
-                                        <button onClick={() => { loadLeaderboard(); setShowLeaderboard(true); }} className="btn-juicy w-full bg-amber-600 text-white font-black py-4 rounded-xl border-amber-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
-                                            <Trophy size={18}/> Show Leaderboard
+                                        <button onClick={() => { loadLeaderboard(); setShowLeaderboard(true); }} className="btn-juicy w-full bg-amber-600 text-white font-black py-3.5 rounded-xl border-amber-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                            <Trophy size={16}/> Leaderboard
                                         </button>
                                     )}
-                                    <button onClick={() => setShowLibrary(true)} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
-                                        <BookOpen size={18}/> What's in this game?
+                                    <button onClick={() => setShowLibrary(true)} className="btn-juicy w-full bg-indigo-600 text-white font-black py-3.5 rounded-xl border-indigo-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                        <BookOpen size={16}/> Ver Vocabulario
                                     </button>
-                                    <button onClick={resetToMenu} className="btn-juicy w-full bg-zinc-800 text-white font-black py-4 rounded-xl border-zinc-950 text-sm uppercase tracking-widest flex items-center justify-center gap-2 mt-4">
-                                        Volver al Inicio
+                                    <button onClick={resetToMenu} className="btn-juicy w-full bg-zinc-800 text-white font-black py-3.5 rounded-xl border-zinc-950 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                        <RotateCcw size={16}/> Volver al Inicio
                                     </button>
                                 </div>
-
-                                <button onClick={() => window.location.href='index.html'} className="text-zinc-500 font-bold text-xs uppercase tracking-widest mt-8 hover:text-white transition-colors">
-                                    Salir al Hub
-                                </button>
+                                {!isStudent && <button onClick={() => window.location.href='index.html'} className="text-zinc-500 font-bold text-xs uppercase tracking-widest mt-6 hover:text-white block mx-auto">Salir al Hub</button>}
                             </div>
                         </div>
 
+                        {/* Library modal */}
                         {showLibrary && (
                             <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
                                 <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-xl flex flex-col max-h-[85vh] shadow-2xl overflow-hidden">
-                                    <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
-                                        <h3 className="font-black text-xl text-white uppercase tracking-widest flex items-center gap-2"><BookOpen size={20} className="text-indigo-400"/> Game Library</h3>
-                                        <button onClick={() => setShowLibrary(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 transition-colors"><X size={20}/></button>
+                                    <div className="p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
+                                        <h3 className="font-black text-lg text-white uppercase tracking-widest flex items-center gap-2"><BookOpen size={18} className="text-indigo-400"/> Vocabulario</h3>
+                                        <button onClick={() => setShowLibrary(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400"><X size={20}/></button>
                                     </div>
-                                    <div className="p-6 overflow-y-auto custom-scrollbar space-y-2 bg-zinc-950/50">
+                                    <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
                                         {[...quizData.content.pairs].sort((a,b) => a.c1.localeCompare(b.c1)).map((p, i) => (
-                                            <div key={i} className="flex flex-col sm:flex-row gap-2 sm:gap-4 text-sm md:text-base font-bold bg-zinc-900 p-4 rounded-xl border border-zinc-800">
+                                            <div key={i} className="flex flex-col sm:flex-row gap-1 sm:gap-3 text-sm font-bold bg-zinc-900 p-3 rounded-xl border border-zinc-800">
                                                 <span className="flex-1 text-indigo-400">{p.c1}</span>
                                                 <span className="flex-1 text-zinc-300">{p.c2}</span>
                                                 <span className="flex-1 text-zinc-300">{p.c3}</span>
@@ -594,20 +911,21 @@
                             </div>
                         )}
 
+                        {/* Leaderboard modal */}
                         {showLeaderboard && (
                             <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
-                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm flex flex-col shadow-2xl overflow-hidden">
-                                    <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
-                                        <h3 className="font-black text-xl text-amber-400 uppercase tracking-widest flex items-center gap-2"><Trophy size={20}/> Top 5</h3>
-                                        <button onClick={() => setShowLeaderboard(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 transition-colors"><X size={20}/></button>
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm shadow-2xl overflow-hidden">
+                                    <div className="p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
+                                        <h3 className="font-black text-lg text-amber-400 uppercase tracking-widest flex items-center gap-2"><Trophy size={18}/> Top 5</h3>
+                                        <button onClick={() => setShowLeaderboard(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400"><X size={20}/></button>
                                     </div>
-                                    <div className="p-6 space-y-3 bg-zinc-950/50">
-                                        {leaderboard.length === 0 ? <p className="text-center text-zinc-500 font-bold">Aún no hay récords.</p> :
+                                    <div className="p-5 space-y-2">
+                                        {leaderboard.length === 0 ? <p className="text-center text-zinc-500 font-bold">Sin récords aún.</p> :
                                             leaderboard.map((l, i) => (
-                                                <div key={i} className="flex justify-between items-center bg-zinc-900 p-4 rounded-xl border border-zinc-800">
-                                                    <div className="flex items-center gap-3">
-                                                        <span className={`font-black text-lg ${i===0?'text-amber-400':i===1?'text-zinc-400':i===2?'text-amber-700':'text-zinc-600'}`}>#{i+1}</span>
-                                                        <span className="font-bold text-white uppercase">{l.playerName}</span>
+                                                <div key={i} className="flex justify-between items-center bg-zinc-900 p-3 rounded-xl border border-zinc-800">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`font-black ${i===0?'text-amber-400':i===1?'text-zinc-400':'text-zinc-600'}`}>#{i+1}</span>
+                                                        <span className="font-bold text-white uppercase text-sm">{l.playerName}</span>
                                                     </div>
                                                     <span className="font-black text-indigo-400 tabular-nums">{formatTime(l.time)}</span>
                                                 </div>
@@ -624,8 +942,7 @@
             return null;
         };
 
-        const root = createRoot(document.getElementById('root'));
-        root.render(<LingoMatch />);
+        createRoot(document.getElementById('root')).render(<LingoMatch />);
     </script>
 </body>
 </html>
