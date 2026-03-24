@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Phone Chat - Práctica | Periplo</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+    
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js",
+        "canvas-confetti": "https://esm.sh/canvas-confetti@1.6.0"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { font-family: 'Nunito', sans-serif; background-color: #f1f5f9; }
+        
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-4px); }
+            40%, 80% { transform: translateX(4px); }
+        }
+        .animate-shake { animation: shake 0.3s ease-in-out; }
+        
+        @keyframes popIn {
+            0% { opacity: 0; transform: scale(0.9) translateY(10px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        .animate-pop { animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-0 sm:p-4">
+
+    <div id="root" class="w-full h-full flex justify-center items-center"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useMemo } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+        import confetti from 'canvas-confetti';
+        import { Loader2, AlertTriangle, ArrowLeft } from 'lucide-react';
+
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // --- COMPONENTE: BURBUJA ACTIVA DEL USUARIO (Motor del Juego) ---
+        const ActiveChallengeBubble = ({ data, onNext }) => {
+            const { parsedAnswer, words } = useMemo(() => {
+                const parsed = data.expectedAnswer.split('').map((char, index) => ({
+                    id: index,
+                    char: char,
+                    isLetter: /[a-zA-Z]/.test(char),
+                }));
+
+                const wordsArray = [];
+                let currentWord = [];
+
+                parsed.forEach(item => {
+                    if (item.char === ' ') {
+                        if (currentWord.length > 0) wordsArray.push(currentWord);
+                        currentWord = []; 
+                    } else {
+                        currentWord.push(item);
+                    }
+                });
+                if (currentWord.length > 0) wordsArray.push(currentWord);
+
+                return { parsedAnswer: parsed, words: wordsArray };
+            }, [data.expectedAnswer]);
+
+            const [userInputs, setUserInputs] = useState(Array(parsedAnswer.length).fill(''));
+            const [gameStatus, setGameStatus] = useState('typing'); 
+            const inputRefs = useRef([]);
+
+            const findNextInputIndex = (currentIndex) => {
+                for (let i = currentIndex + 1; i < parsedAnswer.length; i++) {
+                    if (parsedAnswer[i].isLetter) return i;
+                }
+                return -1;
+            };
+
+            const findPrevInputIndex = (currentIndex) => {
+                for (let i = currentIndex - 1; i >= 0; i--) {
+                    if (parsedAnswer[i].isLetter) return i;
+                }
+                return -1;
+            };
+
+            const handleChange = (e, index) => {
+                if (gameStatus === 'correct') return;
+
+                const char = e.target.value.slice(-1); 
+                const newInputs = [...userInputs];
+                newInputs[index] = char;
+                setUserInputs(newInputs);
+
+                if (char !== '') {
+                    const nextIndex = findNextInputIndex(index);
+                    if (nextIndex !== -1 && inputRefs.current[nextIndex]) {
+                        inputRefs.current[nextIndex].focus();
+                    }
+                }
+            };
+
+            const handleKeyDown = (e, index) => {
+                if (gameStatus === 'correct') return;
+
+                if (e.key === 'Backspace') {
+                    if (!userInputs[index]) {
+                        e.preventDefault();
+                        const prevIndex = findPrevInputIndex(index);
+                        if (prevIndex !== -1 && inputRefs.current[prevIndex]) {
+                            const newInputs = [...userInputs];
+                            newInputs[prevIndex] = '';
+                            setUserInputs(newInputs);
+                            inputRefs.current[prevIndex].focus();
+                        }
+                    } 
+                }
+            };
+
+            useEffect(() => {
+                const letterIndices = parsedAnswer.filter(p => p.isLetter).map(p => p.id);
+                const isFullyFilled = letterIndices.length > 0 && letterIndices.every(i => userInputs[i] !== '');
+
+                if (isFullyFilled && gameStatus === 'typing') {
+                    const isCorrect = letterIndices.every(i => 
+                        userInputs[i].toLowerCase() === parsedAnswer[i].char.toLowerCase()
+                    );
+
+                    if (isCorrect) {
+                        setGameStatus('correct');
+                        confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 }, colors: ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b'] });
+                    } else {
+                        setGameStatus('error');
+                        setTimeout(() => setGameStatus('typing'), 800);
+                    }
+                }
+            }, [userInputs, parsedAnswer, gameStatus]);
+
+            const isCorrect = gameStatus === 'correct';
+
+            return (
+                <div className="flex flex-col items-end w-full space-y-2 animate-pop">
+                    <div className="text-sm font-semibold text-indigo-400 bg-white/80 px-4 py-2 rounded-full shadow-sm mr-2 border border-indigo-100">
+                        "{data.userHint}"
+                    </div>
+
+                    <div className={`
+                        w-[95%] sm:w-[85%] p-4 rounded-3xl rounded-tr-sm shadow-md transition-colors duration-500
+                        ${isCorrect ? 'bg-green-500' : 'bg-gradient-to-br from-indigo-500 to-purple-600'}
+                        ${gameStatus === 'error' ? 'animate-shake' : ''}
+                    `}>
+                        <div className="flex flex-wrap gap-x-3 gap-y-3 justify-start">
+                            {words.map((word, wordIdx) => (
+                                <div key={wordIdx} className="flex gap-1 items-end">
+                                    {word.map((item) => {
+                                        if (!item.isLetter) {
+                                            return (
+                                                <span key={item.id} className="text-xl sm:text-2xl font-bold text-white/80 pb-1">
+                                                    {item.char}
+                                                </span>
+                                            );
+                                        }
+                                        return (
+                                            <input
+                                                key={item.id}
+                                                ref={el => inputRefs.current[item.id] = el}
+                                                type="text"
+                                                maxLength="1"
+                                                value={userInputs[item.id]}
+                                                onChange={(e) => handleChange(e, item.id)}
+                                                onKeyDown={(e) => handleKeyDown(e, item.id)}
+                                                disabled={isCorrect}
+                                                autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck="false"
+                                                className={`
+                                                    w-7 h-9 sm:w-8 sm:h-10 text-lg sm:text-xl text-center rounded-md outline-none border-b-4 
+                                                    transition-all duration-200 uppercase font-bold
+                                                    ${isCorrect 
+                                                        ? 'bg-transparent border-transparent text-white scale-110' 
+                                                        : 'bg-white/20 border-white/40 text-white focus:bg-white focus:text-indigo-700 focus:border-indigo-400'
+                                                    }
+                                                    ${gameStatus === 'error' ? 'bg-red-400 border-red-200 text-white' : ''}
+                                                `}
+                                            />
+                                        );
+                                    })}
+                                </div>
+                            ))}
+                        </div>
+
+                        {isCorrect && (
+                            <div className="mt-6 text-right animate-pop">
+                                <button 
+                                    onClick={onNext}
+                                    className="bg-white text-green-600 font-bold py-2 px-6 rounded-full shadow hover:scale-105 transition-transform"
+                                >
+                                    Enviar / Avanzar ➔
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- APLICACIÓN PRINCIPAL ---
+        const App = () => {
+            const [chatFlow, setChatFlow] = useState([]);
+            const [gameTitle, setGameTitle] = useState("");
+            const [currentStep, setCurrentStep] = useState(0); 
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            
+            const messagesEndRef = useRef(null);
+
+            useEffect(() => {
+                const fetchGame = async () => {
+                    const params = new URLSearchParams(window.location.search);
+                    const id = params.get('id');
+                    
+                    if (!id) {
+                        setError("Falta el ID del juego en la URL.");
+                        setLoading(false);
+                        return;
+                    }
+
+                    try {
+                        const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id);
+                        const docSnap = await getDoc(docRef);
+                        
+                        if (docSnap.exists()) {
+                            const data = docSnap.data();
+                            setGameTitle(data.title || "Conversación");
+                            setChatFlow(data.content || []);
+                        } else {
+                            setError("El juego no existe o fue eliminado.");
+                        }
+                    } catch (err) {
+                        setError(err.message);
+                    } finally {
+                        setLoading(false);
+                    }
+                };
+                
+                fetchGame();
+            }, []);
+
+            const scrollToBottom = () => {
+                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            };
+
+            useEffect(() => {
+                scrollToBottom();
+            }, [currentStep, chatFlow]);
+
+            const handleNext = () => {
+                if (currentStep < chatFlow.length) {
+                    setCurrentStep(prev => prev + 1);
+                }
+            };
+
+            if (loading) {
+                return (
+                    <div className="flex flex-col items-center justify-center text-slate-500 h-full w-full">
+                        <Loader2 className="animate-spin mb-4" size={48}/>
+                        <h2 className="font-bold text-lg">Cargando Conversación...</h2>
+                    </div>
+                );
+            }
+
+            if (error) {
+                return (
+                    <div className="flex flex-col items-center justify-center text-slate-800 p-8 bg-white rounded-3xl shadow-xl">
+                        <AlertTriangle className="text-red-500 mb-4" size={48}/>
+                        <h2 className="font-bold text-xl mb-2">Oops! Algo salió mal</h2>
+                        <p className="text-slate-500 text-center">{error}</p>
+                        <button onClick={() => window.location.href='index.html'} className="mt-6 bg-slate-900 text-white px-6 py-2 rounded-xl font-bold">Volver al Inicio</button>
+                    </div>
+                );
+            }
+
+            if (chatFlow.length === 0) {
+                return (
+                    <div className="flex flex-col items-center justify-center text-slate-800 p-8 bg-white rounded-3xl shadow-xl">
+                        <MessageSquare className="text-indigo-400 mb-4" size={48}/>
+                        <h2 className="font-bold text-xl mb-2">Chat Vacío</h2>
+                        <p className="text-slate-500 text-center">Este juego no tiene mensajes configurados.</p>
+                        <button onClick={() => window.location.href='index.html'} className="mt-6 bg-slate-900 text-white px-6 py-2 rounded-xl font-bold">Volver al Inicio</button>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="w-full h-[100dvh] sm:h-[85vh] max-w-md bg-slate-50 sm:rounded-[2.5rem] shadow-2xl relative overflow-hidden flex flex-col border-0 sm:border-[8px] sm:border-slate-800">
+                    
+                    {/* CABECERA DEL CHAT */}
+                    <div className="bg-white px-6 py-4 flex items-center justify-between shadow-sm z-10">
+                        <div className="flex items-center">
+                            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-xl mr-3 relative">
+                                🧑🏼‍🏫
+                                <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white"></div>
+                            </div>
+                            <div>
+                                <h1 className="font-bold text-gray-800 leading-tight">Teacher Alex</h1>
+                                <p className="text-xs text-slate-400 font-semibold">{gameTitle}</p>
+                            </div>
+                        </div>
+                        <button onClick={() => window.location.href='index.html'} className="text-slate-400 hover:text-slate-600 bg-slate-100 p-2 rounded-full">
+                            <ArrowLeft size={18} />
+                        </button>
+                    </div>
+
+                    {/* ZONA DE MENSAJES */}
+                    <div className="flex-1 overflow-y-auto p-4 space-y-6 no-scrollbar pb-24">
+                        
+                        {chatFlow.slice(0, currentStep + 1).map((data, index) => {
+                            const isCurrentActive = index === currentStep;
+                            const isCompleted = index < currentStep;
+
+                            return (
+                                <div key={data.id || index} className="space-y-6 animate-pop">
+                                    
+                                    {/* Burbuja del Bot (Profesor) */}
+                                    <div className="flex w-full">
+                                        <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-sm mr-2 mt-auto shrink-0">
+                                            🧑🏼‍🏫
+                                        </div>
+                                        <div className="bg-white text-gray-800 px-5 py-3 rounded-2xl rounded-bl-sm shadow-sm border border-gray-100 max-w-[80%] text-lg">
+                                            {data.botMessage}
+                                        </div>
+                                    </div>
+
+                                    {/* Zona del Usuario (Alumno) */}
+                                    {isCurrentActive ? (
+                                        <ActiveChallengeBubble data={data} onNext={handleNext} />
+                                    ) : (
+                                        <div className="flex flex-col items-end w-full space-y-1">
+                                            <span className="text-xs text-gray-400">Enviado</span>
+                                            <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-5 py-3 shadow-sm max-w-[85%] text-lg font-medium">
+                                                {data.expectedAnswer}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+
+                        {/* Mensaje Final si terminó todo */}
+                        {currentStep === chatFlow.length && (
+                            <div className="text-center py-6 animate-pop">
+                                <div className="inline-block bg-yellow-100 text-yellow-800 px-6 py-3 rounded-full font-bold shadow-sm">
+                                    🎉 ¡Conversación Completada! 🎉
+                                </div>
+                                <div className="mt-6">
+                                    <button onClick={() => window.location.href='index.html'} className="text-indigo-600 font-bold underline">
+                                        Volver al menú
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <div ref={messagesEndRef} />
+                    </div>
+
+                    {/* Área decorativa de Input inferior */}
+                    <div className="bg-white p-4 border-t border-gray-100 flex items-center text-gray-400">
+                        <div className="flex-1 bg-gray-100 rounded-full h-10 px-4 flex items-center">
+                            <span className="text-sm">Escribe un mensaje...</span>
+                        </div>
+                        <div className="ml-3 w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500">
+                            🎤
+                        </div>
+                    </div>
+
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
