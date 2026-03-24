@@ -28,9 +28,6 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow: hidden; user-select: none; -webkit-user-select: none; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
-        .cell-input { caret-color: transparent; }
-        .cell-input::selection { background: transparent; }
-        .cell-input:focus { outline: none; }
 
         @keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-4px)} 40%,80%{transform:translateX(4px)} }
         .animate-shake { animation: shake 0.4s ease-in-out; }
@@ -45,16 +42,22 @@
         .glow-beat-1 { animation: heartbeat-glow 4s ease-in-out infinite; }
         .glow-beat-2 { animation: heartbeat-glow 4s ease-in-out infinite 2s; }
 
-        /* Hidden input for mobile keyboard */
         .hidden-input {
             position: fixed;
             left: -9999px;
-            top: -9999px;
+            top: 50%;
             width: 1px;
             height: 1px;
             opacity: 0;
-            font-size: 16px; /* Prevents iOS zoom */
+            font-size: 16px;
+            pointer-events: none;
         }
+
+        @keyframes pop-in {
+            from { opacity: 0; transform: translate(-50%, calc(-100% - 20px)) scale(0.9); }
+            to { opacity: 1; transform: translate(-50%, calc(-100% - 20px)) scale(1); }
+        }
+        .clue-banner-enter { animation: pop-in 0.25s ease-out forwards; }
     </style>
 </head>
 <body class="text-zinc-100 h-[100dvh] flex flex-col">
@@ -65,7 +68,7 @@
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Check, RotateCcw, Award, Home, ArrowRight, ArrowDown, Edit2, X, Share2, ZoomIn, ZoomOut } from 'lucide-react';
+        import { Check, Award, Home, ArrowRight, ArrowDown, X, Share2, ZoomIn, ZoomOut, Crosshair } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -79,12 +82,10 @@
             const sortedWords = [...words].sort((a, b) => b.wordEn.length - a.wordEn.length);
 
             const isValid = (wordStr, startX, startY, isHoriz, gridState) => {
-                let hasIntersection = false;
                 for (let i = 0; i < wordStr.length; i++) {
                     let x = startX + (isHoriz ? i : 0); let y = startY + (isHoriz ? 0 : i);
                     let cell = gridState[`${x},${y}`];
                     if (cell && cell !== wordStr[i]) return false;
-                    if (cell === wordStr[i]) hasIntersection = true;
                     const top = gridState[`${x},${y - 1}`]; const bottom = gridState[`${x},${y + 1}`];
                     const left = gridState[`${x - 1},${y}`]; const right = gridState[`${x + 1},${y}`];
                     if (isHoriz) {
@@ -103,10 +104,8 @@
             const tryPlace = (wordIndex, currentPlacements, currentGrid) => {
                 if (wordIndex === sortedWords.length) { bestLayout = [...currentPlacements]; maxPlaced = currentPlacements.length; return true; }
                 if (currentPlacements.length > maxPlaced) { maxPlaced = currentPlacements.length; bestLayout = [...currentPlacements]; }
-
                 const word = sortedWords[wordIndex];
                 const wordStr = word.wordEn.toUpperCase().replace(/\s+/g, '');
-
                 if (currentPlacements.length === 0) {
                     const newGrid = { ...currentGrid };
                     for (let i = 0; i < wordStr.length; i++) newGrid[`${i},0`] = wordStr[i];
@@ -147,7 +146,6 @@
 
             let numberMap = {}; let currentNumber = 1;
             const sortedPlacements = [...bestLayout].sort((a, b) => a.y === b.y ? a.x - b.x : a.y - b.y);
-
             sortedPlacements.forEach(p => {
                 p.normX = p.x - minX; p.normY = p.y - minY;
                 const key = `${p.normX},${p.normY}`;
@@ -157,7 +155,6 @@
 
             const width = maxX - minX + 1; const height = maxY - minY + 1;
             const grid = Array(height).fill(null).map(() => Array(width).fill(null));
-
             sortedPlacements.forEach(p => {
                 for (let i = 0; i < p.wordStr.length; i++) {
                     const x = p.normX + (p.isHoriz ? i : 0); const y = p.normY + (p.isHoriz ? 0 : i);
@@ -176,7 +173,6 @@
                 p.emojis = p.emojis || "🎯";
                 if (p.isHoriz) clues.across.push(p); else clues.down.push(p);
             });
-
             return { grid, clues, width, height, totalWords: bestLayout.length };
         };
 
@@ -204,26 +200,42 @@
             const [showAcrossPop, setShowAcrossPop] = useState(false);
             const [showDownPop, setShowDownPop] = useState(false);
 
-            // Hidden input ref for mobile keyboard
             const hiddenInputRef = useRef(null);
-            const gridContainerRef = useRef(null);
+            const boardRef = useRef(null);
 
             const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
             const cellSize = isMobile ? 42 : 48;
             const gap = 3;
-            const gridPadding = 32; // Extra padding for number badges
+            const gridPadding = 30;
 
             const boardW = layout ? (layout.width * (cellSize + gap) - gap + (gridPadding * 2)) : 0;
             const boardH = layout ? (layout.height * (cellSize + gap) - gap + (gridPadding * 2)) : 0;
 
-            // ===== PAN & ZOOM STATE =====
-            const [camera, setCamera] = useState({ x: 0, y: 0, scale: 1 });
+            /*
+             * CAMERA SYSTEM
+             * The board div uses: transform: translate(cam.x, cam.y) scale(cam.s)
+             * with transformOrigin: '0 0'
+             *
+             * To place board-local point (bx, by) at screen point (sx, sy):
+             *   cam.x = sx - bx * cam.s
+             *   cam.y = sy - by * cam.s
+             */
+            const [cam, setCam] = useState({ x: 0, y: 0, s: 1 });
             const [baseScale, setBaseScale] = useState(1);
-            const touchRef = useRef({ dragging: false, startX: 0, startY: 0, startCamX: 0, startCamY: 0, dist: 0, startScale: 1, moved: false, identifier: null });
-            const cameraRef = useRef(camera);
-            cameraRef.current = camera;
+            const [isAnimating, setIsAnimating] = useState(false);
+            const camRef = useRef(cam);
+            camRef.current = cam;
+            const animTimerRef = useRef(null);
 
-            // All placements flattened
+            const touchRef = useRef({
+                active: false, moved: false,
+                startX: 0, startY: 0,
+                startCamX: 0, startCamY: 0,
+                pinching: false, pinchDist: 0, pinchScale: 1,
+                pinchMidX: 0, pinchMidY: 0,
+                pinchCamX: 0, pinchCamY: 0,
+            });
+
             const allPlacements = useMemo(() => {
                 if (!layout) return [];
                 return layout.clues.across.concat(layout.clues.down);
@@ -234,12 +246,54 @@
             }, [allPlacements, activePlacementId]);
 
             useEffect(() => {
-                const handleResize = () => setIsMobile(window.innerWidth < 768);
-                window.addEventListener('resize', handleResize);
-                return () => window.removeEventListener('resize', handleResize);
+                const fn = () => setIsMobile(window.innerWidth < 768);
+                window.addEventListener('resize', fn);
+                return () => window.removeEventListener('resize', fn);
             }, []);
 
-            // ===== FIREBASE LOAD =====
+            // Helper: viewport center below header
+            const getViewCenter = useCallback(() => {
+                const vw = window.innerWidth;
+                const vh = window.innerHeight;
+                const hh = isMobile ? 56 : 64;
+                return { x: vw / 2, y: hh + (vh - hh) / 2 };
+            }, [isMobile]);
+
+            // Helper: camera to center board
+            const getOverviewCam = useCallback(() => {
+                const vc = getViewCenter();
+                const s = baseScale;
+                return { x: vc.x - (boardW / 2) * s, y: vc.y - (boardH / 2) * s, s };
+            }, [baseScale, boardW, boardH, getViewCenter]);
+
+            // Helper: camera to focus on a placement
+            const getFocusCam = useCallback((placement) => {
+                if (!placement) return camRef.current;
+                const wcx = placement.normX * (cellSize + gap) + gridPadding +
+                    (placement.isHoriz ? (placement.wordStr.length * (cellSize + gap) - gap) / 2 : cellSize / 2);
+                const wcy = placement.normY * (cellSize + gap) + gridPadding +
+                    (!placement.isHoriz ? (placement.wordStr.length * (cellSize + gap) - gap) / 2 : cellSize / 2);
+                const fs = isMobile ? 1.15 : 1.5;
+                const vc = getViewCenter();
+                const kbOff = isMobile ? 50 : 0;
+                return { x: vc.x - wcx * fs, y: (vc.y - kbOff) - wcy * fs, s: fs };
+            }, [cellSize, gap, gridPadding, isMobile, getViewCenter]);
+
+            // Animate camera smoothly
+            const animateCamTo = useCallback((newCam) => {
+                if (animTimerRef.current) clearTimeout(animTimerRef.current);
+                setIsAnimating(true);
+                setCam(newCam);
+                animTimerRef.current = setTimeout(() => setIsAnimating(false), 480);
+            }, []);
+
+            // Snap camera (no anim) for drag/pinch
+            const snapCam = useCallback((newCam) => {
+                setIsAnimating(false);
+                setCam(newCam);
+            }, []);
+
+            // ====== FIREBASE ======
             useEffect(() => {
                 signInAnonymously(auth);
                 const unsub = onAuthStateChanged(auth, setUser);
@@ -255,8 +309,7 @@
                             })).filter(w => w.wordEn);
                             setFullWordList(cleanWords);
                             const shuffled = [...cleanWords].sort(() => 0.5 - Math.random());
-                            const generated = generateCrossword(shuffled.slice(0, 15));
-                            setLayout(generated);
+                            setLayout(generateCrossword(shuffled.slice(0, 15)));
                         } else { alert("Juego no encontrado"); }
                         setLoading(false);
                     });
@@ -264,385 +317,263 @@
                 return () => unsub();
             }, [quizId]);
 
-            // ===== COMPUTE BASE SCALE ON LAYOUT / RESIZE =====
+            // ====== INITIAL SCALE + CAMERA ======
             useEffect(() => {
-                if (!layout || !gameStarted) return;
+                if (!layout || !gameStarted || !boardW || !boardH) return;
                 const compute = () => {
+                    const m = window.innerWidth < 768;
                     const vw = window.innerWidth;
                     const vh = window.innerHeight;
-                    const headerH = isMobile ? 80 : 100;
-                    const availW = vw - 40;
-                    const availH = vh - headerH - 40;
-                    const sx = availW / boardW;
-                    const sy = availH / boardH;
-                    const s = Math.min(sx, sy, 1.3);
+                    const hh = m ? 56 : 64;
+                    const aw = vw - (m ? 20 : 60);
+                    const ah = vh - hh - (m ? 20 : 60);
+                    const s = Math.min(aw / boardW, ah / boardH, 1.3);
                     setBaseScale(s);
-                    setCamera({ x: 0, y: 0, scale: s });
+                    const vcx = vw / 2, vcy = hh + (vh - hh) / 2;
+                    setCam({ x: vcx - (boardW / 2) * s, y: vcy - (boardH / 2) * s, s });
                 };
                 compute();
                 window.addEventListener('resize', compute);
                 return () => window.removeEventListener('resize', compute);
-            }, [layout, gameStarted, boardW, boardH, isMobile]);
+            }, [layout, gameStarted, boardW, boardH]);
 
-            // ===== FOCUS CAMERA ON ACTIVE WORD =====
-            const focusCameraOnPlacement = useCallback((placement) => {
-                if (!placement) return;
-                const wordCenterX = placement.normX * (cellSize + gap) + (placement.isHoriz ? (placement.wordStr.length * (cellSize + gap) - gap) / 2 : 0) + gridPadding;
-                const wordCenterY = placement.normY * (cellSize + gap) + (!placement.isHoriz ? (placement.wordStr.length * (cellSize + gap) - gap) / 2 : 0) + gridPadding;
-
-                const focusScale = isMobile ? 1.3 : 1.6;
-                const vw = window.innerWidth;
-                const vh = window.innerHeight;
-                const headerH = isMobile ? 80 : 100;
-                const viewCenterX = vw / 2;
-                const viewCenterY = headerH + (vh - headerH) / 2;
-                // On mobile, shift up to account for keyboard
-                const keyboardOffset = isMobile ? 80 : 0;
-
-                const tx = viewCenterX - wordCenterX * focusScale;
-                const ty = viewCenterY - wordCenterY * focusScale - keyboardOffset;
-
-                setCamera({ x: tx, y: ty, scale: focusScale });
-            }, [cellSize, gap, gridPadding, isMobile]);
-
+            // ====== GO OVERVIEW ======
             const goOverview = useCallback(() => {
                 setViewMode('overview');
                 setActivePlacementId(null);
                 setSelectedCell(null);
                 setShowAcrossPop(false);
                 setShowDownPop(false);
-                const vw = window.innerWidth;
-                const vh = window.innerHeight;
-                const headerH = isMobile ? 80 : 100;
-                const cx = (vw - boardW * baseScale) / 2;
-                const cy = headerH + ((vh - headerH) - boardH * baseScale) / 2;
-                setCamera({ x: cx, y: cy, scale: baseScale });
-            }, [baseScale, boardW, boardH, isMobile]);
+                animateCamTo(getOverviewCam());
+            }, [animateCamTo, getOverviewCam]);
 
-            // When viewMode changes to overview, reset camera
-            useEffect(() => {
-                if (viewMode === 'overview' && layout && gameStarted) {
-                    goOverview();
-                }
-            }, [viewMode, layout, gameStarted, goOverview]);
+            // ====== FOCUS WORD (animated) ======
+            const focusOnPlacement = useCallback((placement) => {
+                animateCamTo(getFocusCam(placement));
+            }, [animateCamTo, getFocusCam]);
 
-            // When active placement changes in focused mode, move camera
-            useEffect(() => {
-                if (viewMode === 'focused' && activePlacementObj) {
-                    focusCameraOnPlacement(activePlacementObj);
-                }
-            }, [viewMode, activePlacementObj, focusCameraOnPlacement]);
+            // ====== TOUCH ======
+            const dist2 = (a, b) => Math.sqrt((a.clientX - b.clientX) ** 2 + (a.clientY - b.clientY) ** 2);
+            const mid2 = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
 
-            // ===== TOUCH HANDLERS FOR PAN/ZOOM =====
-            const getTouchDist = (t1, t2) => Math.sqrt((t1.clientX - t2.clientX) ** 2 + (t1.clientY - t2.clientY) ** 2);
-
-            const handleTouchStart = useCallback((e) => {
+            const onTouchStart = useCallback((e) => {
+                const tr = touchRef.current;
                 if (e.touches.length === 2) {
-                    // Pinch start
-                    const d = getTouchDist(e.touches[0], e.touches[1]);
-                    touchRef.current = { ...touchRef.current, dist: d, startScale: cameraRef.current.scale, dragging: false };
+                    const d = dist2(e.touches[0], e.touches[1]);
+                    const m = mid2(e.touches[0], e.touches[1]);
+                    tr.pinching = true; tr.active = false; tr.moved = true;
+                    tr.pinchDist = d; tr.pinchScale = camRef.current.s;
+                    tr.pinchMidX = m.x; tr.pinchMidY = m.y;
+                    tr.pinchCamX = camRef.current.x; tr.pinchCamY = camRef.current.y;
                     return;
                 }
                 if (e.touches.length === 1) {
                     const t = e.touches[0];
-                    touchRef.current = {
-                        dragging: true, startX: t.clientX, startY: t.clientY,
-                        startCamX: cameraRef.current.x, startCamY: cameraRef.current.y,
-                        dist: 0, startScale: cameraRef.current.scale, moved: false,
-                        identifier: t.identifier
-                    };
+                    tr.active = true; tr.moved = false; tr.pinching = false;
+                    tr.startX = t.clientX; tr.startY = t.clientY;
+                    tr.startCamX = camRef.current.x; tr.startCamY = camRef.current.y;
                 }
             }, []);
 
-            const handleTouchMove = useCallback((e) => {
-                if (e.touches.length === 2) {
+            const onTouchMove = useCallback((e) => {
+                const tr = touchRef.current;
+                if (tr.pinching && e.touches.length === 2) {
                     e.preventDefault();
-                    const d = getTouchDist(e.touches[0], e.touches[1]);
-                    const ratio = d / touchRef.current.dist;
-                    const newScale = Math.min(Math.max(touchRef.current.startScale * ratio, 0.4), 3);
-                    setCamera(prev => ({ ...prev, scale: newScale }));
-                    touchRef.current.moved = true;
+                    const d = dist2(e.touches[0], e.touches[1]);
+                    const m = mid2(e.touches[0], e.touches[1]);
+                    const ratio = d / tr.pinchDist;
+                    const newS = Math.min(Math.max(tr.pinchScale * ratio, 0.25), 3.5);
+                    // Zoom towards midpoint
+                    const oldS = tr.pinchScale;
+                    const dx = m.x - tr.pinchMidX;
+                    const dy = m.y - tr.pinchMidY;
+                    const nx = tr.pinchCamX + dx - (m.x - tr.pinchCamX) * (newS / oldS - 1);
+                    const ny = tr.pinchCamY + dy - (m.y - tr.pinchCamY) * (newS / oldS - 1);
+                    snapCam({ x: nx, y: ny, s: newS });
                     return;
                 }
-                if (touchRef.current.dragging && e.touches.length === 1) {
+                if (tr.active && e.touches.length === 1) {
                     const t = e.touches[0];
-                    const dx = t.clientX - touchRef.current.startX;
-                    const dy = t.clientY - touchRef.current.startY;
-                    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
-                        touchRef.current.moved = true;
-                    }
-                    if (touchRef.current.moved) {
+                    const dx = t.clientX - tr.startX;
+                    const dy = t.clientY - tr.startY;
+                    if (!tr.moved && (Math.abs(dx) > 6 || Math.abs(dy) > 6)) tr.moved = true;
+                    if (tr.moved) {
                         e.preventDefault();
-                        setCamera(prev => ({
-                            ...prev,
-                            x: touchRef.current.startCamX + dx,
-                            y: touchRef.current.startCamY + dy
-                        }));
+                        snapCam({ ...camRef.current, x: tr.startCamX + dx, y: tr.startCamY + dy });
                     }
                 }
+            }, [snapCam]);
+
+            const onTouchEnd = useCallback(() => {
+                touchRef.current.active = false;
+                touchRef.current.pinching = false;
             }, []);
 
-            const handleTouchEnd = useCallback((e) => {
-                touchRef.current.dragging = false;
-            }, []);
+            // ====== CELL TAP ======
+            const handleCellTap = useCallback((x, y) => {
+                if (globalWin || touchRef.current.moved) return;
+                const cell = layout.grid[y]?.[x];
+                if (!cell) return;
+                const unsolved = cell.placements.filter(p => !solvedWords.includes(p.id));
+                if (unsolved.length === 0) return;
 
-            // ===== HIDDEN INPUT HANDLER (mobile keyboard) =====
+                let newActive;
+                if (selectedCell?.x === x && selectedCell?.y === y && activePlacementId) {
+                    const other = unsolved.find(p => p.id !== activePlacementId);
+                    newActive = other || unsolved[0];
+                } else {
+                    newActive = unsolved[0];
+                }
+
+                setActivePlacementId(newActive.id);
+                setDirection(newActive.isHoriz ? 'across' : 'down');
+                setShowAcrossPop(false); setShowDownPop(false);
+                setSelectedCell({ x: newActive.normX, y: newActive.normY });
+                setViewMode('focused');
+                focusOnPlacement(newActive);
+                setTimeout(() => { if (hiddenInputRef.current) { hiddenInputRef.current.value = ''; hiddenInputRef.current.focus(); } }, 120);
+            }, [globalWin, layout, solvedWords, selectedCell, activePlacementId, focusOnPlacement]);
+
+            // ====== CLUE TAP ======
+            const handleClueClick = useCallback((p) => {
+                if (solvedWords.includes(p.id)) return;
+                setActivePlacementId(p.id);
+                setDirection(p.isHoriz ? 'across' : 'down');
+                setViewMode('focused');
+                setShowAcrossPop(false); setShowDownPop(false);
+                setSelectedCell({ x: p.normX, y: p.normY });
+                focusOnPlacement(p);
+                setTimeout(() => { if (hiddenInputRef.current) { hiddenInputRef.current.value = ''; hiddenInputRef.current.focus(); } }, 120);
+            }, [solvedWords, focusOnPlacement]);
+
+            // ====== EMPTY TAP ======
+            const handleEmptyTap = useCallback(() => {
+                if (touchRef.current.moved) return;
+                if (viewMode === 'focused') goOverview();
+                setShowAcrossPop(false); setShowDownPop(false);
+            }, [viewMode, goOverview]);
+
+            // ====== ADVANCE FOCUS ======
+            const advanceFocusFrom = useCallback((x, y, ap, curInputs) => {
+                const d = ap.isHoriz ? (x - ap.normX) : (y - ap.normY);
+                if (d + 1 < ap.wordStr.length) {
+                    const nx = ap.normX + (ap.isHoriz ? d + 1 : 0);
+                    const ny = ap.normY + (ap.isHoriz ? 0 : d + 1);
+                    setSelectedCell({ x: nx, y: ny });
+                    setTimeout(() => hiddenInputRef.current?.focus(), 20);
+                } else {
+                    setTimeout(() => checkWord(ap, curInputs || inputs), 60);
+                }
+            }, [inputs]);
+
+            // ====== HIDDEN INPUT (mobile) ======
             const handleHiddenInput = useCallback((e) => {
                 if (!selectedCell || !activePlacementId || globalWin || !layout) return;
                 const val = e.target.value.slice(-1).toUpperCase();
-                e.target.value = ''; // Always clear
-
+                e.target.value = '';
                 if (!/^[A-ZÑ]$/.test(val)) return;
-
                 const { x, y } = selectedCell;
                 const cell = layout.grid[y]?.[x];
                 if (!cell) return;
+                const isGreen = cell.placements.some(p => solvedWords.includes(p.id));
+                const ap = allPlacements.find(p => p.id === activePlacementId);
+                if (!ap) return;
 
-                const isPartOfSolved = cell.placements.some(p => solvedWords.includes(p.id));
-                const activePlacement = allPlacements.find(p => p.id === activePlacementId);
-                if (!activePlacement) return;
-
-                // If cell is solved (green), user must type the correct letter to advance
-                if (isPartOfSolved) {
-                    if (val === cell.answer) {
-                        advanceFocusFrom(x, y, activePlacement);
-                    } else {
-                        setWordFeedback('error');
-                        setTimeout(() => setWordFeedback(null), 600);
-                    }
+                if (isGreen) {
+                    if (val === cell.answer) advanceFocusFrom(x, y, ap);
+                    else { setWordFeedback('error'); setTimeout(() => setWordFeedback(null), 500); }
                     return;
                 }
+                const ni = { ...inputs, [`${x},${y}`]: val };
+                setInputs(ni);
+                advanceFocusFrom(x, y, ap, ni);
+            }, [selectedCell, activePlacementId, globalWin, layout, inputs, solvedWords, allPlacements, advanceFocusFrom]);
 
-                // Normal cell: write + advance
-                const newInputs = { ...inputs, [`${x},${y}`]: val };
-                setInputs(newInputs);
-
-                advanceFocusFrom(x, y, activePlacement, newInputs);
-            }, [selectedCell, activePlacementId, globalWin, layout, inputs, solvedWords, allPlacements]);
-
-            const advanceFocusFrom = useCallback((x, y, activePlacement, currentInputs) => {
-                const dist = activePlacement.isHoriz ? (x - activePlacement.normX) : (y - activePlacement.normY);
-                const nextDist = dist + 1;
-
-                if (nextDist < activePlacement.wordStr.length) {
-                    // Find next unsolved cell to focus
-                    let targetDist = nextDist;
-                    while (targetDist < activePlacement.wordStr.length) {
-                        const nx = activePlacement.normX + (activePlacement.isHoriz ? targetDist : 0);
-                        const ny = activePlacement.normY + (activePlacement.isHoriz ? 0 : targetDist);
-                        const nextCell = layout.grid[ny]?.[nx];
-                        // If cell is green AND already has correct letter in inputs, skip
-                        const isSolvedAndFilled = nextCell && nextCell.placements.some(p => solvedWords.includes(p.id));
-                        // Don't skip — user needs to type through green cells too
-                        break;
-                    }
-
-                    const nx = activePlacement.normX + (activePlacement.isHoriz ? targetDist : 0);
-                    const ny = activePlacement.normY + (activePlacement.isHoriz ? 0 : targetDist);
-                    setSelectedCell({ x: nx, y: ny });
-                    // Keep hidden input focused
-                    setTimeout(() => hiddenInputRef.current?.focus(), 20);
-                } else {
-                    // Reached end — auto-check
-                    const inp = currentInputs || inputs;
-                    setTimeout(() => checkWord(activePlacement, inp), 50);
-                }
-            }, [layout, solvedWords, inputs]);
-
-            // ===== PHYSICAL KEYBOARD HANDLER =====
+            // ====== KEYBOARD ======
             const handleKeyDown = useCallback((e) => {
                 if (!selectedCell || !activePlacementId || globalWin || !layout) return;
                 const { x, y } = selectedCell;
-                const activePlacement = allPlacements.find(p => p.id === activePlacementId);
-                if (!activePlacement) return;
-
+                const ap = allPlacements.find(p => p.id === activePlacementId);
+                if (!ap) return;
                 const cell = layout.grid[y]?.[x];
                 if (!cell) return;
+                const d = ap.isHoriz ? (x - ap.normX) : (y - ap.normY);
+                const isGreen = cell.placements.some(p => solvedWords.includes(p.id));
 
-                const dist = activePlacement.isHoriz ? (x - activePlacement.normX) : (y - activePlacement.normY);
-                const isPartOfSolved = cell.placements.some(p => solvedWords.includes(p.id));
-
-                if (e.key === 'Escape') {
-                    e.preventDefault();
-                    goOverview();
-                    return;
-                }
-
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    checkWord(activePlacement, inputs);
-                    return;
-                }
-
+                if (e.key === 'Escape') { e.preventDefault(); goOverview(); return; }
+                if (e.key === 'Enter') { e.preventDefault(); checkWord(ap, inputs); return; }
                 if (e.key === 'Backspace') {
                     e.preventDefault();
-                    if (!isPartOfSolved) {
-                        setInputs(prev => ({ ...prev, [`${x},${y}`]: '' }));
-                    }
-                    if (dist > 0) {
-                        const prevX = activePlacement.normX + (activePlacement.isHoriz ? (dist - 1) : 0);
-                        const prevY = activePlacement.normY + (activePlacement.isHoriz ? 0 : (dist - 1));
-                        setSelectedCell({ x: prevX, y: prevY });
+                    if (!isGreen) setInputs(prev => ({ ...prev, [`${x},${y}`]: '' }));
+                    if (d > 0) {
+                        setSelectedCell({ x: ap.normX + (ap.isHoriz ? d-1 : 0), y: ap.normY + (ap.isHoriz ? 0 : d-1) });
                     }
                     return;
                 }
-
                 if (/^[a-zA-ZñÑ]$/.test(e.key)) {
                     e.preventDefault();
-                    const val = e.key.toUpperCase();
-
-                    if (isPartOfSolved) {
-                        if (val === cell.answer) {
-                            advanceFocusFrom(x, y, activePlacement);
-                        } else {
-                            setWordFeedback('error');
-                            setTimeout(() => setWordFeedback(null), 600);
-                        }
+                    const v = e.key.toUpperCase();
+                    if (isGreen) {
+                        if (v === cell.answer) advanceFocusFrom(x, y, ap);
+                        else { setWordFeedback('error'); setTimeout(() => setWordFeedback(null), 500); }
                         return;
                     }
-
-                    const newInputs = { ...inputs, [`${x},${y}`]: val };
-                    setInputs(newInputs);
-                    advanceFocusFrom(x, y, activePlacement, newInputs);
+                    const ni = { ...inputs, [`${x},${y}`]: v };
+                    setInputs(ni);
+                    advanceFocusFrom(x, y, ap, ni);
                     return;
                 }
-
-                // Arrow keys
-                if (['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+                if (['ArrowRight','ArrowLeft','ArrowUp','ArrowDown'].includes(e.key)) {
                     e.preventDefault();
                     let nx = x, ny = y;
                     if (e.key === 'ArrowRight') nx++;
                     if (e.key === 'ArrowLeft') nx--;
                     if (e.key === 'ArrowDown') ny++;
                     if (e.key === 'ArrowUp') ny--;
-                    if (nx >= 0 && ny >= 0 && ny < layout.height && nx < layout.width && layout.grid[ny]?.[nx]) {
-                        setSelectedCell({ x: nx, y: ny });
-                    }
+                    if (nx >= 0 && ny >= 0 && ny < layout.height && nx < layout.width && layout.grid[ny]?.[nx]) setSelectedCell({ x: nx, y: ny });
                 }
-            }, [selectedCell, activePlacementId, globalWin, layout, inputs, solvedWords, allPlacements, goOverview]);
+            }, [selectedCell, activePlacementId, globalWin, layout, inputs, solvedWords, allPlacements, goOverview, advanceFocusFrom]);
 
-            // Attach keyboard listener
             useEffect(() => {
                 window.addEventListener('keydown', handleKeyDown);
                 return () => window.removeEventListener('keydown', handleKeyDown);
             }, [handleKeyDown]);
 
-            // ===== CHECK WORD =====
-            const checkWord = useCallback((activePlacement, currentInputs) => {
-                let isCorrect = true; let allFilled = true;
-
-                for (let i = 0; i < activePlacement.wordStr.length; i++) {
-                    const cx = activePlacement.normX + (activePlacement.isHoriz ? i : 0);
-                    const cy = activePlacement.normY + (activePlacement.isHoriz ? 0 : i);
+            // ====== CHECK WORD ======
+            const checkWord = useCallback((ap, ci) => {
+                let ok = true, full = true;
+                for (let i = 0; i < ap.wordStr.length; i++) {
+                    const cx = ap.normX + (ap.isHoriz ? i : 0);
+                    const cy = ap.normY + (ap.isHoriz ? 0 : i);
                     const cell = layout.grid[cy][cx];
-                    const isGreen = cell.placements.some(p => solvedWords.includes(p.id));
-                    const rawInput = currentInputs[`${cx},${cy}`];
-
-                    let val = '';
-                    if (rawInput !== undefined && rawInput !== '') {
-                        val = rawInput;
-                    } else if (isGreen) {
-                        val = cell.answer;
-                    }
-
-                    if (val === '') allFilled = false;
-                    if (val !== activePlacement.wordStr[i]) isCorrect = false;
+                    const green = cell.placements.some(p => solvedWords.includes(p.id));
+                    const raw = ci[`${cx},${cy}`];
+                    let v = '';
+                    if (raw) v = raw; else if (green) v = cell.answer;
+                    if (!v) full = false;
+                    if (v !== ap.wordStr[i]) ok = false;
                 }
-
-                if (!allFilled) return;
-
-                if (isCorrect && !solvedWords.includes(activePlacement.id)) {
-                    const newSolved = [...solvedWords, activePlacement.id];
-                    setSolvedWords(newSolved);
+                if (!full) return;
+                if (ok && !solvedWords.includes(ap.id)) {
+                    const ns = [...solvedWords, ap.id];
+                    setSolvedWords(ns);
                     setWordFeedback('success');
                     setTimeout(() => {
                         setWordFeedback(null);
-                        if (newSolved.length === layout.totalWords) {
-                            setGlobalWin(true);
-                        } else {
-                            goOverview();
-                        }
+                        if (ns.length === layout.totalWords) setGlobalWin(true);
+                        else goOverview();
                     }, 1000);
-                } else if (!isCorrect) {
+                } else if (!ok) {
                     setWordFeedback('error');
-                    setTimeout(() => setWordFeedback(null), 600);
+                    setTimeout(() => setWordFeedback(null), 500);
                 }
             }, [layout, solvedWords, goOverview]);
 
-            // ===== CELL TAP HANDLER =====
-            const handleCellTap = useCallback((x, y) => {
-                if (globalWin) return;
-                if (touchRef.current.moved) return; // Was a drag, not a tap
-
-                const cell = layout.grid[y]?.[x];
-                if (!cell) return;
-
-                const unsolvedPlacements = cell.placements.filter(p => !solvedWords.includes(p.id));
-                if (unsolvedPlacements.length === 0) return;
-
-                // If tapping the same cell, toggle direction
-                let newActive;
-                if (selectedCell?.x === x && selectedCell?.y === y && activePlacementId) {
-                    const currentP = allPlacements.find(p => p.id === activePlacementId);
-                    const otherP = unsolvedPlacements.find(p => p.id !== activePlacementId);
-                    newActive = otherP || currentP || unsolvedPlacements[0];
-                } else {
-                    newActive = unsolvedPlacements[0];
-                }
-
-                setActivePlacementId(newActive.id);
-                setDirection(newActive.isHoriz ? 'across' : 'down');
-                setShowAcrossPop(false);
-                setShowDownPop(false);
-
-                // Focus on the FIRST cell of the word
-                const firstX = newActive.normX;
-                const firstY = newActive.normY;
-                setSelectedCell({ x: firstX, y: firstY });
-                setViewMode('focused');
-
-                // Focus hidden input for mobile keyboard
-                setTimeout(() => {
-                    if (hiddenInputRef.current) {
-                        hiddenInputRef.current.value = '';
-                        hiddenInputRef.current.focus();
-                    }
-                }, 100);
-            }, [globalWin, layout, solvedWords, selectedCell, activePlacementId, allPlacements]);
-
-            // ===== CLUE TAP =====
-            const handleClueClick = useCallback((placement) => {
-                if (solvedWords.includes(placement.id)) return;
-                setActivePlacementId(placement.id);
-                setDirection(placement.isHoriz ? 'across' : 'down');
-                setViewMode('focused');
-                setShowAcrossPop(false);
-                setShowDownPop(false);
-                setSelectedCell({ x: placement.normX, y: placement.normY });
-                setTimeout(() => {
-                    if (hiddenInputRef.current) {
-                        hiddenInputRef.current.value = '';
-                        hiddenInputRef.current.focus();
-                    }
-                }, 100);
-            }, [solvedWords]);
-
-            // ===== EMPTY SPACE TAP =====
-            const handleEmptyTap = useCallback(() => {
-                if (touchRef.current.moved) return;
-                if (viewMode === 'focused') goOverview();
-            }, [viewMode, goOverview]);
-
-            // ===== COPY LINK =====
             const copyLink = () => {
-                const studentUrl = `${window.location.origin}${window.location.pathname}?id=${quizId}&student=true`;
-                navigator.clipboard.writeText(studentUrl).then(() => {
-                    setToastMsg('¡Link copiado!');
-                    setTimeout(() => setToastMsg(null), 3000);
-                });
+                const u = `${window.location.origin}${window.location.pathname}?id=${quizId}&student=true`;
+                navigator.clipboard.writeText(u).then(() => { setToastMsg('¡Link copiado!'); setTimeout(() => setToastMsg(null), 3000); });
             };
 
-            // Scroll clue into view
             useEffect(() => {
                 if (activePlacementId && viewMode === 'overview') {
                     const el = document.getElementById(`clue-${direction}-${activePlacementId}`);
@@ -650,113 +581,69 @@
                 }
             }, [activePlacementId, direction, viewMode]);
 
-            // ===== RENDER =====
+            // ====== RENDER ======
             if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-amber-500 font-black animate-pulse text-xl">Generando Malla...</div>;
-            if (!layout) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-bold p-6 text-center">No se pudo generar el crucigrama. Verifica que tu banco de palabras no esté vacío o intenta con palabras más largas.</div>;
+            if (!layout) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-bold p-6 text-center">No se pudo generar el crucigrama. Verifica tu banco de palabras.</div>;
 
-            // ===== START SCREEN =====
             if (!gameStarted) {
                 return (
-                    <div className="h-[100dvh] bg-zinc-950 flex flex-col items-center justify-center p-4 relative overflow-hidden">
-                        <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[2.5rem] shadow-2xl max-w-md w-full text-center z-10">
+                    <div className="h-[100dvh] bg-zinc-950 flex flex-col items-center justify-center p-4 overflow-hidden">
+                        <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[2.5rem] shadow-2xl max-w-md w-full text-center">
                             <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center text-white text-4xl font-black shadow-lg shadow-indigo-600/20 mx-auto mb-6">P</div>
-                            <h1 className="text-3xl font-black text-amber-500 mb-2 leading-tight">{quizData?.title || 'Crucigrama'}</h1>
-                            <p className="text-zinc-400 mb-8 font-medium">Ingresa tu nombre para comenzar la actividad.</p>
-                            <input
-                                type="text"
-                                placeholder="Tu nombre..."
-                                value={playerName}
-                                onChange={(e) => setPlayerName(e.target.value)}
+                            <h1 className="text-3xl font-black text-amber-500 mb-2">{quizData?.title || 'Crucigrama'}</h1>
+                            <p className="text-zinc-400 mb-8 font-medium">Ingresa tu nombre para comenzar.</p>
+                            <input type="text" placeholder="Tu nombre..." value={playerName} onChange={(e) => setPlayerName(e.target.value)}
                                 onKeyDown={(e) => e.key === 'Enter' && playerName.trim() && setGameStarted(true)}
-                                className="w-full bg-zinc-950 border-2 border-zinc-800 rounded-xl p-4 text-center text-xl font-bold text-white mb-6 outline-none focus:border-amber-500 transition-colors"
-                                style={{ fontSize: '16px' }}
-                            />
-                            <button
-                                disabled={!playerName.trim()}
-                                onClick={() => setGameStarted(true)}
-                                className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-black font-black text-lg py-4 rounded-xl transition-all shadow-lg active:scale-95 uppercase tracking-widest"
-                            >
+                                className="w-full bg-zinc-950 border-2 border-zinc-800 rounded-xl p-4 text-center text-xl font-bold text-white mb-6 outline-none focus:border-amber-500 transition-colors" style={{ fontSize: '16px' }} />
+                            <button disabled={!playerName.trim()} onClick={() => setGameStarted(true)}
+                                className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-black font-black text-lg py-4 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest">
                                 Empezar Juego
                             </button>
-                            {!isStudent && (
-                                <button onClick={() => window.location.href='index.html'} className="mt-6 text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-widest">
-                                    Volver al Hub (Maestro)
-                                </button>
-                            )}
+                            {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-6 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">Volver al Hub</button>}
                         </div>
                     </div>
                 );
             }
 
-            // ===== GAME SCREEN =====
             return (
-                <div className="h-[100dvh] bg-zinc-950 text-zinc-100 font-sans flex flex-col overflow-hidden relative">
-
-                    {/* Hidden input for mobile keyboard */}
-                    <input
-                        ref={hiddenInputRef}
-                        className="hidden-input"
-                        type="text"
-                        autoCapitalize="characters"
-                        autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck="false"
-                        inputMode="text"
+                <div className="h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col overflow-hidden relative">
+                    <input ref={hiddenInputRef} className="hidden-input" type="text" autoCapitalize="characters" autoComplete="off" autoCorrect="off" spellCheck="false" inputMode="text"
                         onInput={handleHiddenInput}
-                        onBlur={() => {
-                            // Re-focus if still in focused mode
-                            if (viewMode === 'focused' && activePlacementId) {
-                                setTimeout(() => hiddenInputRef.current?.focus(), 200);
-                            }
-                        }}
+                        onBlur={() => { if (viewMode === 'focused' && activePlacementId) setTimeout(() => hiddenInputRef.current?.focus(), 250); }}
                     />
 
-                    {toastMsg && (
-                        <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-emerald-500 text-black px-6 py-3 rounded-full font-black text-sm shadow-xl z-[120] flex items-center gap-2">
-                            <Check size={16} /> {toastMsg}
-                        </div>
-                    )}
+                    {toastMsg && <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-emerald-500 text-black px-6 py-3 rounded-full font-black text-sm shadow-xl z-[120] flex items-center gap-2"><Check size={16}/> {toastMsg}</div>}
 
-                    {/* WIN OVERLAY */}
                     {globalWin && (
                         <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
                             <div className="bg-zinc-900 border border-zinc-700 text-white p-8 rounded-[2rem] text-center shadow-2xl w-full max-w-md">
-                                <Award className="w-24 h-24 text-amber-500 mx-auto mb-6 animate-bounce"/>
-                                <h2 className="text-4xl font-black mb-2">¡Completado, {playerName}!</h2>
+                                <Award className="w-20 h-20 text-amber-500 mx-auto mb-6 animate-bounce"/>
+                                <h2 className="text-3xl font-black mb-2">¡Completado, {playerName}!</h2>
                                 <p className="text-zinc-400 font-bold uppercase tracking-widest mb-8">Puntaje Perfecto</p>
-                                <div className="flex flex-col gap-4 w-full">
-                                    <button onClick={() => setShowWordList(true)} className="w-full bg-zinc-800 border-2 border-zinc-700 hover:bg-zinc-700 text-white font-black px-6 py-4 rounded-xl transition-all shadow-md active:scale-95 text-sm sm:text-base">
-                                        📖 VER LAS {fullWordList.length} PALABRAS
-                                    </button>
-                                    <button onClick={() => window.location.reload()} className="w-full bg-amber-500 hover:bg-amber-400 text-black font-black px-6 py-4 rounded-xl transition-all shadow-md active:scale-95 text-sm sm:text-base">
-                                        🔄 JUGAR OTRO TABLERO
-                                    </button>
-                                    {!isStudent && (
-                                        <button onClick={() => window.location.href='index.html'} className="mt-2 text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-widest">SALIR AL HUB</button>
-                                    )}
+                                <div className="flex flex-col gap-3">
+                                    <button onClick={() => setShowWordList(true)} className="w-full bg-zinc-800 border-2 border-zinc-700 hover:bg-zinc-700 text-white font-black px-6 py-4 rounded-xl active:scale-95 text-sm">📖 VER LAS {fullWordList.length} PALABRAS</button>
+                                    <button onClick={() => window.location.reload()} className="w-full bg-amber-500 hover:bg-amber-400 text-black font-black px-6 py-4 rounded-xl active:scale-95 text-sm">🔄 JUGAR OTRO TABLERO</button>
+                                    {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-2 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">SALIR AL HUB</button>}
                                 </div>
                             </div>
                         </div>
                     )}
 
-                    {/* WORD LIST OVERLAY */}
                     {showWordList && (
                         <div className="absolute inset-0 z-[110] bg-zinc-950 flex flex-col p-4 sm:p-8">
                             <div className="max-w-3xl mx-auto w-full flex flex-col h-full bg-zinc-900 rounded-[2rem] border border-zinc-800 p-6 shadow-2xl">
                                 <div className="flex items-center justify-between mb-6 shrink-0">
-                                    <h2 className="text-2xl sm:text-3xl font-black text-white">Vocabulario</h2>
-                                    <button onClick={() => setShowWordList(false)} className="p-3 bg-zinc-800 text-zinc-400 rounded-full hover:bg-zinc-700 hover:text-white transition-colors">
-                                        <X size={20} />
-                                    </button>
+                                    <h2 className="text-2xl font-black text-white">Vocabulario</h2>
+                                    <button onClick={() => setShowWordList(false)} className="p-3 bg-zinc-800 text-zinc-400 rounded-full hover:bg-zinc-700 hover:text-white"><X size={20}/></button>
                                 </div>
-                                <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar pb-6">
-                                    {fullWordList.map(card => (
-                                        <div key={card.id} className="flex flex-col sm:flex-row items-start sm:items-center p-4 bg-zinc-950/50 rounded-2xl border border-zinc-800 gap-4">
-                                            <div className="text-4xl bg-zinc-900 w-16 h-16 flex items-center justify-center rounded-xl shadow-sm border border-zinc-800 flex-shrink-0">{card.emojis}</div>
-                                            <div className="flex-grow w-full">
-                                                <h4 className="text-lg font-black text-white">{card.wordEn}</h4>
-                                                <p className="text-amber-500 font-bold text-sm mb-1">{card.wordEs}</p>
-                                                {card.exampleEn && <p className="text-zinc-500 text-xs italic">"{card.exampleEn}"</p>}
+                                <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pb-6">
+                                    {fullWordList.map(c => (
+                                        <div key={c.id} className="flex items-center p-4 bg-zinc-950/50 rounded-2xl border border-zinc-800 gap-4">
+                                            <div className="text-3xl bg-zinc-900 w-14 h-14 flex items-center justify-center rounded-xl border border-zinc-800 flex-shrink-0">{c.emojis}</div>
+                                            <div className="min-w-0">
+                                                <h4 className="text-base font-black text-white">{c.wordEn}</h4>
+                                                <p className="text-amber-500 font-bold text-sm">{c.wordEs}</p>
+                                                {c.exampleEn && <p className="text-zinc-500 text-xs italic truncate">"{c.exampleEn}"</p>}
                                             </div>
                                         </div>
                                     ))}
@@ -766,80 +653,63 @@
                     )}
 
                     {/* HEADER */}
-                    <header className="p-3 sm:p-5 w-full flex flex-col sm:flex-row justify-between items-center shrink-0 border-b border-zinc-800/50 bg-zinc-900/90 backdrop-blur-md z-40 gap-3">
-                        <div className="flex items-center gap-3 w-full sm:w-auto justify-between">
-                            <div className="flex items-center gap-2">
-                                {!isStudent && (
-                                    <button onClick={() => window.location.href='index.html'} className="p-2 bg-zinc-800 text-zinc-400 rounded-xl hover:bg-zinc-700 hover:text-white transition-colors border border-zinc-700">
-                                        <Home size={18}/>
-                                    </button>
-                                )}
-                                {!isStudent && (
-                                    <button onClick={copyLink} className="p-2 bg-zinc-800 text-sky-400 rounded-xl hover:bg-zinc-700 hover:text-sky-300 transition-colors border border-zinc-700" title="Copiar link para alumnos">
-                                        <Share2 size={18}/>
-                                    </button>
-                                )}
-                                <div className="ml-1">
-                                    <h1 className="text-base sm:text-lg font-black text-amber-500 leading-none tracking-tight">{quizData?.title || 'Crucigrama'}</h1>
-                                    <p className="text-[9px] sm:text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-0.5">{solvedWords.length}/{layout.totalWords} palabras</p>
-                                </div>
+                    <header className="px-3 py-2 sm:px-5 sm:py-3 w-full flex justify-between items-center shrink-0 border-b border-zinc-800/50 bg-zinc-900/90 backdrop-blur-md z-40 gap-2" style={{ minHeight: isMobile ? 56 : 64 }}>
+                        <div className="flex items-center gap-2 min-w-0">
+                            {!isStudent && <button onClick={() => window.location.href='index.html'} className="p-2 bg-zinc-800 text-zinc-400 rounded-xl hover:bg-zinc-700 hover:text-white border border-zinc-700 flex-shrink-0"><Home size={16}/></button>}
+                            {!isStudent && <button onClick={copyLink} className="p-2 bg-zinc-800 text-sky-400 rounded-xl hover:bg-zinc-700 border border-zinc-700 flex-shrink-0"><Share2 size={16}/></button>}
+                            <div className="min-w-0">
+                                <h1 className="text-sm sm:text-base font-black text-amber-500 leading-none truncate">{quizData?.title || 'Crucigrama'}</h1>
+                                <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mt-0.5">{solvedWords.length}/{layout.totalWords} palabras</p>
                             </div>
-
-                            {/* Focused mode: show active clue in header */}
-                            {viewMode === 'focused' && activePlacementObj && (
-                                <button onClick={goOverview} className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2 max-w-[200px] sm:max-w-none">
-                                    <span className="text-amber-500 text-lg flex-shrink-0">{activePlacementObj.emojis}</span>
-                                    <span className="text-xs font-bold text-amber-300 truncate">{activePlacementObj.clueText}</span>
-                                    <X size={14} className="text-zinc-400 flex-shrink-0"/>
-                                </button>
-                            )}
                         </div>
 
-                        {/* CLUE BUTTONS - only in overview */}
-                        {viewMode === 'overview' && (
-                            <div className="flex items-center gap-3 w-full sm:w-auto relative z-50">
-                                <div className="relative group w-1/2 sm:w-32">
-                                    <div className="absolute inset-0 bg-amber-500 blur-md opacity-20 rounded-xl pointer-events-none glow-beat-1"></div>
-                                    <button onClick={(e) => { e.stopPropagation(); setShowAcrossPop(!showAcrossPop); setShowDownPop(false);}} className={`relative w-full flex justify-center items-center gap-2 px-4 py-3 rounded-xl font-black text-sm uppercase tracking-widest transition-all border border-transparent shadow-md ${showAcrossPop ? 'bg-amber-600 text-black' : 'bg-zinc-800 text-amber-500 hover:bg-zinc-700 active:scale-95'}`}>
-                                        <ArrowRight size={16}/> HOR
+                        {viewMode === 'focused' && activePlacementObj ? (
+                            <button onClick={goOverview} className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2 min-w-0 max-w-[55%] flex-shrink">
+                                <span className="text-lg flex-shrink-0">{activePlacementObj.emojis}</span>
+                                <span className="text-[11px] font-bold text-amber-300 truncate">{activePlacementObj.clueText}</span>
+                                <X size={14} className="text-zinc-500 flex-shrink-0"/>
+                            </button>
+                        ) : (
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                                <div className="relative">
+                                    <div className="absolute inset-0 bg-amber-500 blur-md opacity-15 rounded-xl pointer-events-none glow-beat-1"></div>
+                                    <button onClick={(e) => { e.stopPropagation(); setShowAcrossPop(!showAcrossPop); setShowDownPop(false); }}
+                                        className={`relative flex items-center gap-1.5 px-3 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider shadow-md ${showAcrossPop ? 'bg-amber-600 text-black' : 'bg-zinc-800 text-amber-500 active:scale-95'}`}>
+                                        <ArrowRight size={14}/> HOR
                                     </button>
                                     {showAcrossPop && (
-                                        <div className="absolute top-full left-0 sm:left-auto sm:right-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 z-50">
+                                        <div className="absolute top-full right-0 mt-2 w-72 max-h-60 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 z-50">
                                             <div className="flex justify-between items-center p-2 mb-1 border-b border-zinc-700">
                                                 <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Horizontales</span>
                                                 <button onClick={()=>setShowAcrossPop(false)} className="text-zinc-500 hover:text-white"><X size={14}/></button>
                                             </div>
-                                            {layout.clues.across.map(c => {
-                                                const isSolved = solvedWords.includes(c.id);
-                                                return (
-                                                    <button key={c.id} id={`clue-across-${c.id}`} disabled={isSolved} onClick={() => handleClueClick(c)} className={`w-full text-left p-3 rounded-xl mb-1 text-sm font-bold flex items-start gap-2 transition-colors ${isSolved ? 'opacity-40 line-through text-zinc-500' : 'hover:bg-zinc-700 text-zinc-200'}`}>
-                                                        <span className="text-amber-500 shrink-0">{c.number}.</span> <span>{c.clueText}</span>
-                                                    </button>
-                                                );
-                                            })}
+                                            {layout.clues.across.map(c => (
+                                                <button key={c.id} disabled={solvedWords.includes(c.id)} onClick={() => handleClueClick(c)}
+                                                    className={`w-full text-left p-3 rounded-xl mb-1 text-sm font-bold flex items-start gap-2 ${solvedWords.includes(c.id) ? 'opacity-40 line-through text-zinc-500' : 'hover:bg-zinc-700 text-zinc-200'}`}>
+                                                    <span className="text-amber-500 shrink-0">{c.number}.</span><span>{c.clueText}</span>
+                                                </button>
+                                            ))}
                                         </div>
                                     )}
                                 </div>
-
-                                <div className="relative group w-1/2 sm:w-32">
-                                    <div className="absolute inset-0 bg-amber-500 blur-md opacity-20 rounded-xl pointer-events-none glow-beat-2"></div>
-                                    <button onClick={(e) => { e.stopPropagation(); setShowDownPop(!showDownPop); setShowAcrossPop(false);}} className={`relative w-full flex justify-center items-center gap-2 px-4 py-3 rounded-xl font-black text-sm uppercase tracking-widest transition-all border border-transparent shadow-md ${showDownPop ? 'bg-amber-600 text-black' : 'bg-zinc-800 text-amber-500 hover:bg-zinc-700 active:scale-95'}`}>
-                                        <ArrowDown size={16}/> VER
+                                <div className="relative">
+                                    <div className="absolute inset-0 bg-amber-500 blur-md opacity-15 rounded-xl pointer-events-none glow-beat-2"></div>
+                                    <button onClick={(e) => { e.stopPropagation(); setShowDownPop(!showDownPop); setShowAcrossPop(false); }}
+                                        className={`relative flex items-center gap-1.5 px-3 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider shadow-md ${showDownPop ? 'bg-amber-600 text-black' : 'bg-zinc-800 text-amber-500 active:scale-95'}`}>
+                                        <ArrowDown size={14}/> VER
                                     </button>
                                     {showDownPop && (
-                                        <div className="absolute top-full right-0 mt-3 w-72 max-h-64 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 z-50">
+                                        <div className="absolute top-full right-0 mt-2 w-72 max-h-60 overflow-y-auto custom-scrollbar bg-zinc-800 border border-zinc-700 rounded-2xl shadow-2xl p-2 z-50">
                                             <div className="flex justify-between items-center p-2 mb-1 border-b border-zinc-700">
                                                 <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Verticales</span>
                                                 <button onClick={()=>setShowDownPop(false)} className="text-zinc-500 hover:text-white"><X size={14}/></button>
                                             </div>
-                                            {layout.clues.down.map(c => {
-                                                const isSolved = solvedWords.includes(c.id);
-                                                return (
-                                                    <button key={c.id} id={`clue-down-${c.id}`} disabled={isSolved} onClick={() => handleClueClick(c)} className={`w-full text-left p-3 rounded-xl mb-1 text-sm font-bold flex items-start gap-2 transition-colors ${isSolved ? 'opacity-40 line-through text-zinc-500' : 'hover:bg-zinc-700 text-zinc-200'}`}>
-                                                        <span className="text-amber-500 shrink-0">{c.number}.</span> <span>{c.clueText}</span>
-                                                    </button>
-                                                );
-                                            })}
+                                            {layout.clues.down.map(c => (
+                                                <button key={c.id} disabled={solvedWords.includes(c.id)} onClick={() => handleClueClick(c)}
+                                                    className={`w-full text-left p-3 rounded-xl mb-1 text-sm font-bold flex items-start gap-2 ${solvedWords.includes(c.id) ? 'opacity-40 line-through text-zinc-500' : 'hover:bg-zinc-700 text-zinc-200'}`}>
+                                                    <span className="text-amber-500 shrink-0">{c.number}.</span><span>{c.clueText}</span>
+                                                </button>
+                                            ))}
                                         </div>
                                     )}
                                 </div>
@@ -847,154 +717,101 @@
                         )}
                     </header>
 
-                    {/* GRID AREA */}
-                    <div
-                        ref={gridContainerRef}
-                        className="flex-1 w-full relative min-h-0 overflow-hidden"
+                    {/* GRID */}
+                    <div className="flex-1 w-full relative min-h-0 overflow-hidden bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-zinc-900 to-zinc-950"
                         style={{ touchAction: 'none' }}
-                        onTouchStart={handleTouchStart}
-                        onTouchMove={handleTouchMove}
-                        onTouchEnd={handleTouchEnd}
-                        onClick={handleEmptyTap}
-                    >
-                        {/* THE BOARD */}
-                        <div
-                            className="absolute bg-zinc-900/60 rounded-3xl border border-zinc-800/50"
+                        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+                        onClick={handleEmptyTap}>
+
+                        <div ref={boardRef}
+                            className="absolute bg-zinc-900/50 rounded-3xl border border-zinc-800/40"
                             style={{
-                                width: boardW,
-                                height: boardH,
-                                left: camera.x,
-                                top: camera.y,
-                                transform: `scale(${camera.scale})`,
+                                width: boardW, height: boardH,
+                                transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.s})`,
                                 transformOrigin: '0 0',
-                                transition: touchRef.current.moved ? 'none' : 'all 0.45s cubic-bezier(0.22, 1, 0.36, 1)',
-                                willChange: 'transform, left, top'
-                            }}
-                        >
-                            {/* FLOATING CLUE BANNER */}
+                                transition: isAnimating ? 'transform 0.45s cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
+                                willChange: 'transform',
+                            }}>
+
                             {viewMode === 'focused' && activePlacementObj && (
-                                <div
-                                    className="absolute z-50 flex justify-center pointer-events-none"
+                                <div className="absolute z-50 flex justify-center pointer-events-none clue-banner-enter"
                                     style={{
                                         left: `${(activePlacementObj.normX * (cellSize + gap)) + gridPadding + (activePlacementObj.isHoriz ? (activePlacementObj.wordStr.length * (cellSize + gap) - gap) / 2 : cellSize / 2)}px`,
                                         top: `${(activePlacementObj.normY * (cellSize + gap)) + gridPadding}px`,
-                                        transform: 'translate(-50%, calc(-100% - 20px))',
-                                        width: 'max-content'
-                                    }}
-                                >
-                                    <div className="bg-zinc-900/95 border-2 border-amber-500/50 p-2 sm:p-3 rounded-2xl shadow-2xl flex items-center gap-2 sm:gap-3 backdrop-blur-md max-w-[280px]">
-                                        <div className="text-2xl bg-zinc-950 p-1.5 rounded-xl flex-shrink-0 shadow-inner">{activePlacementObj.emojis}</div>
+                                        transform: 'translate(-50%, calc(-100% - 20px))', width: 'max-content'
+                                    }}>
+                                    <div className="bg-zinc-900/95 border-2 border-amber-500/50 p-2.5 rounded-2xl shadow-2xl flex items-center gap-2 backdrop-blur-md max-w-[260px]">
+                                        <div className="text-2xl bg-zinc-950 p-1.5 rounded-xl flex-shrink-0">{activePlacementObj.emojis}</div>
                                         <div className="flex flex-col text-left min-w-0">
                                             <span className="text-[9px] text-amber-500 font-black uppercase tracking-widest mb-0.5 flex items-center gap-1">
-                                                {activePlacementObj.isHoriz ? <ArrowRight size={10}/> : <ArrowDown size={10}/>}
-                                                {activePlacementObj.isHoriz ? 'Horizontal' : 'Vertical'} {activePlacementObj.number}
+                                                {activePlacementObj.isHoriz ? <ArrowRight size={9}/> : <ArrowDown size={9}/>}
+                                                {activePlacementObj.isHoriz ? 'Hor' : 'Ver'} {activePlacementObj.number}
                                             </span>
-                                            <span className="text-xs sm:text-sm font-bold text-white leading-tight truncate">{activePlacementObj.clueText}</span>
+                                            <span className="text-xs font-bold text-white leading-tight">{activePlacementObj.clueText}</span>
                                         </div>
                                     </div>
                                 </div>
                             )}
 
-                            {/* CELLS */}
                             {layout.grid.map((row, y) =>
                                 row.map((cell, x) => {
                                     if (!cell) return null;
-
-                                    const isPartOfSolved = cell.placements.some(p => solvedWords.includes(p.id));
+                                    const isGreen = cell.placements.some(p => solvedWords.includes(p.id));
                                     const rawInput = inputs[`${x},${y}`];
-                                    const isGreen = isPartOfSolved;
+                                    let dv = '';
+                                    if (isGreen) dv = cell.answer;
+                                    else if (rawInput) dv = rawInput;
 
-                                    let displayVal = '';
-                                    if (isGreen) {
-                                        displayVal = cell.answer;
-                                    } else if (rawInput !== undefined && rawInput !== '') {
-                                        displayVal = rawInput;
+                                    const isSel = selectedCell?.x === x && selectedCell?.y === y;
+                                    const isWA = cell.placements.some(p => p.id === activePlacementId);
+                                    const focused = viewMode === 'focused';
+
+                                    let bg, tc, ring = '';
+                                    if (wordFeedback === 'success' && isWA && focused) {
+                                        bg = 'bg-emerald-400'; tc = 'text-black font-black'; ring = 'ring-2 ring-emerald-300';
+                                    } else if (isGreen) {
+                                        bg = 'bg-emerald-500'; tc = 'text-black font-black'; ring = 'ring-1 ring-emerald-400/60';
+                                    } else if (wordFeedback === 'error' && isWA && focused) {
+                                        bg = 'bg-rose-500/70'; tc = 'text-white font-black'; ring = 'animate-shake';
+                                    } else if (isSel && focused) {
+                                        bg = 'bg-amber-400'; tc = 'text-black font-black'; ring = 'ring-[3px] ring-white shadow-lg shadow-amber-400/40 z-30 scale-[1.06]';
+                                    } else if (isWA && focused) {
+                                        bg = 'bg-amber-500/20'; tc = 'text-white font-bold'; ring = 'border border-amber-500/40';
+                                    } else {
+                                        bg = 'bg-zinc-800'; tc = 'text-white font-bold'; ring = 'border border-zinc-700/50';
                                     }
-
-                                    const isSelected = selectedCell?.x === x && selectedCell?.y === y;
-                                    const isWordActive = cell.placements.some(p => p.id === activePlacementId);
-
-                                    let bg = 'bg-zinc-800 border-zinc-700/50';
-                                    let textColor = 'text-white';
-                                    let extra = '';
-
-                                    if (isGreen) {
-                                        bg = 'bg-emerald-500 border-emerald-400';
-                                        textColor = 'text-black';
-                                        extra = 'shadow-sm shadow-emerald-500/40';
-                                    } else if (wordFeedback === 'error' && isWordActive && viewMode === 'focused') {
-                                        bg = 'bg-rose-500/80 border-rose-400';
-                                        extra = 'animate-shake';
-                                    } else if (isSelected && viewMode === 'focused') {
-                                        bg = 'bg-amber-400 border-amber-300';
-                                        textColor = 'text-black';
-                                        extra = 'z-30 ring-2 ring-white shadow-lg shadow-amber-500/50 scale-[1.08]';
-                                    } else if (isWordActive && viewMode === 'focused') {
-                                        bg = 'bg-amber-500/25 border-amber-500/40';
-                                        textColor = 'text-white';
-                                    }
-
-                                    const dimmed = viewMode === 'focused' && !isWordActive && !isGreen;
+                                    const dimmed = focused && !isWA && !isGreen;
 
                                     return (
-                                        <div
-                                            key={`${x}-${y}`}
-                                            className={`absolute flex items-center justify-center rounded-lg border transition-all duration-200 ${bg} ${extra} ${dimmed ? 'opacity-15' : ''}`}
-                                            style={{
-                                                width: cellSize,
-                                                height: cellSize,
-                                                left: x * (cellSize + gap) + gridPadding,
-                                                top: y * (cellSize + gap) + gridPadding
-                                            }}
-                                            onClick={(e) => { e.stopPropagation(); handleCellTap(x, y); }}
-                                        >
-                                            {/* Number badges */}
-                                            {cell.starts && cell.starts.map((s, idx) => (
-                                                <span key={idx} className={`absolute w-[18px] h-[18px] bg-amber-500 text-black rounded-full flex items-center justify-center text-[9px] font-black z-40 pointer-events-none ${s.isHoriz ? '-left-[22px] top-1/2 -translate-y-1/2' : '-top-[22px] left-1/2 -translate-x-1/2'}`}>
-                                                    {s.number}
-                                                </span>
+                                        <div key={`${x}-${y}`}
+                                            className={`absolute flex items-center justify-center rounded-lg transition-colors duration-150 ${bg} ${ring} ${dimmed ? 'opacity-[0.12]' : ''}`}
+                                            style={{ width: cellSize, height: cellSize, left: x * (cellSize + gap) + gridPadding, top: y * (cellSize + gap) + gridPadding }}
+                                            onClick={(e) => { e.stopPropagation(); handleCellTap(x, y); }}>
+                                            {cell.starts?.map((s, i) => (
+                                                <span key={i} className={`absolute w-[17px] h-[17px] bg-amber-500 text-black rounded-full flex items-center justify-center text-[8px] font-black z-40 pointer-events-none ${s.isHoriz ? '-left-[21px] top-1/2 -translate-y-1/2' : '-top-[21px] left-1/2 -translate-x-1/2'}`}>{s.number}</span>
                                             ))}
-
-                                            {/* Letter display */}
-                                            <span className={`font-black text-lg sm:text-xl ${textColor} pointer-events-none select-none`}>
-                                                {displayVal}
-                                            </span>
+                                            <span className={`text-lg sm:text-xl ${tc} pointer-events-none select-none leading-none`}>{dv}</span>
                                         </div>
                                     );
                                 })
                             )}
                         </div>
 
-                        {/* Zoom controls (mobile) */}
-                        {isMobile && viewMode === 'overview' && (
-                            <div className="absolute bottom-4 right-4 flex flex-col gap-2 z-50">
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); setCamera(prev => ({ ...prev, scale: Math.min(prev.scale * 1.3, 3) })); }}
-                                    className="w-10 h-10 bg-zinc-800/90 border border-zinc-700 rounded-xl flex items-center justify-center text-zinc-300 active:scale-90 backdrop-blur-sm"
-                                >
-                                    <ZoomIn size={18}/>
-                                </button>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); setCamera(prev => ({ ...prev, scale: Math.max(prev.scale * 0.7, 0.3) })); }}
-                                    className="w-10 h-10 bg-zinc-800/90 border border-zinc-700 rounded-xl flex items-center justify-center text-zinc-300 active:scale-90 backdrop-blur-sm"
-                                >
-                                    <ZoomOut size={18}/>
-                                </button>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); goOverview(); }}
-                                    className="w-10 h-10 bg-zinc-800/90 border border-zinc-700 rounded-xl flex items-center justify-center text-zinc-300 active:scale-90 backdrop-blur-sm text-xs font-black"
-                                >
-                                    FIT
-                                </button>
-                            </div>
-                        )}
+                        {/* ZOOM BUTTONS */}
+                        <div className="absolute bottom-4 right-4 flex flex-col gap-2 z-50">
+                            <button onClick={(e) => { e.stopPropagation(); const vc = getViewCenter(); setCam(prev => { const ns = Math.min(prev.s * 1.3, 3.5); return { x: vc.x - (vc.x - prev.x) * (ns / prev.s), y: vc.y - (vc.y - prev.y) * (ns / prev.s), s: ns }; }); setIsAnimating(true); setTimeout(()=>setIsAnimating(false),480); }}
+                                className="w-10 h-10 bg-zinc-800/90 border border-zinc-700 rounded-xl flex items-center justify-center text-zinc-300 active:scale-90 backdrop-blur-sm shadow-lg"><ZoomIn size={18}/></button>
+                            <button onClick={(e) => { e.stopPropagation(); const vc = getViewCenter(); setCam(prev => { const ns = Math.max(prev.s * 0.7, 0.25); return { x: vc.x - (vc.x - prev.x) * (ns / prev.s), y: vc.y - (vc.y - prev.y) * (ns / prev.s), s: ns }; }); setIsAnimating(true); setTimeout(()=>setIsAnimating(false),480); }}
+                                className="w-10 h-10 bg-zinc-800/90 border border-zinc-700 rounded-xl flex items-center justify-center text-zinc-300 active:scale-90 backdrop-blur-sm shadow-lg"><ZoomOut size={18}/></button>
+                            <button onClick={(e) => { e.stopPropagation(); animateCamTo(getOverviewCam()); }}
+                                className="w-10 h-10 bg-zinc-800/90 border border-zinc-700 rounded-xl flex items-center justify-center text-zinc-300 active:scale-90 backdrop-blur-sm shadow-lg"><Crosshair size={18}/></button>
+                        </div>
                     </div>
                 </div>
             );
         };
 
-        const root = createRoot(document.getElementById('root'));
-        root.render(<CrosswordApp />);
+        createRoot(document.getElementById('root')).render(<CrosswordApp />);
     </script>
 </body>
 </html>
