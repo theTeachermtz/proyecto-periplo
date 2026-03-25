@@ -28,31 +28,20 @@
 
         @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(5px)} }
         .animate-shake { animation: shake 0.35s ease-in-out; }
-
         @keyframes popIn { 0%{opacity:0;transform:scale(0.9) translateY(10px)} 100%{opacity:1;transform:scale(1) translateY(0)} }
         .animate-pop { animation: popIn 0.35s cubic-bezier(0.175,0.885,0.32,1.275) forwards; }
-
-        @keyframes slideUp { 0%{opacity:0;transform:translateY(20px)} 100%{opacity:1;transform:translateY(0)} }
-        .animate-slide-up { animation: slideUp 0.3s ease-out forwards; }
+        @keyframes slideUp { 0%{opacity:0;transform:translateY(16px)} 100%{opacity:1;transform:translateY(0)} }
+        .animate-slide-up { animation: slideUp 0.25s ease-out forwards; }
+        @keyframes pulse-bar { 0%,100%{opacity:0.4} 50%{opacity:1} }
+        .voice-bar { animation: pulse-bar 1.2s ease-in-out infinite; }
 
         .cell-input {
-            width: 28px; height: 36px;
-            font-size: 16px;
-            text-align: center;
-            border: none;
-            border-bottom: 3px solid;
-            background: transparent;
-            outline: none;
-            padding: 0;
-            margin: 0;
-            font-weight: 800;
-            text-transform: uppercase;
-            caret-color: #a78bfa;
-            -webkit-appearance: none;
+            width: 28px; height: 36px; font-size: 16px; text-align: center;
+            border: none; border-bottom: 3px solid; background: transparent;
+            outline: none; padding: 0; margin: 0; font-weight: 800;
+            text-transform: uppercase; caret-color: #a78bfa; -webkit-appearance: none;
         }
-        @media (min-width: 640px) {
-            .cell-input { width: 32px; height: 40px; font-size: 18px; }
-        }
+        @media (min-width: 640px) { .cell-input { width: 32px; height: 40px; font-size: 18px; } }
     </style>
 </head>
 <body class="text-zinc-100 h-[100dvh]">
@@ -61,115 +50,154 @@
         import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+        import { getFirestore, doc, getDoc, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
         import confetti from 'canvas-confetti';
-        import { Loader2, Volume2, Lightbulb, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw } from 'lucide-react';
+        import { Loader2, Volume2, Lightbulb, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, Eye, X, Mic } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // ====== TTS ======
-        const speak = (text, lang = 'en-US', rate = 0.9) => {
+        // TTS
+        const speak = (text, lang = 'en-US', rate = 0.85) => {
             if (!window.speechSynthesis) return;
             window.speechSynthesis.cancel();
-            const u = new SpeechSynthesisUtterance(text);
-            u.lang = lang;
-            u.rate = rate;
-            u.pitch = 1;
-            // Try to find a good voice
+            const u = new SpeechSynthesisUtterance(text); u.lang = lang; u.rate = rate; u.pitch = 1;
             const voices = window.speechSynthesis.getVoices();
-            const v = voices.find(v => v.lang.startsWith(lang.split('-')[0]) && v.name.includes('Google')) ||
-                      voices.find(v => v.lang.startsWith(lang.split('-')[0])) || null;
+            const v = voices.find(v => v.lang.startsWith(lang.split('-')[0]) && v.name.includes('Google')) || voices.find(v => v.lang.startsWith(lang.split('-')[0]));
             if (v) u.voice = v;
             window.speechSynthesis.speak(u);
         };
+        if (window.speechSynthesis) { window.speechSynthesis.getVoices(); window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices(); }
 
-        // Preload voices
-        if (window.speechSynthesis) {
-            window.speechSynthesis.getVoices();
-            window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
-        }
-
-        // ====== GUESS CONTACT NAME & EMOJI FROM CONTEXT ======
-        const guessContact = (chatFlow) => {
-            if (!chatFlow || chatFlow.length === 0) return { name: 'Teacher', emoji: '🧑‍🏫' };
-            const allText = chatFlow.map(c => (c.botMessage || '') + ' ' + (c.expectedAnswer || '')).join(' ').toLowerCase();
-
-            const patterns = [
-                { keys: ['boss', 'manager', 'meeting', 'deadline', 'project', 'office', 'report'], name: 'Boss', emoji: '👔' },
-                { keys: ['doctor', 'appointment', 'health', 'medicine', 'symptoms', 'pain', 'hospital'], name: 'Dr. Smith', emoji: '🩺' },
-                { keys: ['waiter', 'menu', 'order', 'restaurant', 'food', 'eat', 'table', 'drink', 'bill', 'check'], name: 'Server', emoji: '🍽️' },
-                { keys: ['bartender', 'bar', 'cocktail', 'beer', 'wine'], name: 'Bartender', emoji: '🍸' },
-                { keys: ['friend', 'party', 'hang out', 'movie', 'fun', 'weekend', 'dude', 'bro'], name: 'Best Friend', emoji: '😎' },
-                { keys: ['mom', 'mother', 'mama', 'family', 'dinner', 'home', 'love you'], name: 'Mom', emoji: '👩‍🦱' },
-                { keys: ['dad', 'father', 'papa'], name: 'Dad', emoji: '👨‍🦳' },
-                { keys: ['grandma', 'grandmother', 'abuela', 'nana'], name: 'Grandma', emoji: '👵' },
-                { keys: ['hotel', 'reservation', 'room', 'check in', 'checkout', 'stay'], name: 'Hotel Staff', emoji: '🏨' },
-                { keys: ['store', 'buy', 'price', 'shopping', 'cash', 'card', 'pay'], name: 'Cashier', emoji: '🛒' },
-                { keys: ['teacher', 'class', 'homework', 'school', 'study', 'learn', 'test'], name: 'Teacher', emoji: '📚' },
-                { keys: ['taxi', 'uber', 'driver', 'ride', 'airport', 'address'], name: 'Driver', emoji: '🚕' },
-                { keys: ['neighbor', 'neighbourhood', 'noise', 'pet', 'dog', 'cat'], name: 'Neighbor', emoji: '🏠' },
-                { keys: ['interview', 'hire', 'resume', 'job', 'position', 'salary'], name: 'Interviewer', emoji: '💼' },
-            ];
-
-            for (const p of patterns) {
-                if (p.keys.some(k => allText.includes(k))) return { name: p.name, emoji: p.emoji };
-            }
-            return { name: 'Conversation Partner', emoji: '💬' };
+        // Pick context-emoji for user messages
+        const pickUserEmoji = (text) => {
+            const t = text.toLowerCase();
+            if (/thank|thanks|gracias/.test(t)) return ' 🙏';
+            if (/please|por favor/.test(t)) return ' 🤝';
+            if (/hello|hi |hey|hola/.test(t)) return ' 👋';
+            if (/bye|goodbye|see you|nos vemos/.test(t)) return ' 👋';
+            if (/sorry|apologize|perdón/.test(t)) return ' 😅';
+            if (/love|amazing|great|awesome|wonderful/.test(t)) return ' 😍';
+            if (/yes|sure|of course|claro/.test(t)) return ' 👍';
+            if (/no |don't|can't/.test(t)) return ' 🙅';
+            if (/help|ayuda/.test(t)) return ' 🆘';
+            if (/food|eat|hungry|dinner|lunch|breakfast/.test(t)) return ' 🍽️';
+            if (/drink|water|coffee|tea|beer/.test(t)) return ' ☕';
+            if (/happy|glad|excited/.test(t)) return ' 😊';
+            if (/tired|sleep|bed/.test(t)) return ' 😴';
+            if (/work|job|office/.test(t)) return ' 💼';
+            if (/money|pay|cost|price/.test(t)) return ' 💰';
+            if (/time|when|hour|clock/.test(t)) return ' ⏰';
+            if (/where|place|location|address/.test(t)) return ' 📍';
+            if (Math.random() > 0.5) return '';
+            const randoms = [' 💬', ' ✨', ' 📝', ' 🎯', ''];
+            return randoms[Math.floor(Math.random() * randoms.length)];
         };
 
-        // ====== ACTIVE CHALLENGE BUBBLE ======
-        const ActiveBubble = ({ data, onNext, totalScore, setTotalScore, stepIndex, totalSteps }) => {
+        // Guess contact
+        const guessContact = (chatFlow) => {
+            if (!chatFlow || chatFlow.length === 0) return { name: 'Teacher', emoji: '🧑‍🏫' };
+            const t = chatFlow.map(c => (c.botMessage||'') + ' ' + (c.expectedAnswer||'')).join(' ').toLowerCase();
+            const p = [
+                { k: ['boss','manager','meeting','deadline','project','office','report'], n: 'Boss', e: '👔' },
+                { k: ['doctor','appointment','health','medicine','symptoms','hospital'], n: 'Dr. Smith', e: '🩺' },
+                { k: ['waiter','menu','order','restaurant','food','table','bill','check'], n: 'Server', e: '🍽️' },
+                { k: ['bartender','bar','cocktail','beer','wine'], n: 'Bartender', e: '🍸' },
+                { k: ['friend','party','hang out','movie','fun','weekend','dude','bro'], n: 'Best Friend', e: '😎' },
+                { k: ['mom','mother','mama','family','love you'], n: 'Mom', e: '👩‍🦱' },
+                { k: ['dad','father','papa'], n: 'Dad', e: '👨‍🦳' },
+                { k: ['grandma','grandmother','abuela'], n: 'Grandma', e: '👵' },
+                { k: ['hotel','reservation','room','check in'], n: 'Hotel Staff', e: '🏨' },
+                { k: ['store','buy','price','shopping','pay'], n: 'Cashier', e: '🛒' },
+                { k: ['teacher','class','homework','school','study','learn'], n: 'Teacher', e: '📚' },
+                { k: ['taxi','uber','driver','ride','airport'], n: 'Driver', e: '🚕' },
+                { k: ['interview','hire','resume','job','position'], n: 'Interviewer', e: '💼' },
+            ];
+            for (const x of p) if (x.k.some(k => t.includes(k))) return { name: x.n, emoji: x.e };
+            return { name: 'Chat Partner', emoji: '💬' };
+        };
+
+        // ====== VOICE NOTE COMPONENT ======
+        const VoiceNote = ({ text, onPlay, isPlaying }) => (
+            <div className="flex items-center gap-2 bg-zinc-700/50 rounded-2xl px-3 py-2 max-w-[200px]">
+                <button onClick={onPlay} className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center text-white flex-shrink-0 active:scale-90 transition-transform">
+                    {isPlaying ? <div className="w-2.5 h-2.5 bg-white rounded-sm"/> : <Play size={14} fill="white"/>}
+                </button>
+                <div className="flex-1 flex items-center gap-[2px] h-5 overflow-hidden">
+                    {[...Array(18)].map((_, i) => (
+                        <div key={i} className={`w-[3px] rounded-full bg-emerald-400 ${isPlaying ? 'voice-bar' : ''}`}
+                            style={{ height: `${Math.random() * 60 + 30}%`, animationDelay: `${i * 0.08}s`, opacity: isPlaying ? undefined : 0.4 }}/>
+                    ))}
+                </div>
+                <span className="text-[10px] text-zinc-400 font-bold flex-shrink-0">0:{String(Math.ceil(text.length / 14)).padStart(2,'0')}</span>
+            </div>
+        );
+
+        // ====== ACTIVE CHALLENGE ======
+        const ActiveBubble = ({ data, onNext, setTotalScore, contact }) => {
             const { parsed, words } = useMemo(() => {
-                const p = data.expectedAnswer.split('').map((char, i) => ({
-                    id: i, char, isLetter: /[a-zA-Z]/.test(char),
-                }));
+                const p = data.expectedAnswer.split('').map((c, i) => ({ id: i, char: c, isLetter: /[a-zA-Z]/.test(c) }));
                 const w = []; let cur = [];
-                p.forEach(item => {
-                    if (item.char === ' ') { if (cur.length > 0) w.push(cur); cur = []; }
-                    else cur.push(item);
-                });
+                p.forEach(item => { if (item.char === ' ') { if (cur.length > 0) w.push(cur); cur = []; } else cur.push(item); });
                 if (cur.length > 0) w.push(cur);
                 return { parsed: p, words: w };
             }, [data.expectedAnswer]);
 
-            // Split answer into "word" objects for hint system
             const answerWords = useMemo(() => {
-                const result = [];
-                let wordChars = []; let wordStart = -1;
-                parsed.forEach((p, i) => {
-                    if (p.char === ' ') {
-                        if (wordChars.length > 0) result.push({ start: wordStart, chars: wordChars });
-                        wordChars = []; wordStart = -1;
-                    } else {
-                        if (wordStart === -1) wordStart = i;
-                        wordChars.push(p);
-                    }
-                });
-                if (wordChars.length > 0) result.push({ start: wordStart, chars: wordChars });
-                return result;
+                const r = []; let wc = []; let ws = -1;
+                parsed.forEach((p, i) => { if (p.char === ' ') { if (wc.length > 0) r.push({ start: ws, chars: wc }); wc = []; ws = -1; } else { if (ws === -1) ws = i; wc.push(p); } });
+                if (wc.length > 0) r.push({ start: ws, chars: wc });
+                return r;
             }, [parsed]);
+
+            const totalLetters = parsed.filter(p => p.isLetter).length;
+            const LISTEN_BONUS = Math.ceil(totalLetters * 0.5); // 50% bonus for blind answer
+
+            // Phases: voice → transcript → typing → correct
+            const [phase, setPhase] = useState('voice'); // voice | transcript | typing | correct
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [hasListened, setHasListened] = useState(false);
+            const [blindMode, setBlindMode] = useState(true); // True if hasn't seen transcript yet
 
             const [inputs, setInputs] = useState(Array(parsed.length).fill(''));
             const [status, setStatus] = useState('typing'); // typing | error | correct
             const [errorIndices, setErrorIndices] = useState(new Set());
-            const [hintedIndices, setHintedIndices] = useState(new Set()); // Indices filled by hint
-            const [attempts, setAttempts] = useState(0); // Total wrong letter attempts
+            const [hintedIndices, setHintedIndices] = useState(new Set());
+            const [attempts, setAttempts] = useState(0);
             const [showHintPicker, setShowHintPicker] = useState(false);
             const [stepScore, setStepScore] = useState(0);
-            const [hasSpoken, setHasSpoken] = useState(false);
+            const [botSpoken, setBotSpoken] = useState(false);
             const inputRefs = useRef([]);
 
-            // Auto-read bot message on mount
-            useEffect(() => {
-                if (!hasSpoken) {
-                    setTimeout(() => speak(data.botMessage, 'en-US', 0.85), 400);
-                    setHasSpoken(true);
-                }
-            }, [data.botMessage, hasSpoken]);
+            const userEmoji = useMemo(() => pickUserEmoji(data.expectedAnswer), [data.expectedAnswer]);
 
-            const totalLetters = parsed.filter(p => p.isLetter).length;
+            // Auto-play bot voice note on mount
+            useEffect(() => {
+                if (!botSpoken) {
+                    setTimeout(() => {
+                        speak(data.botMessage, 'en-US', 0.85);
+                        setBotSpoken(true);
+                    }, 400);
+                }
+            }, []);
+
+            const playBotAudio = () => { setIsPlaying(true); speak(data.botMessage, 'en-US', 0.85); setTimeout(() => setIsPlaying(false), Math.max(1500, data.botMessage.length * 70)); };
+            const playAnswerAudio = () => { speak(data.expectedAnswer, 'en-US', 0.85); };
+
+            // Transition to typing (from voice or transcript)
+            const startTyping = () => {
+                setPhase('typing');
+                setTimeout(() => {
+                    const first = parsed.findIndex(p => p.isLetter);
+                    if (first !== -1 && inputRefs.current[first]) inputRefs.current[first].focus();
+                }, 300);
+            };
+
+            const seeTranscript = () => {
+                setBlindMode(false);
+                setPhase('transcript');
+            };
 
             const findNext = (idx) => { for (let i = idx + 1; i < parsed.length; i++) if (parsed[i].isLetter && !hintedIndices.has(i)) return i; return -1; };
             const findPrev = (idx) => { for (let i = idx - 1; i >= 0; i--) if (parsed[i].isLetter && !hintedIndices.has(i)) return i; return -1; };
@@ -178,176 +206,179 @@
                 if (status === 'correct') return;
                 const char = e.target.value.slice(-1);
                 const ni = [...inputs]; ni[index] = char; setInputs(ni);
-                // Clear error for this index if it was wrong
-                if (errorIndices.has(index)) {
-                    const ne = new Set(errorIndices); ne.delete(index); setErrorIndices(ne);
-                }
+                if (errorIndices.has(index)) { const ne = new Set(errorIndices); ne.delete(index); setErrorIndices(ne); }
                 if (char !== '') { const n = findNext(index); if (n !== -1 && inputRefs.current[n]) inputRefs.current[n].focus(); }
             };
 
             const handleKeyDown = (e, index) => {
                 if (status === 'correct') return;
-                if (e.key === 'Backspace') {
-                    if (!inputs[index]) {
-                        e.preventDefault();
-                        const p = findPrev(index);
-                        if (p !== -1 && inputRefs.current[p]) {
-                            const ni = [...inputs]; ni[p] = ''; setInputs(ni);
-                            inputRefs.current[p].focus();
-                            if (errorIndices.has(p)) { const ne = new Set(errorIndices); ne.delete(p); setErrorIndices(ne); }
-                        }
+                if (e.key === 'Backspace' && !inputs[index]) {
+                    e.preventDefault();
+                    const p = findPrev(index);
+                    if (p !== -1 && inputRefs.current[p]) {
+                        const ni = [...inputs]; ni[p] = ''; setInputs(ni); inputRefs.current[p].focus();
+                        if (errorIndices.has(p)) { const ne = new Set(errorIndices); ne.delete(p); setErrorIndices(ne); }
                     }
                 }
             };
 
-            // Check when all filled
+            // Check
             useEffect(() => {
-                const letterIndices = parsed.filter(p => p.isLetter).map(p => p.id);
-                const filled = letterIndices.every(i => inputs[i] !== '');
-                if (!filled || status !== 'typing') return;
+                if (phase !== 'typing' || status !== 'typing') return;
+                const letterIdx = parsed.filter(p => p.isLetter).map(p => p.id);
+                if (!letterIdx.every(i => inputs[i] !== '')) return;
 
                 const wrong = new Set();
-                letterIndices.forEach(i => {
-                    if (inputs[i].toLowerCase() !== parsed[i].char.toLowerCase()) wrong.add(i);
-                });
+                letterIdx.forEach(i => { if (inputs[i].toLowerCase() !== parsed[i].char.toLowerCase()) wrong.add(i); });
 
                 if (wrong.size === 0) {
-                    // Calculate score: total letters - hinted letters - attempts
-                    const hintedLetters = [...hintedIndices].filter(i => parsed[i]?.isLetter).length;
-                    const earned = Math.max(0, totalLetters - hintedLetters - attempts);
+                    const hinted = [...hintedIndices].filter(i => parsed[i]?.isLetter).length;
+                    let earned = Math.max(0, totalLetters - hinted - attempts);
+                    if (blindMode) earned += LISTEN_BONUS;
                     setStepScore(earned);
                     setTotalScore(prev => prev + earned);
-                    setStatus('correct');
-                    confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 }, colors: ['#10b981','#f59e0b','#8b5cf6'] });
-                    // Read the answer aloud
+                    setStatus('correct'); setPhase('correct');
+                    confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
                     setTimeout(() => speak(data.expectedAnswer, 'en-US', 0.85), 600);
                 } else {
-                    setErrorIndices(wrong);
-                    setAttempts(prev => prev + wrong.size);
-                    setStatus('error');
-                    setTimeout(() => setStatus('typing'), 800);
+                    setErrorIndices(wrong); setAttempts(prev => prev + wrong.size);
+                    setStatus('error'); setTimeout(() => setStatus('typing'), 800);
                 }
-            }, [inputs, parsed, status]);
+            }, [inputs, parsed, status, phase]);
 
-            // Hint: reveal a word
-            const handleHint = (wordIdx) => {
-                const word = answerWords[wordIdx];
-                if (!word) return;
-                const ni = [...inputs];
-                const nh = new Set(hintedIndices);
-                word.chars.forEach(c => {
-                    ni[c.id] = c.char;
-                    nh.add(c.id);
-                });
-                setInputs(ni);
-                setHintedIndices(nh);
-                setShowHintPicker(false);
-                // Focus next empty cell after hint
-                const lastIdx = word.chars[word.chars.length - 1].id;
-                const n = findNext(lastIdx);
+            const handleHint = (wi) => {
+                const w = answerWords[wi]; if (!w) return;
+                const ni = [...inputs]; const nh = new Set(hintedIndices);
+                w.chars.forEach(c => { ni[c.id] = c.char; nh.add(c.id); });
+                setInputs(ni); setHintedIndices(nh); setShowHintPicker(false);
+                const last = w.chars[w.chars.length - 1].id;
+                const n = findNext(last);
                 if (n !== -1 && inputRefs.current[n]) setTimeout(() => inputRefs.current[n].focus(), 100);
             };
 
-            const isCorrect = status === 'correct';
+            // ====== VOICE PHASE ======
+            if (phase === 'voice') return (
+                <div className="flex flex-col items-end w-full space-y-2 animate-pop">
+                    <div className="flex items-center gap-2 mr-2">
+                        <span className="text-[10px] font-bold text-zinc-500 bg-zinc-800/80 px-2.5 py-1 rounded-full border border-zinc-700">💡 "{data.userHint}"</span>
+                    </div>
+                    <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm space-y-3">
+                        <div className="flex items-center gap-2">
+                            <Mic size={14} className="text-indigo-300"/>
+                            <span className="text-indigo-200 text-xs font-bold">Nota de voz — escucha e intenta responder</span>
+                        </div>
+                        <VoiceNote text={data.botMessage} onPlay={playBotAudio} isPlaying={isPlaying}/>
+                        <div className="flex gap-2">
+                            <button onClick={startTyping} className="flex-1 bg-white text-indigo-700 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-1.5 active:scale-95 transition-transform">
+                                ✍️ Responder
+                            </button>
+                        </div>
+                        <button onClick={seeTranscript} className="w-full text-indigo-200/60 text-[11px] font-bold flex items-center justify-center gap-1 hover:text-indigo-200 py-1">
+                            <Eye size={12}/> Ver transcripción
+                        </button>
+                    </div>
+                </div>
+            );
 
-            // Focus first input on mount
-            useEffect(() => {
-                const first = parsed.findIndex(p => p.isLetter);
-                if (first !== -1 && inputRefs.current[first]) {
-                    setTimeout(() => inputRefs.current[first]?.focus(), 500);
-                }
-            }, []);
+            // ====== TRANSCRIPT PHASE ======
+            if (phase === 'transcript') return (
+                <div className="flex flex-col items-end w-full space-y-2 animate-pop">
+                    <div className="flex items-center gap-2 mr-2">
+                        <span className="text-[10px] font-bold text-zinc-500 bg-zinc-800/80 px-2.5 py-1 rounded-full border border-zinc-700">💡 "{data.userHint}"</span>
+                    </div>
+                    <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm space-y-3">
+                        <VoiceNote text={data.botMessage} onPlay={playBotAudio} isPlaying={isPlaying}/>
+                        <div className="bg-indigo-700/50 rounded-xl p-3 border border-indigo-500/20">
+                            <p className="text-white text-sm leading-relaxed">{data.botMessage}</p>
+                        </div>
+                        <p className="text-indigo-300/50 text-[10px] font-bold text-center">📖 Transcripción visible — bonus de escucha perdido</p>
+                        <button onClick={startTyping} className="w-full bg-white text-indigo-700 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-1.5 active:scale-95 transition-transform">
+                            ✍️ Responder
+                        </button>
+                    </div>
+                </div>
+            );
 
+            // ====== TYPING / CORRECT PHASE ======
             return (
                 <div className="flex flex-col items-end w-full space-y-2 animate-pop">
-                    {/* Hint text */}
                     <div className="flex items-center gap-2 mr-2">
-                        <span className="text-xs font-bold text-zinc-500 bg-zinc-800 px-3 py-1.5 rounded-full border border-zinc-700">
-                            💡 "{data.userHint}"
-                        </span>
+                        <span className="text-[10px] font-bold text-zinc-500 bg-zinc-800/80 px-2.5 py-1 rounded-full border border-zinc-700">💡 "{data.userHint}"</span>
+                        {blindMode && phase !== 'correct' && <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">👂 +{LISTEN_BONUS} bonus</span>}
                     </div>
 
-                    {/* Answer bubble */}
-                    <div className={`w-[95%] sm:w-[88%] p-4 rounded-2xl rounded-tr-sm transition-colors duration-500 ${
-                        isCorrect ? 'bg-emerald-600' : 'bg-indigo-600'
-                    } ${status === 'error' ? 'animate-shake' : ''}`}>
+                    <div className={`w-[95%] sm:w-[88%] p-4 rounded-2xl rounded-tr-sm transition-colors duration-500 ${phase === 'correct' ? 'bg-emerald-600' : 'bg-indigo-600'} ${status === 'error' ? 'animate-shake' : ''}`}>
 
-                        {isCorrect ? (
-                            /* Show clean text when correct */
+                        {phase === 'correct' ? (
                             <div>
-                                <p className="text-white font-bold text-lg leading-relaxed">{data.expectedAnswer}</p>
-                                <div className="flex items-center gap-3 mt-3">
-                                    <button onClick={() => speak(data.expectedAnswer, 'en-US', 0.85)}
-                                        className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full"><Volume2 size={18}/></button>
+                                <p className="text-white font-bold text-base sm:text-lg leading-relaxed">{data.expectedAnswer}{userEmoji}</p>
+                                <div className="flex items-center gap-2 mt-3 flex-wrap">
+                                    <button onClick={playAnswerAudio} className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full"><Volume2 size={16}/></button>
                                     <div className="flex items-center gap-1 bg-white/20 px-3 py-1.5 rounded-full">
-                                        <Star size={14} className="text-amber-300"/>
-                                        <span className="text-white font-black text-sm">+{stepScore}</span>
+                                        <Star size={13} className="text-amber-300"/><span className="text-white font-black text-sm">+{stepScore}</span>
                                     </div>
+                                    {blindMode && <span className="text-emerald-200 text-[10px] font-bold bg-white/10 px-2 py-1 rounded-full">👂 Bonus incluido</span>}
                                 </div>
                                 <div className="mt-4 text-right">
-                                    <button onClick={onNext}
-                                        className="bg-white text-emerald-700 font-black py-2.5 px-6 rounded-xl shadow-lg hover:scale-105 transition-transform text-sm uppercase tracking-wider flex items-center gap-1 ml-auto">
+                                    <button onClick={onNext} className="bg-white text-emerald-700 font-black py-2.5 px-6 rounded-xl shadow-lg text-sm uppercase tracking-wider flex items-center gap-1 ml-auto active:scale-95 transition-transform">
                                         Enviar <ChevronRight size={16}/>
                                     </button>
                                 </div>
                             </div>
                         ) : (
-                            /* Input cells */
                             <div>
+                                {/* Show transcript toggle if in blind mode */}
+                                {blindMode && (
+                                    <button onClick={() => setBlindMode(false)} className="mb-3 text-indigo-200/50 text-[10px] font-bold flex items-center gap-1 hover:text-indigo-200">
+                                        <Eye size={11}/> Ver transcripción (pierdes bonus 👂)
+                                    </button>
+                                )}
+                                {!blindMode && (
+                                    <div className="mb-3 bg-indigo-700/40 rounded-lg p-2.5 border border-indigo-500/20">
+                                        <p className="text-white/80 text-xs leading-relaxed">{data.botMessage}</p>
+                                    </div>
+                                )}
+
                                 <div className="flex flex-wrap gap-x-3 gap-y-3 justify-start">
                                     {words.map((word, wi) => (
                                         <div key={wi} className="flex gap-[3px] items-end">
                                             {word.map(item => {
-                                                if (!item.isLetter) {
-                                                    return <span key={item.id} className="text-xl font-bold text-white/70 pb-1">{item.char}</span>;
-                                                }
-                                                const isHinted = hintedIndices.has(item.id);
-                                                const isError = errorIndices.has(item.id);
+                                                if (!item.isLetter) return <span key={item.id} className="text-lg font-bold text-white/60 pb-1">{item.char}</span>;
+                                                const isH = hintedIndices.has(item.id);
+                                                const isE = errorIndices.has(item.id);
                                                 return (
-                                                    <input
-                                                        key={item.id}
-                                                        ref={el => inputRefs.current[item.id] = el}
-                                                        type="text" maxLength="1"
-                                                        value={inputs[item.id]}
+                                                    <input key={item.id} ref={el => inputRefs.current[item.id] = el}
+                                                        type="text" maxLength="1" value={inputs[item.id]}
                                                         onChange={(e) => handleChange(e, item.id)}
                                                         onKeyDown={(e) => handleKeyDown(e, item.id)}
-                                                        disabled={isCorrect || isHinted}
+                                                        disabled={isH}
                                                         autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck="false"
-                                                        className={`cell-input ${
-                                                            isHinted ? 'text-amber-300 border-amber-400/50 opacity-80' :
-                                                            isError ? 'text-rose-300 border-rose-400 bg-rose-500/20' :
-                                                            'text-white border-white/40 focus:border-white focus:bg-white/10'
-                                                        }`}
-                                                        style={{ fontSize: '16px' }}
-                                                    />
+                                                        className={`cell-input ${isH ? 'text-amber-300 border-amber-400/50 opacity-80' : isE ? 'text-rose-300 border-rose-400 bg-rose-500/20' : 'text-white border-white/40 focus:border-white focus:bg-white/10'}`}
+                                                        style={{ fontSize: '16px' }}/>
                                                 );
                                             })}
                                         </div>
                                     ))}
                                 </div>
 
-                                {/* Hint button */}
-                                <div className="mt-4 flex items-center gap-2">
+                                <div className="mt-4 flex items-center gap-2 flex-wrap">
+                                    <button onClick={playBotAudio} className="bg-white/10 hover:bg-white/20 text-indigo-200 p-2 rounded-full"><Volume2 size={15}/></button>
                                     <button onClick={() => setShowHintPicker(!showHintPicker)}
-                                        className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-amber-500/30">
-                                        <Lightbulb size={14}/> Pista
+                                        className="bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-amber-500/20">
+                                        <Lightbulb size={13}/> Pista
                                     </button>
-                                    <span className="text-indigo-300/60 text-[10px] font-bold">Las pistas no suman puntos</span>
+                                    <span className="text-indigo-300/40 text-[9px] font-bold">Pistas no suman pts</span>
                                 </div>
 
-                                {/* Hint word picker */}
                                 {showHintPicker && (
                                     <div className="mt-2 flex flex-wrap gap-2 animate-slide-up">
                                         {answerWords.map((w, i) => {
-                                            const wordText = w.chars.map(c => c.char).join('');
-                                            const alreadyHinted = w.chars.every(c => hintedIndices.has(c.id));
+                                            const wt = w.chars.map(c => c.char).join('');
+                                            const done = w.chars.every(c => hintedIndices.has(c.id));
                                             return (
-                                                <button key={i} disabled={alreadyHinted} onClick={() => handleHint(i)}
-                                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                                                        alreadyHinted ? 'bg-zinc-700/50 text-zinc-500 border-zinc-700' :
-                                                        'bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20 active:scale-95'
-                                                    }`}>
-                                                    {alreadyHinted ? wordText : `Palabra ${i + 1} (${w.chars.filter(c => c.isLetter).length} letras)`}
+                                                <button key={i} disabled={done} onClick={() => handleHint(i)}
+                                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${done ? 'bg-zinc-700/50 text-zinc-500 border-zinc-700' : 'bg-amber-500/10 text-amber-300 border-amber-500/20 hover:bg-amber-500/20 active:scale-95'}`}>
+                                                    {done ? wt : `Palabra ${i+1} (${w.chars.filter(c=>c.isLetter).length} letras)`}
                                                 </button>
                                             );
                                         })}
@@ -369,25 +400,33 @@
             const [error, setError] = useState(null);
             const [totalScore, setTotalScore] = useState(0);
             const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
+            const [quizId] = useState(new URLSearchParams(window.location.search).get('id'));
+
+            // Pre-game
+            const [playerName, setPlayerName] = useState('');
+            const [gameStarted, setGameStarted] = useState(false);
+            const [leaderboard, setLeaderboard] = useState([]);
 
             const messagesEndRef = useRef(null);
 
+            // Load quiz + leaderboard
             useEffect(() => {
-                const fetchGame = async () => {
-                    const id = new URLSearchParams(window.location.search).get('id');
-                    if (!id) { setError("Falta el ID del juego."); setLoading(false); return; }
+                const load = async () => {
+                    if (!quizId) { setError("Falta el ID."); setLoading(false); return; }
                     try {
-                        const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id));
-                        if (snap.exists()) {
-                            const data = snap.data();
-                            setGameTitle(data.title || 'Conversación');
-                            setChatFlow(data.content || []);
-                        } else { setError("Juego no encontrado."); }
+                        const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId));
+                        if (snap.exists()) { const d = snap.data(); setGameTitle(d.title || 'Chat'); setChatFlow(d.content || []); }
+                        else setError("Juego no encontrado.");
+
+                        // Load leaderboard
+                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score', 'desc'), limit(5));
+                        const lbSnap = await getDocs(q);
+                        setLeaderboard(lbSnap.docs.map(d => d.data()));
                     } catch (e) { setError(e.message); }
                     setLoading(false);
                 };
-                fetchGame();
-            }, []);
+                load();
+            }, [quizId]);
 
             const contact = useMemo(() => guessContact(chatFlow), [chatFlow]);
 
@@ -395,16 +434,26 @@
                 setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 200);
             }, [currentStep]);
 
-            const handleNext = () => {
-                if (currentStep < chatFlow.length) setCurrentStep(prev => prev + 1);
-            };
+            const handleNext = () => { if (currentStep < chatFlow.length) setCurrentStep(prev => prev + 1); };
 
-            if (loading) return (
-                <div className="h-[100dvh] flex items-center justify-center bg-zinc-950">
-                    <Loader2 className="animate-spin text-indigo-500" size={40}/>
-                </div>
-            );
+            // Save score at end
+            const isComplete = currentStep === chatFlow.length && gameStarted && chatFlow.length > 0;
+            const [scoreSaved, setScoreSaved] = useState(false);
 
+            useEffect(() => {
+                if (isComplete && !scoreSaved && playerName) {
+                    addDoc(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), {
+                        playerName, score: totalScore, date: serverTimestamp()
+                    }).then(() => {
+                        setScoreSaved(true);
+                        // Reload leaderboard
+                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score', 'desc'), limit(5));
+                        getDocs(q).then(s => setLeaderboard(s.docs.map(d => d.data())));
+                    });
+                }
+            }, [isComplete, scoreSaved]);
+
+            if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-indigo-500" size={40}/></div>;
             if (error) return (
                 <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 p-6">
                     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 text-center max-w-sm">
@@ -415,19 +464,60 @@
                 </div>
             );
 
-            const isComplete = currentStep === chatFlow.length;
+            // ====== NAME ENTRY + LEADERBOARD ======
+            if (!gameStarted) return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950 overflow-auto">
+                    <div className="max-w-sm w-full my-auto">
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] p-6 shadow-2xl text-center">
+                            <div className="w-16 h-16 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-3xl mx-auto mb-4">{contact.emoji}</div>
+                            <h1 className="text-2xl font-black text-white mb-1">{gameTitle}</h1>
+                            <p className="text-zinc-500 text-sm font-medium mb-6">Practica la conversación con {contact.name}</p>
 
+                            {leaderboard.length > 0 && (
+                                <div className="mb-6 space-y-2">
+                                    <div className="flex items-center gap-2 justify-center mb-2">
+                                        <Trophy size={16} className="text-amber-400"/>
+                                        <span className="text-amber-400 font-black text-xs uppercase tracking-widest">Top Scores</span>
+                                    </div>
+                                    {leaderboard.map((l, i) => (
+                                        <div key={i} className="flex items-center justify-between bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5">
+                                            <div className="flex items-center gap-2">
+                                                <span className={`font-black text-sm ${i===0?'text-amber-400':i===1?'text-zinc-400':'text-zinc-600'}`}>#{i+1}</span>
+                                                <span className="font-bold text-white text-sm uppercase">{l.playerName}</span>
+                                            </div>
+                                            <div className="flex items-center gap-1">
+                                                <Star size={12} className="text-amber-400"/>
+                                                <span className="font-black text-amber-400 text-sm">{l.score}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            <input type="text" placeholder="Tu nombre..." value={playerName}
+                                onChange={(e) => setPlayerName(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && playerName.trim() && setGameStarted(true)}
+                                className="w-full bg-zinc-950 border-2 border-zinc-800 rounded-xl p-3 text-center text-lg font-bold text-white mb-4 outline-none focus:border-indigo-500"
+                                style={{ fontSize: '16px' }}/>
+                            <button disabled={!playerName.trim()} onClick={() => setGameStarted(true)}
+                                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-black py-3.5 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm">
+                                Empezar Chat
+                            </button>
+                        </div>
+                        {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-4 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest block mx-auto">Volver al Hub</button>}
+                    </div>
+                </div>
+            );
+
+            // ====== GAME ======
             return (
                 <div className="h-[100dvh] flex flex-col bg-zinc-950 max-w-lg mx-auto sm:my-4 sm:rounded-[2rem] sm:border sm:border-zinc-800 sm:shadow-2xl overflow-hidden sm:h-[calc(100dvh-2rem)]">
-
-                    {/* Header — looks like a phone */}
                     <header className="bg-zinc-900 px-4 py-3 flex items-center justify-between shrink-0 border-b border-zinc-800">
                         <div className="flex items-center gap-3">
                             <button onClick={() => window.location.href = isStudent ? 'javascript:history.back()' : 'index.html'}
                                 className="p-2 text-zinc-500 hover:text-white rounded-xl"><ArrowLeft size={18}/></button>
                             <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-xl border border-indigo-500/30 relative">
-                                {contact.emoji}
-                                <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900"/>
+                                {contact.emoji}<div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900"/>
                             </div>
                             <div>
                                 <h1 className="font-black text-white text-sm leading-none">{contact.name}</h1>
@@ -440,47 +530,36 @@
                         </div>
                     </header>
 
-                    {/* Messages */}
                     <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 custom-scrollbar">
-
                         {chatFlow.slice(0, currentStep + 1).map((data, index) => {
                             const isCurrent = index === currentStep && !isComplete;
-                            const isCompleted = index < currentStep;
-
+                            const isDone = index < currentStep;
                             return (
                                 <div key={data.id || index} className="space-y-3 animate-pop">
-                                    {/* Bot message */}
+                                    {/* Bot bubble */}
                                     <div className="flex w-full gap-2">
-                                        <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">
-                                            {contact.emoji}
-                                        </div>
-                                        <div className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[82%]">
-                                            <p className="text-sm sm:text-base leading-relaxed">{data.botMessage}</p>
-                                            <button onClick={() => speak(data.botMessage, 'en-US', 0.85)}
-                                                className="mt-2 text-indigo-400 hover:text-indigo-300 flex items-center gap-1 text-xs font-bold">
-                                                <Volume2 size={14}/> Escuchar
-                                            </button>
-                                        </div>
+                                        <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">{contact.emoji}</div>
+                                        {isDone ? (
+                                            <div className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[82%]">
+                                                <p className="text-sm leading-relaxed">{data.botMessage}</p>
+                                                <button onClick={() => speak(data.botMessage, 'en-US', 0.85)} className="mt-1.5 text-indigo-400 hover:text-indigo-300 flex items-center gap-1 text-[11px] font-bold"><Volume2 size={12}/> Escuchar</button>
+                                            </div>
+                                        ) : (
+                                            /* For current step, the bot message is inside the ActiveBubble as voice note */
+                                            <div className="bg-zinc-800 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[82%]">
+                                                <VoiceNote text={data.botMessage} onPlay={() => speak(data.botMessage, 'en-US', 0.85)} isPlaying={false}/>
+                                            </div>
+                                        )}
                                     </div>
 
                                     {/* User response */}
                                     {isCurrent ? (
-                                        <ActiveBubble
-                                            data={data}
-                                            onNext={handleNext}
-                                            totalScore={totalScore}
-                                            setTotalScore={setTotalScore}
-                                            stepIndex={index}
-                                            totalSteps={chatFlow.length}
-                                        />
-                                    ) : isCompleted ? (
+                                        <ActiveBubble data={data} onNext={handleNext} setTotalScore={setTotalScore} contact={contact}/>
+                                    ) : isDone ? (
                                         <div className="flex flex-col items-end w-full space-y-1">
                                             <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-4 py-3 max-w-[85%]">
-                                                <p className="text-sm sm:text-base font-medium leading-relaxed">{data.expectedAnswer}</p>
-                                                <button onClick={() => speak(data.expectedAnswer, 'en-US', 0.85)}
-                                                    className="mt-1.5 text-indigo-200 hover:text-white flex items-center gap-1 text-xs font-bold ml-auto">
-                                                    <Volume2 size={13}/> Repetir
-                                                </button>
+                                                <p className="text-sm font-medium leading-relaxed">{data.expectedAnswer}{pickUserEmoji(data.expectedAnswer)}</p>
+                                                <button onClick={() => speak(data.expectedAnswer, 'en-US', 0.85)} className="mt-1 text-indigo-200 hover:text-white flex items-center gap-1 text-[11px] font-bold ml-auto"><Volume2 size={12}/> Repetir</button>
                                             </div>
                                         </div>
                                     ) : null}
@@ -488,42 +567,38 @@
                             );
                         })}
 
-                        {/* Completion */}
                         {isComplete && (
                             <div className="text-center py-6 animate-pop">
                                 <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-xs mx-auto">
-                                    <Trophy size={40} className="text-amber-400 mx-auto mb-3"/>
-                                    <h2 className="text-xl font-black text-white mb-1">¡Conversación Completada!</h2>
+                                    <Trophy size={36} className="text-amber-400 mx-auto mb-3"/>
+                                    <h2 className="text-lg font-black text-white mb-1">¡Chat Completado!</h2>
                                     <div className="flex items-center justify-center gap-2 mb-4">
-                                        <Star size={18} className="text-amber-400"/>
+                                        <Star size={16} className="text-amber-400"/>
                                         <span className="text-2xl font-black text-amber-400">{totalScore}</span>
-                                        <span className="text-zinc-500 font-bold text-sm">puntos</span>
+                                        <span className="text-zinc-500 text-sm font-bold">pts</span>
                                     </div>
-                                    <div className="space-y-2">
-                                        <button onClick={() => window.location.reload()}
-                                            className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2">
-                                            <RotateCcw size={16}/> Jugar de nuevo
-                                        </button>
-                                        <button onClick={() => window.location.href='index.html'}
-                                            className="w-full bg-zinc-800 text-zinc-300 font-bold py-3 rounded-xl text-sm">
-                                            Volver al Hub
-                                        </button>
-                                    </div>
+                                    {leaderboard.length > 0 && (
+                                        <div className="mb-4 space-y-1.5">
+                                            {leaderboard.slice(0, 3).map((l, i) => (
+                                                <div key={i} className="flex justify-between bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs">
+                                                    <span className="font-bold text-zinc-300">{i===0?'🥇':i===1?'🥈':'🥉'} {l.playerName}</span>
+                                                    <span className="font-black text-amber-400">{l.score}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <button onClick={() => window.location.reload()} className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2 mb-2"><RotateCcw size={14}/> Jugar de nuevo</button>
+                                    <button onClick={() => window.location.href='index.html'} className="w-full bg-zinc-800 text-zinc-400 font-bold py-2.5 rounded-xl text-sm">Volver</button>
                                 </div>
                             </div>
                         )}
-
                         <div ref={messagesEndRef}/>
                     </div>
 
-                    {/* Bottom bar (decorative like a real chat) */}
                     {!isComplete && (
                         <div className="bg-zinc-900 px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0">
                             <div className="flex-1 bg-zinc-800 rounded-full h-10 px-4 flex items-center border border-zinc-700/50">
                                 <span className="text-zinc-500 text-sm">Escribe arriba...</span>
-                            </div>
-                            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-indigo-400 border border-indigo-500/30">
-                                <Volume2 size={18}/>
                             </div>
                         </div>
                     )}
