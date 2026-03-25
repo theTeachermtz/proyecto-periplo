@@ -33,8 +33,10 @@
         .animate-slide-up { animation: slideUp 0.25s ease-out forwards; }
         @keyframes pulse-bar { 0%,100%{opacity:0.4} 50%{opacity:1} }
         .voice-bar { animation: pulse-bar 1.2s ease-in-out infinite; }
-        @keyframes glowPulse { 0%,100%{box-shadow:0 0 0 0 rgba(99,102,241,0.3)} 50%{box-shadow:0 0 12px 4px rgba(99,102,241,0.2)} }
+        @keyframes glowPulse { 0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,0.3)} 50%{box-shadow:0 0 14px 4px rgba(251,191,36,0.15)} }
         .glow-hint { animation: glowPulse 1.5s ease-in-out infinite; }
+        @keyframes pointDown { 0%,100%{transform:translateY(0)} 50%{transform:translateY(6px)} }
+        .point-down { animation: pointDown 1s ease-in-out infinite; }
 
         .cell-input {
             width: 28px; height: 36px; font-size: 16px; text-align: center;
@@ -48,7 +50,7 @@
 <body class="text-zinc-100 h-[100dvh]">
     <div id="root" class="h-full"></div>
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+        import React, { useState, useEffect, useRef, useMemo } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
@@ -59,133 +61,72 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        const speak = (text, lang = 'en-US', rate = 0.85) => {
-            if (!window.speechSynthesis) return;
+        // TTS — strips emojis before speaking
+        const stripEmoji = (s) => s.replace(/[\u{1F600}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1FA00}-\u{1FAFF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '').trim();
+        const speak = (text, lang='en-US', rate=0.85, onEnd) => {
+            if(!window.speechSynthesis) { if(onEnd) onEnd(); return; }
             window.speechSynthesis.cancel();
-            const u = new SpeechSynthesisUtterance(text); u.lang = lang; u.rate = rate; u.pitch = 1;
+            const u = new SpeechSynthesisUtterance(stripEmoji(text)); u.lang=lang; u.rate=rate; u.pitch=1;
             const voices = window.speechSynthesis.getVoices();
-            const v = voices.find(v => v.lang.startsWith(lang.split('-')[0]) && v.name.includes('Google')) || voices.find(v => v.lang.startsWith(lang.split('-')[0]));
-            if (v) u.voice = v;
+            const v = voices.find(v=>v.lang.startsWith(lang.split('-')[0])&&v.name.includes('Google')) || voices.find(v=>v.lang.startsWith(lang.split('-')[0]));
+            if(v) u.voice=v;
+            if(onEnd) u.onend = onEnd;
             window.speechSynthesis.speak(u);
         };
-        if (window.speechSynthesis) { window.speechSynthesis.getVoices(); window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices(); }
+        if(window.speechSynthesis){window.speechSynthesis.getVoices();window.speechSynthesis.onvoiceschanged=()=>window.speechSynthesis.getVoices();}
 
-        const pickUserEmoji = (text) => {
-            const t = text.toLowerCase();
-            if (/thank|thanks/.test(t)) return ' 🙏';
-            if (/please/.test(t)) return ' 🤝';
-            if (/hello|hi |hey/.test(t)) return ' 👋';
-            if (/bye|goodbye|see you/.test(t)) return ' 👋';
-            if (/sorry|apologize/.test(t)) return ' 😅';
-            if (/love|amazing|great|awesome/.test(t)) return ' 😍';
-            if (/yes|sure|of course/.test(t)) return ' 👍';
-            if (/no |don't|can't/.test(t)) return ' 🙅';
-            if (/food|eat|hungry|dinner|lunch/.test(t)) return ' 🍽️';
-            if (/drink|water|coffee|beer/.test(t)) return ' ☕';
-            if (/happy|glad|excited/.test(t)) return ' 😊';
-            if (/work|job|office/.test(t)) return ' 💼';
-            if (/money|pay|cost/.test(t)) return ' 💰';
-            if (/time|when|hour/.test(t)) return ' ⏰';
-            const r = [' 💬',' ✨',' 📝','','',''];
-            return r[Math.floor(Math.random()*r.length)];
+        const pickUserEmoji = (t) => {
+            const l=t.toLowerCase();
+            if(/thank|thanks/.test(l)) return ' 🙏'; if(/please/.test(l)) return ' 🤝';
+            if(/hello|hi |hey/.test(l)) return ' 👋'; if(/bye|goodbye|see you/.test(l)) return ' 👋';
+            if(/sorry/.test(l)) return ' 😅'; if(/love|amazing|great|awesome/.test(l)) return ' 😍';
+            if(/yes|sure|of course/.test(l)) return ' 👍'; if(/food|eat|hungry|dinner/.test(l)) return ' 🍽️';
+            if(/happy|glad|excited/.test(l)) return ' 😊'; if(/work|job|office/.test(l)) return ' 💼';
+            const r=[' 💬',' ✨','','','']; return r[Math.floor(Math.random()*r.length)];
         };
 
-        const guessContact = (chatFlow) => {
-            if (!chatFlow || chatFlow.length === 0) return { name: 'Teacher', emoji: '🧑‍🏫' };
-            const t = chatFlow.map(c => (c.botMessage||'')+(c.expectedAnswer||'')).join(' ').toLowerCase();
-            const p = [
-                {k:['boss','manager','meeting','deadline','project','office'],n:'Boss',e:'👔'},
-                {k:['doctor','appointment','health','medicine','hospital'],n:'Dr. Smith',e:'🩺'},
-                {k:['waiter','menu','order','restaurant','food','table','bill'],n:'Server',e:'🍽️'},
-                {k:['bartender','bar','cocktail','beer','wine'],n:'Bartender',e:'🍸'},
-                {k:['friend','party','hang out','movie','fun','weekend','bro'],n:'Best Friend',e:'😎'},
-                {k:['mom','mother','mama','family','love you'],n:'Mom',e:'👩‍🦱'},
-                {k:['dad','father','papa'],n:'Dad',e:'👨‍🦳'},
-                {k:['grandma','grandmother','abuela'],n:'Grandma',e:'👵'},
-                {k:['hotel','reservation','room','check in'],n:'Hotel Staff',e:'🏨'},
-                {k:['store','buy','price','shopping','pay'],n:'Cashier',e:'🛒'},
-                {k:['teacher','class','homework','school','study'],n:'Teacher',e:'📚'},
-                {k:['taxi','uber','driver','ride','airport'],n:'Driver',e:'🚕'},
-                {k:['interview','hire','resume','job','position'],n:'Interviewer',e:'💼'},
-            ];
-            for (const x of p) if (x.k.some(k => t.includes(k))) return {name:x.n,emoji:x.e};
-            return {name:'Chat Partner',emoji:'💬'};
+        const guessContact = (cf) => {
+            if(!cf||cf.length===0) return{name:'Teacher',emoji:'🧑‍🏫'};
+            const t=cf.map(c=>(c.botMessage||'')+(c.expectedAnswer||'')).join(' ').toLowerCase();
+            const p=[{k:['boss','manager','meeting','deadline','office'],n:'Boss',e:'👔'},{k:['doctor','appointment','health','hospital'],n:'Dr. Smith',e:'🩺'},{k:['waiter','menu','order','restaurant','food','bill'],n:'Server',e:'🍽️'},{k:['bartender','bar','cocktail','beer'],n:'Bartender',e:'🍸'},{k:['friend','party','hang out','movie','weekend','bro'],n:'Best Friend',e:'😎'},{k:['mom','mother','mama','family'],n:'Mom',e:'👩‍🦱'},{k:['dad','father','papa'],n:'Dad',e:'👨‍🦳'},{k:['grandma','grandmother','abuela'],n:'Grandma',e:'👵'},{k:['hotel','reservation','room','check in'],n:'Hotel Staff',e:'🏨'},{k:['store','buy','price','shopping'],n:'Cashier',e:'🛒'},{k:['teacher','class','homework','school'],n:'Teacher',e:'📚'},{k:['taxi','uber','driver','ride','airport'],n:'Driver',e:'🚕'},{k:['interview','hire','resume','job'],n:'Interviewer',e:'💼'}];
+            for(const x of p) if(x.k.some(k=>t.includes(k))) return{name:x.n,emoji:x.e};
+            return{name:'Chat Partner',emoji:'💬'};
         };
 
-        // Voice note visual
-        const VoiceNote = ({ text, onPlay, isPlaying }) => (
-            <div className="flex items-center gap-2 bg-zinc-700/50 rounded-2xl px-3 py-2 max-w-[220px]">
+        // Voice note
+        const VoiceNote = ({text, onPlay, isPlaying}) => (
+            <div className="flex items-center gap-2 bg-zinc-700/50 rounded-2xl px-3 py-2.5 max-w-[220px]">
                 <button onClick={onPlay} className="w-9 h-9 rounded-full bg-emerald-500 flex items-center justify-center text-white flex-shrink-0 active:scale-90 transition-transform">
-                    {isPlaying ? <div className="w-2.5 h-2.5 bg-white rounded-sm"/> : <Play size={15} fill="white"/>}
+                    {isPlaying?<div className="w-2.5 h-2.5 bg-white rounded-sm"/>:<Play size={15} fill="white"/>}
                 </button>
                 <div className="flex-1 flex items-center gap-[2px] h-5 overflow-hidden">
-                    {[...Array(16)].map((_,i) => (
-                        <div key={i} className={`w-[3px] rounded-full bg-emerald-400 ${isPlaying?'voice-bar':''}`}
-                            style={{height:`${Math.random()*60+30}%`,animationDelay:`${i*0.08}s`,opacity:isPlaying?undefined:0.4}}/>
-                    ))}
+                    {[...Array(16)].map((_,i)=>(<div key={i} className={`w-[3px] rounded-full bg-emerald-400 ${isPlaying?'voice-bar':''}`} style={{height:`${Math.random()*60+30}%`,animationDelay:`${i*0.08}s`,opacity:isPlaying?undefined:0.4}}/>))}
                 </div>
                 <span className="text-[10px] text-zinc-400 font-bold flex-shrink-0">0:{String(Math.ceil(text.length/14)).padStart(2,'0')}</span>
             </div>
         );
 
-        // ====== TUTORIAL OVERLAY ======
-        const TutorialOverlay = ({ step, onNext, onPlay, isPlaying, hintText }) => {
-            // Steps: 0=listen, 1=try typing, 2=transcript help
-            const messages = [
-                { title: "🎧 Primero, escucha", body: "Dale play a la nota de voz para escuchar la pregunta. Así entrenas tu oído.", action: null, highlight: 'play' },
-                { title: "✍️ Ahora, intenta responder", body: `La pista en español te dice qué contestar. ¡Si lo logras sin ver la transcripción ganas puntos extra!`, action: "¡Entendido!", highlight: 'input' },
-                { title: "👁️ ¿No pudiste? No pasa nada", body: "Toca 'Ver transcripción' para leer lo que dijo. También puedes pedir pistas por palabra, pero esas letras no suman puntos.", action: "¡Listo, a jugar!", highlight: 'transcript' },
-            ];
-            const m = messages[step];
-            if (!m) return null;
-
-            return (
-                <div className="fixed inset-0 z-[60] flex items-end justify-center pb-6 px-4 bg-black/50 backdrop-blur-sm" onClick={(e) => e.stopPropagation()}>
-                    <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-5 max-w-sm w-full shadow-2xl animate-slide-up">
-                        <h3 className="text-lg font-black text-white mb-2">{m.title}</h3>
-                        <p className="text-zinc-300 text-sm leading-relaxed mb-4">{m.body}</p>
-                        {step === 0 && (
-                            <button onClick={onPlay} className="w-full bg-emerald-500 text-white font-black py-3 rounded-xl text-sm flex items-center justify-center gap-2 active:scale-95 mb-2">
-                                <Play size={16} fill="white"/> Escuchar nota de voz
-                            </button>
-                        )}
-                        {step === 0 && isPlaying && (
-                            <button onClick={onNext} className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl text-sm active:scale-95">
-                                Ya la escuché →
-                            </button>
-                        )}
-                        {m.action && (
-                            <button onClick={onNext} className="w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-sm active:scale-95">
-                                {m.action}
-                            </button>
-                        )}
-                    </div>
-                </div>
-            );
-        };
-
         // ====== ACTIVE BUBBLE ======
-        const ActiveBubble = ({ data, onNext, setTotalScore, contact, isTutorial, onTutorialStep }) => {
-            const { parsed, words } = useMemo(() => {
-                const p = data.expectedAnswer.split('').map((c,i) => ({id:i,char:c,isLetter:/[a-zA-Z]/.test(c)}));
-                const w = []; let cur = [];
-                p.forEach(item => { if(item.char===' '){if(cur.length>0)w.push(cur);cur=[];}else cur.push(item);});
-                if(cur.length>0) w.push(cur);
-                return {parsed:p,words:w};
-            }, [data.expectedAnswer]);
+        const ActiveBubble = ({data, onNext, setTotalScore, isTutorial, showTranscriptCb, transcriptVisible}) => {
+            const {parsed, words} = useMemo(() => {
+                const p=data.expectedAnswer.split('').map((c,i)=>({id:i,char:c,isLetter:/[a-zA-Z]/.test(c)}));
+                const w=[]; let cur=[];
+                p.forEach(item=>{if(item.char===' '){if(cur.length>0)w.push(cur);cur=[];}else cur.push(item);});
+                if(cur.length>0)w.push(cur);
+                return{parsed:p,words:w};
+            },[data.expectedAnswer]);
 
-            const answerWords = useMemo(() => {
+            const answerWords = useMemo(()=>{
                 const r=[]; let wc=[]; let ws=-1;
-                parsed.forEach((p,i) => {if(p.char===' '){if(wc.length>0)r.push({start:ws,chars:wc});wc=[];ws=-1;}else{if(ws===-1)ws=i;wc.push(p);}});
+                parsed.forEach((p,i)=>{if(p.char===' '){if(wc.length>0)r.push({start:ws,chars:wc});wc=[];ws=-1;}else{if(ws===-1)ws=i;wc.push(p);}});
                 if(wc.length>0)r.push({start:ws,chars:wc});
                 return r;
-            }, [parsed]);
+            },[parsed]);
 
             const totalLetters = parsed.filter(p=>p.isLetter).length;
-            const LISTEN_BONUS = Math.ceil(totalLetters * 0.5);
+            const LISTEN_BONUS = Math.ceil(totalLetters*0.5);
 
-            const [phase, setPhase] = useState('voice');
-            const [isPlaying, setIsPlaying] = useState(false);
+            const [phase, setPhase] = useState('waiting'); // waiting (for user to start) | typing | correct
             const [blindMode, setBlindMode] = useState(true);
             const [inputs, setInputs] = useState(Array(parsed.length).fill(''));
             const [status, setStatus] = useState('typing');
@@ -194,128 +135,107 @@
             const [attempts, setAttempts] = useState(0);
             const [showHintPicker, setShowHintPicker] = useState(false);
             const [stepScore, setStepScore] = useState(0);
-            const [tutStep, setTutStep] = useState(isTutorial ? 0 : -1); // -1 = no tutorial
-            const [firstErrorShown, setFirstErrorShown] = useState(false);
+            const [tutStep, setTutStep] = useState(isTutorial?0:-1);
+            const [firstErrorDone, setFirstErrorDone] = useState(false);
             const inputRefs = useRef([]);
-            const userEmoji = useMemo(() => pickUserEmoji(data.expectedAnswer), [data.expectedAnswer]);
+            const userEmoji = useMemo(()=>pickUserEmoji(data.expectedAnswer),[data.expectedAnswer]);
 
-            const playBot = () => {
-                setIsPlaying(true);
-                speak(data.botMessage, 'en-US', 0.85);
-                setTimeout(() => setIsPlaying(false), Math.max(1500, data.botMessage.length * 70));
-            };
-
-            // Auto-play on mount (if not tutorial)
-            useEffect(() => {
-                if (!isTutorial) setTimeout(() => playBot(), 400);
-            }, []);
+            // When transcript becomes visible externally, lose blind mode
+            useEffect(()=>{if(transcriptVisible) setBlindMode(false);},[transcriptVisible]);
 
             const startTyping = () => {
                 setPhase('typing');
-                setTimeout(() => { const f = parsed.findIndex(p=>p.isLetter); if(f!==-1 && inputRefs.current[f]) inputRefs.current[f].focus(); }, 300);
+                setTimeout(()=>{const f=parsed.findIndex(p=>p.isLetter);if(f!==-1&&inputRefs.current[f])inputRefs.current[f].focus();},300);
             };
 
-            const seeTranscript = () => { setBlindMode(false); setPhase('transcript'); };
+            // Tutorial: after audio played, advance to step 1
+            const onBotAudioEnd = () => {
+                if(tutStep===0) setTutStep(1);
+            };
 
-            const findNext = (idx) => { for(let i=idx+1;i<parsed.length;i++) if(parsed[i].isLetter && !hintedIndices.has(i)) return i; return -1; };
-            const findPrev = (idx) => { for(let i=idx-1;i>=0;i--) if(parsed[i].isLetter && !hintedIndices.has(i)) return i; return -1; };
+            // Start typing from tutorial step 1
+            useEffect(()=>{
+                if(tutStep===1) startTyping();
+            },[tutStep]);
 
-            const handleChange = (e, index) => {
-                if(status==='correct') return;
-                const char = e.target.value.slice(-1);
-                const ni=[...inputs]; ni[index]=char; setInputs(ni);
+            const findNext=(idx)=>{for(let i=idx+1;i<parsed.length;i++)if(parsed[i].isLetter&&!hintedIndices.has(i))return i;return-1;};
+            const findPrev=(idx)=>{for(let i=idx-1;i>=0;i--)if(parsed[i].isLetter&&!hintedIndices.has(i))return i;return-1;};
+
+            const handleChange=(e,index)=>{
+                if(status==='correct')return;
+                const char=e.target.value.slice(-1);
+                const ni=[...inputs];ni[index]=char;setInputs(ni);
                 if(errorIndices.has(index)){const ne=new Set(errorIndices);ne.delete(index);setErrorIndices(ne);}
                 if(char!==''){const n=findNext(index);if(n!==-1&&inputRefs.current[n])inputRefs.current[n].focus();}
             };
 
-            const handleKeyDown = (e, index) => {
-                if(status==='correct') return;
-                if(e.key==='Backspace' && !inputs[index]){
-                    e.preventDefault();
-                    const p=findPrev(index);
+            const handleKeyDown=(e,index)=>{
+                if(status==='correct')return;
+                if(e.key==='Backspace'&&!inputs[index]){
+                    e.preventDefault();const p=findPrev(index);
                     if(p!==-1&&inputRefs.current[p]){const ni=[...inputs];ni[p]='';setInputs(ni);inputRefs.current[p].focus();if(errorIndices.has(p)){const ne=new Set(errorIndices);ne.delete(p);setErrorIndices(ne);}}
                 }
             };
 
-            // Check
-            useEffect(() => {
-                if(phase!=='typing'||status!=='typing') return;
-                const li = parsed.filter(p=>p.isLetter).map(p=>p.id);
-                if(!li.every(i=>inputs[i]!=='')) return;
-                const wrong = new Set();
-                li.forEach(i => { if(inputs[i].toLowerCase()!==parsed[i].char.toLowerCase()) wrong.add(i); });
+            useEffect(()=>{
+                if(phase!=='typing'||status!=='typing')return;
+                const li=parsed.filter(p=>p.isLetter).map(p=>p.id);
+                if(!li.every(i=>inputs[i]!==''))return;
+                const wrong=new Set();
+                li.forEach(i=>{if(inputs[i].toLowerCase()!==parsed[i].char.toLowerCase())wrong.add(i);});
                 if(wrong.size===0){
                     const h=[...hintedIndices].filter(i=>parsed[i]?.isLetter).length;
-                    let earned = Math.max(0, totalLetters - h - attempts);
-                    if(blindMode) earned += LISTEN_BONUS;
-                    setStepScore(earned); setTotalScore(prev=>prev+earned);
-                    setStatus('correct'); setPhase('correct');
+                    let earned=Math.max(0,totalLetters-h-attempts);
+                    if(blindMode)earned+=LISTEN_BONUS;
+                    setStepScore(earned);setTotalScore(prev=>prev+earned);
+                    setStatus('correct');setPhase('correct');
                     confetti({particleCount:80,spread:60,origin:{y:0.6}});
-                    setTimeout(() => speak(data.expectedAnswer,'en-US',0.85), 600);
-                } else {
-                    setErrorIndices(wrong); setAttempts(prev=>prev+wrong.size);
-                    setStatus('error'); setTimeout(()=>setStatus('typing'),800);
-                    // Tutorial: first error triggers step 2
-                    if(isTutorial && !firstErrorShown) { setFirstErrorShown(true); setTutStep(2); }
+                    setTimeout(()=>speak(data.expectedAnswer,'en-US',0.85),600);
+                }else{
+                    setErrorIndices(wrong);setAttempts(prev=>prev+wrong.size);
+                    setStatus('error');setTimeout(()=>setStatus('typing'),800);
+                    if(isTutorial&&!firstErrorDone){setFirstErrorDone(true);setTutStep(2);}
                 }
-            }, [inputs, parsed, status, phase]);
+            },[inputs,parsed,status,phase]);
 
-            const handleHint = (wi) => {
-                const w=answerWords[wi]; if(!w) return;
-                const ni=[...inputs]; const nh=new Set(hintedIndices);
+            const handleHint=(wi)=>{
+                const w=answerWords[wi];if(!w)return;
+                const ni=[...inputs];const nh=new Set(hintedIndices);
                 w.chars.forEach(c=>{ni[c.id]=c.char;nh.add(c.id);});
-                setInputs(ni); setHintedIndices(nh); setShowHintPicker(false);
-                const last=w.chars[w.chars.length-1].id; const n=findNext(last);
-                if(n!==-1&&inputRefs.current[n]) setTimeout(()=>inputRefs.current[n].focus(),100);
+                setInputs(ni);setHintedIndices(nh);setShowHintPicker(false);
+                const last=w.chars[w.chars.length-1].id;const n=findNext(last);
+                if(n!==-1&&inputRefs.current[n])setTimeout(()=>inputRefs.current[n].focus(),100);
             };
 
-            // Tutorial handlers
-            const handleTutPlay = () => { playBot(); };
-            const handleTutNext = () => {
-                if (tutStep === 0) { setTutStep(1); startTyping(); }
-                else if (tutStep === 1) { setTutStep(-1); }
-                else if (tutStep === 2) { setTutStep(-1); }
+            // ====== TUTORIAL TOOLTIPS (overlay at bottom) ======
+            const renderTutorial = () => {
+                if(tutStep<0) return null;
+                const msgs = [
+                    {title:"🎧 Escucha la nota de voz", body:"Dale play al botón verde de arriba ☝️ para escuchar la pregunta.", showNext:false},
+                    {title:"✍️ Intenta responder", body:"La pista en español te dice qué contestar. Si lo logras sin ver la transcripción ganas puntos extra. Si no entiendes, da click en 'Ver transcripción' debajo del audio pero pierdes el bonus.", btn:"¡Entendido!"},
+                    {title:"👁️ ¿Te equivocaste? No pasa nada", body:"Puedes ver la transcripción debajo del audio. También pide pistas por palabra con el botón 💡 — pero esas letras no suman puntos.", btn:"¡Listo, a jugar!"},
+                ];
+                const m=msgs[tutStep]; if(!m) return null;
+                return (
+                    <div className="fixed inset-0 z-[60] flex items-end justify-center pb-6 px-4 bg-black/40 backdrop-blur-sm">
+                        <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-5 max-w-sm w-full shadow-2xl animate-slide-up">
+                            {tutStep===0 && <div className="text-center mb-2 point-down text-2xl">☝️</div>}
+                            <h3 className="text-base font-black text-white mb-1.5">{m.title}</h3>
+                            <p className="text-zinc-300 text-sm leading-relaxed mb-4">{m.body}</p>
+                            {m.btn && <button onClick={()=>setTutStep(-1)} className="w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-sm active:scale-95">{m.btn}</button>}
+                        </div>
+                    </div>
+                );
             };
 
-            // ====== VOICE PHASE ======
-            if (phase === 'voice') return (
+            // ====== WAITING (before typing starts) ======
+            if(phase==='waiting') return (
                 <div className="flex flex-col items-end w-full space-y-2 animate-pop relative">
-                    {tutStep >= 0 && <TutorialOverlay step={tutStep} onNext={handleTutNext} onPlay={handleTutPlay} isPlaying={isPlaying}/>}
-                    <div className="flex items-center gap-2 mr-2">
-                        <span className="text-sm font-bold text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20">💡 {data.userHint}</span>
+                    {renderTutorial()}
+                    <div className="flex items-center gap-2 mr-2 flex-wrap justify-end">
+                        <span className="text-base font-bold text-amber-400 bg-amber-500/10 px-4 py-2 rounded-xl border border-amber-500/20">💡 {data.userHint}</span>
                     </div>
                     <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm space-y-3">
-                        <div className="flex items-center gap-2">
-                            <Mic size={14} className="text-indigo-300"/>
-                            <span className="text-indigo-200 text-xs font-bold">Nota de voz</span>
-                        </div>
-                        <VoiceNote text={data.botMessage} onPlay={playBot} isPlaying={isPlaying}/>
-                        <button onClick={() => { if(isTutorial && tutStep===0) return; startTyping(); }}
-                            disabled={isTutorial && tutStep===0}
-                            className="w-full bg-white text-indigo-700 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-40 disabled:cursor-not-allowed">
-                            ✍️ Responder
-                        </button>
-                        <button onClick={() => { if(isTutorial && tutStep===0) return; seeTranscript(); }}
-                            disabled={isTutorial && tutStep===0}
-                            className="w-full text-indigo-200/50 text-[11px] font-bold flex items-center justify-center gap-1 hover:text-indigo-200 py-1 disabled:opacity-20">
-                            <Eye size={12}/> Ver transcripción
-                        </button>
-                    </div>
-                </div>
-            );
-
-            // ====== TRANSCRIPT PHASE ======
-            if (phase === 'transcript') return (
-                <div className="flex flex-col items-end w-full space-y-2 animate-pop">
-                    <div className="flex items-center gap-2 mr-2">
-                        <span className="text-sm font-bold text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20">💡 {data.userHint}</span>
-                    </div>
-                    <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm space-y-3">
-                        <VoiceNote text={data.botMessage} onPlay={playBot} isPlaying={isPlaying}/>
-                        <div className="bg-indigo-700/50 rounded-xl p-3 border border-indigo-500/20">
-                            <p className="text-white text-sm leading-relaxed">{data.botMessage}</p>
-                        </div>
-                        <p className="text-indigo-300/40 text-[10px] font-bold text-center">📖 Bonus de escucha perdido</p>
                         <button onClick={startTyping} className="w-full bg-white text-indigo-700 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-1.5 active:scale-95">
                             ✍️ Responder
                         </button>
@@ -326,68 +246,53 @@
             // ====== TYPING / CORRECT ======
             return (
                 <div className="flex flex-col items-end w-full space-y-2 animate-pop relative">
-                    {tutStep >= 0 && <TutorialOverlay step={tutStep} onNext={handleTutNext} onPlay={handleTutPlay} isPlaying={isPlaying} hintText={data.userHint}/>}
+                    {renderTutorial()}
                     <div className="flex items-center gap-2 mr-2 flex-wrap justify-end">
-                        <span className={`text-sm font-bold text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20 ${tutStep===1?'glow-hint ring-2 ring-amber-400/50':''}`}>💡 {data.userHint}</span>
-                        {blindMode && phase!=='correct' && <span className="text-[11px] font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">👂 +{LISTEN_BONUS}</span>}
+                        <span className={`text-base font-bold text-amber-400 bg-amber-500/10 px-4 py-2 rounded-xl border border-amber-500/20 ${tutStep===1?'glow-hint':''}`}>💡 {data.userHint}</span>
+                        {blindMode && phase!=='correct' && <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 rounded-full border border-emerald-500/20">👂 +{LISTEN_BONUS}</span>}
                     </div>
 
                     <div className={`w-[95%] sm:w-[88%] p-4 rounded-2xl rounded-tr-sm transition-colors duration-500 ${phase==='correct'?'bg-emerald-600':'bg-indigo-600'} ${status==='error'?'animate-shake':''}`}>
-                        {phase === 'correct' ? (
+                        {phase==='correct' ? (
                             <div>
                                 <p className="text-white font-bold text-base sm:text-lg leading-relaxed">{data.expectedAnswer}{userEmoji}</p>
                                 <div className="flex items-center gap-2 mt-3 flex-wrap">
                                     <button onClick={()=>speak(data.expectedAnswer,'en-US',0.85)} className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full"><Volume2 size={16}/></button>
-                                    <div className="flex items-center gap-1 bg-white/20 px-3 py-1.5 rounded-full">
-                                        <Star size={13} className="text-amber-300"/><span className="text-white font-black text-sm">+{stepScore}</span>
-                                    </div>
+                                    <div className="flex items-center gap-1 bg-white/20 px-3 py-1.5 rounded-full"><Star size={13} className="text-amber-300"/><span className="text-white font-black text-sm">+{stepScore}</span></div>
                                     {blindMode && <span className="text-emerald-200 text-[10px] font-bold bg-white/10 px-2 py-1 rounded-full">👂 Bonus</span>}
                                 </div>
                                 <div className="mt-4 text-right">
-                                    <button onClick={onNext} className="bg-white text-emerald-700 font-black py-2.5 px-6 rounded-xl shadow-lg text-sm uppercase tracking-wider flex items-center gap-1 ml-auto active:scale-95">
-                                        Enviar <ChevronRight size={16}/>
-                                    </button>
+                                    <button onClick={onNext} className="bg-white text-emerald-700 font-black py-2.5 px-6 rounded-xl shadow-lg text-sm uppercase tracking-wider flex items-center gap-1 ml-auto active:scale-95">Enviar <ChevronRight size={16}/></button>
                                 </div>
                             </div>
                         ) : (
                             <div>
-                                {blindMode && <button onClick={()=>{setBlindMode(false);}} className="mb-3 text-indigo-200/40 text-[10px] font-bold flex items-center gap-1 hover:text-indigo-200"><Eye size={11}/> Ver transcripción (pierdes bonus 👂)</button>}
-                                {!blindMode && (
-                                    <div className="mb-3 bg-indigo-700/40 rounded-lg p-2.5 border border-indigo-500/20">
-                                        <p className="text-white/80 text-xs leading-relaxed">{data.botMessage}</p>
-                                    </div>
-                                )}
                                 <div className="flex flex-wrap gap-x-3 gap-y-3 justify-start">
-                                    {words.map((word,wi) => (
+                                    {words.map((word,wi)=>(
                                         <div key={wi} className="flex gap-[3px] items-end">
-                                            {word.map(item => {
+                                            {word.map(item=>{
                                                 if(!item.isLetter) return <span key={item.id} className="text-lg font-bold text-white/60 pb-1">{item.char}</span>;
-                                                const isH=hintedIndices.has(item.id);
-                                                const isE=errorIndices.has(item.id);
-                                                return (
-                                                    <input key={item.id} ref={el=>inputRefs.current[item.id]=el}
-                                                        type="text" maxLength="1" value={inputs[item.id]}
-                                                        onChange={(e)=>handleChange(e,item.id)}
-                                                        onKeyDown={(e)=>handleKeyDown(e,item.id)}
-                                                        disabled={isH}
-                                                        autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck="false"
-                                                        className={`cell-input ${isH?'text-amber-300 border-amber-400/50 opacity-80':isE?'text-rose-300 border-rose-400 bg-rose-500/20':'text-white border-white/40 focus:border-white focus:bg-white/10'}`}
-                                                        style={{fontSize:'16px'}}/>
-                                                );
+                                                const isH=hintedIndices.has(item.id); const isE=errorIndices.has(item.id);
+                                                return (<input key={item.id} ref={el=>inputRefs.current[item.id]=el}
+                                                    type="text" maxLength="1" value={inputs[item.id]}
+                                                    onChange={(e)=>handleChange(e,item.id)} onKeyDown={(e)=>handleKeyDown(e,item.id)}
+                                                    disabled={isH} autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck="false"
+                                                    className={`cell-input ${isH?'text-amber-300 border-amber-400/50 opacity-80':isE?'text-rose-300 border-rose-400 bg-rose-500/20':'text-white border-white/40 focus:border-white focus:bg-white/10'}`}
+                                                    style={{fontSize:'16px'}}/>);
                                             })}
                                         </div>
                                     ))}
                                 </div>
                                 <div className="mt-4 flex items-center gap-2 flex-wrap">
-                                    <button onClick={playBot} className="bg-white/10 hover:bg-white/20 text-indigo-200 p-2 rounded-full"><Volume2 size={15}/></button>
                                     <button onClick={()=>setShowHintPicker(!showHintPicker)}
                                         className="bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-amber-500/20">
                                         <Lightbulb size={13}/> Pista
                                     </button>
+                                    <span className="text-indigo-300/40 text-[9px] font-bold">No suman pts</span>
                                 </div>
                                 {showHintPicker && (
                                     <div className="mt-2 flex flex-wrap gap-2 animate-slide-up">
-                                        {answerWords.map((w,i) => {
+                                        {answerWords.map((w,i)=>{
                                             const wt=w.chars.map(c=>c.char).join('');
                                             const done=w.chars.every(c=>hintedIndices.has(c.id));
                                             return (<button key={i} disabled={done} onClick={()=>handleHint(i)}
@@ -406,138 +311,132 @@
 
         // ====== MAIN APP ======
         const App = () => {
-            const [chatFlow, setChatFlow] = useState([]);
-            const [gameTitle, setGameTitle] = useState('');
-            const [currentStep, setCurrentStep] = useState(0);
-            const [loading, setLoading] = useState(true);
-            const [error, setError] = useState(null);
-            const [totalScore, setTotalScore] = useState(0);
-            const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
-            const [quizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [chatFlow,setChatFlow]=useState([]);
+            const [gameTitle,setGameTitle]=useState('');
+            const [currentStep,setCurrentStep]=useState(0);
+            const [loading,setLoading]=useState(true);
+            const [error,setError]=useState(null);
+            const [totalScore,setTotalScore]=useState(0);
+            const [isStudent]=useState(new URLSearchParams(window.location.search).get('student')==='true');
+            const [quizId]=useState(new URLSearchParams(window.location.search).get('id'));
+            const [screen,setScreen]=useState('name');
+            const [playerName,setPlayerName]=useState('');
+            const [rememberChoice,setRememberChoice]=useState(true);
+            const [showTutorial,setShowTutorial]=useState(false);
+            const [leaderboard,setLeaderboard]=useState([]);
+            const [scoreSaved,setScoreSaved]=useState(false);
+            // Per-step: track if transcript is shown (lives in parent so NPC bubble can show it)
+            const [transcriptVisible,setTranscriptVisible]=useState(false);
+            const [isPlayingBot,setIsPlayingBot]=useState(false);
+            const [botAudioDone,setBotAudioDone]=useState(false);
 
-            // Screens: name → askPlayed → (tutorial in-game) → game → end
-            const [screen, setScreen] = useState('name'); // name | askPlayed | game
-            const [playerName, setPlayerName] = useState('');
-            const [hasPlayed, setHasPlayed] = useState(null); // null | true | false
-            const [rememberChoice, setRememberChoice] = useState(true);
-            const [showTutorial, setShowTutorial] = useState(false);
-            const [leaderboard, setLeaderboard] = useState([]);
+            const messagesEndRef=useRef(null);
 
-            const messagesEndRef = useRef(null);
-
-            // Check localStorage for remembered choice
-            useEffect(() => {
-                const saved = localStorage.getItem(`periplo-chat-played-${quizId}`);
-                if (saved === 'yes') { setHasPlayed(true); }
-            }, [quizId]);
-
-            // Load
-            useEffect(() => {
-                const load = async () => {
-                    if (!quizId) { setError("Falta el ID."); setLoading(false); return; }
-                    try {
-                        const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId));
-                        if (snap.exists()) { const d=snap.data(); setGameTitle(d.title||'Chat'); setChatFlow(d.content||[]); }
+            useEffect(()=>{
+                const load=async()=>{
+                    if(!quizId){setError("Falta el ID.");setLoading(false);return;}
+                    try{
+                        const snap=await getDoc(doc(db,'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes',quizId));
+                        if(snap.exists()){const d=snap.data();setGameTitle(d.title||'Chat');setChatFlow(d.content||[]);}
                         else setError("Juego no encontrado.");
-                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score','desc'), limit(5));
-                        const lbSnap = await getDocs(q);
-                        setLeaderboard(lbSnap.docs.map(d=>d.data()));
-                    } catch(e) { setError(e.message); }
+                        const q=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`),orderBy('score','desc'),limit(5));
+                        const lbSnap=await getDocs(q);setLeaderboard(lbSnap.docs.map(d=>d.data()));
+                    }catch(e){setError(e.message);}
                     setLoading(false);
-                };
-                load();
-            }, [quizId]);
+                };load();
+            },[quizId]);
 
-            const contact = useMemo(() => guessContact(chatFlow), [chatFlow]);
+            const contact=useMemo(()=>guessContact(chatFlow),[chatFlow]);
+            useEffect(()=>{setTimeout(()=>messagesEndRef.current?.scrollIntoView({behavior:'smooth'}),200);},[currentStep]);
 
-            useEffect(() => {
-                setTimeout(() => messagesEndRef.current?.scrollIntoView({behavior:'smooth'}), 200);
-            }, [currentStep]);
+            const handleNext=()=>{
+                if(currentStep<chatFlow.length){
+                    setCurrentStep(prev=>prev+1);
+                    setTranscriptVisible(false);
+                    setIsPlayingBot(false);
+                    setBotAudioDone(false);
+                }
+            };
 
-            const handleNext = () => { if(currentStep<chatFlow.length) setCurrentStep(prev=>prev+1); };
-
-            const goToGame = (played) => {
-                setHasPlayed(played);
-                if (rememberChoice && played) localStorage.setItem(`periplo-chat-played-${quizId}`, 'yes');
+            const goToGame=(played)=>{
+                if(rememberChoice&&played) localStorage.setItem(`periplo-chat-played-${quizId}`,'yes');
                 setShowTutorial(!played);
                 setScreen('game');
             };
 
-            const goBackToName = () => { setScreen('name'); setCurrentStep(0); setTotalScore(0); setScoreSaved(false); };
+            const goBackToName=()=>{setScreen('name');setCurrentStep(0);setTotalScore(0);setScoreSaved(false);setTranscriptVisible(false);};
 
-            // Save score
-            const isComplete = screen === 'game' && currentStep === chatFlow.length && chatFlow.length > 0;
-            const [scoreSaved, setScoreSaved] = useState(false);
+            const isComplete = screen==='game' && currentStep===chatFlow.length && chatFlow.length>0;
 
-            useEffect(() => {
-                if (isComplete && !scoreSaved && playerName) {
-                    addDoc(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), {
-                        playerName, score: totalScore, date: serverTimestamp()
-                    }).then(() => {
+            useEffect(()=>{
+                if(isComplete&&!scoreSaved&&playerName){
+                    addDoc(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`),{playerName,score:totalScore,date:serverTimestamp()}).then(()=>{
                         setScoreSaved(true);
-                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score','desc'), limit(5));
-                        getDocs(q).then(s => setLeaderboard(s.docs.map(d=>d.data())));
+                        const q=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`),orderBy('score','desc'),limit(5));
+                        getDocs(q).then(s=>setLeaderboard(s.docs.map(d=>d.data())));
                     });
                 }
-            }, [isComplete, scoreSaved]);
+            },[isComplete,scoreSaved]);
 
-            if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-indigo-500" size={40}/></div>;
-            if (error) return (
+            // Play current bot audio
+            const playCurrentBot=()=>{
+                const d=chatFlow[currentStep];
+                if(!d) return;
+                setIsPlayingBot(true);
+                speak(d.botMessage,'en-US',0.85,()=>{setIsPlayingBot(false);setBotAudioDone(true);});
+            };
+
+            // Auto-play bot on new step (non-tutorial)
+            useEffect(()=>{
+                if(screen==='game'&&!showTutorial&&currentStep<chatFlow.length){
+                    setTimeout(()=>playCurrentBot(),400);
+                }
+            },[currentStep,screen]);
+
+            if(loading)return<div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-indigo-500" size={40}/></div>;
+            if(error)return(
                 <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 p-6">
                     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 text-center max-w-sm">
-                        <p className="text-rose-400 font-bold mb-2">Error</p>
-                        <p className="text-zinc-400 text-sm mb-6">{error}</p>
+                        <p className="text-rose-400 font-bold mb-2">Error</p><p className="text-zinc-400 text-sm mb-6">{error}</p>
                         <button onClick={()=>window.location.href='index.html'} className="bg-zinc-800 text-white font-bold px-6 py-2 rounded-xl">Volver</button>
                     </div>
                 </div>
             );
 
-            // ====== NAME SCREEN ======
-            if (screen === 'name') return (
+            // NAME
+            if(screen==='name')return(
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950 overflow-auto">
                     <div className="max-w-sm w-full my-auto">
                         <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] p-6 shadow-2xl text-center">
                             <div className="w-16 h-16 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-3xl mx-auto mb-4">{contact.emoji}</div>
                             <h1 className="text-2xl font-black text-white mb-1">{gameTitle}</h1>
                             <p className="text-zinc-500 text-sm font-medium mb-6">Practica con {contact.name}</p>
-                            {leaderboard.length > 0 && (
+                            {leaderboard.length>0&&(
                                 <div className="mb-6 space-y-2">
-                                    <div className="flex items-center gap-2 justify-center mb-2">
-                                        <Trophy size={16} className="text-amber-400"/>
-                                        <span className="text-amber-400 font-black text-xs uppercase tracking-widest">Top Scores</span>
-                                    </div>
-                                    {leaderboard.map((l,i) => (
+                                    <div className="flex items-center gap-2 justify-center mb-2"><Trophy size={16} className="text-amber-400"/><span className="text-amber-400 font-black text-xs uppercase tracking-widest">Top Scores</span></div>
+                                    {leaderboard.map((l,i)=>(
                                         <div key={i} className="flex items-center justify-between bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5">
-                                            <div className="flex items-center gap-2">
-                                                <span className={`font-black text-sm ${i===0?'text-amber-400':i===1?'text-zinc-400':'text-zinc-600'}`}>#{i+1}</span>
-                                                <span className="font-bold text-white text-sm uppercase">{l.playerName}</span>
-                                            </div>
+                                            <div className="flex items-center gap-2"><span className={`font-black text-sm ${i===0?'text-amber-400':i===1?'text-zinc-400':'text-zinc-600'}`}>#{i+1}</span><span className="font-bold text-white text-sm uppercase">{l.playerName}</span></div>
                                             <div className="flex items-center gap-1"><Star size={12} className="text-amber-400"/><span className="font-black text-amber-400 text-sm">{l.score}</span></div>
                                         </div>
                                     ))}
                                 </div>
                             )}
-                            <input type="text" placeholder="Tu nombre..." value={playerName}
-                                onChange={(e)=>setPlayerName(e.target.value)}
-                                onKeyDown={(e)=>e.key==='Enter'&&playerName.trim()&&setScreen('askPlayed')}
+                            <input type="text" placeholder="Tu nombre..." value={playerName} onChange={(e)=>setPlayerName(e.target.value)}
+                                onKeyDown={(e)=>e.key==='Enter'&&playerName.trim()&&(localStorage.getItem(`periplo-chat-played-${quizId}`)==='yes'?goToGame(true):setScreen('askPlayed'))}
                                 className="w-full bg-zinc-950 border-2 border-zinc-800 rounded-xl p-3 text-center text-lg font-bold text-white mb-4 outline-none focus:border-indigo-500" style={{fontSize:'16px'}}/>
                             <button disabled={!playerName.trim()} onClick={()=>{
-                                // If remembered as played, skip ask screen
-                                const saved = localStorage.getItem(`periplo-chat-played-${quizId}`);
-                                if (saved === 'yes') goToGame(true);
+                                if(localStorage.getItem(`periplo-chat-played-${quizId}`)==='yes') goToGame(true);
                                 else setScreen('askPlayed');
-                            }}
-                                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-black py-3.5 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm">
-                                Continuar
-                            </button>
+                            }} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-black py-3.5 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm">Continuar</button>
                         </div>
-                        {!isStudent && <button onClick={()=>window.location.href='index.html'} className="mt-4 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest block mx-auto">Volver al Hub</button>}
+                        {!isStudent&&<button onClick={()=>window.location.href='index.html'} className="mt-4 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest block mx-auto">Volver al Hub</button>}
                     </div>
                 </div>
             );
 
-            // ====== ASK PLAYED BEFORE ======
-            if (screen === 'askPlayed') return (
+            // ASK PLAYED
+            if(screen==='askPlayed')return(
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950 overflow-auto">
                     <div className="max-w-sm w-full my-auto">
                         <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] p-6 shadow-2xl text-center">
@@ -545,51 +444,40 @@
                             <h2 className="text-xl font-black text-white mb-2">¿Ya has jugado antes?</h2>
                             <p className="text-zinc-400 text-sm mb-6">Si es tu primera vez te mostramos cómo funciona.</p>
                             <div className="space-y-3 mb-6">
-                                <button onClick={()=>goToGame(true)} className="w-full bg-indigo-600 text-white font-black py-3.5 rounded-xl text-sm uppercase tracking-widest active:scale-95">
-                                    Sí, ya sé cómo funciona
-                                </button>
-                                <button onClick={()=>goToGame(false)} className="w-full bg-zinc-800 text-zinc-200 font-black py-3.5 rounded-xl text-sm uppercase tracking-widest active:scale-95 border border-zinc-700">
-                                    No, muéstrame cómo
-                                </button>
+                                <button onClick={()=>goToGame(true)} className="w-full bg-indigo-600 text-white font-black py-3.5 rounded-xl text-sm uppercase tracking-widest active:scale-95">Sí, ya sé cómo</button>
+                                <button onClick={()=>goToGame(false)} className="w-full bg-zinc-800 text-zinc-200 font-black py-3.5 rounded-xl text-sm uppercase tracking-widest active:scale-95 border border-zinc-700">No, muéstrame</button>
                             </div>
-                            <button onClick={()=>{setRememberChoice(!rememberChoice);}} className="flex items-center gap-2 mx-auto text-zinc-500 text-xs font-bold hover:text-zinc-300">
-                                {rememberChoice ? <CheckSquare size={16} className="text-indigo-400"/> : <Square size={16}/>}
-                                Recordar mi respuesta
+                            <button onClick={()=>setRememberChoice(!rememberChoice)} className="flex items-center gap-2 mx-auto text-zinc-500 text-xs font-bold hover:text-zinc-300">
+                                {rememberChoice?<CheckSquare size={16} className="text-indigo-400"/>:<Square size={16}/>} Recordar mi respuesta
                             </button>
                         </div>
                     </div>
                 </div>
             );
 
-            // ====== GAME ======
-            return (
+            // GAME
+            const currentData = chatFlow[currentStep];
+
+            return(
                 <div className="h-[100dvh] flex flex-col bg-zinc-950 max-w-lg mx-auto sm:my-4 sm:rounded-[2rem] sm:border sm:border-zinc-800 sm:shadow-2xl overflow-hidden sm:h-[calc(100dvh-2rem)]">
                     <header className="bg-zinc-900 px-4 py-3 flex items-center justify-between shrink-0 border-b border-zinc-800">
                         <div className="flex items-center gap-3">
                             <button onClick={goBackToName} className="p-2 text-zinc-500 hover:text-white rounded-xl"><ArrowLeft size={18}/></button>
-                            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-xl border border-indigo-500/30 relative">
-                                {contact.emoji}<div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900"/>
-                            </div>
-                            <div>
-                                <h1 className="font-black text-white text-sm leading-none">{contact.name}</h1>
-                                <p className="text-[10px] text-zinc-500 font-bold mt-0.5">{gameTitle}</p>
-                            </div>
+                            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-xl border border-indigo-500/30 relative">{contact.emoji}<div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900"/></div>
+                            <div><h1 className="font-black text-white text-sm leading-none">{contact.name}</h1><p className="text-[10px] text-zinc-500 font-bold mt-0.5">{gameTitle}</p></div>
                         </div>
-                        <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-full">
-                            <Star size={14} className="text-amber-400"/>
-                            <span className="text-amber-400 font-black text-sm tabular-nums">{totalScore}</span>
-                        </div>
+                        <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-full"><Star size={14} className="text-amber-400"/><span className="text-amber-400 font-black text-sm tabular-nums">{totalScore}</span></div>
                     </header>
 
                     <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 custom-scrollbar">
-                        {chatFlow.slice(0, currentStep + 1).map((data, index) => {
-                            const isCurrent = index === currentStep && !isComplete;
-                            const isDone = index < currentStep;
-                            // Only first step gets tutorial
-                            const isFirstTutorial = showTutorial && index === 0 && isCurrent;
+                        {chatFlow.slice(0,currentStep+1).map((data,index)=>{
+                            const isCurrent=index===currentStep&&!isComplete;
+                            const isDone=index<currentStep;
+                            const isFirstTutorial=showTutorial&&index===0&&isCurrent;
 
-                            return (
-                                <div key={data.id || index} className="space-y-3 animate-pop">
+                            return(
+                                <div key={data.id||index} className="space-y-3 animate-pop">
+                                    {/* NPC bubble */}
                                     <div className="flex w-full gap-2">
                                         <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">{contact.emoji}</div>
                                         {isDone ? (
@@ -598,14 +486,30 @@
                                                 <button onClick={()=>speak(data.botMessage,'en-US',0.85)} className="mt-1.5 text-indigo-400 hover:text-indigo-300 flex items-center gap-1 text-[11px] font-bold"><Volume2 size={12}/> Escuchar</button>
                                             </div>
                                         ) : (
-                                            <div className="bg-zinc-800 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[82%]">
-                                                <VoiceNote text={data.botMessage} onPlay={()=>speak(data.botMessage,'en-US',0.85)} isPlaying={false}/>
+                                            <div className="bg-zinc-800 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[82%] space-y-2">
+                                                <VoiceNote text={data.botMessage} onPlay={playCurrentBot} isPlaying={isPlayingBot}/>
+                                                {/* See transcript — below the voice note */}
+                                                {!transcriptVisible ? (
+                                                    <button onClick={()=>setTranscriptVisible(true)} className="text-zinc-500 hover:text-zinc-300 text-xs font-bold flex items-center gap-1">
+                                                        <Eye size={12}/> Ver transcripción
+                                                    </button>
+                                                ) : (
+                                                    <div className="bg-zinc-700/40 rounded-xl p-3 border border-zinc-600/30 animate-slide-up">
+                                                        <p className="text-zinc-200 text-sm leading-relaxed">{data.botMessage}</p>
+                                                    </div>
+                                                )}
                                             </div>
                                         )}
                                     </div>
 
+                                    {/* User response */}
                                     {isCurrent ? (
-                                        <ActiveBubble data={data} onNext={handleNext} setTotalScore={setTotalScore} contact={contact} isTutorial={isFirstTutorial} onTutorialStep={null}/>
+                                        <ActiveBubble
+                                            data={data} onNext={handleNext} setTotalScore={setTotalScore}
+                                            isTutorial={isFirstTutorial}
+                                            showTranscriptCb={()=>setTranscriptVisible(true)}
+                                            transcriptVisible={transcriptVisible}
+                                        />
                                     ) : isDone ? (
                                         <div className="flex flex-col items-end w-full space-y-1">
                                             <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-4 py-3 max-w-[85%]">
@@ -613,31 +517,18 @@
                                                 <button onClick={()=>speak(data.expectedAnswer,'en-US',0.85)} className="mt-1 text-indigo-200 hover:text-white flex items-center gap-1 text-[11px] font-bold ml-auto"><Volume2 size={12}/> Repetir</button>
                                             </div>
                                         </div>
-                                    ) : null}
+                                    ):null}
                                 </div>
                             );
                         })}
 
-                        {isComplete && (
+                        {isComplete&&(
                             <div className="text-center py-6 animate-pop">
                                 <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-xs mx-auto">
                                     <Trophy size={36} className="text-amber-400 mx-auto mb-3"/>
                                     <h2 className="text-lg font-black text-white mb-1">¡Chat Completado!</h2>
-                                    <div className="flex items-center justify-center gap-2 mb-4">
-                                        <Star size={16} className="text-amber-400"/>
-                                        <span className="text-2xl font-black text-amber-400">{totalScore}</span>
-                                        <span className="text-zinc-500 text-sm font-bold">pts</span>
-                                    </div>
-                                    {leaderboard.length > 0 && (
-                                        <div className="mb-4 space-y-1.5">
-                                            {leaderboard.slice(0,3).map((l,i) => (
-                                                <div key={i} className="flex justify-between bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs">
-                                                    <span className="font-bold text-zinc-300">{i===0?'🥇':i===1?'🥈':'🥉'} {l.playerName}</span>
-                                                    <span className="font-black text-amber-400">{l.score}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
+                                    <div className="flex items-center justify-center gap-2 mb-4"><Star size={16} className="text-amber-400"/><span className="text-2xl font-black text-amber-400">{totalScore}</span><span className="text-zinc-500 text-sm font-bold">pts</span></div>
+                                    {leaderboard.length>0&&(<div className="mb-4 space-y-1.5">{leaderboard.slice(0,3).map((l,i)=>(<div key={i} className="flex justify-between bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs"><span className="font-bold text-zinc-300">{i===0?'🥇':i===1?'🥈':'🥉'} {l.playerName}</span><span className="font-black text-amber-400">{l.score}</span></div>))}</div>)}
                                     <button onClick={()=>window.location.reload()} className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2 mb-2"><RotateCcw size={14}/> Jugar de nuevo</button>
                                     <button onClick={goBackToName} className="w-full bg-zinc-800 text-zinc-400 font-bold py-2.5 rounded-xl text-sm">Volver</button>
                                 </div>
@@ -646,18 +537,12 @@
                         <div ref={messagesEndRef}/>
                     </div>
 
-                    {!isComplete && (
-                        <div className="bg-zinc-900 px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0">
-                            <div className="flex-1 bg-zinc-800 rounded-full h-10 px-4 flex items-center border border-zinc-700/50">
-                                <span className="text-zinc-500 text-sm">Escribe arriba...</span>
-                            </div>
-                        </div>
-                    )}
+                    {!isComplete&&(<div className="bg-zinc-900 px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0"><div className="flex-1 bg-zinc-800 rounded-full h-10 px-4 flex items-center border border-zinc-700/50"><span className="text-zinc-500 text-sm">Escribe arriba...</span></div></div>)}
                 </div>
             );
         };
 
-        createRoot(document.getElementById('root')).render(<App />);
+        createRoot(document.getElementById('root')).render(<App/>);
     </script>
 </body>
 </html>
