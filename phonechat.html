@@ -2,12 +2,10 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Phone Chat - Práctica | Periplo</title>
-    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Phone Chat | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
-    
+    <script>tailwind.config = { darkMode: 'class' }; document.documentElement.classList.add('dark');</script>
     <script type="importmap">
     {
       "imports": {
@@ -16,202 +14,345 @@
         "lucide-react": "https://esm.sh/lucide-react@0.263.1",
         "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
         "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js",
-        "canvas-confetti": "https://esm.sh/canvas-confetti@1.6.0"
+        "canvas-confetti": "https://esm.sh/canvas-confetti@1.9.3"
       }
     }
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Nunito', sans-serif; background-color: #f1f5f9; }
-        
-        @keyframes shake {
-            0%, 100% { transform: translateX(0); }
-            20%, 60% { transform: translateX(-4px); }
-            40%, 80% { transform: translateX(4px); }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; user-select: none; -webkit-user-select: none; overflow: hidden; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+
+        @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(5px)} }
+        .animate-shake { animation: shake 0.35s ease-in-out; }
+
+        @keyframes popIn { 0%{opacity:0;transform:scale(0.9) translateY(10px)} 100%{opacity:1;transform:scale(1) translateY(0)} }
+        .animate-pop { animation: popIn 0.35s cubic-bezier(0.175,0.885,0.32,1.275) forwards; }
+
+        @keyframes slideUp { 0%{opacity:0;transform:translateY(20px)} 100%{opacity:1;transform:translateY(0)} }
+        .animate-slide-up { animation: slideUp 0.3s ease-out forwards; }
+
+        .cell-input {
+            width: 28px; height: 36px;
+            font-size: 16px;
+            text-align: center;
+            border: none;
+            border-bottom: 3px solid;
+            background: transparent;
+            outline: none;
+            padding: 0;
+            margin: 0;
+            font-weight: 800;
+            text-transform: uppercase;
+            caret-color: #a78bfa;
+            -webkit-appearance: none;
         }
-        .animate-shake { animation: shake 0.3s ease-in-out; }
-        
-        @keyframes popIn {
-            0% { opacity: 0; transform: scale(0.9) translateY(10px); }
-            100% { opacity: 1; transform: scale(1) translateY(0); }
+        @media (min-width: 640px) {
+            .cell-input { width: 32px; height: 40px; font-size: 18px; }
         }
-        .animate-pop { animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
-        
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
 </head>
-<body class="min-h-screen flex items-center justify-center p-0 sm:p-4">
-
-    <div id="root" class="w-full h-full flex justify-center items-center"></div>
-
+<body class="text-zinc-100 h-[100dvh]">
+    <div id="root" class="h-full"></div>
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef, useMemo } from 'react';
+        import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
         import confetti from 'canvas-confetti';
-        import { Loader2, AlertTriangle, ArrowLeft } from 'lucide-react';
+        import { Loader2, Volume2, Lightbulb, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // --- COMPONENTE: BURBUJA ACTIVA DEL USUARIO (Motor del Juego) ---
-        const ActiveChallengeBubble = ({ data, onNext }) => {
-            const { parsedAnswer, words } = useMemo(() => {
-                const parsed = data.expectedAnswer.split('').map((char, index) => ({
-                    id: index,
-                    char: char,
-                    isLetter: /[a-zA-Z]/.test(char),
+        // ====== TTS ======
+        const speak = (text, lang = 'en-US', rate = 0.9) => {
+            if (!window.speechSynthesis) return;
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(text);
+            u.lang = lang;
+            u.rate = rate;
+            u.pitch = 1;
+            // Try to find a good voice
+            const voices = window.speechSynthesis.getVoices();
+            const v = voices.find(v => v.lang.startsWith(lang.split('-')[0]) && v.name.includes('Google')) ||
+                      voices.find(v => v.lang.startsWith(lang.split('-')[0])) || null;
+            if (v) u.voice = v;
+            window.speechSynthesis.speak(u);
+        };
+
+        // Preload voices
+        if (window.speechSynthesis) {
+            window.speechSynthesis.getVoices();
+            window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+        }
+
+        // ====== GUESS CONTACT NAME & EMOJI FROM CONTEXT ======
+        const guessContact = (chatFlow) => {
+            if (!chatFlow || chatFlow.length === 0) return { name: 'Teacher', emoji: '🧑‍🏫' };
+            const allText = chatFlow.map(c => (c.botMessage || '') + ' ' + (c.expectedAnswer || '')).join(' ').toLowerCase();
+
+            const patterns = [
+                { keys: ['boss', 'manager', 'meeting', 'deadline', 'project', 'office', 'report'], name: 'Boss', emoji: '👔' },
+                { keys: ['doctor', 'appointment', 'health', 'medicine', 'symptoms', 'pain', 'hospital'], name: 'Dr. Smith', emoji: '🩺' },
+                { keys: ['waiter', 'menu', 'order', 'restaurant', 'food', 'eat', 'table', 'drink', 'bill', 'check'], name: 'Server', emoji: '🍽️' },
+                { keys: ['bartender', 'bar', 'cocktail', 'beer', 'wine'], name: 'Bartender', emoji: '🍸' },
+                { keys: ['friend', 'party', 'hang out', 'movie', 'fun', 'weekend', 'dude', 'bro'], name: 'Best Friend', emoji: '😎' },
+                { keys: ['mom', 'mother', 'mama', 'family', 'dinner', 'home', 'love you'], name: 'Mom', emoji: '👩‍🦱' },
+                { keys: ['dad', 'father', 'papa'], name: 'Dad', emoji: '👨‍🦳' },
+                { keys: ['grandma', 'grandmother', 'abuela', 'nana'], name: 'Grandma', emoji: '👵' },
+                { keys: ['hotel', 'reservation', 'room', 'check in', 'checkout', 'stay'], name: 'Hotel Staff', emoji: '🏨' },
+                { keys: ['store', 'buy', 'price', 'shopping', 'cash', 'card', 'pay'], name: 'Cashier', emoji: '🛒' },
+                { keys: ['teacher', 'class', 'homework', 'school', 'study', 'learn', 'test'], name: 'Teacher', emoji: '📚' },
+                { keys: ['taxi', 'uber', 'driver', 'ride', 'airport', 'address'], name: 'Driver', emoji: '🚕' },
+                { keys: ['neighbor', 'neighbourhood', 'noise', 'pet', 'dog', 'cat'], name: 'Neighbor', emoji: '🏠' },
+                { keys: ['interview', 'hire', 'resume', 'job', 'position', 'salary'], name: 'Interviewer', emoji: '💼' },
+            ];
+
+            for (const p of patterns) {
+                if (p.keys.some(k => allText.includes(k))) return { name: p.name, emoji: p.emoji };
+            }
+            return { name: 'Conversation Partner', emoji: '💬' };
+        };
+
+        // ====== ACTIVE CHALLENGE BUBBLE ======
+        const ActiveBubble = ({ data, onNext, totalScore, setTotalScore, stepIndex, totalSteps }) => {
+            const { parsed, words } = useMemo(() => {
+                const p = data.expectedAnswer.split('').map((char, i) => ({
+                    id: i, char, isLetter: /[a-zA-Z]/.test(char),
                 }));
-
-                const wordsArray = [];
-                let currentWord = [];
-
-                parsed.forEach(item => {
-                    if (item.char === ' ') {
-                        if (currentWord.length > 0) wordsArray.push(currentWord);
-                        currentWord = []; 
-                    } else {
-                        currentWord.push(item);
-                    }
+                const w = []; let cur = [];
+                p.forEach(item => {
+                    if (item.char === ' ') { if (cur.length > 0) w.push(cur); cur = []; }
+                    else cur.push(item);
                 });
-                if (currentWord.length > 0) wordsArray.push(currentWord);
-
-                return { parsedAnswer: parsed, words: wordsArray };
+                if (cur.length > 0) w.push(cur);
+                return { parsed: p, words: w };
             }, [data.expectedAnswer]);
 
-            const [userInputs, setUserInputs] = useState(Array(parsedAnswer.length).fill(''));
-            const [gameStatus, setGameStatus] = useState('typing'); 
+            // Split answer into "word" objects for hint system
+            const answerWords = useMemo(() => {
+                const result = [];
+                let wordChars = []; let wordStart = -1;
+                parsed.forEach((p, i) => {
+                    if (p.char === ' ') {
+                        if (wordChars.length > 0) result.push({ start: wordStart, chars: wordChars });
+                        wordChars = []; wordStart = -1;
+                    } else {
+                        if (wordStart === -1) wordStart = i;
+                        wordChars.push(p);
+                    }
+                });
+                if (wordChars.length > 0) result.push({ start: wordStart, chars: wordChars });
+                return result;
+            }, [parsed]);
+
+            const [inputs, setInputs] = useState(Array(parsed.length).fill(''));
+            const [status, setStatus] = useState('typing'); // typing | error | correct
+            const [errorIndices, setErrorIndices] = useState(new Set());
+            const [hintedIndices, setHintedIndices] = useState(new Set()); // Indices filled by hint
+            const [attempts, setAttempts] = useState(0); // Total wrong letter attempts
+            const [showHintPicker, setShowHintPicker] = useState(false);
+            const [stepScore, setStepScore] = useState(0);
+            const [hasSpoken, setHasSpoken] = useState(false);
             const inputRefs = useRef([]);
 
-            const findNextInputIndex = (currentIndex) => {
-                for (let i = currentIndex + 1; i < parsedAnswer.length; i++) {
-                    if (parsedAnswer[i].isLetter) return i;
+            // Auto-read bot message on mount
+            useEffect(() => {
+                if (!hasSpoken) {
+                    setTimeout(() => speak(data.botMessage, 'en-US', 0.85), 400);
+                    setHasSpoken(true);
                 }
-                return -1;
-            };
+            }, [data.botMessage, hasSpoken]);
 
-            const findPrevInputIndex = (currentIndex) => {
-                for (let i = currentIndex - 1; i >= 0; i--) {
-                    if (parsedAnswer[i].isLetter) return i;
-                }
-                return -1;
-            };
+            const totalLetters = parsed.filter(p => p.isLetter).length;
+
+            const findNext = (idx) => { for (let i = idx + 1; i < parsed.length; i++) if (parsed[i].isLetter && !hintedIndices.has(i)) return i; return -1; };
+            const findPrev = (idx) => { for (let i = idx - 1; i >= 0; i--) if (parsed[i].isLetter && !hintedIndices.has(i)) return i; return -1; };
 
             const handleChange = (e, index) => {
-                if (gameStatus === 'correct') return;
-
-                const char = e.target.value.slice(-1); 
-                const newInputs = [...userInputs];
-                newInputs[index] = char;
-                setUserInputs(newInputs);
-
-                if (char !== '') {
-                    const nextIndex = findNextInputIndex(index);
-                    if (nextIndex !== -1 && inputRefs.current[nextIndex]) {
-                        inputRefs.current[nextIndex].focus();
-                    }
+                if (status === 'correct') return;
+                const char = e.target.value.slice(-1);
+                const ni = [...inputs]; ni[index] = char; setInputs(ni);
+                // Clear error for this index if it was wrong
+                if (errorIndices.has(index)) {
+                    const ne = new Set(errorIndices); ne.delete(index); setErrorIndices(ne);
                 }
+                if (char !== '') { const n = findNext(index); if (n !== -1 && inputRefs.current[n]) inputRefs.current[n].focus(); }
             };
 
             const handleKeyDown = (e, index) => {
-                if (gameStatus === 'correct') return;
-
+                if (status === 'correct') return;
                 if (e.key === 'Backspace') {
-                    if (!userInputs[index]) {
+                    if (!inputs[index]) {
                         e.preventDefault();
-                        const prevIndex = findPrevInputIndex(index);
-                        if (prevIndex !== -1 && inputRefs.current[prevIndex]) {
-                            const newInputs = [...userInputs];
-                            newInputs[prevIndex] = '';
-                            setUserInputs(newInputs);
-                            inputRefs.current[prevIndex].focus();
+                        const p = findPrev(index);
+                        if (p !== -1 && inputRefs.current[p]) {
+                            const ni = [...inputs]; ni[p] = ''; setInputs(ni);
+                            inputRefs.current[p].focus();
+                            if (errorIndices.has(p)) { const ne = new Set(errorIndices); ne.delete(p); setErrorIndices(ne); }
                         }
-                    } 
+                    }
                 }
             };
 
+            // Check when all filled
             useEffect(() => {
-                const letterIndices = parsedAnswer.filter(p => p.isLetter).map(p => p.id);
-                const isFullyFilled = letterIndices.length > 0 && letterIndices.every(i => userInputs[i] !== '');
+                const letterIndices = parsed.filter(p => p.isLetter).map(p => p.id);
+                const filled = letterIndices.every(i => inputs[i] !== '');
+                if (!filled || status !== 'typing') return;
 
-                if (isFullyFilled && gameStatus === 'typing') {
-                    const isCorrect = letterIndices.every(i => 
-                        userInputs[i].toLowerCase() === parsedAnswer[i].char.toLowerCase()
-                    );
+                const wrong = new Set();
+                letterIndices.forEach(i => {
+                    if (inputs[i].toLowerCase() !== parsed[i].char.toLowerCase()) wrong.add(i);
+                });
 
-                    if (isCorrect) {
-                        setGameStatus('correct');
-                        confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 }, colors: ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b'] });
-                    } else {
-                        setGameStatus('error');
-                        setTimeout(() => setGameStatus('typing'), 800);
-                    }
+                if (wrong.size === 0) {
+                    // Calculate score: total letters - hinted letters - attempts
+                    const hintedLetters = [...hintedIndices].filter(i => parsed[i]?.isLetter).length;
+                    const earned = Math.max(0, totalLetters - hintedLetters - attempts);
+                    setStepScore(earned);
+                    setTotalScore(prev => prev + earned);
+                    setStatus('correct');
+                    confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 }, colors: ['#10b981','#f59e0b','#8b5cf6'] });
+                    // Read the answer aloud
+                    setTimeout(() => speak(data.expectedAnswer, 'en-US', 0.85), 600);
+                } else {
+                    setErrorIndices(wrong);
+                    setAttempts(prev => prev + wrong.size);
+                    setStatus('error');
+                    setTimeout(() => setStatus('typing'), 800);
                 }
-            }, [userInputs, parsedAnswer, gameStatus]);
+            }, [inputs, parsed, status]);
 
-            const isCorrect = gameStatus === 'correct';
+            // Hint: reveal a word
+            const handleHint = (wordIdx) => {
+                const word = answerWords[wordIdx];
+                if (!word) return;
+                const ni = [...inputs];
+                const nh = new Set(hintedIndices);
+                word.chars.forEach(c => {
+                    ni[c.id] = c.char;
+                    nh.add(c.id);
+                });
+                setInputs(ni);
+                setHintedIndices(nh);
+                setShowHintPicker(false);
+                // Focus next empty cell after hint
+                const lastIdx = word.chars[word.chars.length - 1].id;
+                const n = findNext(lastIdx);
+                if (n !== -1 && inputRefs.current[n]) setTimeout(() => inputRefs.current[n].focus(), 100);
+            };
+
+            const isCorrect = status === 'correct';
+
+            // Focus first input on mount
+            useEffect(() => {
+                const first = parsed.findIndex(p => p.isLetter);
+                if (first !== -1 && inputRefs.current[first]) {
+                    setTimeout(() => inputRefs.current[first]?.focus(), 500);
+                }
+            }, []);
 
             return (
                 <div className="flex flex-col items-end w-full space-y-2 animate-pop">
-                    <div className="text-sm font-semibold text-indigo-400 bg-white/80 px-4 py-2 rounded-full shadow-sm mr-2 border border-indigo-100">
-                        "{data.userHint}"
+                    {/* Hint text */}
+                    <div className="flex items-center gap-2 mr-2">
+                        <span className="text-xs font-bold text-zinc-500 bg-zinc-800 px-3 py-1.5 rounded-full border border-zinc-700">
+                            💡 "{data.userHint}"
+                        </span>
                     </div>
 
-                    <div className={`
-                        w-[95%] sm:w-[85%] p-4 rounded-3xl rounded-tr-sm shadow-md transition-colors duration-500
-                        ${isCorrect ? 'bg-green-500' : 'bg-gradient-to-br from-indigo-500 to-purple-600'}
-                        ${gameStatus === 'error' ? 'animate-shake' : ''}
-                    `}>
-                        <div className="flex flex-wrap gap-x-3 gap-y-3 justify-start">
-                            {words.map((word, wordIdx) => (
-                                <div key={wordIdx} className="flex gap-1 items-end">
-                                    {word.map((item) => {
-                                        if (!item.isLetter) {
-                                            return (
-                                                <span key={item.id} className="text-xl sm:text-2xl font-bold text-white/80 pb-1">
-                                                    {item.char}
-                                                </span>
-                                            );
-                                        }
-                                        return (
-                                            <input
-                                                key={item.id}
-                                                ref={el => inputRefs.current[item.id] = el}
-                                                type="text"
-                                                maxLength="1"
-                                                value={userInputs[item.id]}
-                                                onChange={(e) => handleChange(e, item.id)}
-                                                onKeyDown={(e) => handleKeyDown(e, item.id)}
-                                                disabled={isCorrect}
-                                                autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck="false"
-                                                className={`
-                                                    w-7 h-9 sm:w-8 sm:h-10 text-lg sm:text-xl text-center rounded-md outline-none border-b-4 
-                                                    transition-all duration-200 uppercase font-bold
-                                                    ${isCorrect 
-                                                        ? 'bg-transparent border-transparent text-white scale-110' 
-                                                        : 'bg-white/20 border-white/40 text-white focus:bg-white focus:text-indigo-700 focus:border-indigo-400'
-                                                    }
-                                                    ${gameStatus === 'error' ? 'bg-red-400 border-red-200 text-white' : ''}
-                                                `}
-                                            />
-                                        );
-                                    })}
-                                </div>
-                            ))}
-                        </div>
+                    {/* Answer bubble */}
+                    <div className={`w-[95%] sm:w-[88%] p-4 rounded-2xl rounded-tr-sm transition-colors duration-500 ${
+                        isCorrect ? 'bg-emerald-600' : 'bg-indigo-600'
+                    } ${status === 'error' ? 'animate-shake' : ''}`}>
 
-                        {isCorrect && (
-                            <div className="mt-6 text-right animate-pop">
-                                <button 
-                                    onClick={onNext}
-                                    className="bg-white text-green-600 font-bold py-2 px-6 rounded-full shadow hover:scale-105 transition-transform"
-                                >
-                                    Enviar / Avanzar ➔
-                                </button>
+                        {isCorrect ? (
+                            /* Show clean text when correct */
+                            <div>
+                                <p className="text-white font-bold text-lg leading-relaxed">{data.expectedAnswer}</p>
+                                <div className="flex items-center gap-3 mt-3">
+                                    <button onClick={() => speak(data.expectedAnswer, 'en-US', 0.85)}
+                                        className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full"><Volume2 size={18}/></button>
+                                    <div className="flex items-center gap-1 bg-white/20 px-3 py-1.5 rounded-full">
+                                        <Star size={14} className="text-amber-300"/>
+                                        <span className="text-white font-black text-sm">+{stepScore}</span>
+                                    </div>
+                                </div>
+                                <div className="mt-4 text-right">
+                                    <button onClick={onNext}
+                                        className="bg-white text-emerald-700 font-black py-2.5 px-6 rounded-xl shadow-lg hover:scale-105 transition-transform text-sm uppercase tracking-wider flex items-center gap-1 ml-auto">
+                                        Enviar <ChevronRight size={16}/>
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            /* Input cells */
+                            <div>
+                                <div className="flex flex-wrap gap-x-3 gap-y-3 justify-start">
+                                    {words.map((word, wi) => (
+                                        <div key={wi} className="flex gap-[3px] items-end">
+                                            {word.map(item => {
+                                                if (!item.isLetter) {
+                                                    return <span key={item.id} className="text-xl font-bold text-white/70 pb-1">{item.char}</span>;
+                                                }
+                                                const isHinted = hintedIndices.has(item.id);
+                                                const isError = errorIndices.has(item.id);
+                                                return (
+                                                    <input
+                                                        key={item.id}
+                                                        ref={el => inputRefs.current[item.id] = el}
+                                                        type="text" maxLength="1"
+                                                        value={inputs[item.id]}
+                                                        onChange={(e) => handleChange(e, item.id)}
+                                                        onKeyDown={(e) => handleKeyDown(e, item.id)}
+                                                        disabled={isCorrect || isHinted}
+                                                        autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck="false"
+                                                        className={`cell-input ${
+                                                            isHinted ? 'text-amber-300 border-amber-400/50 opacity-80' :
+                                                            isError ? 'text-rose-300 border-rose-400 bg-rose-500/20' :
+                                                            'text-white border-white/40 focus:border-white focus:bg-white/10'
+                                                        }`}
+                                                        style={{ fontSize: '16px' }}
+                                                    />
+                                                );
+                                            })}
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Hint button */}
+                                <div className="mt-4 flex items-center gap-2">
+                                    <button onClick={() => setShowHintPicker(!showHintPicker)}
+                                        className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-amber-500/30">
+                                        <Lightbulb size={14}/> Pista
+                                    </button>
+                                    <span className="text-indigo-300/60 text-[10px] font-bold">Las pistas no suman puntos</span>
+                                </div>
+
+                                {/* Hint word picker */}
+                                {showHintPicker && (
+                                    <div className="mt-2 flex flex-wrap gap-2 animate-slide-up">
+                                        {answerWords.map((w, i) => {
+                                            const wordText = w.chars.map(c => c.char).join('');
+                                            const alreadyHinted = w.chars.every(c => hintedIndices.has(c.id));
+                                            return (
+                                                <button key={i} disabled={alreadyHinted} onClick={() => handleHint(i)}
+                                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                                                        alreadyHinted ? 'bg-zinc-700/50 text-zinc-500 border-zinc-700' :
+                                                        'bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20 active:scale-95'
+                                                    }`}>
+                                                    {alreadyHinted ? wordText : `Palabra ${i + 1} (${w.chars.filter(c => c.isLetter).length} letras)`}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
@@ -219,181 +360,178 @@
             );
         };
 
-        // --- APLICACIÓN PRINCIPAL ---
+        // ====== MAIN APP ======
         const App = () => {
             const [chatFlow, setChatFlow] = useState([]);
-            const [gameTitle, setGameTitle] = useState("");
-            const [currentStep, setCurrentStep] = useState(0); 
+            const [gameTitle, setGameTitle] = useState('');
+            const [currentStep, setCurrentStep] = useState(0);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
-            
+            const [totalScore, setTotalScore] = useState(0);
+            const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
+
             const messagesEndRef = useRef(null);
 
             useEffect(() => {
                 const fetchGame = async () => {
-                    const params = new URLSearchParams(window.location.search);
-                    const id = params.get('id');
-                    
-                    if (!id) {
-                        setError("Falta el ID del juego en la URL.");
-                        setLoading(false);
-                        return;
-                    }
-
+                    const id = new URLSearchParams(window.location.search).get('id');
+                    if (!id) { setError("Falta el ID del juego."); setLoading(false); return; }
                     try {
-                        const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id);
-                        const docSnap = await getDoc(docRef);
-                        
-                        if (docSnap.exists()) {
-                            const data = docSnap.data();
-                            setGameTitle(data.title || "Conversación");
+                        const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id));
+                        if (snap.exists()) {
+                            const data = snap.data();
+                            setGameTitle(data.title || 'Conversación');
                             setChatFlow(data.content || []);
-                        } else {
-                            setError("El juego no existe o fue eliminado.");
-                        }
-                    } catch (err) {
-                        setError(err.message);
-                    } finally {
-                        setLoading(false);
-                    }
+                        } else { setError("Juego no encontrado."); }
+                    } catch (e) { setError(e.message); }
+                    setLoading(false);
                 };
-                
                 fetchGame();
             }, []);
 
-            const scrollToBottom = () => {
-                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-            };
+            const contact = useMemo(() => guessContact(chatFlow), [chatFlow]);
 
             useEffect(() => {
-                scrollToBottom();
-            }, [currentStep, chatFlow]);
+                setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 200);
+            }, [currentStep]);
 
             const handleNext = () => {
-                if (currentStep < chatFlow.length) {
-                    setCurrentStep(prev => prev + 1);
-                }
+                if (currentStep < chatFlow.length) setCurrentStep(prev => prev + 1);
             };
 
-            if (loading) {
-                return (
-                    <div className="flex flex-col items-center justify-center text-slate-500 h-full w-full">
-                        <Loader2 className="animate-spin mb-4" size={48}/>
-                        <h2 className="font-bold text-lg">Cargando Conversación...</h2>
-                    </div>
-                );
-            }
+            if (loading) return (
+                <div className="h-[100dvh] flex items-center justify-center bg-zinc-950">
+                    <Loader2 className="animate-spin text-indigo-500" size={40}/>
+                </div>
+            );
 
-            if (error) {
-                return (
-                    <div className="flex flex-col items-center justify-center text-slate-800 p-8 bg-white rounded-3xl shadow-xl">
-                        <AlertTriangle className="text-red-500 mb-4" size={48}/>
-                        <h2 className="font-bold text-xl mb-2">Oops! Algo salió mal</h2>
-                        <p className="text-slate-500 text-center">{error}</p>
-                        <button onClick={() => window.location.href='index.html'} className="mt-6 bg-slate-900 text-white px-6 py-2 rounded-xl font-bold">Volver al Inicio</button>
+            if (error) return (
+                <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 p-6">
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 text-center max-w-sm">
+                        <p className="text-rose-400 font-bold text-lg mb-2">Error</p>
+                        <p className="text-zinc-400 text-sm mb-6">{error}</p>
+                        <button onClick={() => window.location.href='index.html'} className="bg-zinc-800 text-white font-bold px-6 py-2 rounded-xl">Volver</button>
                     </div>
-                );
-            }
+                </div>
+            );
 
-            if (chatFlow.length === 0) {
-                return (
-                    <div className="flex flex-col items-center justify-center text-slate-800 p-8 bg-white rounded-3xl shadow-xl">
-                        <MessageSquare className="text-indigo-400 mb-4" size={48}/>
-                        <h2 className="font-bold text-xl mb-2">Chat Vacío</h2>
-                        <p className="text-slate-500 text-center">Este juego no tiene mensajes configurados.</p>
-                        <button onClick={() => window.location.href='index.html'} className="mt-6 bg-slate-900 text-white px-6 py-2 rounded-xl font-bold">Volver al Inicio</button>
-                    </div>
-                );
-            }
+            const isComplete = currentStep === chatFlow.length;
 
             return (
-                <div className="w-full h-[100dvh] sm:h-[85vh] max-w-md bg-slate-50 sm:rounded-[2.5rem] shadow-2xl relative overflow-hidden flex flex-col border-0 sm:border-[8px] sm:border-slate-800">
-                    
-                    {/* CABECERA DEL CHAT */}
-                    <div className="bg-white px-6 py-4 flex items-center justify-between shadow-sm z-10">
-                        <div className="flex items-center">
-                            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-xl mr-3 relative">
-                                🧑🏼‍🏫
-                                <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white"></div>
+                <div className="h-[100dvh] flex flex-col bg-zinc-950 max-w-lg mx-auto sm:my-4 sm:rounded-[2rem] sm:border sm:border-zinc-800 sm:shadow-2xl overflow-hidden sm:h-[calc(100dvh-2rem)]">
+
+                    {/* Header — looks like a phone */}
+                    <header className="bg-zinc-900 px-4 py-3 flex items-center justify-between shrink-0 border-b border-zinc-800">
+                        <div className="flex items-center gap-3">
+                            <button onClick={() => window.location.href = isStudent ? 'javascript:history.back()' : 'index.html'}
+                                className="p-2 text-zinc-500 hover:text-white rounded-xl"><ArrowLeft size={18}/></button>
+                            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-xl border border-indigo-500/30 relative">
+                                {contact.emoji}
+                                <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900"/>
                             </div>
                             <div>
-                                <h1 className="font-bold text-gray-800 leading-tight">Teacher Alex</h1>
-                                <p className="text-xs text-slate-400 font-semibold">{gameTitle}</p>
+                                <h1 className="font-black text-white text-sm leading-none">{contact.name}</h1>
+                                <p className="text-[10px] text-zinc-500 font-bold mt-0.5">{gameTitle}</p>
                             </div>
                         </div>
-                        <button onClick={() => window.location.href='index.html'} className="text-slate-400 hover:text-slate-600 bg-slate-100 p-2 rounded-full">
-                            <ArrowLeft size={18} />
-                        </button>
-                    </div>
+                        <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-full">
+                            <Star size={14} className="text-amber-400"/>
+                            <span className="text-amber-400 font-black text-sm tabular-nums">{totalScore}</span>
+                        </div>
+                    </header>
 
-                    {/* ZONA DE MENSAJES */}
-                    <div className="flex-1 overflow-y-auto p-4 space-y-6 no-scrollbar pb-24">
-                        
+                    {/* Messages */}
+                    <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 custom-scrollbar">
+
                         {chatFlow.slice(0, currentStep + 1).map((data, index) => {
-                            const isCurrentActive = index === currentStep;
+                            const isCurrent = index === currentStep && !isComplete;
                             const isCompleted = index < currentStep;
 
                             return (
-                                <div key={data.id || index} className="space-y-6 animate-pop">
-                                    
-                                    {/* Burbuja del Bot (Profesor) */}
-                                    <div className="flex w-full">
-                                        <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-sm mr-2 mt-auto shrink-0">
-                                            🧑🏼‍🏫
+                                <div key={data.id || index} className="space-y-3 animate-pop">
+                                    {/* Bot message */}
+                                    <div className="flex w-full gap-2">
+                                        <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">
+                                            {contact.emoji}
                                         </div>
-                                        <div className="bg-white text-gray-800 px-5 py-3 rounded-2xl rounded-bl-sm shadow-sm border border-gray-100 max-w-[80%] text-lg">
-                                            {data.botMessage}
+                                        <div className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[82%]">
+                                            <p className="text-sm sm:text-base leading-relaxed">{data.botMessage}</p>
+                                            <button onClick={() => speak(data.botMessage, 'en-US', 0.85)}
+                                                className="mt-2 text-indigo-400 hover:text-indigo-300 flex items-center gap-1 text-xs font-bold">
+                                                <Volume2 size={14}/> Escuchar
+                                            </button>
                                         </div>
                                     </div>
 
-                                    {/* Zona del Usuario (Alumno) */}
-                                    {isCurrentActive ? (
-                                        <ActiveChallengeBubble data={data} onNext={handleNext} />
-                                    ) : (
+                                    {/* User response */}
+                                    {isCurrent ? (
+                                        <ActiveBubble
+                                            data={data}
+                                            onNext={handleNext}
+                                            totalScore={totalScore}
+                                            setTotalScore={setTotalScore}
+                                            stepIndex={index}
+                                            totalSteps={chatFlow.length}
+                                        />
+                                    ) : isCompleted ? (
                                         <div className="flex flex-col items-end w-full space-y-1">
-                                            <span className="text-xs text-gray-400">Enviado</span>
-                                            <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-5 py-3 shadow-sm max-w-[85%] text-lg font-medium">
-                                                {data.expectedAnswer}
+                                            <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-4 py-3 max-w-[85%]">
+                                                <p className="text-sm sm:text-base font-medium leading-relaxed">{data.expectedAnswer}</p>
+                                                <button onClick={() => speak(data.expectedAnswer, 'en-US', 0.85)}
+                                                    className="mt-1.5 text-indigo-200 hover:text-white flex items-center gap-1 text-xs font-bold ml-auto">
+                                                    <Volume2 size={13}/> Repetir
+                                                </button>
                                             </div>
                                         </div>
-                                    )}
+                                    ) : null}
                                 </div>
                             );
                         })}
 
-                        {/* Mensaje Final si terminó todo */}
-                        {currentStep === chatFlow.length && (
+                        {/* Completion */}
+                        {isComplete && (
                             <div className="text-center py-6 animate-pop">
-                                <div className="inline-block bg-yellow-100 text-yellow-800 px-6 py-3 rounded-full font-bold shadow-sm">
-                                    🎉 ¡Conversación Completada! 🎉
-                                </div>
-                                <div className="mt-6">
-                                    <button onClick={() => window.location.href='index.html'} className="text-indigo-600 font-bold underline">
-                                        Volver al menú
-                                    </button>
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-xs mx-auto">
+                                    <Trophy size={40} className="text-amber-400 mx-auto mb-3"/>
+                                    <h2 className="text-xl font-black text-white mb-1">¡Conversación Completada!</h2>
+                                    <div className="flex items-center justify-center gap-2 mb-4">
+                                        <Star size={18} className="text-amber-400"/>
+                                        <span className="text-2xl font-black text-amber-400">{totalScore}</span>
+                                        <span className="text-zinc-500 font-bold text-sm">puntos</span>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <button onClick={() => window.location.reload()}
+                                            className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2">
+                                            <RotateCcw size={16}/> Jugar de nuevo
+                                        </button>
+                                        <button onClick={() => window.location.href='index.html'}
+                                            className="w-full bg-zinc-800 text-zinc-300 font-bold py-3 rounded-xl text-sm">
+                                            Volver al Hub
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         )}
 
-                        <div ref={messagesEndRef} />
+                        <div ref={messagesEndRef}/>
                     </div>
 
-                    {/* Área decorativa de Input inferior */}
-                    <div className="bg-white p-4 border-t border-gray-100 flex items-center text-gray-400">
-                        <div className="flex-1 bg-gray-100 rounded-full h-10 px-4 flex items-center">
-                            <span className="text-sm">Escribe un mensaje...</span>
+                    {/* Bottom bar (decorative like a real chat) */}
+                    {!isComplete && (
+                        <div className="bg-zinc-900 px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0">
+                            <div className="flex-1 bg-zinc-800 rounded-full h-10 px-4 flex items-center border border-zinc-700/50">
+                                <span className="text-zinc-500 text-sm">Escribe arriba...</span>
+                            </div>
+                            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-indigo-400 border border-indigo-500/30">
+                                <Volume2 size={18}/>
+                            </div>
                         </div>
-                        <div className="ml-3 w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500">
-                            🎤
-                        </div>
-                    </div>
-
+                    )}
                 </div>
             );
         };
 
-        const root = createRoot(document.getElementById('root'));
-        root.render(<App />);
+        createRoot(document.getElementById('root')).render(<App />);
     </script>
 </body>
 </html>
