@@ -87,8 +87,7 @@
 
             const scoreRef = useRef(0);
             const lockedRef = useRef(false);
-            const poolQueueRef = useRef([]);
-            const fadingSlotsRef = useRef({}); 
+            const fadingSlotsRef = useRef({ left: {}, right: {} }); // Manejo independiente para evitar choques
 
             useEffect(() => {
                 const init = async () => {
@@ -99,8 +98,6 @@
                         if (snap.exists()) {
                             const data = snap.data();
                             setGameData(data);
-                            
-                            // LECTURA DIRECTA Y EXACTA DE LO QUE EXPORTA DASHBOARD-MATCH.HTML
                             if (data.content && Array.isArray(data.content.wordPool)) {
                                 setWordPool(data.content.wordPool);
                             }
@@ -113,60 +110,53 @@
                 init();
             }, []);
 
-            const buildInitialBoard = useCallback((pool) => {
-                const first5 = pool.slice(0, 5);
-                const rest = pool.slice(5);
-                poolQueueRef.current = rest;
+            // INYECCIÓN DE BLOQUES DE 15
+            const buildInitialBoard = useCallback(() => {
+                // Tomamos solo las primeras 15 para empezar
+                let activeChunk = wordPool.slice(0, 15);
+                if (activeChunk.length < 5) activeChunk = wordPool;
 
+                const first5 = shuffle(activeChunk).slice(0, 5);
                 let rightOrder = shuffle(first5);
-                let att = 0;
-                while (rightOrder.some((w, i) => w.id === first5[i].id) && att < 100) {
-                    rightOrder = shuffle(first5); att++;
+                while (rightOrder.some((w, i) => w.id === first5[i].id)) {
+                    rightOrder = shuffle(first5);
                 }
 
-                // USO EXACTO DE LAS PROPIEDADES 'es' Y 'en'
                 return first5.map((w, i) => ({
-                    leftId: w.id, leftText: w.es, leftStatus: 'idle',
-                    rightId: rightOrder[i].id, rightText: rightOrder[i].en, rightStatus: 'idle',
+                    leftId: w.id, leftText: w.c1 || w.es, leftStatus: 'idle',
+                    rightId: rightOrder[i].id, rightText: rightOrder[i].c2 || rightOrder[i].en, rightStatus: 'idle',
                     key: Date.now() + i,
                 }));
-            }, []);
+            }, [wordPool]);
 
-            const getNextPair = useCallback((currentBoardLeftIds, currentBoardRightIds) => {
-                if (poolQueueRef.current.length === 0) {
-                    poolQueueRef.current = shuffle([...wordPool]);
-                }
+            // EXTRACCIÓN DEL PAR PERFECTO DEPENDIENDO DEL PUNTAJE (Bloques de 15)
+            const getNextPair = useCallback((activeIds, currentScore) => {
+                // Saber en qué bloque estamos (0, 1 o 2)
+                const chunkIndex = Math.min(Math.floor(currentScore / 15), 2);
+                const chunkStart = chunkIndex * 15;
                 
-                let candidateIndex = 0;
-                let safetyBreak = 0;
-                let candidate = poolQueueRef.current[candidateIndex];
+                // Extraer solo ese bloque de 15
+                let activeChunk = wordPool.slice(chunkStart, chunkStart + 15);
+                if (activeChunk.length < 5) activeChunk = wordPool; // Fallback por si acaso
 
-                while ((currentBoardLeftIds.includes(candidate.id) || currentBoardRightIds.includes(candidate.id)) && safetyBreak < 50) {
-                    candidateIndex++;
-                    if(candidateIndex >= poolQueueRef.current.length) {
-                        poolQueueRef.current = shuffle([...wordPool]);
-                        candidateIndex = 0;
-                    }
-                    candidate = poolQueueRef.current[candidateIndex];
-                    safetyBreak++;
-                }
+                // Buscar una palabra de este bloque que NO esté en la pantalla
+                let available = activeChunk.filter(w => !activeIds.includes(w.id));
+                if (available.length === 0) available = activeChunk; // Fallback extremo
 
-                return poolQueueRef.current.splice(candidateIndex, 1)[0];
+                return available[Math.floor(Math.random() * available.length)];
             }, [wordPool]);
 
             const startGame = useCallback(() => {
                 if(wordPool.length < 5) return alert("Necesitas al menos 5 pares en tu banco de palabras.");
-                let pool = shuffle([...wordPool]);
-                while (pool.length < TOTAL_PAIRS + 10) pool = [...pool, ...shuffle([...wordPool])];
 
-                const b = buildInitialBoard(pool);
+                const b = buildInitialBoard();
                 setBoard(b);
                 setScore(0); scoreRef.current = 0;
                 setTimeLeft(TIME_SECONDS);
                 setSelectedSide(null);
                 setMilestone(null);
                 lockedRef.current = false;
-                fadingSlotsRef.current = {};
+                fadingSlotsRef.current = { left: {}, right: {} };
                 setGameState('playing');
             }, [wordPool, buildInitialBoard]);
 
@@ -184,61 +174,69 @@
             }, [gameState]);
 
             const resolveAllFading = useCallback(() => {
-                const fading = fadingSlotsRef.current;
-                const keys = Object.keys(fading);
-                if (keys.length === 0) return;
-
                 setBoard(prev => {
                     const next = [...prev];
-                    keys.forEach(idxStr => {
-                        const idx = parseInt(idxStr);
-                        const pending = fading[idx];
-                        if (pending) {
+                    ['left', 'right'].forEach(side => {
+                        const fading = fadingSlotsRef.current[side];
+                        Object.keys(fading).forEach(idxStr => {
+                            const idx = parseInt(idxStr);
+                            const pending = fading[idx];
                             clearTimeout(pending.timer);
-                            next[idx] = {
-                                ...next[idx],
-                                leftId: pending.left.id, leftText: pending.left.text, leftStatus: 'entering',
-                                rightId: pending.right.id, rightText: pending.right.text, rightStatus: 'entering',
-                                key: Date.now() + idx + Math.random(),
-                            };
-                        }
+                            
+                            const slot = { ...next[idx], key: Date.now() + idx + Math.random() };
+                            if (side === 'left') {
+                                slot.leftId = pending.data.id;
+                                slot.leftText = pending.data.text;
+                                slot.leftStatus = 'entering';
+                            } else {
+                                slot.rightId = pending.data.id;
+                                slot.rightText = pending.data.text;
+                                slot.rightStatus = 'entering';
+                            }
+                            next[idx] = slot;
+                        });
                     });
                     return next;
                 });
-                fadingSlotsRef.current = {};
+                
+                fadingSlotsRef.current = { left: {}, right: {} };
 
                 setTimeout(() => {
-                    setBoard(prev => prev.map(slot =>
-                        (slot.leftStatus === 'entering' || slot.rightStatus === 'entering')
-                            ? { ...slot, leftStatus: 'idle', rightStatus: 'idle' }
-                            : slot
-                    ));
+                    setBoard(prev => prev.map(slot => ({
+                        ...slot,
+                        leftStatus: slot.leftStatus === 'entering' ? 'idle' : slot.leftStatus,
+                        rightStatus: slot.rightStatus === 'entering' ? 'idle' : slot.rightStatus
+                    })));
                 }, 200);
             }, []);
 
-            const scheduleFadeReplacement = useCallback((slotIndex, leftPair, rightPair) => {
+            const scheduleFadeReplacement = useCallback((slotIndex, side, data) => {
                 const timer = setTimeout(() => {
-                    delete fadingSlotsRef.current[slotIndex];
+                    delete fadingSlotsRef.current[side][slotIndex];
                     setBoard(prev => {
                         const next = [...prev];
-                        next[slotIndex] = {
-                            ...next[slotIndex],
-                            leftId: leftPair.id, leftText: leftPair.text, leftStatus: 'entering',
-                            rightId: rightPair.id, rightText: rightPair.text, rightStatus: 'entering',
-                            key: Date.now() + slotIndex + Math.random(),
-                        };
+                        const slot = { ...next[slotIndex], key: Date.now() + Math.random() };
+                        if (side === 'left') {
+                            slot.leftId = data.id;
+                            slot.leftText = data.text;
+                            slot.leftStatus = 'entering';
+                        } else {
+                            slot.rightId = data.id;
+                            slot.rightText = data.text;
+                            slot.rightStatus = 'entering';
+                        }
+                        next[slotIndex] = slot;
                         return next;
                     });
                     setTimeout(() => {
-                        setBoard(prev => prev.map((s, i) =>
-                            i === slotIndex && (s.leftStatus === 'entering' || s.rightStatus === 'entering')
-                                ? { ...s, leftStatus: 'idle', rightStatus: 'idle' }
-                                : s
-                        ));
+                        setBoard(prev => prev.map((s, i) => i === slotIndex ? { 
+                            ...s, 
+                            [side+'Status']: s[side+'Status'] === 'entering' ? 'idle' : s[side+'Status'] 
+                        } : s));
                     }, 200);
                 }, 2500); 
 
-                fadingSlotsRef.current[slotIndex] = { left: leftPair, right: rightPair, timer };
+                fadingSlotsRef.current[side][slotIndex] = { data, timer };
             }, []);
 
             const handleClick = useCallback((side, index) => {
@@ -316,26 +314,16 @@
                         return;
                     }
 
-                    const currentLeftIds = board.map(s => s.leftId);
-                    const currentRightIds = board.map(s => s.rightId);
-                    
-                    const lIdFilter = currentLeftIds.filter(id => id !== prevId);
-                    const rIdFilter = currentRightIds.filter(id => id !== prevId);
+                    // LÓGICA DE UN SOLO PAR EXACTO
+                    const currentIds = board.map(s => s.leftId);
+                    const activeIds = currentIds.filter(id => id !== prevId); // Excluir el que acabamos de resolver
 
-                    const newPairForLeft = getNextPair(lIdFilter, rIdFilter);
-                    const newPairForRight = getNextPair([...lIdFilter, newPairForLeft.id], [...rIdFilter, newPairForLeft.id]);
+                    // Traer EXACTAMENTE UN PAR del bloque actual
+                    const nextPair = getNextPair(activeIds, ns);
 
-                    scheduleFadeReplacement(leftIdx, 
-                        { id: newPairForLeft.id, text: newPairForLeft.es }, // USO EXACTO DE 'es'
-                        board[leftIdx] ? { id: board[leftIdx].rightId, text: board[leftIdx].rightText } : { id: newPairForRight.id, text: newPairForRight.en } // USO EXACTO DE 'en'
-                    );
-
-                    if (rightIdx !== leftIdx) {
-                        scheduleFadeReplacement(rightIdx, 
-                            { id: board[rightIdx].leftId, text: board[rightIdx].leftText }, 
-                            { id: newPairForRight.id, text: newPairForRight.en } // USO EXACTO DE 'en'
-                        );
-                    }
+                    // Agendar reemplazo garantizando que no se rompa la pareja
+                    scheduleFadeReplacement(leftIdx, 'left', { id: nextPair.id, text: nextPair.c1 || nextPair.es });
+                    scheduleFadeReplacement(rightIdx, 'right', { id: nextPair.id, text: nextPair.c2 || nextPair.en });
 
                     setSelectedSide(null);
                     lockedRef.current = false;
@@ -458,8 +446,8 @@
                             </div>
                         </header>
                         <div className="flex px-4 sm:px-8 max-w-2xl mx-auto w-full pt-3 pb-1">
-                            <p className="flex-1 text-center text-zinc-500 font-bold text-[10px] uppercase tracking-widest">Español</p>
-                            <p className="flex-1 text-center text-zinc-500 font-bold text-[10px] uppercase tracking-widest">English</p>
+                            <p className="flex-1 text-center text-zinc-500 font-bold text-[10px] uppercase tracking-widest">Columna 1</p>
+                            <p className="flex-1 text-center text-zinc-500 font-bold text-[10px] uppercase tracking-widest">Columna 2</p>
                         </div>
                         <main className="flex-1 flex gap-3 sm:gap-4 px-4 sm:px-8 pb-6 max-w-2xl mx-auto w-full">
                             <div className="flex-1 flex flex-col gap-2.5 sm:gap-3 justify-center">
