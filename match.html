@@ -26,7 +26,7 @@
 import React,{useState,useEffect,useRef,useCallback,useMemo} from 'react';
 import {createRoot} from 'react-dom/client';
 import {initializeApp} from 'firebase/app';
-import {getFirestore,doc,getDoc,collection,addDoc,query,orderBy,limit,getDocs,serverTimestamp} from 'firebase/firestore';
+import {getFirestore,doc,getDoc,collection,addDoc,query,orderBy,limit,getDocs,serverTimestamp,where,deleteDoc} from 'firebase/firestore';
 import {Loader2,Play,RotateCcw,X,Trophy,Star,ChevronDown,ChevronUp,BookOpen,Crown,ArrowRight} from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -107,16 +107,26 @@ const MatchGame=()=>{
                         return{id:w.id||`w${i}`,c1:w.c1||w.es||w.term||w.spanish||s[0]||'???',c2:w.c2||w.en||w.definition||w.english||s[1]||'???'};
                     }));
                 }
-                const q=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`),orderBy('score','desc'),limit(10));
-                const lbs=await getDocs(q);setLeaderboard(lbs.docs.map(d=>d.data()));
+                const q=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`),limit(50));
+                const lbs=await getDocs(q);
+                const allLb=lbs.docs.map(d=>({...d.data(),docId:d.id}));
+                allLb.sort((a,b)=>{if((b.crown||1)!==(a.crown||1))return(b.crown||1)-(a.crown||1);return(b.score||0)-(a.score||0)});
+                setLeaderboard(allLb.slice(0,10));
             }catch(e){console.error(e)}
             setLoading(false);
         };init();
     },[quizId]);
 
     const loadLB=async()=>{
-        const q=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`),orderBy('score','desc'),limit(10));
-        const s=await getDocs(q);setLeaderboard(s.docs.map(d=>d.data()));
+        // Load all entries, sort client-side: crown DESC, then score DESC
+        const q=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`),limit(50));
+        const snap=await getDocs(q);
+        const all=snap.docs.map(d=>({...d.data(),docId:d.id}));
+        all.sort((a,b)=>{
+            if((b.crown||1)!==(a.crown||1)) return (b.crown||1)-(a.crown||1);
+            return (b.score||0)-(a.score||0);
+        });
+        setLeaderboard(all.slice(0,10));
     };
 
     // Build checkpoint
@@ -266,21 +276,28 @@ const MatchGame=()=>{
                         const perfectBonus=retriesRef.current===0?20:0;
                         const finalScore=ns+timeBonus+perfectBonus;
                         scoreRef.current=finalScore;setScore(finalScore);
-                        // Save to leaderboard
-                        addDoc(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`),{
-                            playerName,score:finalScore,crown:crownIdx+1,
-                            time:c.time-Math.ceil(timeLeft),perfect:retriesRef.current===0,
-                            date:serverTimestamp()
-                        }).then(()=>loadLB());
+                        // Delete old entry for this player, then save new one
+                        const oldQ=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`),where('playerName','==',playerName));
+                        getDocs(oldQ).then(snap=>{
+                            snap.docs.forEach(d=>deleteDoc(doc(db,`artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`,d.id)));
+                        }).then(()=>{
+                            addDoc(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`),{
+                                playerName,score:finalScore,crown:crownIdx+1,
+                                time:c.time-Math.ceil(timeLeft),perfect:retriesRef.current===0,
+                                date:serverTimestamp()
+                            }).then(()=>loadLB());
+                        });
                         setScreen('crownWon');
                     },800);
                 }else{
                     setMilestone({emoji:nextCpI===1?'🔥':'⚡',text:`Checkpoint ${nextCpI+1}!`,count:ns});
+                    setScreen('checkpoint'); // Pause the timer!
                     setTimeout(()=>{
                         setMilestone(null);fadingRef.current={};
                         cpIdxRef.current=nextCpI;setCpIdx(nextCpI);
                         cpMatchedRef.current=0;setCpMatched(0);
                         buildCP(allPairsRef.current.slice(nextCpI*c.perCP,(nextCpI+1)*c.perCP));
+                        setScreen('playing'); // Resume timer
                     },2000);
                 }
             }
@@ -411,7 +428,7 @@ const MatchGame=()=>{
     );
 
     // ====== PLAYING ======
-    if(screen==='playing'){
+    if(screen==='playing'||screen==='checkpoint'){
         const pct=(score/totalPairs)*100;const isLow=timeLeft<20;
         const m=Math.floor(Math.ceil(timeLeft)/60);const s=Math.ceil(timeLeft)%60;
         return(
