@@ -27,25 +27,14 @@
 
         @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-6px)} 40%{transform:translateX(6px)} 60%{transform:translateX(-6px)} 80%{transform:translateX(6px)} }
         .animate-shake { animation: shake 0.35s ease-in-out; }
-
         @keyframes popIn { 0%{transform:scale(0.8);opacity:0} 100%{transform:scale(1);opacity:1} }
         .animate-pop-in { animation: popIn 0.2s ease-out forwards; }
-
-        @keyframes slowFade {
-            0% { opacity:1; transform:scale(1); }
-            100% { opacity:0; transform:scale(0.92); pointer-events:none; }
-        }
-        .animate-slow-fade { animation: slowFade 2.5s ease-in forwards; pointer-events: none; }
-        .animate-instant-in { animation: popIn 0.15s ease-out forwards; }
-
-        @keyframes milestoneIn {
-            0% { transform: scale(0) rotate(-10deg); opacity: 0; }
-            60% { transform: scale(1.15) rotate(3deg); opacity: 1; }
-            100% { transform: scale(1) rotate(0deg); opacity: 1; }
-        }
+        @keyframes slowFade { 0%{opacity:1;transform:scale(1)} 100%{opacity:0;transform:scale(0.9)} }
+        .animate-slow-fade { animation: slowFade 2.5s ease-in forwards; pointer-events:none; }
+        @keyframes milestoneIn { 0%{transform:scale(0) rotate(-10deg);opacity:0} 60%{transform:scale(1.15) rotate(3deg);opacity:1} 100%{transform:scale(1) rotate(0deg);opacity:1} }
         .animate-milestone { animation: milestoneIn 0.5s ease-out forwards; }
 
-        .btn-juicy { transition: transform 0.08s, background-color 0.15s, border-color 0.15s, opacity 0.3s; }
+        .btn-juicy { transition: transform 0.08s, background-color 0.15s, border-color 0.15s; }
         .btn-juicy:active:not(:disabled) { transform: translateY(3px); border-bottom-width: 1px !important; }
     </style>
 </head>
@@ -63,14 +52,38 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        const shuffle = (arr) => {
-            const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a;
-        };
+        const shuffle = (a) => { const b=[...a]; for(let i=b.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[b[i],b[j]]=[b[j],b[i]];} return b; };
 
-        const TOTAL_PAIRS = 45; 
-        const PAIRS_PER_ROUND = 15;
-        const ROUNDS = TOTAL_PAIRS / PAIRS_PER_ROUND;
-        const TIME_SECONDS = 105; 
+        const PAIRS_PER_CHECKPOINT = 15;
+        const CHECKPOINTS = 3;
+        const TOTAL_PAIRS = PAIRS_PER_CHECKPOINT * CHECKPOINTS; // 45
+        const TIME_SECONDS = 105;
+        const FADE_DURATION = 2500; // ms anti-cheat delay
+        const BOARD_SIZE = 5; // visible rows
+
+        /*
+         * HOW IT WORKS:
+         *
+         * Each checkpoint has 15 pairs. We show 5 on screen at a time.
+         * The remaining 10 are in a queue.
+         *
+         * Board = 5 rows. Each row: { leftId, leftText, rightId, rightText, ... }
+         * Left column = español. Right column = english. ALWAYS.
+         *
+         * On correct match:
+         *   - Both cells get status 'matched' → slow fade 2.5s (anti-cheat)
+         *   - A replacement pair is queued from the 15-pool
+         *   - The replacement goes: español→left slot, english→right slot
+         *   - But the LEFT and RIGHT slots may be in DIFFERENT rows!
+         *     (left slot = where the matched español was, right slot = where matched english was)
+         *   - So we pick ONE new pair and split it: c1→leftSlot, c2→rightSlot
+         *   - If the user clicks anything during fade, the fading cells resolve instantly
+         *
+         * Derangement: at board setup, no row has its own pair (left.id ≠ right.id)
+         *
+         * After 15 matches → checkpoint celebration → load next 15
+         * After 45 → win!
+         */
 
         const MatchGame = () => {
             const [loading, setLoading] = useState(true);
@@ -78,23 +91,25 @@
             const [wordPool, setWordPool] = useState([]);
             const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
 
-            const [gameState, setGameState] = useState('menu'); 
+            const [gameState, setGameState] = useState('menu');
             const [timeLeft, setTimeLeft] = useState(0);
             const [score, setScore] = useState(0);
-            const [milestone, setMilestone] = useState(null); 
+            const [checkpoint, setCheckpoint] = useState(0); // 0,1,2
+            const [checkpointMatched, setCheckpointMatched] = useState(0);
+            const [milestone, setMilestone] = useState(null);
 
+            // Board: 5 rows, each with left (es) and right (en) items
             const [board, setBoard] = useState([]);
-            const [selectedSide, setSelectedSide] = useState(null); 
-            const [currentRound, setCurrentRound] = useState(0);
+            const [selectedSide, setSelectedSide] = useState(null);
 
             const scoreRef = useRef(0);
+            const cpMatchedRef = useRef(0);
             const lockedRef = useRef(false);
-            
-            // Colas independientes para manejar los vaciados de forma perfecta
-            const leftQueueRef = useRef([]);
-            const rightQueueRef = useRef([]);
-            const gamePoolRef = useRef([]); // Las 45 palabras elegidas para esta partida
+            const queueRef = useRef([]); // remaining pairs for this checkpoint
+            const allPairsRef = useRef([]); // all 45 pairs
+            const fadingRef = useRef({}); // { slotIdx: { pair, leftIdx, rightIdx, timer } }
 
+            // Load
             useEffect(() => {
                 const init = async () => {
                     const id = new URLSearchParams(window.location.search).get('id');
@@ -104,297 +119,319 @@
                         if (snap.exists()) {
                             const data = snap.data();
                             setGameData(data);
-                            
-                            let foundPool = [];
-                            if (Array.isArray(data.content)) {
-                                foundPool = data.content;
-                            } else if (data.content && typeof data.content === 'object') {
-                                Object.values(data.content).forEach(val => {
-                                    if (Array.isArray(val) && val.length > foundPool.length) {
-                                        foundPool = val;
-                                    }
-                                });
+                            // Normalize word pool from various formats
+                            let pool = [];
+                            if (Array.isArray(data.content)) pool = data.content;
+                            else if (data.content && typeof data.content === 'object') {
+                                // Find the largest array in content
+                                Object.values(data.content).forEach(v => { if (Array.isArray(v) && v.length > pool.length) pool = v; });
                             }
-                            
-                            const normalizedPool = foundPool.map((item, index) => {
-                                const strValues = Object.values(item).filter(v => typeof v === 'string');
+                            setWordPool(pool.map((w, i) => {
+                                const strs = Object.values(w).filter(v => typeof v === 'string');
                                 return {
-                                    id: item.id || `word-${index}-${Date.now()}`,
-                                    c1: item.c1 || item.es || item.term || item.spanish || strValues[0] || "???",
-                                    c2: item.c2 || item.en || item.definition || item.english || strValues[1] || "???"
+                                    id: w.id || `w${i}`,
+                                    c1: w.c1 || w.es || w.term || w.spanish || strs[0] || '???',
+                                    c2: w.c2 || w.en || w.definition || w.english || strs[1] || '???',
                                 };
-                            });
-
-                            setWordPool(normalizedPool);
+                            }));
                         }
-                    } catch (err) {
-                        console.error(err);
-                    }
+                    } catch (e) { console.error(e); }
                     setLoading(false);
                 };
                 init();
             }, []);
 
-            const startRound = useCallback((roundIdx, pool) => {
-                const roundPairs = pool.slice(roundIdx * PAIRS_PER_ROUND, (roundIdx + 1) * PAIRS_PER_ROUND);
-                
-                let lQueue = shuffle([...roundPairs]);
-                let rQueue = shuffle([...roundPairs]);
-                
-                // Evitar que los primeros 5 coincidan en la misma fila al iniciar
-                for(let i=0; i<5; i++) {
-                    if(lQueue[i] && rQueue[i] && lQueue[i].id === rQueue[i].id) {
-                        const swapIdx = (i + 1) % Math.min(15, rQueue.length);
-                        const temp = rQueue[i];
-                        rQueue[i] = rQueue[swapIdx];
-                        rQueue[swapIdx] = temp;
-                    }
-                }
-                
-                leftQueueRef.current = lQueue.slice(5);
-                rightQueueRef.current = rQueue.slice(5);
+            // Build board for a checkpoint: 5 visible + 10 in queue
+            const buildCheckpoint = useCallback((pairs15) => {
+                const shuffled = shuffle(pairs15);
+                const visible = shuffled.slice(0, BOARD_SIZE);
+                const queue = shuffled.slice(BOARD_SIZE);
+                queueRef.current = queue;
 
-                const initialBoard = [];
-                for(let i=0; i<5; i++) {
-                    if(lQueue[i] && rQueue[i]) {
-                        initialBoard.push({
-                            left: { id: lQueue[i].id, text: lQueue[i].c1, status: 'idle' },
-                            right: { id: rQueue[i].id, text: rQueue[i].c2, status: 'idle' },
-                            key: Date.now() + i
-                        });
-                    }
+                // Build board with derangement (no row has its pair)
+                const leftOrder = [...visible]; // español
+                let rightOrder = shuffle([...visible]); // english
+                let att = 0;
+                while (rightOrder.some((w, i) => w.id === leftOrder[i].id) && att < 100) {
+                    rightOrder = shuffle([...visible]); att++;
                 }
-                setBoard(initialBoard);
-                setCurrentRound(roundIdx);
+
+                const newBoard = leftOrder.map((w, i) => ({
+                    left: { id: w.id, text: w.c1, status: 'idle' },
+                    right: { id: rightOrder[i].id, text: rightOrder[i].c2, status: 'idle' },
+                    key: Date.now() + i,
+                }));
+
+                setBoard(newBoard);
+                fadingRef.current = {};
             }, []);
 
+            // Start game
             const startGame = useCallback(() => {
-                if(wordPool.length < 5) return alert("Necesitas al menos 5 pares en tu banco de palabras.");
-                
-                // Seleccionar las 45 palabras para el juego (o repetir si hay menos)
+                if (wordPool.length < 5) return;
                 let pool = shuffle([...wordPool]);
                 while (pool.length < TOTAL_PAIRS) pool = [...pool, ...shuffle([...wordPool])];
-                gamePoolRef.current = pool.slice(0, TOTAL_PAIRS);
+                const all45 = pool.slice(0, TOTAL_PAIRS);
+                allPairsRef.current = all45;
 
-                startRound(0, gamePoolRef.current);
-                
+                buildCheckpoint(all45.slice(0, PAIRS_PER_CHECKPOINT));
+                setCheckpoint(0);
+                setCheckpointMatched(0); cpMatchedRef.current = 0;
                 setScore(0); scoreRef.current = 0;
                 setTimeLeft(TIME_SECONDS);
                 setSelectedSide(null);
                 setMilestone(null);
                 lockedRef.current = false;
                 setGameState('playing');
-            }, [wordPool, startRound]);
+            }, [wordPool, buildCheckpoint]);
 
+            // Timer
             useEffect(() => {
-                let timer;
+                let t;
                 if (gameState === 'playing' && timeLeft > 0) {
-                    timer = setInterval(() => {
+                    t = setInterval(() => {
                         setTimeLeft(prev => {
-                            if (prev <= 0.1) { clearInterval(timer); setGameState('lost'); return 0; }
+                            if (prev <= 0.1) { clearInterval(t); setGameState('lost'); return 0; }
                             return +(prev - 0.1).toFixed(1);
                         });
                     }, 100);
                 }
-                return () => clearInterval(timer);
-            }, [gameState, timeLeft]);
+                return () => clearInterval(t);
+            }, [gameState]);
 
+            // Resolve all fading slots instantly (when user clicks something)
+            const resolveAllFading = useCallback(() => {
+                const fading = fadingRef.current;
+                const keys = Object.keys(fading);
+                if (keys.length === 0) return;
+
+                setBoard(prev => {
+                    const next = prev.map((row, i) => {
+                        // Check if this row's left or right is fading and has a pending replacement
+                        let newRow = { ...row };
+                        keys.forEach(k => {
+                            const f = fading[k];
+                            if (!f || !f.pair) return;
+                            if (f.leftIdx === i) {
+                                newRow = { ...newRow, left: { id: f.pair.id, text: f.pair.c1, status: 'entering' }, key: Date.now() + i };
+                            }
+                            if (f.rightIdx === i) {
+                                newRow = { ...newRow, right: { id: f.pair.id, text: f.pair.c2, status: 'entering' }, key: Date.now() + i + 100 };
+                            }
+                        });
+                        return newRow;
+                    });
+                    return next;
+                });
+
+                keys.forEach(k => { clearTimeout(fading[k]?.timer); });
+                fadingRef.current = {};
+
+                setTimeout(() => {
+                    setBoard(prev => prev.map(row => ({
+                        ...row,
+                        left: row.left.status === 'entering' ? { ...row.left, status: 'idle' } : row.left,
+                        right: row.right.status === 'entering' ? { ...row.right, status: 'idle' } : row.right,
+                    })));
+                }, 180);
+            }, []);
+
+            // Click handler
             const handleClick = useCallback((side, index) => {
                 if (lockedRef.current || gameState !== 'playing') return;
-                
-                const slot = board[index];
-                const item = side === 'left' ? slot.left : slot.right;
-                if (item.status === 'fading' || item.status === 'entering' || item.status === 'wrong' || item.status === 'empty') return;
+                const row = board[index];
+                const item = side === 'left' ? row.left : row.right;
+                if (['matched', 'entering', 'wrong', 'empty'].includes(item.status)) return;
 
-                const clickedId = item.id;
+                // Any click resolves fading slots
+                resolveAllFading();
 
-                if (selectedSide && selectedSide.side === side && selectedSide.index === index) {
+                // Deselect same
+                if (selectedSide?.side === side && selectedSide?.index === index) {
                     setSelectedSide(null);
-                    setBoard(prev => prev.map((s, i) => {
-                        if (i !== index) return s;
-                        return side === 'left' ? { ...s, left: { ...s.left, status: 'idle' } } : { ...s, right: { ...s.right, status: 'idle' } };
-                    }));
+                    setBoard(prev => prev.map((r, i) => i !== index ? r : (
+                        side === 'left' ? { ...r, left: { ...r.left, status: 'idle' } } : { ...r, right: { ...r.right, status: 'idle' } }
+                    )));
                     return;
                 }
 
-                if (selectedSide && selectedSide.side === side) {
-                    setBoard(prev => prev.map((s, i) => {
-                        if (i === selectedSide.index) return side === 'left' ? { ...s, left: { ...s.left, status: 'idle' } } : { ...s, right: { ...s.right, status: 'idle' } };
-                        if (i === index) return side === 'left' ? { ...s, left: { ...s.left, status: 'selected' } } : { ...s, right: { ...s.right, status: 'selected' } };
-                        return s;
+                // Switch selection on same side
+                if (selectedSide?.side === side) {
+                    setBoard(prev => prev.map((r, i) => {
+                        if (i === selectedSide.index) return side === 'left' ? { ...r, left: { ...r.left, status: 'idle' } } : { ...r, right: { ...r.right, status: 'idle' } };
+                        if (i === index) return side === 'left' ? { ...r, left: { ...r.left, status: 'selected' } } : { ...r, right: { ...r.right, status: 'selected' } };
+                        return r;
                     }));
                     setSelectedSide({ side, index });
                     return;
                 }
 
+                // First selection
                 if (!selectedSide) {
-                    setBoard(prev => prev.map((s, i) => {
-                        if (i !== index) return s;
-                        return side === 'left' ? { ...s, left: { ...s.left, status: 'selected' } } : { ...s, right: { ...s.right, status: 'selected' } };
-                    }));
+                    setBoard(prev => prev.map((r, i) => i !== index ? r : (
+                        side === 'left' ? { ...r, left: { ...r.left, status: 'selected' } } : { ...r, right: { ...r.right, status: 'selected' } }
+                    )));
                     setSelectedSide({ side, index });
                     return;
                 }
 
-                const prevSlot = board[selectedSide.index];
-                const prevItem = selectedSide.side === 'left' ? prevSlot.left : prevSlot.right;
-                const isMatch = prevItem.id === clickedId;
+                // Second selection on OPPOSITE side — check match
+                const prevRow = board[selectedSide.index];
+                const prevItem = selectedSide.side === 'left' ? prevRow.left : prevRow.right;
+                const isMatch = prevItem.id === item.id;
 
                 lockedRef.current = true;
 
                 if (isMatch) {
+                    // Find which row has the matched left and which has the matched right
                     const leftIdx = selectedSide.side === 'left' ? selectedSide.index : index;
                     const rightIdx = selectedSide.side === 'right' ? selectedSide.index : index;
 
-                    setBoard(prev => prev.map((s, i) => {
-                        let newS = { ...s };
-                        if (i === leftIdx) newS.left = { ...newS.left, status: 'correct' };
-                        if (i === rightIdx) newS.right = { ...newS.right, status: 'correct' };
-                        return newS;
+                    // Mark both as matched (start slow fade)
+                    setBoard(prev => prev.map((r, i) => {
+                        let nr = { ...r };
+                        if (i === leftIdx) nr = { ...nr, left: { ...nr.left, status: 'matched' } };
+                        if (i === rightIdx) nr = { ...nr, right: { ...nr.right, status: 'matched' } };
+                        return nr;
                     }));
+
+                    confetti({ particleCount: 10, spread: 25, origin: { y: 0.5 }, gravity: 2, scalar: 0.6 });
 
                     const ns = scoreRef.current + 1;
                     scoreRef.current = ns;
                     setScore(ns);
 
-                    // Reemplazo con desvanecimiento
-                    setTimeout(() => {
-                        const nextLeft = leftQueueRef.current.pop();
-                        const nextRight = rightQueueRef.current.pop();
+                    const cpm = cpMatchedRef.current + 1;
+                    cpMatchedRef.current = cpm;
+                    setCheckpointMatched(cpm);
 
-                        setBoard(prev => {
-                            const next = [...prev];
-                            
-                            // Reemplazar o vaciar
-                            if (nextLeft) {
-                                next[leftIdx].left = { id: nextLeft.id, text: nextLeft.c1, status: 'entering' };
-                            } else {
-                                next[leftIdx].left = { ...next[leftIdx].left, status: 'empty' };
-                            }
-                            
-                            if (nextRight) {
-                                next[rightIdx].right = { id: nextRight.id, text: nextRight.c2, status: 'entering' };
-                            } else {
-                                next[rightIdx].right = { ...next[rightIdx].right, status: 'empty' };
-                            }
+                    // Get next pair from queue for replacement
+                    const nextPair = queueRef.current.shift() || null;
 
-                            return next;
-                        });
+                    if (nextPair) {
+                        // Schedule replacement after fade
+                        const fadeId = `${leftIdx}-${rightIdx}-${Date.now()}`;
+                        const timer = setTimeout(() => {
+                            delete fadingRef.current[fadeId];
+                            setBoard(prev => {
+                                const next = [...prev];
+                                next[leftIdx] = { ...next[leftIdx], left: { id: nextPair.id, text: nextPair.c1, status: 'entering' }, key: Date.now() + leftIdx };
+                                next[rightIdx] = { ...next[rightIdx], right: { id: nextPair.id, text: nextPair.c2, status: 'entering' }, key: Date.now() + rightIdx + 100 };
+                                return next;
+                            });
+                            setTimeout(() => {
+                                setBoard(prev => prev.map(r => ({
+                                    ...r,
+                                    left: r.left.status === 'entering' ? { ...r.left, status: 'idle' } : r.left,
+                                    right: r.right.status === 'entering' ? { ...r.right, status: 'idle' } : r.right,
+                                })));
+                            }, 180);
+                        }, FADE_DURATION);
 
-                        setTimeout(() => {
-                            setBoard(prev => prev.map(s => ({
-                                ...s,
-                                left: s.left.status === 'entering' ? { ...s.left, status: 'idle' } : s.left,
-                                right: s.right.status === 'entering' ? { ...s.right, status: 'idle' } : s.right
-                            })));
-
-                            // Revisar si la ronda se limpió completamente (todos vacíos o ya se alcanzó el múltiplo de 15)
-                            if (ns % PAIRS_PER_ROUND === 0) {
-                                if (ns >= TOTAL_PAIRS) {
-                                    confetti({ particleCount: 200, spread: 100, origin: { y: 0.5 } });
-                                    setGameState('won');
-                                } else {
-                                    setMilestone({ text: '¡Ronda Completada!', emoji: '🔥', count: ns });
-                                    setTimeout(() => {
-                                        setMilestone(null);
-                                        startRound(currentRound + 1, gamePoolRef.current);
-                                    }, 2000);
-                                }
-                            }
-
-                            lockedRef.current = false;
-                        }, 200);
-                    }, 2500);
+                        fadingRef.current[fadeId] = { pair: nextPair, leftIdx, rightIdx, timer };
+                    } else {
+                        // No more pairs in queue — just let them fade to empty
+                        const timer = setTimeout(() => {
+                            setBoard(prev => prev.map((r, i) => {
+                                let nr = { ...r };
+                                if (i === leftIdx && nr.left.status === 'matched') nr = { ...nr, left: { ...nr.left, status: 'empty' } };
+                                if (i === rightIdx && nr.right.status === 'matched') nr = { ...nr, right: { ...nr.right, status: 'empty' } };
+                                return nr;
+                            }));
+                        }, FADE_DURATION);
+                    }
 
                     setSelectedSide(null);
+                    lockedRef.current = false;
 
+                    // Check checkpoint complete
+                    if (cpm >= PAIRS_PER_CHECKPOINT) {
+                        const nextCp = checkpoint + 1;
+                        if (ns >= TOTAL_PAIRS) {
+                            setTimeout(() => {
+                                confetti({ particleCount: 200, spread: 100, origin: { y: 0.5 } });
+                                setGameState('won');
+                            }, 800);
+                        } else {
+                            setMilestone({ emoji: nextCp === 1 ? '🔥' : '⚡', text: `¡Checkpoint ${nextCp}!`, count: ns });
+                            setTimeout(() => {
+                                setMilestone(null);
+                                fadingRef.current = {};
+                                const start = nextCp * PAIRS_PER_CHECKPOINT;
+                                buildCheckpoint(allPairsRef.current.slice(start, start + PAIRS_PER_CHECKPOINT));
+                                setCheckpoint(nextCp);
+                                setCheckpointMatched(0);
+                                cpMatchedRef.current = 0;
+                            }, 2000);
+                        }
+                    }
                 } else {
-                    // Error: Mostrar 🤔
+                    // Wrong
+                    const leftIdx = selectedSide.side === 'left' ? selectedSide.index : index;
+                    const rightIdx = selectedSide.side === 'right' ? selectedSide.index : index;
+
                     setBoard(prev => {
                         const next = [...prev];
-                        if (selectedSide.side === 'left') next[selectedSide.index].left = { ...next[selectedSide.index].left, status: 'wrong' };
-                        else next[selectedSide.index].right = { ...next[selectedSide.index].right, status: 'wrong' };
-                        
-                        if (side === 'left') next[index].left = { ...next[index].left, status: 'wrong' };
-                        else next[index].right = { ...next[index].right, status: 'wrong' };
-                        
+                        if (selectedSide.side === 'left') next[selectedSide.index] = { ...next[selectedSide.index], left: { ...next[selectedSide.index].left, status: 'wrong' } };
+                        else next[selectedSide.index] = { ...next[selectedSide.index], right: { ...next[selectedSide.index].right, status: 'wrong' } };
+                        if (side === 'left') next[index] = { ...next[index], left: { ...next[index].left, status: 'wrong' } };
+                        else next[index] = { ...next[index], right: { ...next[index].right, status: 'wrong' } };
                         return next;
                     });
 
                     setSelectedSide(null);
                     setTimeout(() => {
-                        setBoard(prev => prev.map(s => ({
-                            ...s,
-                            left: s.left.status === 'wrong' ? { ...s.left, status: 'idle' } : s.left,
-                            right: s.right.status === 'wrong' ? { ...s.right, status: 'idle' } : s.right,
+                        setBoard(prev => prev.map(r => ({
+                            ...r,
+                            left: r.left.status === 'wrong' ? { ...r.left, status: 'idle' } : r.left,
+                            right: r.right.status === 'wrong' ? { ...r.right, status: 'idle' } : r.right,
                         })));
                         lockedRef.current = false;
                     }, 400);
                 }
-            }, [board, selectedSide, gameState, currentRound, startRound]);
+            }, [board, selectedSide, gameState, checkpoint, resolveAllFading, buildCheckpoint]);
 
-            const WordBtn = ({ item, onClick }) => {
-                if (item.status === 'empty') {
-                    return <div className="h-[3.6rem] sm:h-[4.2rem] opacity-0 pointer-events-none"></div>;
-                }
+            // Word button
+            const WordBtn = ({ item, onClick, side }) => {
+                if (item.status === 'empty') return <div className="h-14 sm:h-[4.2rem]"/>;
 
-                let bg = 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-slate-700 dark:text-zinc-200';
+                let bg = 'bg-zinc-800 border-zinc-700 text-zinc-200';
                 let anim = '';
-                let displayText = item.text;
 
-                if (item.status === 'selected') {
-                    bg = 'bg-cyan-50 dark:bg-cyan-900/30 border-cyan-300 dark:border-cyan-800 text-cyan-700 dark:text-cyan-400 font-black';
-                } else if (item.status === 'correct') {
-                    bg = 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-transparent'; 
-                    anim = 'animate-slow-fade';
-                    displayText = '😎';
-                } else if (item.status === 'wrong') {
-                    bg = 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-transparent'; 
-                    anim = 'animate-shake';
-                    displayText = '🤔';
-                } else if (item.status === 'entering') {
-                    anim = 'animate-instant-in';
-                }
+                if (item.status === 'selected') bg = 'bg-emerald-600 border-emerald-800 text-white';
+                else if (item.status === 'matched') { bg = 'bg-emerald-500/40 border-emerald-700/40 text-emerald-300'; anim = 'animate-slow-fade'; }
+                else if (item.status === 'wrong') { bg = 'bg-rose-500/70 border-rose-700 text-white'; anim = 'animate-shake'; }
+                else if (item.status === 'entering') { anim = 'animate-pop-in'; }
 
-                const disabled = item.status === 'fading' || item.status === 'wrong' || item.status === 'entering' || item.status === 'correct';
+                const disabled = ['matched', 'wrong', 'entering', 'empty'].includes(item.status);
 
                 return (
-                    <div className="h-[3.6rem] sm:h-[4.2rem]">
-                        <button
-                            className={`btn-juicy w-full h-full rounded-2xl border-2 border-b-4 font-bold text-sm sm:text-base flex items-center justify-center px-3 leading-tight ${bg} ${anim}`}
-                            onClick={onClick}
-                            disabled={disabled}>
-                            <span className={item.status === 'correct' || item.status === 'wrong' ? 'text-3xl text-black dark:text-white' : ''}>
-                                {displayText}
-                            </span>
+                    <div className="h-14 sm:h-[4.2rem]">
+                        <button className={`btn-juicy w-full h-full rounded-2xl border-2 border-b-4 font-bold text-sm sm:text-base flex items-center justify-center px-3 leading-tight ${bg} ${anim}`}
+                            onClick={onClick} disabled={disabled}>
+                            {item.text}
                         </button>
                     </div>
                 );
             };
 
+            // Render
             if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-zinc-500" size={32}/></div>;
-            if (!gameData || wordPool.length < 5) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><div className="bg-rose-900/20 border border-rose-500/50 p-6 rounded-2xl text-rose-500 font-bold text-center max-w-sm">⚠️ Error: No hay suficientes palabras guardadas en este juego. (Se encontraron {wordPool.length}, mínimo 5).</div></div>;
+            if (!gameData || wordPool.length < 5) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 p-6"><div className="bg-rose-900/20 border border-rose-500/50 p-6 rounded-2xl text-rose-400 font-bold text-center max-w-sm">Necesitas al menos 5 pares de palabras.</div></div>;
 
+            // Menu
             if (gameState === 'menu') return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950 overflow-auto">
                     <div className="max-w-sm w-full text-center my-auto">
                         <div className="text-7xl mb-4">⚡</div>
                         <h1 className="text-4xl font-black text-white mb-1">Match Madness</h1>
                         <p className="text-zinc-400 font-medium mb-1">{gameData.title}</p>
-                        <p className="text-zinc-500 text-sm mb-8">Empareja {TOTAL_PAIRS} pares en {Math.floor(TIME_SECONDS/60)}:{(TIME_SECONDS%60).toString().padStart(2,'0')}</p>
-                        
+                        <p className="text-zinc-500 text-sm mb-8">{TOTAL_PAIRS} pares en {Math.floor(TIME_SECONDS/60)}:{(TIME_SECONDS%60).toString().padStart(2,'0')}</p>
                         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 mb-8 text-left space-y-3">
-                            <div className="flex items-center gap-3">
-                                <span className="text-2xl">🔥</span>
-                                <div><p className="font-black text-white text-sm">3 Rondas</p><p className="text-zinc-500 text-xs">De 15 pares cada una</p></div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <span className="text-2xl">😎</span>
-                                <div><p className="font-black text-white text-sm">Anti-Trampas</p><p className="text-zinc-500 text-xs">No esperes, sigue haciendo pares</p></div>
-                            </div>
+                            <div className="flex items-center gap-3"><span className="text-2xl">🎯</span><div><p className="font-black text-white text-sm">3 Checkpoints</p><p className="text-zinc-500 text-xs">{PAIRS_PER_CHECKPOINT} pares cada uno</p></div></div>
+                            <div className="flex items-center gap-3"><span className="text-2xl">⏱️</span><div><p className="font-black text-white text-sm">Español ↔ English</p><p className="text-zinc-500 text-xs">Izquierda español, derecha inglés</p></div></div>
                         </div>
-                        
-                        <button onClick={startGame} className="btn-juicy w-full bg-cyan-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-cyan-700 text-xl uppercase tracking-widest flex items-center justify-center gap-2">
+                        <button onClick={startGame} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-emerald-700 text-xl uppercase tracking-widest flex items-center justify-center gap-2">
                             <Play fill="currentColor" size={24}/> JUGAR
                         </button>
                         {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-6 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">Volver al Hub</button>}
@@ -402,86 +439,76 @@
                 </div>
             );
 
+            // Playing
             if (gameState === 'playing') {
                 const pct = (score / TOTAL_PAIRS) * 100;
                 const isLow = timeLeft < 20;
-                const mins = Math.floor(Math.ceil(timeLeft) / 60);
-                const secs = Math.ceil(timeLeft) % 60;
-                const timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
+                const m = Math.floor(Math.ceil(timeLeft) / 60);
+                const s = Math.ceil(timeLeft) % 60;
 
                 return (
-                    <div className="h-[100dvh] flex flex-col bg-slate-50 dark:bg-zinc-950 overflow-hidden relative">
+                    <div className="h-[100dvh] flex flex-col bg-zinc-950 overflow-hidden relative">
                         {milestone && (
                             <div className="fixed top-24 left-1/2 -translate-x-1/2 z-50 animate-milestone">
-                                <div className="bg-zinc-800 border-2 border-cyan-500/50 px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3">
+                                <div className="bg-zinc-800 border-2 border-amber-500/50 px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3">
                                     <span className="text-3xl">{milestone.emoji}</span>
-                                    <div>
-                                        <p className="font-black text-white text-lg">{milestone.count} pares</p>
-                                        <p className="text-cyan-400 font-bold text-sm">{milestone.text}</p>
-                                    </div>
+                                    <div><p className="font-black text-white text-lg">{milestone.count} pares</p><p className="text-amber-400 font-bold text-sm">{milestone.text}</p></div>
                                 </div>
                             </div>
                         )}
-                        <header className="px-4 py-2.5 flex items-center justify-between shrink-0 bg-white dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800 shadow-sm">
-                            <button onClick={() => setGameState('menu')} className="p-2 text-slate-400 dark:text-zinc-500 hover:text-slate-800 dark:hover:text-white rounded-xl"><X size={20}/></button>
+
+                        <header className="px-4 py-2.5 flex items-center justify-between shrink-0 bg-zinc-900 border-b border-zinc-800">
+                            <button onClick={() => setGameState('menu')} className="p-2 text-zinc-500 hover:text-white rounded-xl"><X size={20}/></button>
                             <div className="flex-1 mx-4 relative">
-                                <div className="h-3 w-full bg-slate-200 dark:bg-zinc-800 rounded-full overflow-hidden">
-                                    <div className={`h-full rounded-full transition-all duration-300 ${isLow ? 'bg-rose-500' : 'bg-cyan-500'}`} style={{ width: `${pct}%` }}/>
+                                <div className="h-3 w-full bg-zinc-800 rounded-full overflow-hidden relative">
+                                    <div className={`h-full rounded-full transition-all duration-300 ${isLow ? 'bg-rose-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }}/>
+                                    {/* Checkpoint markers */}
+                                    {[1,2].map(cp => (
+                                        <div key={cp} className="absolute top-1/2 -translate-y-1/2" style={{ left: `${(cp * PAIRS_PER_CHECKPOINT / TOTAL_PAIRS) * 100}%` }}>
+                                            <div className={`w-2 h-5 rounded-full ${score >= cp * PAIRS_PER_CHECKPOINT ? 'bg-amber-400' : 'bg-zinc-600'}`}/>
+                                        </div>
+                                    ))}
                                 </div>
+                                <div className="flex justify-between mt-1"><span className="text-[10px] text-zinc-500 font-bold">{score}/{TOTAL_PAIRS}</span></div>
                             </div>
-                            <div className={`font-black text-lg tabular-nums min-w-[50px] text-right ${isLow ? 'text-rose-500 animate-pulse' : 'text-cyan-600 dark:text-cyan-400'}`}>
-                                {timeStr}
+                            <div className={`font-black text-lg tabular-nums min-w-[50px] text-right ${isLow ? 'text-rose-500 animate-pulse' : 'text-amber-500'}`}>
+                                {m}:{s.toString().padStart(2,'0')}
                             </div>
                         </header>
+
                         <div className="flex px-4 sm:px-8 max-w-2xl mx-auto w-full pt-3 pb-1">
-                            <p className="flex-1 text-center text-slate-400 dark:text-zinc-500 font-bold text-[10px] uppercase tracking-widest">Columna 1</p>
-                            <p className="flex-1 text-center text-slate-400 dark:text-zinc-500 font-bold text-[10px] uppercase tracking-widest">Columna 2</p>
+                            <p className="flex-1 text-center text-zinc-500 font-bold text-[10px] uppercase tracking-widest">Español</p>
+                            <p className="flex-1 text-center text-zinc-500 font-bold text-[10px] uppercase tracking-widest">English</p>
                         </div>
-                        <main className="flex-1 flex gap-3 sm:gap-4 px-4 sm:px-8 pb-6 max-w-2xl mx-auto w-full">
+
+                        <main className="flex-1 flex gap-3 sm:gap-4 px-4 sm:px-8 pb-6 max-w-2xl mx-auto w-full items-center">
                             <div className="flex-1 flex flex-col gap-2.5 sm:gap-3 justify-center">
-                                {board.map((slot, i) => (
-                                    <WordBtn key={`l-${slot.key}`} item={slot.left} onClick={() => handleClick('left', i)}/>
-                                ))}
+                                {board.map((row, i) => <WordBtn key={`l-${row.key}`} item={row.left} side="left" onClick={() => handleClick('left', i)}/>)}
                             </div>
                             <div className="flex-1 flex flex-col gap-2.5 sm:gap-3 justify-center">
-                                {board.map((slot, i) => (
-                                    <WordBtn key={`r-${slot.key}`} item={slot.right} onClick={() => handleClick('right', i)}/>
-                                ))}
+                                {board.map((row, i) => <WordBtn key={`r-${row.key}`} item={row.right} side="right" onClick={() => handleClick('right', i)}/>)}
                             </div>
                         </main>
                     </div>
                 );
             }
 
+            // Results
             const isWin = gameState === 'won';
-            const timeTaken = TIME_SECONDS - Math.ceil(timeLeft);
-            const mins = Math.floor(timeTaken / 60);
-            const secs = timeTaken % 60;
+            const taken = TIME_SECONDS - Math.ceil(timeLeft);
 
             return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950 overflow-auto">
                     <div className="max-w-sm w-full text-center my-auto">
                         <div className="text-7xl mb-4">{isWin ? '👑' : '⏱️'}</div>
                         {isWin ? (
-                            <>
-                                <h2 className="text-3xl font-black text-cyan-400 mb-2">¡VICTORIA!</h2>
-                                <p className="text-zinc-400 font-bold mb-1">{TOTAL_PAIRS} pares en {mins}:{secs.toString().padStart(2, '0')}</p>
-                                <p className="text-zinc-500 text-sm mb-8">Has dominado Match Madness.</p>
-                            </>
+                            <><h2 className="text-3xl font-black text-amber-400 mb-2">¡VICTORIA!</h2><p className="text-zinc-400 font-bold mb-1">{TOTAL_PAIRS} pares en {Math.floor(taken/60)}:{(taken%60).toString().padStart(2,'0')}</p><p className="text-zinc-500 text-sm mb-8">Match Madness dominado.</p></>
                         ) : (
-                            <>
-                                <h2 className="text-3xl font-black text-rose-400 mb-2">Se acabó el tiempo</h2>
-                                <p className="text-zinc-400 font-bold mb-1">{score} de {TOTAL_PAIRS} pares</p>
-                                <p className="text-zinc-500 text-sm mb-8">¡Inténtalo otra vez!</p>
-                            </>
+                            <><h2 className="text-3xl font-black text-rose-400 mb-2">Se acabó el tiempo</h2><p className="text-zinc-400 font-bold mb-1">{score} de {TOTAL_PAIRS} pares</p><p className="text-zinc-500 text-sm mb-8">¡Vuelve a intentar!</p></>
                         )}
                         <div className="space-y-3">
-                            <button onClick={startGame} className="btn-juicy w-full bg-cyan-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-cyan-700 text-lg uppercase tracking-widest flex items-center justify-center gap-2">
-                                <RotateCcw size={20}/> {isWin ? 'Jugar de Nuevo' : 'Reintentar'}
-                            </button>
-                            <button onClick={() => setGameState('menu')} className="btn-juicy w-full bg-zinc-800 text-zinc-300 font-black py-3 rounded-2xl border-2 border-b-4 border-zinc-900 text-sm uppercase tracking-widest">
-                                Menú
-                            </button>
+                            <button onClick={startGame} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-2xl border-2 border-b-4 border-emerald-700 text-lg uppercase tracking-widest flex items-center justify-center gap-2"><RotateCcw size={20}/> {isWin ? 'Otra vez' : 'Reintentar'}</button>
+                            <button onClick={() => setGameState('menu')} className="btn-juicy w-full bg-zinc-800 text-zinc-300 font-black py-3 rounded-2xl border-2 border-b-4 border-zinc-900 text-sm uppercase tracking-widest">Menú</button>
                         </div>
                         {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-8 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">Volver al Hub</button>}
                     </div>
