@@ -182,6 +182,8 @@ const GameBoard=()=>{
     const[roomRoles,setRoomRoles]=useState({red:null,yellow:null,observer:null});
     const[playerNames,setPlayerNames]=useState({});
     const emptyBoard=Array(6).fill(null).map(()=>Array(7).fill(null));
+    const boardToFB=b=>JSON.stringify(b); // Firebase can't store nested arrays
+    const fbToBoard=s=>{try{return typeof s==='string'?JSON.parse(s):s||emptyBoard}catch{return emptyBoard}};
     const[board,setBoard]=useState(emptyBoard);
     const[currentPlayer,setCurrentPlayer]=useState('red');
     const[winner,setWinner]=useState(null);
@@ -220,7 +222,7 @@ const GameBoard=()=>{
         const unsub=onSnapshot(doc(db,ROOMS_PATH,roomId),snap=>{
             if(!snap.exists())return;
             const d=snap.data();
-            setBoard(d.board||emptyBoard);setCurrentPlayer(d.turn||'red');setWinner(d.winner||null);setModal(d.activeChallenge||null);
+            setBoard(fbToBoard(d.board));setCurrentPlayer(d.turn||'red');setWinner(d.winner||null);setModal(d.activeChallenge||null);
             setRoomRoles(d.roles||{});setPlayerNames(d.playerNames||{});
             const uid=myUid.current;
             if(d.roles.red===uid)setMyRole('red');
@@ -234,7 +236,12 @@ const GameBoard=()=>{
     const fillPools=c=>{const p={};Object.keys(c).forEach(k=>{if(Array.isArray(c[k])&&c[k].length>0)p[k]=shuffle(c[k])});setActivePools(p)};
 
     const syncState=async updates=>{
-        if(roomId){try{await updateDoc(doc(db,ROOMS_PATH,roomId),updates)}catch(e){console.error('Sync error:',e)}}
+        if(roomId){
+            // Serialize board for Firebase (no nested arrays)
+            const fbUpdates={...updates};
+            if(fbUpdates.board!==undefined)fbUpdates.board=boardToFB(fbUpdates.board);
+            try{await updateDoc(doc(db,ROOMS_PATH,roomId),fbUpdates)}catch(e){console.error('Sync error:',e)}
+        }
         else{if(updates.board!==undefined)setBoard(updates.board);if(updates.turn!==undefined)setCurrentPlayer(updates.turn);if(updates.activeChallenge!==undefined)setModal(updates.activeChallenge);if(updates.winner!==undefined)setWinner(updates.winner)}
     };
 
@@ -246,7 +253,7 @@ const GameBoard=()=>{
         try{
             await setDoc(doc(db,ROOMS_PATH,code),{
                 gameId:new URLSearchParams(window.location.search).get('id'),
-                board:emptyBoard,turn:'red',winner:null,activeChallenge:null,
+                board:boardToFB(emptyBoard),turn:'red',winner:null,activeChallenge:null,
                 hostUid:myUid.current,
                 roles:{red:null,yellow:null,observer:null},
                 playerNames:{},gameState:'roles',
