@@ -31,12 +31,45 @@
         import React, { useState, useEffect } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
-        import { Youtube, Play, Loader2, ArrowLeft, KeyRound, Sparkles, BookOpen, Trash2, Plus, Clock, HelpCircle } from 'lucide-react';
+        import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
+        import { Youtube, Play, Loader2, ArrowLeft, KeyRound, Sparkles, BookOpen, Trash2, Plus, Clock, HelpCircle, Tags, X, Save } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
+
+        // ============================================================
+        // TAXONOMÍA MAESTRA (ACTUALIZADA CON "OTRO")
+        // ============================================================
+        const TAXONOMY={
+            basic:{
+                grammar:["Modal Verbs","Present Simple","Present Continuous","Future (Going to)", "Otro"],
+                verbs:["Pack 1: Daily Routine","Pack 2: Home & Communication","Pack 3: Travel & Conflict","Pack 4: Business & Emotion","Pack 5: Action & Strategy","Pack 6: Thoughts & Senses","Pack 7: Social & Science","Pack 8: Corporate & Economy","Pack 9: Medical & Survival", "Otro"],
+                nouns:["Pack 1: Modern Nomad","Pack 2: Hungry Traveler","Pack 3: Daily Grind","Pack 4: Urban Chaos","Pack 5: Weekend Getaway", "Otro"],
+                adjectives:["Pack 1: Personality & Looks","Pack 2: Feelings & State","Pack 3: Places & Vibes","Pack 4: The -ed/-ing Trap","Pack 5: Opinions & Taste", "Otro"],
+                key_structs:["WH Questions","FANBOYS & Correlative","Subordinating Conj.","Prep. Time","Prep. Place","Prep. Movement & Other","Possessive & Object Pron.","Quantifiers","Frequency Adverbs", "Otro"],
+                otro: ["Otro"]
+            },
+            advanced:{
+                grammar:["Past Simple","Second Conditional","Past Continuous","Past Future Intention", "Otro"],
+                verbs:["Irregular A-F","Irregular G-M","Irregular R-S","Irregular T-W","Regular /t/ Sound","Regular /d/ Sound","Regular /ɪd/ Sound", "Otro"],
+                nouns:["Pack 1: Success & Failure","Pack 2: Truth & Lies","Pack 3: Media & Ent.","Pack 4: Compound Nouns","Pack 5: Env. & Science", "Otro"],
+                adjectives:["Short Comparatives","Long Comparatives","Irregular Comparatives","Superlatives", "Otro"],
+                key_structs:["Used to / Use to","Comparative Rules","Superlative Rules","Idiomatic Expressions","Possessive Nouns","Relative Clauses","Modals of Possibility","Passive Voice", "Otro"],
+                otro: ["Otro"]
+            },
+            pro:{
+                grammar:["Present/Past Perfect","Perfect Continuous","Third Conditional","Mixed Conditionals", "Otro"],
+                verbs:["Phrasal Verbs 2","Idiomatic Expressions","Sayings & Proverbs","Advanced Collocations", "Otro"],
+                nouns:["Pack 1: Law & Politics","Pack 2: Finance & Econ.","Pack 3: Collective Nouns","Pack 4: Uncountables","Pack 5: Formal & Academic", "Otro"],
+                adjectives:["Formal Register Adj.","Nuance & Tone Adj.", "Otro"],
+                key_structs:["Inversion","Cleft Sentences","Participle Clauses","Wish & Regret","Double Comparatives", "Otro"],
+                otro: ["Otro"]
+            },
+            otro: {
+                otro: ["Otro"]
+            }
+        };
 
         const extractYouTubeId = (url) => {
             const match = url.match(/^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/);
@@ -87,6 +120,7 @@
             
             const [thumbnailUrl, setThumbnailUrl] = useState("");
             const [isSaving, setIsSaving] = useState(false);
+            const [editingId, setEditingId] = useState(null);
 
             const [isExtractingVocab, setIsExtractingVocab] = useState(false);
             const [vocabulary, setVocabulary] = useState([]);
@@ -94,10 +128,46 @@
             const [isExtractingQuestions, setIsExtractingQuestions] = useState(false);
             const [questions, setQuestions] = useState([]);
 
+            // TAXONOMY MODAL STATE
+            const [showSaveModal, setShowSaveModal] = useState(false);
+            const [saveLevel, setSaveLevel] = useState('basic');
+            const [saveCat, setSaveCat] = useState('grammar');
+            const [saveTopic, setSaveTopic] = useState(TAXONOMY['basic']['grammar'][0]);
+
             useEffect(() => {
                 const savedGeminiKey = localStorage.getItem('gemini_api_key');
                 if (savedGeminiKey) setApiKey(savedGeminiKey);
+
+                const params = new URLSearchParams(window.location.search);
+                const editId = params.get('edit');
+                if (editId) {
+                    getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editId)).then(docSnap => {
+                        if (docSnap.exists()) {
+                            const data = docSnap.data();
+                            setTitle(data.title);
+                            setVideoUrl(`https://www.youtube.com/watch?v=${data.videoId}`);
+                            setEditingId(editId);
+                            if (data.vocabulary) setVocabulary(data.vocabulary);
+                            if (data.questions) setQuestions(data.questions);
+                            // Set transcript mapped backwards from parsed if we wanted, but let's keep simple
+                            
+                            // Load existing tags
+                            if (data.tags) {
+                                setSaveLevel(data.tags.level || 'basic');
+                                setSaveCat(data.tags.category || 'grammar');
+                                setSaveTopic(data.tags.topic || TAXONOMY['basic']['grammar'][0]);
+                            }
+                        }
+                    });
+                }
             }, []);
+
+            // Actualizar Topic dinámicamente
+            useEffect(() => {
+                if (TAXONOMY[saveLevel] && TAXONOMY[saveLevel][saveCat]) {
+                    setSaveTopic(TAXONOMY[saveLevel][saveCat][0] || 'Otro');
+                }
+            }, [saveLevel, saveCat]);
 
             const videoId = extractYouTubeId(videoUrl);
 
@@ -192,17 +262,33 @@
                 finally { setIsExtractingQuestions(false); }
             };
 
-            const handleProcessAndCreate = async () => {
-                if (!videoId || !transcript) return alert("Faltan campos obligatorios.");
+            // PRE-SAVE CHECK
+            const handlePreSave = () => {
+                if (!videoId) return alert("Falta el URL del video.");
+                if (!editingId && !transcript) return alert("Pega el transcript para crear la actividad.");
+                setShowSaveModal(true);
+            };
 
+            // FINAL SAVE WITH TAXONOMY
+            const executeFinalSave = async () => {
+                setShowSaveModal(false);
                 setIsSaving(true);
                 try {
-                    const cleanTranscriptArray = parseDirtyTranscript(transcript);
-                    if (cleanTranscriptArray.length === 0) throw new Error("No se pudo extraer el texto.");
+                    let cleanTranscriptArray = [];
+                    if (transcript) {
+                        cleanTranscriptArray = parseDirtyTranscript(transcript);
+                        if (cleanTranscriptArray.length === 0) throw new Error("No se pudo extraer el texto.");
+                    }
 
                     const params = new URLSearchParams(window.location.search);
                     const parentPath = params.get('folder') ? decodeURIComponent(params.get('folder')) : '';
                     const finalTitle = title.trim() !== "" ? title.trim() : "Listening & Comp Activity";
+
+                    const tags = {
+                        level: saveLevel,
+                        category: saveCat,
+                        topic: saveTopic
+                    };
 
                     const payload = {
                         title: finalTitle,
@@ -211,14 +297,23 @@
                         videoId: videoId,
                         vocabulary: vocabulary,
                         questions: questions,
-                        parsedTranscript: cleanTranscriptArray,
+                        tags: tags,
                         parentPath: parentPath,
-                        createdAt: serverTimestamp(),
                         updatedAt: serverTimestamp()
                     };
 
-                    const docRef = await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), payload);
-                    window.location.href = `listening.html?id=${docRef.id}`;
+                    if (transcript) {
+                        payload.parsedTranscript = cleanTranscriptArray;
+                    }
+
+                    if (editingId) {
+                        await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes', editingId), payload);
+                        window.location.href = `listening.html?id=${editingId}`;
+                    } else {
+                        payload.createdAt = serverTimestamp();
+                        const docRef = await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), payload);
+                        window.location.href = `listening.html?id=${docRef.id}`;
+                    }
                 } catch (e) { alert("Error: " + e.message); } 
                 finally { setIsSaving(false); }
             };
@@ -236,8 +331,48 @@
             };
 
             return (
-                <div className="w-full flex flex-col lg:flex-row gap-8">
+                <div className="w-full flex flex-col lg:flex-row gap-8 relative">
                     
+                    {/* TAXONOMY SAVE MODAL */}
+                    {showSaveModal && (
+                        <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm p-6 shadow-2xl">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h2 className="text-lg font-black flex items-center gap-2 text-white"><Tags className="text-rose-500"/> Clasificar Listening</h2>
+                                    <button onClick={()=>setShowSaveModal(false)} className="text-zinc-500 hover:text-white"><X size={20}/></button>
+                                </div>
+                                
+                                <div className="space-y-4 mb-8">
+                                    <div>
+                                        <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">1. Nivel</label>
+                                        <select value={saveLevel} onChange={e=>{setSaveLevel(e.target.value);const cats=Object.keys(TAXONOMY[e.target.value]||{});setSaveCat(cats[0]||'grammar');}}
+                                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-rose-500 cursor-pointer">
+                                            {Object.keys(TAXONOMY).map(l=><option key={l} value={l}>{l.toUpperCase()}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">2. Categoría</label>
+                                        <select value={saveCat} onChange={e=>setSaveCat(e.target.value)}
+                                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-rose-500 cursor-pointer capitalize">
+                                            {Object.keys(TAXONOMY[saveLevel]||{}).map(c=><option key={c} value={c}>{c.replace('_',' ')}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">3. Tema Específico</label>
+                                        <select value={saveTopic} onChange={e=>setSaveTopic(e.target.value)}
+                                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-rose-500 cursor-pointer">
+                                            {(TAXONOMY[saveLevel]?.[saveCat]||[]).map(t=><option key={t} value={t}>{t}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <button onClick={executeFinalSave} disabled={isSaving} className="w-full bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white py-4 rounded-xl font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95">
+                                    {isSaving ? <Loader2 className="animate-spin" size={18}/> : <Save size={18}/>} Confirmar y Guardar
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl shadow-2xl w-full lg:w-1/3 relative flex flex-col h-[90vh]">
                         <button onClick={() => window.location.href = 'index.html'} className="absolute top-8 left-8 text-zinc-400 hover:text-white transition"><ArrowLeft size={24}/></button>
                         <h1 className="text-3xl font-black text-rose-500 mb-8 text-center flex items-center justify-center gap-3">
@@ -264,7 +399,7 @@
                             </div>
                         </div>
 
-                        <button onClick={handleProcessAndCreate} disabled={isSaving || !videoId || !transcript} className="w-full bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white py-4 rounded-xl font-black shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 text-xl mt-6 shrink-0">
+                        <button onClick={handlePreSave} disabled={isSaving || !videoId || (!editingId && !transcript)} className="w-full bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white py-4 rounded-xl font-black shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 text-xl mt-6 shrink-0">
                             {isSaving ? <Loader2 className="animate-spin"/> : <Play/>} Guardar y Ver
                         </button>
                     </div>
