@@ -38,11 +38,38 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
-        import { BookOpen, Save, ArrowLeft, Loader2, KeyRound, Sparkles, Image as ImageIcon, Trash2, Plus, Settings2, GripVertical, CheckCircle2 } from 'lucide-react';
+        import { BookOpen, Save, ArrowLeft, Loader2, KeyRound, Sparkles, Image as ImageIcon, Trash2, Plus, Settings2, GripVertical, CheckCircle2, Tags, X } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
+
+        // ============================================================
+        // TAXONOMÍA MAESTRA
+        // ============================================================
+        const TAXONOMY={
+            basic:{
+                grammar:["Modal Verbs","Present Simple","Present Continuous","Future (Going to)"],
+                verbs:["Pack 1: Daily Routine","Pack 2: Home & Communication","Pack 3: Travel & Conflict","Pack 4: Business & Emotion","Pack 5: Action & Strategy","Pack 6: Thoughts & Senses","Pack 7: Social & Science","Pack 8: Corporate & Economy","Pack 9: Medical & Survival"],
+                nouns:["Pack 1: Modern Nomad","Pack 2: Hungry Traveler","Pack 3: Daily Grind","Pack 4: Urban Chaos","Pack 5: Weekend Getaway"],
+                adjectives:["Pack 1: Personality & Looks","Pack 2: Feelings & State","Pack 3: Places & Vibes","Pack 4: The -ed/-ing Trap","Pack 5: Opinions & Taste"],
+                key_structs:["WH Questions","FANBOYS & Correlative","Subordinating Conj.","Prep. Time","Prep. Place","Prep. Movement & Other","Possessive & Object Pron.","Quantifiers","Frequency Adverbs"]
+            },
+            advanced:{
+                grammar:["Past Simple","Second Conditional","Past Continuous","Past Future Intention"],
+                verbs:["Irregular A-F","Irregular G-M","Irregular R-S","Irregular T-W","Regular /t/ Sound","Regular /d/ Sound","Regular /ɪd/ Sound"],
+                nouns:["Pack 1: Success & Failure","Pack 2: Truth & Lies","Pack 3: Media & Ent.","Pack 4: Compound Nouns","Pack 5: Env. & Science"],
+                adjectives:["Short Comparatives","Long Comparatives","Irregular Comparatives","Superlatives"],
+                key_structs:["Used to / Use to","Comparative Rules","Superlative Rules","Idiomatic Expressions","Possessive Nouns","Relative Clauses","Modals of Possibility","Passive Voice"]
+            },
+            pro:{
+                grammar:["Present/Past Perfect","Perfect Continuous","Third Conditional","Mixed Conditionals"],
+                verbs:["Phrasal Verbs 2","Idiomatic Expressions","Sayings & Proverbs","Advanced Collocations"],
+                nouns:["Pack 1: Law & Politics","Pack 2: Finance & Econ.","Pack 3: Collective Nouns","Pack 4: Uncountables","Pack 5: Formal & Academic"],
+                adjectives:["Formal Register Adj.","Nuance & Tone Adj."],
+                key_structs:["Inversion","Cleft Sentences","Participle Clauses","Wish & Regret","Double Comparatives"]
+            }
+        };
 
         const Dashboard = () => {
             const [apiKey, setApiKey] = useState("");
@@ -60,6 +87,12 @@
             const [stories, setStories] = useState([]);
             const [editingStoryIdx, setEditingStoryIdx] = useState(-1);
 
+            // TAXONOMY MODAL STATE
+            const [showSaveModal, setShowSaveModal] = useState(false);
+            const [saveLevel, setSaveLevel] = useState('basic');
+            const [saveCat, setSaveCat] = useState('grammar');
+            const [saveTopic, setSaveTopic] = useState(TAXONOMY['basic']['grammar'][0]);
+
             useEffect(() => {
                 const savedKey = localStorage.getItem('gemini_api_key');
                 if (savedKey) setApiKey(savedKey);
@@ -75,10 +108,24 @@
                             setEditingId(editId);
                             if (data.stories) setStories(data.stories);
                             else if (data.content) setStories([{...data.content, title: data.title}]); 
+                            
+                            // Cargar tags guardados si existen
+                            if (data.tags) {
+                                setSaveLevel(data.tags.level || 'basic');
+                                setSaveCat(data.tags.category || 'grammar');
+                                setSaveTopic(data.tags.topic || TAXONOMY['basic']['grammar'][0]);
+                            }
                         }
                     });
                 }
             }, []);
+
+            // Actualizar el Topic cuando cambia la Category
+            useEffect(() => {
+                if (TAXONOMY[saveLevel] && TAXONOMY[saveLevel][saveCat]) {
+                    setSaveTopic(TAXONOMY[saveLevel][saveCat][0] || 'mixed');
+                }
+            }, [saveLevel, saveCat]);
 
             const generateStoryWithAI = async () => {
                 if (!apiKey) { alert("Necesitas tu API Key de Gemini."); setShowApiInput(true); return; }
@@ -160,22 +207,35 @@
                 setStories(ns);
             };
 
-            const saveToFirebase = async () => {
+            // PRE-SAVE CHECK
+            const handlePreSave = () => {
                 if (!title) return alert("El título general de la colección es obligatorio.");
                 if (stories.length === 0) return alert("Genera al menos una lectura.");
-                
+                setShowSaveModal(true);
+            };
+
+            // FINAL SAVE WITH TAXONOMY
+            const executeFinalSave = async () => {
+                setShowSaveModal(false);
                 setIsSaving(true);
                 try {
                     const params = new URLSearchParams(window.location.search);
                     const parentPath = params.get('folder') ? decodeURIComponent(params.get('folder')) : '';
 
+                    // CREATE TAGS OBJECT
+                    const tags = {
+                        level: saveLevel,
+                        category: saveCat,
+                        topic: saveTopic
+                    };
+
                     if (editingId) {
                         await updateDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', editingId), { 
-                            title: title, genre: genre, stories: stories, updatedAt: serverTimestamp() 
+                            title: title, genre: genre, stories: stories, tags: tags, updatedAt: serverTimestamp() 
                         });
                     } else {
                         await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'users', 'teacher_builder_001', 'quizzes'), { 
-                            title: title, type: 'READING', genre: genre, stories: stories, createdAt: serverTimestamp(), parentPath: parentPath 
+                            title: title, type: 'READING', genre: genre, stories: stories, tags: tags, createdAt: serverTimestamp(), parentPath: parentPath 
                         });
                     }
                     window.location.href = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html'; 
@@ -250,7 +310,48 @@
             };
 
             return (
-                <div className="h-[100dvh] flex flex-col bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100">
+                <div className="h-[100dvh] flex flex-col bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 relative">
+                    
+                    {/* TAXONOMY SAVE MODAL */}
+                    {showSaveModal && (
+                        <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm p-6 shadow-2xl">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h2 className="text-lg font-black flex items-center gap-2 text-white"><Tags className="text-indigo-400"/> Clasificar Lectura</h2>
+                                    <button onClick={()=>setShowSaveModal(false)} className="text-zinc-500 hover:text-white"><X size={20}/></button>
+                                </div>
+                                
+                                <div className="space-y-4 mb-8">
+                                    <div>
+                                        <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">1. Nivel</label>
+                                        <select value={saveLevel} onChange={e=>{setSaveLevel(e.target.value);const cats=Object.keys(TAXONOMY[e.target.value]||{});setSaveCat(cats[0]||'grammar');}}
+                                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-indigo-500 cursor-pointer">
+                                            {Object.keys(TAXONOMY).map(l=><option key={l} value={l}>{l.toUpperCase()}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">2. Categoría</label>
+                                        <select value={saveCat} onChange={e=>setSaveCat(e.target.value)}
+                                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-indigo-500 cursor-pointer capitalize">
+                                            {Object.keys(TAXONOMY[saveLevel]||{}).map(c=><option key={c} value={c}>{c.replace('_',' ')}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">3. Tema Específico</label>
+                                        <select value={saveTopic} onChange={e=>setSaveTopic(e.target.value)}
+                                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-indigo-500 cursor-pointer">
+                                            {(TAXONOMY[saveLevel]?.[saveCat]||[]).map(t=><option key={t} value={t}>{t}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <button onClick={executeFinalSave} disabled={isSaving} className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:bg-zinc-800 text-white py-4 rounded-xl font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95">
+                                    {isSaving ? <Loader2 className="animate-spin" size={18}/> : <Save size={18}/>} Confirmar y Guardar
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="bg-white dark:bg-zinc-900 px-6 py-4 flex justify-between items-center shadow-sm z-10 border-b border-slate-200 dark:border-zinc-800 shrink-0">
                         <div className="flex items-center gap-4">
                             <button onClick={() => window.location.href='index.html'} className="p-2 bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 rounded-xl transition"><ArrowLeft size={20}/></button>
@@ -258,7 +359,7 @@
                         </div>
                         <div className="flex items-center gap-4">
                             <button onClick={() => setShowApiInput(!showApiInput)} className="text-slate-400 hover:text-indigo-500 transition"><KeyRound size={20}/></button>
-                            <button onClick={saveToFirebase} disabled={isSaving || stories.length === 0} className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white px-6 py-2 rounded-xl font-bold flex gap-2 shadow-lg transition-transform active:scale-95">
+                            <button onClick={handlePreSave} disabled={isSaving || stories.length === 0} className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white px-6 py-2 rounded-xl font-bold flex gap-2 shadow-lg transition-transform active:scale-95">
                                 {isSaving ? <Loader2 className="animate-spin"/> : <Save/>} Guardar Actividad
                             </button>
                         </div>
