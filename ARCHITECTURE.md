@@ -1,154 +1,53 @@
-# Hub de Juegos Educativos - Arquitectura y Contexto
+# Hub de Juegos Educativos - Periplo (Architecture & Context)
 
 ## 🎯 Propósito
-Centro de aprendizaje de inglés con 11+ juegos interactivos. Cada juego tiene su lógica, pero muchos comparten dashboards estandarizados basados en taxonomía de estudio.
+Centro de aprendizaje de inglés para maestros de ESL. Permite generar, administrar y jugar actividades educativas interactivas.
 
----
+## 🗄️ Arquitectura Base de Datos y Backend
+- **Tecnología:** Firebase Firestore y Firebase Authentication (Anonymous SignIn).
+- **Adiós a localStorage:** Todo el contenido (Quizzes, Juegos, Salas Multijugador) se guarda y se lee en tiempo real desde Firebase.
+- **Ruta de Quizzes (Maestro):** `artifacts/periplo-app-v1/users/teacher_builder_001/quizzes`
+- **Ruta de Salas Online (Multijugador):** `artifacts/periplo-app-v1/public/data/rooms`
 
-## 📁 Estructura de Archivos
+## 🏷️ Sistema Universal de Taxonomía (CRÍTICO)
+TODOS los nuevos dashboards deben incluir obligatoriamente el sistema de Taxonomía antes de guardar en Firebase. 
+- **Estructura:** 3 Dropdowns dependientes (`Level` -> `Category` -> `Topic`).
+- **Niveles:** `basic`, `advanced`, `pro`.
+- **JSON Output:** Al guardar, el documento en Firebase DEBE incluir el objeto: `tags: { level: "...", category: "...", topic: "..." }`.
 
-### Archivo Raíz
-- **index.html** - Punto de entrada. Menú principal con botón "+Actividad" (desplegable) que muestra todos los juegos/dashboards disponibles.
+## 🎮 Ecosistema de Juegos y Dashboards (Builders)
+La plataforma se divide en dos caras: El **Juego** (UI del alumno) y el **Dashboard Builder** (UI del maestro para inyectar/generar el contenido).
 
-### Sistema de Visualización/Conversión
-- **__activity.html** - Visualizador/Conversor. Permite duplicar juegos que comparten el mismo dashboard. Ej: creas un Flashcards, lo previsualizas como Anagram, Crossword, Memorama desde aquí, y si te gusta, das "guardar como" y se guarda una copia en index.html.
+### 1. Familia "Match" (Pares de Palabras)
+- **Juego:** `lingomatch.html`
+- **Builder:** `dashboard-match.html` (Usa el Diccionario interno de la Taxonomía para arrastrar y soltar palabras en la bolsa, con límite de 96 pares).
 
----
+### 2. Familia "Connect 4" (Evaluación Dinámica y Multijugador)
+- **Juego:** `connect4.html` (Soporta Multijugador Online por Salas y Roles. Tiene 9 tipos de minijuegos incrustados que reaccionan según sea el turno o si es el maestro observando).
+- **Builder:** `dashboard-connect4.html` (Usa la API de Gemini para generar JSON con 9 arreglos distintos según lo que el maestro configure en los *sliders* de cantidad).
 
-## 🎮 Juegos (11 Total)
+### 3. Familia "UNO" (Mazo de 112 Cartas)
+- **Juego:** `uno.html` (Multijugador Online por Salas. Lógica de cambio de turno, comodines, robar cartas y castigos).
+- **Builder:** `dashboard-uno.html` (Genera 4 columnas de 19 palabras usando la API de Gemini. Guarda bajo el type "UNO").
 
-| Juego | Archivo | Dashboard Asociado | Descripción |
-|-------|---------|-------------------|-------------|
-| Flashcards | flashcards.html | dashboard-fc.html | Tarjetas de estudio |
-| Anagram | anagram.html | dashboard-fc.html | Resolver anagramas |
-| Crossword | crossword.html | dashboard-fc.html | Crucigramas |
-| Memorama | memorama.html | dashboard-fc.html | Juego de memoria |
-| UNO | uno.html | dashboard-uno.html | Juego de cartas (complejo) |
-| Connect4 | connect4.html | dashboard-connect4.html | Conecta 4 |
-| LingoMatch | lingomatch.html | dashboard-match.html | Matching de palabras |
-| Reading | reading.html | dashboard-reading.html | Lectura interactiva |
-| Listening | listening.html | dashboard-listening.html | Comprensión auditiva |
-| Phone Chat | phonechat.html | dashboard-pc.html | Diálogos/gramática conversacional |
-| City Map | citymap.html | dashboard-lm.html | Mapa interactivo |
+### 4. Familia "Phone Chat" (Diálogos)
+- **Juego:** `phonechat.html`
+- **Builder:** `dashboard-pc.html` (Formato de arreglo con id, botMessage, userHint y expectedAnswer).
 
----
+### 5. Otros Dashboards en Desarrollo
+- `dashboard-reading.html` (Textos + Drag & Drop)
+- `dashboard-listening.html` (Audios/Videos YouTube + Preguntas)
+- `dashboard-fc.html` (Flashcards genéricas)
 
-## 📊 Dashboards (9 Total)
+## 🤖 Integración de IA Generativa (Gemini)
+Los Dashboards (Builders) utilizan llamadas REST a la API de Google Generative AI (`generativelanguage.googleapis.com/v1beta/models/...`) para generar el contenido JSON crudo (`responseMimeType: "application/json"`). 
+**Regla de Oro:** La IA recibe un prompt estricto con el esquema JSON deseado y NUNCA debe devolver formato markdown (\`\`\`json).
 
-### Dashboards Compartidos (Múltiples Juegos)
-- **dashboard-fc.html** → Usado por: Flashcards, Anagram, Crossword, Memorama
-  - *Función*: Entrada de datos y gestión de contenido para juegos basados en vocabulario/palabras
-  - *Almacenamiento*: localStorage (datos persistentes)
-  - *Estructura*: Formularios para crear/editar/eliminar elementos
+## 🚀 Similitudes y Reutilización de Código
+- **Las Salas Multijugador (`LobbyScreen`, `RolesScreen`):** La lógica de crear salas, generar un código de 4 dígitos, unirse y asignar roles (`isHost`, `observer`, colores) es **idéntica** y reutilizable entre `connect4.html` y `uno.html`.
+- **UI de Dashboards:** Todos comparten un Header negro superior (con botón de volver, input de API Key y botón verde de guardar) y un diseño oscuro (`bg-zinc-950`) usando Tailwind CSS.
 
-### Dashboards Únicos
-- **dashboard-uno.html** → UNO (juego complejo, lógica propia)
-- **dashboard-connect4.html** → Connect4 (lógica de tablero)
-- **dashboard-match.html** → LingoMatch (matching de pares)
-- **dashboard-reading.html** → Reading (gestión de textos + preguntas drag-and-drop)
-- **dashboard-listening.html** → Listening (gestión de audios/videos YouTube + preguntas TOEFL)
-- **dashboard-pc.html** → Phone Chat (diálogos + correcciones gramaticales)
-- **dashboard-lm.html** → City Map (mapa interactivo)
-- **dashboard-schedule.html** → Schedule (gestión de calendario/cronograma)
-
----
-
-## 🏷️ Taxonomía de Estudio
-
-**Objetivo Actual**: Estandarizar todos los dashboards con un sistema de clasificación común basado en el plan de estudio.
-
-*Detalles específicos de taxonomía a llenar cuando se defina completamente*
-
----
-
-## 🔑 Convenciones de Código
-
-### Almacenamiento de Datos
-- Método principal: **localStorage**
-- Formato: JSON
-- Clave de acceso: `[juego]_data` (ej: `flashcards_data`, `uno_data`)
-
-### Estructura de Elementos en index.html
-- Los accesos a juegos se guardan como **carpeta/documentos estilo Google Drive**
-- Cada elemento tiene:
-  - ID único
-  - Nombre
-  - Referencia al juego/dashboard asociado
-  - Metadatos (fecha creación, última edición, etc.)
-
-### Reglas de Dashboards
-⚠️ **Regla de Oro**: Algunos dashboards pueden ser SIMILARES pero NUNCA son idénticos.
-- Antes de reutilizar código de un dashboard en otro, revisar diferencias específicas
-- Documentar por qué difieren (lógica de juego, campos adicionales, etc.)
-
----
-
-## 🎓 Archivos Administrativos/Especiales
-
-| Archivo | Descripción |
-|---------|-------------|
-| student_portal.html | Portal de estudiantes (gestión de usuarios) |
-| students.html | Listado/gestión de estudiantes |
-| evaluaciones.html | Panel de evaluaciones |
-| schedule.html | Calendario de actividades (juego o herramienta) |
-
----
-
-## 📌 Mapa de Flujo
-
-```
-index.html (raíz)
-    ↓
-Botón "+Actividad" → Desplegable con todos los juegos
-    ↓
-Usuario elige un juego (ej: Flashcards)
-    ↓
-flashcards.html carga
-    ↓
-"Crear/Editar" → Abre dashboard-fc.html
-    ↓
-En dashboard: usuario crea contenido
-    ↓
-Datos se guardan en localStorage
-    ↓
-De vuelta a flashcards.html, juego lee los datos y funciona
-```
-
----
-
-## 🔄 Similitudes (Pero NO Idénticas)
-
-### Dashboards que Pueden Parecer Iguales
-- **dashboard-reading.html** vs **dashboard-listening.html**
-  - Lectura: maneja TEXTOS + preguntas drag-and-drop
-  - Listening: maneja AUDIOS/VIDEOS YouTube + preguntas TOEFL con timestamping
-  - Diferencia clave: tipo de contenido y formato de preguntas
-
-- **dashboard-match.html** vs **dashboard-fc.html**
-  - Match: pares de palabras (A ↔ B)
-  - FC: vocabulario individual (entrada de datos simple)
-  - Diferencia clave: estructura de datos y lógica de validación
-
----
-
-## 🚀 Etapas de Desarrollo Actuales
-
-1. **Estandarización en progreso**: Agregar sistema de taxonomía a todos los dashboards
-2. **Nuevos juegos planeados**: Según el plan de estudio
-3. **Mejoras de UX**: Consistencia visual entre dashboards
-
----
-
-## 📍 Repositorio
-[Insertar URL de GitHub aquí]
-
----
-
-## 📝 Notas Importantes para Claude (IA)
-
-Cuando traballes en este proyecto:
-1. Siempre revisar si el dashboard ya existe antes de crear uno nuevo
-2. Si un dashboard es muy similar a otro, considerar reutilizar código base
-3. Mantener la taxonomía consistente en todos los dashboards
-4. Documentar cambios en este archivo cuando se agreguen nuevos juegos/dashboards
-5. Las similitudes entre dashboards NO significan que sean iguales → revisar diferencias específicas antes de copiar código
+## 📝 Instrucciones para la IA (System Prompt)
+1. **Asume este contexto siempre:** Conoces la estructura de Firebase y la Taxonomía de Periplo.
+2. **Reutiliza pero verifica:** Si se pide un nuevo juego multijugador, usa la lógica de salas de Connect4/UNO, pero adapta la lógica del tablero.
+3. **No rompas la Taxonomía:** Cualquier nuevo Dashboard DEBE incluir el modal de guardado con `saveLevel`, `saveCat` y `saveTopic`.
