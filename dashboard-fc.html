@@ -30,11 +30,39 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-        import { Save, ArrowLeft, Sparkles, Plus, Trash2, Loader2, X, Settings2, Key, Search, Layers } from 'lucide-react';
+        import { Save, ArrowLeft, Sparkles, Plus, Trash2, Loader2, X, Settings2, Key, Search, Layers, AlertCircle, CheckCircle2 } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
+
+        // 🎓 TAXONOMÍA UNIVERSAL - Igual para todos los dashboards
+        const TAXONOMY = {
+            basic: {
+                label: 'Básico',
+                categories: {
+                    vocab: { label: 'Vocabulario', topics: { animals: 'Animales', food: 'Comida', colors: 'Colores', numbers: 'Números', objects: 'Objetos' } },
+                    grammar: { label: 'Gramática', topics: { present: 'Presente Simple', past: 'Pasado Simple', future: 'Futuro', questions: 'Preguntas' } },
+                    phrases: { label: 'Frases Comunes', topics: { greetings: 'Saludos', polite: 'Expresiones Corteses', daily: 'Vida Diaria' } }
+                }
+            },
+            advanced: {
+                label: 'Intermedio',
+                categories: {
+                    vocab: { label: 'Vocabulario Avanzado', topics: { business: 'Negocios', academic: 'Académico', technical: 'Técnico', emotions: 'Emociones' } },
+                    grammar: { label: 'Gramática Compleja', topics: { conditionals: 'Condicionales', modals: 'Modales', passive: 'Voz Pasiva', reported: 'Discurso Indirecto' } },
+                    idioms: { label: 'Idiomas y Expresiones', topics: { phrasal: 'Phrasal Verbs', idioms: 'Expresiones Idiomáticas', slang: 'Jerga Coloquial' } }
+                }
+            },
+            pro: {
+                label: 'Avanzado',
+                categories: {
+                    vocab: { label: 'Vocabulario Especializado', topics: { medical: 'Medicina', legal: 'Legal', scientific: 'Científico', literature: 'Literatura' } },
+                    grammar: { label: 'Matices Gramaticales', topics: { subtle: 'Sutilezas', advanced_tenses: 'Tiempos Complejos', stylistic: 'Estilística' } },
+                    culture: { label: 'Cultura y Contexto', topics: { cultural: 'Referencias Culturales', historical: 'Contexto Histórico', regional: 'Variantes Regionales' } }
+                }
+            }
+        };
 
         const FCBuilder = () => {
             const [title, setTitle] = useState("");
@@ -51,6 +79,11 @@
             const [selectedModel, setSelectedModel] = useState('');
             const [isLoadingModels, setIsLoadingModels] = useState(false);
 
+            // 🎯 ESTADOS DE TAXONOMÍA
+            const [showTaxonomy, setShowTaxonomy] = useState(false);
+            const [taxonomy, setTaxonomy] = useState({ level: 'basic', category: '', topic: '' });
+            const [taxonomyErrors, setTaxonomyErrors] = useState({});
+
             const abortControllerRef = useRef(null);
 
             useEffect(() => {
@@ -66,6 +99,10 @@
                             setTitle(data.title);
                             if (data.content && data.content.cards) {
                                 setCards(data.content.cards.map((c, i) => ({ ...c, id: Date.now() + i })));
+                            }
+                            // Cargar taxonomía guardada
+                            if (data.tags) {
+                                setTaxonomy(data.tags);
                             }
                             setEditingId(editId);
                         }
@@ -179,20 +216,42 @@
                 }
             };
 
+            // 🎯 VALIDAR TAXONOMÍA
+            const validateTaxonomy = () => {
+                const errors = {};
+                if (!taxonomy.level) errors.level = 'Nivel requerido';
+                if (!taxonomy.category) errors.category = 'Categoría requerida';
+                if (!taxonomy.topic) errors.topic = 'Tema requerido';
+                setTaxonomyErrors(errors);
+                return Object.keys(errors).length === 0;
+            };
+
+            // 💾 GUARDAR CON TAXONOMÍA
             const save = async () => {
                 if(!title.trim() || cards.some(c => !c.wordEn || !c.wordEs)) {
                     alert("Asegúrate de tener un título y que ninguna tarjeta tenga las palabras en blanco.");
                     return;
                 }
+
+                // Validar taxonomía
+                if (!validateTaxonomy()) {
+                    setShowTaxonomy(true);
+                    return;
+                }
                 
-                // Limpiamos los IDs temporales antes de guardar
                 const cleanCards = cards.map(({ id, ...rest }) => rest);
                 
                 setLoading(true);
                 const data = { 
                     title, 
-                    type: 'FLASHCARDS', // Identificador clave para el HUB
-                    content: { cards: cleanCards }, 
+                    type: 'FLASHCARDS',
+                    content: { cards: cleanCards },
+                    tags: {
+                        level: taxonomy.level,
+                        category: taxonomy.category,
+                        topic: taxonomy.topic
+                    },
+                    cardCount: cleanCards.length,
                     updatedAt: serverTimestamp() 
                 };
                 
@@ -210,6 +269,10 @@
                     window.location.href = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html';
                 } catch(e) { alert(e.message); setLoading(false); }
             };
+
+            // Calcular categorías y temas disponibles
+            const categories = TAXONOMY[taxonomy.level]?.categories || {};
+            const topics = taxonomy.category ? TAXONOMY[taxonomy.level].categories[taxonomy.category]?.topics || {} : {};
 
             return (
                 <div className="max-w-5xl mx-auto p-6 relative">
@@ -284,7 +347,7 @@
                         </button>
                     </div>
 
-                    {/* MODAL DEL OMNI-PROMPT */}
+                    {/* MODAL DE OMNI-PROMPT */}
                     {magiaModal && (
                         <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
                             <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-xl shadow-2xl overflow-hidden flex flex-col">
@@ -332,6 +395,117 @@
 
                                 <div className="p-6 border-t border-zinc-800 bg-zinc-950 shrink-0">
                                     <button onClick={executeMagia} className="w-full bg-sky-500 hover:bg-sky-400 text-black py-4 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-colors shadow-lg shadow-sky-500/20"><Sparkles size={20}/> Procesar Petición</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MODAL DE TAXONOMÍA */}
+                    {showTaxonomy && (
+                        <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+                                <div className="p-6 border-b border-zinc-800 bg-zinc-950 shrink-0">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="bg-amber-500/20 p-2 rounded-xl text-amber-500"><Settings2 size={24}/></div>
+                                        <h3 className="font-black text-xl text-white">Clasificación</h3>
+                                    </div>
+                                    <p className="text-xs text-zinc-400">Asigna este mazo a un nivel, categoría y tema de estudio</p>
+                                </div>
+                                
+                                <div className="p-6 overflow-y-auto custom-scrollbar space-y-4">
+                                    {/* NIVEL */}
+                                    <div>
+                                        <label className="block text-xs font-bold text-amber-400 uppercase tracking-widest mb-2">Nivel *</label>
+                                        <select 
+                                            value={taxonomy.level}
+                                            onChange={(e) => {
+                                                setTaxonomy({...taxonomy, level: e.target.value, category: '', topic: ''});
+                                                setTaxonomyErrors({});
+                                            }}
+                                            className={`w-full px-4 py-2 bg-zinc-950 border rounded-lg text-white focus:outline-none transition-colors ${
+                                                taxonomyErrors.level ? 'border-rose-500 focus:border-rose-500' : 'border-zinc-800 focus:border-sky-500'
+                                            }`}
+                                        >
+                                            {Object.entries(TAXONOMY).map(([key, val]) => (
+                                                <option key={key} value={key}>{val.label}</option>
+                                            ))}
+                                        </select>
+                                        {taxonomyErrors.level && <p className="text-xs text-rose-500 mt-1">{taxonomyErrors.level}</p>}
+                                    </div>
+
+                                    {/* CATEGORÍA */}
+                                    <div>
+                                        <label className="block text-xs font-bold text-sky-400 uppercase tracking-widest mb-2">Categoría *</label>
+                                        <select 
+                                            value={taxonomy.category}
+                                            onChange={(e) => {
+                                                setTaxonomy({...taxonomy, category: e.target.value, topic: ''});
+                                                setTaxonomyErrors(prev => {delete prev.category; return prev;});
+                                            }}
+                                            className={`w-full px-4 py-2 bg-zinc-950 border rounded-lg text-white focus:outline-none transition-colors ${
+                                                taxonomyErrors.category ? 'border-rose-500 focus:border-rose-500' : 'border-zinc-800 focus:border-sky-500'
+                                            }`}
+                                        >
+                                            <option value="">Selecciona una categoría</option>
+                                            {Object.entries(categories).map(([key, cat]) => (
+                                                <option key={key} value={key}>{cat.label}</option>
+                                            ))}
+                                        </select>
+                                        {taxonomyErrors.category && <p className="text-xs text-rose-500 mt-1">{taxonomyErrors.category}</p>}
+                                    </div>
+
+                                    {/* TEMA */}
+                                    <div>
+                                        <label className="block text-xs font-bold text-emerald-400 uppercase tracking-widest mb-2">Tema *</label>
+                                        <select 
+                                            value={taxonomy.topic}
+                                            onChange={(e) => {
+                                                setTaxonomy({...taxonomy, topic: e.target.value});
+                                                setTaxonomyErrors(prev => {delete prev.topic; return prev;});
+                                            }}
+                                            disabled={!taxonomy.category}
+                                            className={`w-full px-4 py-2 bg-zinc-950 border rounded-lg text-white focus:outline-none transition-colors ${
+                                                taxonomyErrors.topic ? 'border-rose-500 focus:border-rose-500' : 'border-zinc-800 focus:border-sky-500'
+                                            } ${!taxonomy.category ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                        >
+                                            <option value="">Selecciona un tema</option>
+                                            {Object.entries(topics).map(([key, label]) => (
+                                                <option key={key} value={key}>{label}</option>
+                                            ))}
+                                        </select>
+                                        {taxonomyErrors.topic && <p className="text-xs text-rose-500 mt-1">{taxonomyErrors.topic}</p>}
+                                    </div>
+
+                                    {/* PREVIEW */}
+                                    {taxonomy.level && taxonomy.category && taxonomy.topic && (
+                                        <div className="bg-emerald-950/30 border border-emerald-500/30 rounded-lg p-3 flex items-start gap-2 mt-4">
+                                            <CheckCircle2 size={16} className="text-emerald-500 flex-shrink-0 mt-0.5" />
+                                            <div className="text-xs text-emerald-300">
+                                                <p className="font-bold">Clasificación completada:</p>
+                                                <p className="mt-1">{TAXONOMY[taxonomy.level].label} → {categories[taxonomy.category]?.label} → {topics[taxonomy.topic]}</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="p-6 border-t border-zinc-800 bg-zinc-950 shrink-0 flex gap-3">
+                                    <button 
+                                        onClick={() => setShowTaxonomy(false)}
+                                        className="flex-1 py-3 bg-zinc-900 text-zinc-300 rounded-lg font-bold hover:bg-zinc-800 transition-colors"
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button 
+                                        onClick={() => {
+                                            if (validateTaxonomy()) {
+                                                setShowTaxonomy(false);
+                                                save();
+                                            }
+                                        }}
+                                        className="flex-1 py-3 bg-sky-500 text-black rounded-lg font-bold hover:bg-sky-400 transition-colors"
+                                    >
+                                        Guardar Mazo
+                                    </button>
                                 </div>
                             </div>
                         </div>
