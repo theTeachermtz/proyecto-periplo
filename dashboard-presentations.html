@@ -38,28 +38,16 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
-        import { Presentation, Save, ArrowLeft, Loader2, KeyRound, Sparkles, Plus, Trash2, ArrowUp, ArrowDown, LayoutTemplate, Smile, Gamepad2, Settings2 } from 'lucide-react';
+        import { Presentation, Save, ArrowLeft, Loader2, KeyRound, Sparkles, Plus, Trash2, ArrowUp, ArrowDown, LayoutTemplate, Smile, Gamepad2, Settings2, BookOpen, CheckSquare } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // TAXONOMÍA MAESTRA
         const TAXONOMY = {
-            basic: {
-                grammar: ["Modal Verbs", "Present Simple", "Present Continuous", "Future (Going to)", "Otro"],
-                verbs: ["Pack 1", "Pack 2", "Pack 3", "Otro"],
-                key_structs: ["WH Questions", "Prepositions", "Otro"]
-            },
-            advanced: {
-                grammar: ["Past Simple", "Second Conditional", "Past Continuous", "Otro"],
-                verbs: ["Irregular Verbs", "Otro"],
-                key_structs: ["Used to", "Relative Clauses", "Otro"]
-            },
-            pro: {
-                grammar: ["Present Perfect", "Third Conditional", "Otro"],
-                key_structs: ["Inversion", "Cleft Sentences", "Otro"]
-            }
+            basic: { grammar: ["Modal Verbs", "Present Simple", "Present Continuous", "Future (Going to)", "Otro"], verbs: ["Pack 1", "Pack 2", "Pack 3", "Otro"], key_structs: ["WH Questions", "Prepositions", "Otro"] },
+            advanced: { grammar: ["Past Simple", "Second Conditional", "Past Continuous", "Otro"], verbs: ["Irregular Verbs", "Otro"], key_structs: ["Used to", "Relative Clauses", "Otro"] },
+            pro: { grammar: ["Present Perfect", "Third Conditional", "Otro"], key_structs: ["Inversion", "Cleft Sentences", "Otro"] }
         };
 
         const LAYOUT_OPTIONS = [
@@ -67,7 +55,7 @@
             { id: 'hero-emoji-top', label: 'Emoji Arriba (Hero)' },
             { id: 'split-text-left', label: 'Texto Izq / Emoji Der' },
             { id: 'split-text-right', label: 'Texto Der / Emoji Izq' },
-            { id: 'horizontal-emoji-band', label: 'Banda de Emojis Inferior' }
+            { id: 'horizontal-emoji-band', label: 'Banda Inferior' }
         ];
 
         const Dashboard = () => {
@@ -77,17 +65,20 @@
             const [isSaving, setIsSaving] = useState(false);
             const [editingId, setEditingId] = useState(null);
 
-            // Left Panel (Taxonomy & AI)
+            // Left Panel State
             const [level, setLevel] = useState('basic');
             const [category, setCategory] = useState('grammar');
             const [topic, setTopic] = useState('Present Simple');
             const [promptText, setPromptText] = useState("");
-            const [slideCount, setSlideCount] = useState(5);
+            
+            // Mini-game Toggles
+            const [includeMC, setIncludeMC] = useState(false);
+            const [includeFB, setIncludeFB] = useState(false);
+            const [includeSS, setIncludeSS] = useState(false);
 
-            // Right Panel (Content)
+            // Right Panel State
             const [title, setTitle] = useState("");
             const [slides, setSlides] = useState([]);
-            const [miniGame, setMiniGame] = useState({ type: 'none', data: {} });
 
             useEffect(() => {
                 const savedKey = localStorage.getItem('gemini_api_key');
@@ -101,10 +92,8 @@
                             const data = docSnap.data();
                             setTitle(data.title);
                             setEditingId(editId);
-                            if (data.content) {
-                                setSlides(data.content.slides || []);
-                                setMiniGame(data.content.miniGame || { type: 'none', data: {} });
-                            }
+                            if (data.content && data.content.slides) setSlides(data.content.slides);
+                            
                             if (data.tags) {
                                 setLevel(data.tags.level || 'basic');
                                 setCategory(data.tags.category || 'grammar');
@@ -115,15 +104,12 @@
                 }
             }, []);
 
-            // Handle Taxonomy cascades
             useEffect(() => {
                 if (TAXONOMY[level] && TAXONOMY[level][category]) {
                     setTopic(TAXONOMY[level][category][0] || 'Otro');
                 } else {
                     const firstCat = Object.keys(TAXONOMY[level] || {})[0];
-                    if (firstCat) {
-                        setCategory(firstCat);
-                    }
+                    if (firstCat) setCategory(firstCat);
                 }
             }, [level]);
 
@@ -134,16 +120,46 @@
                 setIsGenerating(true);
                 try {
                     const systemPrompt = `
-                        Eres un creador de contenido educativo. Genera una presentación de ${slideCount} diapositivas sobre el tema: ${topic} (${level} level).
+                        Eres el "Frontend CTO" y un creador de contenido educativo. Genera una presentación estructurada sobre: ${topic} (${level} level).
                         Instrucciones del maestro: ${promptText}
+
+                        TONO Y EXTENSIÓN:
+                        - Explica de manera eficiente, con un lenguaje amigable, atrapante y relajado.
+                        - TÚ decides cuántas diapositivas de teoría ("theory") son necesarias para explicar bien y secuencialmente el tema. No te limites, pero sé directo.
+
+                        MINIJUEGOS SOLICITADOS (Crea UNA diapositiva por cada minijuego solicitado al final de la teoría):
+                        ${includeMC ? '- "multipleChoice": EXACTAMENTE 5 preguntas sobre el tema explicado.' : ''}
+                        ${includeFB ? '- "fillBlank": Una historia corta relacionada al tema con EXACTAMENTE 5 huecos (marcados con corchetes, ej: [palabra]). Añade un array "wordBank" con las 5 respuestas correctas MÁS 2 distractores.' : ''}
+                        ${includeSS ? '- "sentenceScramble": EXACTAMENTE 5 oraciones en inglés para ordenar, con su respectiva traducción al español.' : ''}
 
                         Devuelve ÚNICAMENTE un JSON válido con esta estructura estricta:
                         {
                             "suggestedTitle": "Un título atractivo",
                             "slides": [
                                 {
+                                    "type": "theory",
                                     "text": "Explicación concisa (máximo 200 caracteres por slide).",
-                                    "emojis": "📝🎯✨" (Sugerencia de 2 a 3 emojis Unicode juntos que ilustren el texto)
+                                    "emojis": "📝🎯✨" (Sugerencia de 2 a 3 emojis Unicode juntos)
+                                },
+                                // Si se solicitó multipleChoice:
+                                {
+                                    "type": "multipleChoice",
+                                    "questions": [
+                                        { "question": "¿...?", "options": ["Opc1", "Opc2", "Opc3"], "correctIndex": 0 } // Repetir 5 veces
+                                    ]
+                                },
+                                // Si se solicitó fillBlank:
+                                {
+                                    "type": "fillBlank",
+                                    "text": "Historia con [hueco1] y [hueco2]...",
+                                    "wordBank": ["hueco1", "hueco2", "distractor1", "distractor2"]
+                                },
+                                // Si se solicitó sentenceScramble:
+                                {
+                                    "type": "sentenceScramble",
+                                    "sentences": [
+                                        { "text": "Correct sentence in English", "translation": "Traducción al español" } // Repetir 5 veces
+                                    ]
                                 }
                             ]
                         }
@@ -159,15 +175,12 @@
                     resultText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
                     
                     const parsedData = JSON.parse(resultText);
-                    
                     if (!title) setTitle(parsedData.suggestedTitle);
                     
-                    // Map generated slides and append default layout
                     const newSlides = parsedData.slides.map(s => ({
+                        ...s,
                         id: crypto.randomUUID(),
-                        text: s.text.substring(0, 200),
-                        emojis: s.emojis,
-                        layout: 'hero-emoji-center'
+                        layout: s.type === 'theory' ? 'hero-emoji-center' : undefined
                     }));
 
                     setSlides(newSlides);
@@ -192,7 +205,7 @@
                         title,
                         type: 'PRESENTATION',
                         tags: { level, category, topic },
-                        content: { slides, miniGame },
+                        content: { slides },
                         parentPath,
                         updatedAt: serverTimestamp()
                     };
@@ -211,15 +224,33 @@
                 }
             };
 
-            // Slide Controls
-            const updateSlide = (id, field, value) => {
+            // Helpers for deep state updates
+            const updateSlideField = (id, field, value) => {
                 setSlides(slides.map(s => s.id === id ? { ...s, [field]: value } : s));
             };
 
-            const removeSlide = (id) => {
-                setSlides(slides.filter(s => s.id !== id));
+            const updateNestedSlideField = (slideId, arrayName, index, field, value) => {
+                setSlides(slides.map(s => {
+                    if (s.id !== slideId) return s;
+                    const newArray = [...s[arrayName]];
+                    newArray[index] = { ...newArray[index], [field]: value };
+                    return { ...s, [arrayName]: newArray };
+                }));
             };
 
+            const updateMCOption = (slideId, qIndex, optIndex, value) => {
+                setSlides(slides.map(s => {
+                    if (s.id !== slideId) return s;
+                    const newQuestions = [...s.questions];
+                    const newOptions = [...newQuestions[qIndex].options];
+                    newOptions[optIndex] = value;
+                    newQuestions[qIndex] = { ...newQuestions[qIndex], options: newOptions };
+                    return { ...s, questions: newQuestions };
+                }));
+            };
+
+            const removeSlide = (id) => setSlides(slides.filter(s => s.id !== id));
+            
             const moveSlide = (index, direction) => {
                 if (direction === -1 && index === 0) return;
                 if (direction === 1 && index === slides.length - 1) return;
@@ -231,17 +262,7 @@
             };
 
             const addManualSlide = () => {
-                setSlides([...slides, { id: crypto.randomUUID(), text: '', emojis: '✨', layout: 'hero-emoji-center' }]);
-            };
-
-            // MiniGame Controls
-            const handleMiniGameType = (e) => {
-                const type = e.target.value;
-                let defaultData = {};
-                if (type === 'multipleChoice') defaultData = { question: '', options: ['', '', ''], correctIndex: 0 };
-                if (type === 'sentenceScramble') defaultData = { text: '', translation: '' };
-                if (type === 'fillBlank') defaultData = { sentence: 'The [BLANK] is fast.', answer: '', hint: '' };
-                setMiniGame({ type, data: defaultData });
+                setSlides([...slides, { id: crypto.randomUUID(), type: 'theory', text: '', emojis: '✨', layout: 'hero-emoji-center' }]);
             };
 
             return (
@@ -262,7 +283,7 @@
 
                     <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
                         
-                        {/* LEFT PANEL: IA & TAXONOMY */}
+                        {/* LEFT PANEL: IA & CONFIGURATION */}
                         <div className="w-full lg:w-1/3 bg-zinc-950 border-r border-zinc-800 p-6 overflow-y-auto custom-scrollbar flex flex-col">
                             
                             {showApiInput && (
@@ -290,19 +311,33 @@
                                 </div>
                             </div>
 
-                            <div className="flex-1">
-                                <h2 className="text-xs font-black text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2"><Sparkles size={16} className="text-amber-500"/> Generador IA</h2>
+                            <div className="mb-6 border-t border-zinc-800 pt-6">
+                                <h2 className="text-xs font-black text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2"><Gamepad2 size={16} className="text-emerald-400"/> Inyectar Minijuegos</h2>
+                                <p className="text-[10px] text-zinc-400 mb-3">La IA creará slides dinámicas al final de la teoría con 5 preguntas cada uno.</p>
+                                <div className="space-y-2">
+                                    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${includeMC ? 'bg-emerald-500/10 border-emerald-500/50' : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800'}`}>
+                                        <input type="checkbox" checked={includeMC} onChange={e => setIncludeMC(e.target.checked)} className="w-4 h-4 accent-emerald-500"/>
+                                        <span className="text-sm font-bold text-zinc-200">Opción Múltiple</span>
+                                    </label>
+                                    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${includeFB ? 'bg-emerald-500/10 border-emerald-500/50' : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800'}`}>
+                                        <input type="checkbox" checked={includeFB} onChange={e => setIncludeFB(e.target.checked)} className="w-4 h-4 accent-emerald-500"/>
+                                        <span className="text-sm font-bold text-zinc-200">Rellenar Huecos (Historia)</span>
+                                    </label>
+                                    <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${includeSS ? 'bg-emerald-500/10 border-emerald-500/50' : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800'}`}>
+                                        <input type="checkbox" checked={includeSS} onChange={e => setIncludeSS(e.target.checked)} className="w-4 h-4 accent-emerald-500"/>
+                                        <span className="text-sm font-bold text-zinc-200">Ordenar Frases (Scramble)</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="flex-1 border-t border-zinc-800 pt-6">
+                                <h2 className="text-xs font-black text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2"><Sparkles size={16} className="text-amber-500"/> Prompt Teórico</h2>
                                 <textarea 
                                     value={promptText} 
                                     onChange={e => setPromptText(e.target.value)} 
-                                    placeholder="Ej: Explica las reglas de la 3ra persona singular en afirmativo, negativo e interrogativo..." 
-                                    className="w-full bg-zinc-900 p-4 rounded-xl border border-zinc-800 focus:border-amber-500 outline-none h-32 resize-none text-sm font-medium mb-4 text-white"
+                                    placeholder="Ej: Explica las reglas de la 3ra persona singular. Hazlo simple y amigable..." 
+                                    className="w-full bg-zinc-900 p-4 rounded-xl border border-zinc-800 focus:border-amber-500 outline-none h-32 resize-none text-sm font-medium mb-6 text-white"
                                 />
-                                <div className="flex items-center gap-3 mb-6">
-                                    <label className="text-xs font-bold text-zinc-400">Cant. Slides:</label>
-                                    <input type="range" min="3" max="10" value={slideCount} onChange={e => setSlideCount(parseInt(e.target.value))} className="flex-1 accent-amber-500"/>
-                                    <span className="text-sm font-black text-amber-500">{slideCount}</span>
-                                </div>
                                 
                                 <button onClick={generateWithAI} disabled={isGenerating} className="btn-juicy w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white py-4 rounded-xl font-black shadow-lg flex items-center justify-center gap-2 border-indigo-800">
                                     {isGenerating ? <Loader2 className="animate-spin" size={20}/> : <Sparkles size={20}/>} GENERAR PRESENTACIÓN
@@ -319,13 +354,17 @@
                                 className="w-full text-3xl md:text-5xl font-black bg-transparent border-b-2 border-zinc-800 pb-2 mb-10 outline-none focus:border-indigo-500 text-white placeholder-zinc-700"
                             />
 
-                            <div className="space-y-6 mb-12">
+                            <div className="space-y-6 pb-20">
                                 {slides.map((slide, idx) => (
                                     <div key={slide.id} className="bg-zinc-950 border border-zinc-800 rounded-2xl p-5 relative group shadow-sm hover:border-zinc-700 transition-colors">
                                         
-                                        {/* Slide Controls Header */}
+                                        {/* Slide Header */}
                                         <div className="flex justify-between items-center mb-4 pb-3 border-b border-zinc-800">
-                                            <span className="bg-zinc-800 text-zinc-400 text-xs font-black px-3 py-1 rounded-full">Slide {idx + 1}</span>
+                                            <div className="flex items-center gap-3">
+                                                <span className="bg-zinc-800 text-zinc-400 text-xs font-black px-3 py-1 rounded-full">Slide {idx + 1}</span>
+                                                {slide.type === 'theory' && <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-1"><BookOpen size={12}/> Teoría</span>}
+                                                {slide.type !== 'theory' && <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-400 flex items-center gap-1"><Gamepad2 size={12}/> Minijuego</span>}
+                                            </div>
                                             <div className="flex gap-2 opacity-50 group-hover:opacity-100 transition-opacity">
                                                 <button onClick={() => moveSlide(idx, -1)} disabled={idx === 0} className="p-1.5 hover:bg-zinc-800 rounded-md disabled:opacity-30"><ArrowUp size={16}/></button>
                                                 <button onClick={() => moveSlide(idx, 1)} disabled={idx === slides.length - 1} className="p-1.5 hover:bg-zinc-800 rounded-md disabled:opacity-30"><ArrowDown size={16}/></button>
@@ -334,105 +373,123 @@
                                             </div>
                                         </div>
 
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                                            {/* Text Area */}
-                                            <div className="md:col-span-2">
-                                                <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest block mb-2">Contenido (Máx 200)</label>
-                                                <textarea 
-                                                    value={slide.text} 
-                                                    onChange={e => updateSlide(slide.id, 'text', e.target.value)}
-                                                    maxLength={200}
-                                                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-sm text-zinc-200 outline-none focus:border-indigo-500 h-24 resize-none"
-                                                />
+                                        {/* RENDER DYNAMIC SLIDE CONTENT */}
+                                        
+                                        {/* THEORY SLIDE */}
+                                        {slide.type === 'theory' && (
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                                                <div className="md:col-span-2">
+                                                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest block mb-2">Contenido (Máx 200)</label>
+                                                    <textarea 
+                                                        value={slide.text} 
+                                                        onChange={e => updateSlideField(slide.id, 'text', e.target.value)}
+                                                        maxLength={200}
+                                                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-sm text-zinc-200 outline-none focus:border-indigo-500 h-24 resize-none"
+                                                    />
+                                                </div>
+                                                <div className="space-y-4">
+                                                    <div>
+                                                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest block mb-2 flex items-center gap-1"><Smile size={12}/> Emojis</label>
+                                                        <input 
+                                                            value={slide.emojis || ''} 
+                                                            onChange={e => updateSlideField(slide.id, 'emojis', e.target.value)}
+                                                            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-2xl text-center outline-none focus:border-amber-500"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest block mb-2 flex items-center gap-1"><LayoutTemplate size={12}/> Layout</label>
+                                                        <select 
+                                                            value={slide.layout} 
+                                                            onChange={e => updateSlideField(slide.id, 'layout', e.target.value)}
+                                                            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-2.5 text-xs font-bold text-zinc-300 outline-none focus:border-indigo-500"
+                                                        >
+                                                            {LAYOUT_OPTIONS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+                                                        </select>
+                                                    </div>
+                                                </div>
                                             </div>
-                                            
-                                            {/* Emojis & Layout */}
+                                        )}
+
+                                        {/* MULTIPLE CHOICE SLIDE */}
+                                        {slide.type === 'multipleChoice' && (
                                             <div className="space-y-4">
+                                                <h4 className="font-black text-zinc-300 text-sm mb-4">Opción Múltiple</h4>
+                                                {slide.questions?.map((q, qIdx) => (
+                                                    <div key={qIdx} className="bg-zinc-900/50 p-4 rounded-xl border border-zinc-800">
+                                                        <input 
+                                                            value={q.question} 
+                                                            onChange={e => updateNestedSlideField(slide.id, 'questions', qIdx, 'question', e.target.value)} 
+                                                            className="w-full bg-zinc-900 border border-zinc-700 p-3 rounded-xl text-white outline-none focus:border-indigo-500 mb-3 text-sm font-bold"
+                                                            placeholder={`Pregunta ${qIdx + 1}...`}
+                                                        />
+                                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                            {[0, 1, 2].map(optIdx => (
+                                                                <div key={optIdx} className="relative">
+                                                                    <input 
+                                                                        value={q.options[optIdx]} 
+                                                                        onChange={e => updateMCOption(slide.id, qIdx, optIdx, e.target.value)}
+                                                                        className={`w-full bg-zinc-900 border p-3 rounded-xl text-xs outline-none transition-colors pr-10 ${q.correctIndex === optIdx ? 'border-emerald-500 text-emerald-300 font-bold' : 'border-zinc-700 focus:border-indigo-500 text-white'}`}
+                                                                    />
+                                                                    <button 
+                                                                        onClick={() => updateNestedSlideField(slide.id, 'questions', qIdx, 'correctIndex', optIdx)}
+                                                                        className={`absolute right-3 top-2.5 w-5 h-5 rounded-full border-2 transition-colors ${q.correctIndex === optIdx ? 'border-emerald-500 bg-emerald-500' : 'border-zinc-600'}`}
+                                                                    />
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {/* FILL IN THE BLANK SLIDE */}
+                                        {slide.type === 'fillBlank' && (
+                                            <div className="space-y-4">
+                                                <h4 className="font-black text-zinc-300 text-sm mb-4">Rellenar Huecos</h4>
                                                 <div>
-                                                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest block mb-2 flex items-center gap-1"><Smile size={12}/> Emojis</label>
-                                                    <input 
-                                                        value={slide.emojis} 
-                                                        onChange={e => updateSlide(slide.id, 'emojis', e.target.value)}
-                                                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-2xl text-center outline-none focus:border-amber-500"
+                                                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest block mb-2">Historia (Usa [corchetes] para los huecos)</label>
+                                                    <textarea 
+                                                        value={slide.text} 
+                                                        onChange={e => updateSlideField(slide.id, 'text', e.target.value)}
+                                                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm text-zinc-200 outline-none focus:border-indigo-500 h-32 resize-none"
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest block mb-2 flex items-center gap-1"><LayoutTemplate size={12}/> Layout</label>
-                                                    <select 
-                                                        value={slide.layout} 
-                                                        onChange={e => updateSlide(slide.id, 'layout', e.target.value)}
-                                                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-2.5 text-xs font-bold text-zinc-300 outline-none focus:border-indigo-500"
-                                                    >
-                                                        {LAYOUT_OPTIONS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
-                                                    </select>
+                                                    <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest block mb-2">Wordbank (Respuestas + Distractores, separados por coma)</label>
+                                                    <input 
+                                                        value={Array.isArray(slide.wordBank) ? slide.wordBank.join(', ') : slide.wordBank} 
+                                                        onChange={e => updateSlideField(slide.id, 'wordBank', e.target.value.split(',').map(w => w.trim()))}
+                                                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-sm text-emerald-400 font-bold outline-none focus:border-indigo-500"
+                                                    />
                                                 </div>
                                             </div>
-                                        </div>
+                                        )}
+
+                                        {/* SENTENCE SCRAMBLE SLIDE */}
+                                        {slide.type === 'sentenceScramble' && (
+                                            <div className="space-y-4">
+                                                <h4 className="font-black text-zinc-300 text-sm mb-4">Ordenar Frases</h4>
+                                                {slide.sentences?.map((sent, sIdx) => (
+                                                    <div key={sIdx} className="bg-zinc-900/50 p-4 rounded-xl border border-zinc-800 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                        <div>
+                                                            <label className="text-[10px] font-black text-zinc-500 uppercase block mb-1">Inglés (Respuesta)</label>
+                                                            <input value={sent.text} onChange={e => updateNestedSlideField(slide.id, 'sentences', sIdx, 'text', e.target.value)} className="w-full bg-zinc-900 border border-emerald-900/50 p-3 rounded-xl text-sm font-bold text-emerald-300 outline-none focus:border-emerald-500"/>
+                                                        </div>
+                                                        <div>
+                                                            <label className="text-[10px] font-black text-zinc-500 uppercase block mb-1">Español (Pista)</label>
+                                                            <input value={sent.translation} onChange={e => updateNestedSlideField(slide.id, 'sentences', sIdx, 'translation', e.target.value)} className="w-full bg-zinc-900 border border-zinc-700 p-3 rounded-xl text-sm text-zinc-300 outline-none focus:border-indigo-500"/>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
                                     </div>
                                 ))}
 
                                 <button onClick={addManualSlide} className="w-full py-4 border-2 border-dashed border-zinc-800 hover:border-zinc-600 hover:bg-zinc-950 rounded-2xl text-zinc-500 font-bold flex justify-center items-center gap-2 transition-all">
-                                    <Plus size={18}/> AÑADIR SLIDE MANUAL
+                                    <Plus size={18}/> AÑADIR SLIDE DE TEORÍA
                                 </button>
-                            </div>
-
-                            {/* MINIGAME SECTION */}
-                            <div className="bg-indigo-950/20 border border-indigo-900/30 rounded-[2rem] p-6 md:p-8">
-                                <div className="flex items-center gap-3 mb-6">
-                                    <div className="bg-indigo-500/20 p-2 rounded-xl"><Gamepad2 className="text-indigo-400"/></div>
-                                    <div>
-                                        <h3 className="font-black text-lg text-indigo-300">Minijuego Final (Opcional)</h3>
-                                        <p className="text-xs text-indigo-400/60 font-medium">Cierra la presentación evaluando el concepto.</p>
-                                    </div>
-                                </div>
-
-                                <div className="mb-6">
-                                    <select value={miniGame.type} onChange={handleMiniGameType} className="w-full md:w-1/2 bg-zinc-950 border border-indigo-900/50 rounded-xl p-3 text-sm font-bold text-indigo-300 outline-none focus:border-indigo-500">
-                                        <option value="none">Sin minijuego</option>
-                                        <option value="multipleChoice">Opción Múltiple (3 opciones)</option>
-                                        <option value="sentenceScramble">Ordenar la Frase (Scramble)</option>
-                                        <option value="fillBlank">Rellenar el Espacio (Fill in the Blank)</option>
-                                    </select>
-                                </div>
-
-                                {miniGame.type === 'multipleChoice' && (
-                                    <div className="space-y-4 animate-in fade-in duration-300">
-                                        <input value={miniGame.data.question} onChange={e => setMiniGame({...miniGame, data: {...miniGame.data, question: e.target.value}})} placeholder="Pregunta evaluativa..." className="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl text-white outline-none focus:border-indigo-500"/>
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                            {[0, 1, 2].map(idx => (
-                                                <div key={idx} className="relative">
-                                                    <input 
-                                                        value={miniGame.data.options[idx]} 
-                                                        onChange={e => { const newOpts = [...miniGame.data.options]; newOpts[idx] = e.target.value; setMiniGame({...miniGame, data: {...miniGame.data, options: newOpts}}); }} 
-                                                        placeholder={`Opción ${idx + 1}...`} 
-                                                        className={`w-full bg-zinc-900 border p-3 rounded-xl text-sm outline-none transition-colors pr-10 ${miniGame.data.correctIndex === idx ? 'border-emerald-500 text-emerald-300' : 'border-zinc-800 focus:border-indigo-500 text-white'}`}
-                                                    />
-                                                    <button 
-                                                        onClick={() => setMiniGame({...miniGame, data: {...miniGame.data, correctIndex: idx}})}
-                                                        className={`absolute right-3 top-3 w-5 h-5 rounded-full border-2 transition-colors ${miniGame.data.correctIndex === idx ? 'border-emerald-500 bg-emerald-500' : 'border-zinc-600'}`}
-                                                    />
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {miniGame.type === 'sentenceScramble' && (
-                                    <div className="space-y-4 animate-in fade-in duration-300">
-                                        <input value={miniGame.data.text} onChange={e => setMiniGame({...miniGame, data: {...miniGame.data, text: e.target.value}})} placeholder="Oración correcta en inglés (Ej: She doesn't like apples)" className="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl text-white outline-none focus:border-indigo-500"/>
-                                        <input value={miniGame.data.translation} onChange={e => setMiniGame({...miniGame, data: {...miniGame.data, translation: e.target.value}})} placeholder="Traducción o pista (Ej: A ella no le gustan las manzanas)" className="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl text-sm text-zinc-400 outline-none focus:border-indigo-500"/>
-                                    </div>
-                                )}
-
-                                {miniGame.type === 'fillBlank' && (
-                                    <div className="space-y-4 animate-in fade-in duration-300">
-                                        <input value={miniGame.data.sentence} onChange={e => setMiniGame({...miniGame, data: {...miniGame.data, sentence: e.target.value}})} placeholder="Oración con [BLANK] (Ej: He [BLANK] a doctor)" className="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl text-white outline-none focus:border-indigo-500"/>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            <input value={miniGame.data.answer} onChange={e => setMiniGame({...miniGame, data: {...miniGame.data, answer: e.target.value}})} placeholder="Respuesta correcta (Ej: is)" className="w-full bg-zinc-900 border border-emerald-900/50 p-3 rounded-xl text-sm text-emerald-400 outline-none focus:border-emerald-500"/>
-                                            <input value={miniGame.data.hint} onChange={e => setMiniGame({...miniGame, data: {...miniGame.data, hint: e.target.value}})} placeholder="Pista opcional (Ej: Verbo to be)" className="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-xl text-sm text-zinc-400 outline-none focus:border-indigo-500"/>
-                                        </div>
-                                    </div>
-                                )}
                             </div>
                         </div>
                     </div>
