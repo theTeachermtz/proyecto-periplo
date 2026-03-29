@@ -46,7 +46,9 @@
                 "react": "https://esm.sh/react@18.2.0",
                 "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
                 "canvas-confetti": "https://esm.sh/canvas-confetti@1.6.0",
-                "lucide-react": "https://esm.sh/lucide-react@0.292.0?deps=react@18.2.0"
+                "lucide-react": "https://esm.sh/lucide-react@0.292.0?deps=react@18.2.0",
+                "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+                "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
             }
         }
     </script>
@@ -60,20 +62,13 @@
         import { createRoot } from 'react-dom/client';
         import confetti from 'canvas-confetti';
         import { ChevronLeft, ChevronRight, CheckCircle2, AlertCircle } from 'lucide-react';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
 
-        // --- MOCK DATA FALLBACK ---
-        const MOCK_DATA = {
-            title: "Present Simple Rules",
-            content: {
-                slides: [
-                    { id: "uuid1", type: "theory", text: "Usamos el presente simple para rutinas y hechos.", emojis: "⏰ 🏃‍♂️", layout: "hero-emoji-center" },
-                    { id: "uuid1b", type: "theory", text: "También lo usamos en tercera persona agregando 's'.", emojis: "🍎 🐍", layout: "split-text-left" },
-                    { id: "uuid2", type: "multipleChoice", questions: [ { question: "She ___ everyday.", options: ["run", "runs"], correctIndex: 1 }, { question: "They ___ tennis.", options: ["play", "plays"], correctIndex: 0 } ] },
-                    { id: "uuid3", type: "fillBlank", text: "I [wake] up at 7am and [eat] breakfast.", wordBank: ["wake", "sleep", "eat", "run"] },
-                    { id: "uuid4", type: "sentenceScramble", sentences: [ { text: "I play tennis", translation: "Yo juego tenis" } ] }
-                ]
-            }
-        };
+        // --- FIREBASE INIT ---
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
 
         // --- UTILS ---
         const triggerConfetti = () => {
@@ -189,7 +184,6 @@
                         triggerConfetti();
                         setTimeout(onComplete, 1500);
                     } else {
-                        // Shake all blanks if wrong
                         const blankElements = document.querySelectorAll('.fill-blank-slot');
                         blankElements.forEach(el => {
                             el.classList.add('animate-shake', 'border-red-500', 'text-red-500');
@@ -237,17 +231,20 @@
 
         // 4. Sentence Scramble Slide
         const SentenceScrambleSlide = ({ slide, onComplete }) => {
-            // Simplified for first sentence in array
-            const targetSentence = slide.sentences[0].text;
-            const translation = slide.sentences[0].translation;
-            const words = targetSentence.split(' ');
+            const [sIndex, setSIndex] = useState(0);
+            const currentSentence = slide.sentences[sIndex];
             
+            // Re-inicializamos el estado cada vez que cambia la oración activa
             const [shuffled, setShuffled] = useState([]);
             const [selected, setSelected] = useState([]);
 
             useEffect(() => {
-                setShuffled([...words].sort(() => Math.random() - 0.5));
-            }, [slide]);
+                if (currentSentence) {
+                    const words = currentSentence.text.split(' ');
+                    setShuffled([...words].sort(() => Math.random() - 0.5));
+                    setSelected([]);
+                }
+            }, [sIndex, currentSentence]);
 
             const handleSelect = (word, idx) => {
                 setSelected([...selected, word]);
@@ -265,25 +262,31 @@
 
             useEffect(() => {
                 if (shuffled.length === 0 && selected.length > 0) {
-                    if (selected.join(' ') === targetSentence) {
+                    if (selected.join(' ') === currentSentence.text) {
                         triggerConfetti();
-                        setTimeout(onComplete, 1500);
+                        if (sIndex < slide.sentences.length - 1) {
+                            setTimeout(() => setSIndex(sIndex + 1), 1500);
+                        } else {
+                            setTimeout(onComplete, 1500);
+                        }
                     } else {
                         const container = document.getElementById('scramble-container');
                         container.classList.add('animate-shake');
                         setTimeout(() => {
                             container.classList.remove('animate-shake');
-                            // Reset
+                            const words = currentSentence.text.split(' ');
                             setShuffled([...words].sort(() => Math.random() - 0.5));
                             setSelected([]);
                         }, 500);
                     }
                 }
-            }, [selected, shuffled]);
+            }, [selected, shuffled, sIndex, slide.sentences, currentSentence.text]);
+
+            if (!currentSentence) return null;
 
             return (
                 <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn">
-                    <p className="text-xl text-zinc-400 font-bold mb-4 uppercase tracking-widest">{translation}</p>
+                    <p className="text-xl text-zinc-400 font-bold mb-4 uppercase tracking-widest text-center">{currentSentence.translation}</p>
                     
                     <div id="scramble-container" className="flex flex-wrap gap-3 min-h-[80px] mb-12 justify-center items-center p-4 bg-zinc-900 border-2 border-dashed border-zinc-700 rounded-3xl w-full">
                         {selected.map((word, i) => (
@@ -317,17 +320,23 @@
                     const id = params.get('id');
                     
                     if (id) {
-                        // TODO: Reemplazar con lógica real de Firebase
-                        /*
-                        import { doc, getDoc } from "firebase/firestore";
-                        const docRef = doc(db, "presentations", id);
-                        const docSnap = await getDoc(docRef);
-                        if (docSnap.exists()) setPresentation(docSnap.data());
-                        */
-                        console.log("Fetching ID:", id);
-                        setTimeout(() => { setPresentation(MOCK_DATA); setLoading(false); }, 500); // Simulando red
+                        try {
+                            const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id);
+                            const docSnap = await getDoc(docRef);
+                            
+                            if (docSnap.exists()) {
+                                setPresentation(docSnap.data());
+                            } else {
+                                alert("Presentación no encontrada en Firebase.");
+                            }
+                        } catch (error) {
+                            console.error("Error cargando presentación:", error);
+                            alert("Error de conexión con la base de datos.");
+                        } finally {
+                            setLoading(false);
+                        }
                     } else {
-                        setPresentation(MOCK_DATA);
+                        alert("No se proporcionó un ID válido en la URL.");
                         setLoading(false);
                     }
                 };
@@ -335,7 +344,7 @@
             }, []);
 
             if (loading) return <div className="h-screen w-screen flex items-center justify-center text-white"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand"></div></div>;
-            if (!presentation) return <div className="h-screen w-screen flex items-center justify-center text-white">Error loading data.</div>;
+            if (!presentation) return <div className="h-screen w-screen flex items-center justify-center text-white font-bold text-xl">Error 404: Presentación no encontrada.</div>;
 
             const slides = presentation.content.slides;
             const currentSlide = slides[currentIdx];
@@ -358,10 +367,10 @@
                 <div className="h-screen w-screen flex flex-col relative overflow-hidden">
                     {/* Header / Progress */}
                     <header className="absolute top-0 left-0 w-full p-6 flex items-center justify-between z-10 pointer-events-none">
-                        <h1 className="text-xl font-bold text-zinc-300 drop-shadow-md">{presentation.title}</h1>
+                        <h1 className="text-xl font-bold text-zinc-300 drop-shadow-md truncate max-w-[60%]">{presentation.title}</h1>
                         <div className="flex items-center gap-4">
                             <span className="text-sm font-bold text-zinc-500">{currentIdx + 1} / {slides.length}</span>
-                            <div className="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
+                            <div className="w-24 md:w-32 h-2 bg-zinc-800 rounded-full overflow-hidden hidden sm:block">
                                 <div className="h-full bg-brand transition-all duration-300" style={{width: `${progress}%`}}></div>
                             </div>
                         </div>
