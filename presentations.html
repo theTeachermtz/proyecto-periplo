@@ -48,7 +48,10 @@
                 "react": "https://esm.sh/react@18.2.0",
                 "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
                 "canvas-confetti": "https://esm.sh/canvas-confetti@1.6.0",
-                "lucide-react": "https://esm.sh/lucide-react@0.292.0?deps=react@18.2.0"
+                "lucide-react": "https://esm.sh/lucide-react@0.292.0?deps=react@18.2.0",
+                "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+                "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
+                "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
             }
         }
     </script>
@@ -61,21 +64,18 @@
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import confetti from 'canvas-confetti';
-        import { ChevronLeft, ChevronRight, Play, Maximize, X, ArrowLeft, LayoutTemplate } from 'lucide-react';
+        import { ChevronLeft, ChevronRight, Play, X, ArrowLeft, LayoutTemplate } from 'lucide-react';
+        
+        // --- FIREBASE INIT ---
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
 
-        // --- MOCK DATA FALLBACK ---
-        const MOCK_DATA = {
-            title: "The Magic of Present Simple",
-            content: {
-                slides: [
-                    { id: "uuid1", type: "theory", text: "We use Present Simple for daily routines.", emojis: "⏰ 🏃‍♂️", layout: "hero-emoji-center" },
-                    { id: "uuid1b", type: "theory", text: "Don't forget the 's' for he, she, it!", emojis: "🍎 🐍", layout: "split-text-left" },
-                    { id: "uuid2", type: "multipleChoice", questions: [ { question: "She ___ everyday.", options: ["run", "runs"], correctIndex: 1 }, { question: "They ___ tennis.", options: ["play", "plays"], correctIndex: 0 } ] },
-                    { id: "uuid3", type: "fillBlank", text: "I [wake] up at 7am and [eat] breakfast.", wordBank: ["wake", "sleep", "eat", "run"] },
-                    { id: "uuid4", type: "sentenceScramble", sentences: [ { text: "I play tennis", translation: "Yo juego tenis" } ] }
-                ]
-            }
-        };
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const QUIZZES_PATH = 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes';
 
         const triggerConfetti = () => {
             confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: ['#3b82f6', '#10b981', '#f59e0b'] });
@@ -115,12 +115,17 @@
         const MultipleChoiceSlide = ({ slide, onComplete }) => {
             const [qIndex, setQIndex] = useState(0);
             const [errorIdx, setErrorIdx] = useState(null);
-            const q = slide.questions[qIndex];
+            
+            // Verificamos si slide.questions existe, si no, usamos la data anidada (por si acaso cambió la estructura)
+            const questions = slide.questions || slide.data?.questions || [slide]; 
+            const q = questions[qIndex];
+
+            if (!q || !q.options) return <div className="text-center text-white">Error loading question data</div>;
 
             const handleAnswer = (idx) => {
-                if (idx === q.correctIndex) {
+                if (idx === q.correctIndex || idx === q.correct) {
                     triggerConfetti();
-                    if (qIndex < slide.questions.length - 1) setTimeout(() => setQIndex(qIndex + 1), 1000);
+                    if (qIndex < questions.length - 1) setTimeout(() => setQIndex(qIndex + 1), 1000);
                     else setTimeout(onComplete, 1000);
                 } else {
                     setErrorIdx(idx);
@@ -147,12 +152,11 @@
             );
         };
 
-        // Simplified for brevity, same logic as before
         const FillBlankSlide = ({ slide, onComplete }) => {
-             return <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn"><h2 className="text-4xl font-black">Fill in the Blanks (WIP)</h2><button onClick={onComplete} className="mt-8 bg-brand px-6 py-3 rounded-xl font-bold">Skip for now</button></div>
+             return <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn"><h2 className="text-4xl font-black text-white">Fill in the Blanks (WIP)</h2><button onClick={onComplete} className="mt-8 bg-brand text-white px-6 py-3 rounded-xl font-bold">Skip for now</button></div>
         }
         const SentenceScrambleSlide = ({ slide, onComplete }) => {
-            return <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn"><h2 className="text-4xl font-black">Sentence Scramble (WIP)</h2><button onClick={onComplete} className="mt-8 bg-brand px-6 py-3 rounded-xl font-bold">Skip for now</button></div>
+            return <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn"><h2 className="text-4xl font-black text-white">Sentence Scramble (WIP)</h2><button onClick={onComplete} className="mt-8 bg-brand text-white px-6 py-3 rounded-xl font-bold">Skip for now</button></div>
         }
 
         // --- MAIN APP ---
@@ -160,52 +164,88 @@
             const [presentation, setPresentation] = useState(null);
             const [currentIdx, setCurrentIdx] = useState(0);
             const [loading, setLoading] = useState(true);
-            const [isPresenting, setIsPresenting] = useState(false); // THEATER MODE STATE
+            const [isPresenting, setIsPresenting] = useState(false);
+            const [errorMsg, setErrorMsg] = useState(null);
 
             useEffect(() => {
-                const loadData = async () => {
+                const initAndFetch = async () => {
                     const params = new URLSearchParams(window.location.search);
                     const id = params.get('id');
-                    if (id) {
-                        setTimeout(() => { setPresentation(MOCK_DATA); setLoading(false); }, 500); 
-                    } else {
-                        setPresentation(MOCK_DATA);
+                    
+                    if (!id) {
+                        setErrorMsg("No ID provided in URL.");
+                        setLoading(false);
+                        return;
+                    }
+
+                    try {
+                        await signInAnonymously(auth);
+                        const docRef = doc(db, QUIZZES_PATH, id);
+                        const docSnap = await getDoc(docRef);
+                        
+                        if (docSnap.exists()) {
+                            setPresentation(docSnap.data());
+                        } else {
+                            setErrorMsg("Presentation not found.");
+                        }
+                    } catch (error) {
+                        console.error("Error fetching presentation:", error);
+                        setErrorMsg(error.message);
+                    } finally {
                         setLoading(false);
                     }
                 };
-                loadData();
+
+                initAndFetch();
             }, []);
 
             if (loading) return <div className="h-[100dvh] flex items-center justify-center"><div className="animate-spin h-12 w-12 border-t-4 border-brand rounded-full"></div></div>;
-            if (!presentation) return <div className="h-[100dvh] flex items-center justify-center">Error loading data.</div>;
+            if (errorMsg) return <div className="h-[100dvh] flex items-center justify-center text-red-500 font-bold text-xl">{errorMsg}</div>;
+            if (!presentation || !presentation.content) return <div className="h-[100dvh] flex items-center justify-center text-white">Invalid presentation data.</div>;
 
-            const slides = presentation.content.slides;
-            const currentSlide = slides[currentIdx];
+            // Extraer slides y posible minijuego
+            const slides = presentation.content.slides || presentation.content;
+            
+            // Si la IA generó un miniGame separado al final (estructura nueva del bot)
+            const allSlides = [...slides];
+            if (presentation.miniGame && presentation.miniGame.type !== 'none') {
+                allSlides.push({
+                    id: "minigame-final",
+                    type: presentation.miniGame.type,
+                    ...presentation.miniGame.data
+                });
+            }
 
-            const nextSlide = () => { if (currentIdx < slides.length - 1) setCurrentIdx(currentIdx + 1); };
+            const currentSlide = allSlides[currentIdx];
+            if (!currentSlide) return null;
+
+            const nextSlide = () => { if (currentIdx < allSlides.length - 1) setCurrentIdx(currentIdx + 1); };
             const prevSlide = () => { if (currentIdx > 0) setCurrentIdx(currentIdx - 1); };
 
             const renderSlide = () => {
+                const type = currentSlide.type || currentSlide.layout ? 'theory' : 'unknown';
+                
+                if (type === 'theory' || currentSlide.layout) return <TheorySlide slide={currentSlide} />;
+                
                 switch(currentSlide.type) {
-                    case 'theory': return <TheorySlide slide={currentSlide} />;
-                    case 'multipleChoice': return <MultipleChoiceSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id} />;
-                    case 'fillBlank': return <FillBlankSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id} />;
-                    case 'sentenceScramble': return <SentenceScrambleSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id} />;
-                    default: return <div className="p-8 text-center text-xl">Unknown slide type</div>;
+                    case 'multipleChoice': return <MultipleChoiceSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id || currentIdx} />;
+                    case 'fillBlank': return <FillBlankSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id || currentIdx} />;
+                    case 'sentenceScramble': return <SentenceScrambleSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id || currentIdx} />;
+                    default: return <div className="p-8 text-center text-xl text-white">Unknown slide type</div>;
                 }
             };
 
             return (
                 <div className="h-[100dvh] w-full flex flex-col bg-zinc-950 text-white overflow-hidden font-sans">
                     
-                    {/* 1. TOP BANNER (Hidden in Theater Mode) */}
+                    {/* 1. TOP BANNER */}
                     {!isPresenting && (
                         <header className="h-16 md:h-20 shrink-0 border-b border-zinc-800 bg-zinc-900 flex items-center justify-between px-4 md:px-8 z-20">
                             <div className="flex items-center gap-4">
                                 <button onClick={() => window.location.href='index.html'} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-white transition-colors" title="Back to Hub">
                                     <ArrowLeft size={24} />
                                 </button>
-                                <h1 className="text-lg md:text-2xl font-black truncate max-w-[200px] md:max-w-md">{presentation.title}</h1>
+                                <h1 className="text-lg md:text-2xl font-black truncate max-w-[200px] md:max-w-md">{presentation.title || "Presentación"}</h1>
                             </div>
                             <button 
                                 onClick={() => setIsPresenting(true)}
@@ -219,58 +259,54 @@
                     {/* 2. MAIN STAGE */}
                     <main className={`flex-1 relative transition-all duration-500 flex flex-col ${isPresenting ? 'h-[100dvh] bg-black z-50' : 'bg-zinc-950'}`}>
                         
-                        {/* Close button for Theater Mode */}
                         {isPresenting && (
                             <button onClick={() => setIsPresenting(false)} className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white z-50 backdrop-blur-md transition-colors">
                                 <X size={24} />
                             </button>
                         )}
 
-                        {/* The actual slide content */}
                         <div className="flex-1 w-full h-full relative z-0">
                             {renderSlide()}
                         </div>
 
-                        {/* Navigation Arrows (Floating) */}
                         <div className="absolute top-1/2 -translate-y-1/2 w-full flex justify-between px-4 md:px-8 pointer-events-none z-10">
                             <button onClick={prevSlide} disabled={currentIdx === 0}
                                 className={`pointer-events-auto touch-safe p-3 md:p-5 rounded-full backdrop-blur-md transition-all
                                     ${currentIdx === 0 ? 'opacity-0' : 'opacity-100 bg-white/10 hover:bg-white/20 text-white hover-scale'}`}>
                                 <ChevronLeft size={32} />
                             </button>
-                            <button onClick={nextSlide} disabled={currentIdx === slides.length - 1}
+                            <button onClick={nextSlide} disabled={currentIdx === allSlides.length - 1}
                                 className={`pointer-events-auto touch-safe p-3 md:p-5 rounded-full backdrop-blur-md transition-all
-                                    ${currentIdx === slides.length - 1 ? 'opacity-0' : 'opacity-100 bg-white/10 hover:bg-white/20 text-white hover-scale'}`}>
+                                    ${currentIdx === allSlides.length - 1 ? 'opacity-0' : 'opacity-100 bg-white/10 hover:bg-white/20 text-white hover-scale'}`}>
                                 <ChevronRight size={32} />
                             </button>
                         </div>
 
-                        {/* Progress Bar (Only in Theater Mode) */}
                         {isPresenting && (
                             <div className="absolute bottom-0 left-0 w-full h-1.5 bg-white/10">
-                                <div className="h-full bg-brand transition-all duration-300" style={{width: `${((currentIdx + 1) / slides.length) * 100}%`}}></div>
+                                <div className="h-full bg-brand transition-all duration-300" style={{width: `${((currentIdx + 1) / allSlides.length) * 100}%`}}></div>
                             </div>
                         )}
                     </main>
 
-                    {/* 3. BOTTOM STRIP (Hidden in Theater Mode) */}
+                    {/* 3. BOTTOM STRIP */}
                     {!isPresenting && (
                         <footer className="h-36 md:h-48 shrink-0 border-t border-zinc-800 bg-zinc-900 flex items-center px-4 md:px-8 overflow-x-auto gap-4 custom-scrollbar z-20">
-                            {slides.map((slide, idx) => (
+                            {allSlides.map((slide, idx) => (
                                 <button 
-                                    key={slide.id} 
+                                    key={slide.id || idx} 
                                     onClick={() => setCurrentIdx(idx)}
                                     className={`shrink-0 h-24 w-36 md:h-32 md:w-48 rounded-xl border-2 flex flex-col items-center justify-center p-2 relative overflow-hidden transition-all hover-scale
                                         ${idx === currentIdx ? 'border-brand ring-4 ring-brand/20 bg-zinc-800' : 'border-zinc-700 bg-zinc-950 hover:border-zinc-500'}`}
                                 >
                                     <span className="text-xs font-bold text-zinc-500 absolute top-2 left-3">{idx + 1}</span>
-                                    {slide.type === 'theory' ? (
-                                        <span className="text-3xl md:text-5xl mt-2">{slide.emojis.split(' ')[0]}</span>
+                                    {(!slide.type || slide.type === 'theory') ? (
+                                        <span className="text-3xl md:text-5xl mt-2">{(slide.emojis || "📝").split(' ')[0]}</span>
                                     ) : (
                                         <LayoutTemplate size={32} className="text-zinc-600 mt-2" />
                                     )}
                                     <p className="text-[10px] md:text-xs text-zinc-400 font-bold mt-2 truncate w-full px-2">
-                                        {slide.type === 'theory' ? slide.text : `${slide.type} Quiz`}
+                                        {(!slide.type || slide.type === 'theory') ? slide.text : `${slide.type} Quiz`}
                                     </p>
                                 </button>
                             ))}
