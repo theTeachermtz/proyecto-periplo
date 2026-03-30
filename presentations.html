@@ -45,7 +45,6 @@
             .hover-scale:hover { transform: scale(1.05); }
             .hover-bg:hover { background-color: rgba(255, 255, 255, 0.1); }
         }
-        /* Nav arrows fade transition */
         .nav-arrows { transition: opacity 0.4s ease; }
         .nav-arrows.hidden-arrows { opacity: 0; pointer-events: none; }
         .nav-arrows.visible-arrows { opacity: 1; pointer-events: auto; }
@@ -75,9 +74,8 @@
         import confetti from 'canvas-confetti';
         import { ChevronLeft, ChevronRight, Play, X, ArrowLeft, LayoutTemplate } from 'lucide-react';
         
-        // --- FIREBASE INIT ---
         import { initializeApp } from 'firebase/app';
-        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { getAuth, signInAnonymously } from 'firebase/auth';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
@@ -91,40 +89,61 @@
         };
 
         // ============================================================
-        // MINI-MARKDOWN PARSER
-        // Supports: **bold**, __underline__, *italic*
-        // Also detects numbered list patterns in text: "1. xxx 2. yyy"
+        // THEME SYSTEM
+        // ============================================================
+        const THEMES = {
+            'dark':    { bg: '#09090b', text: 'white', accent: '#3b82f6', subtle: 'rgba(255,255,255,0.08)' },
+            'blue':    { bg: '#1e3a5f', text: 'white', accent: '#60a5fa', subtle: 'rgba(255,255,255,0.1)' },
+            'indigo':  { bg: '#312e81', text: 'white', accent: '#818cf8', subtle: 'rgba(255,255,255,0.1)' },
+            'green':   { bg: '#14532d', text: 'white', accent: '#4ade80', subtle: 'rgba(255,255,255,0.1)' },
+            'purple':  { bg: '#3b0764', text: 'white', accent: '#c084fc', subtle: 'rgba(255,255,255,0.1)' },
+            'warm':    { bg: '#451a03', text: 'white', accent: '#fb923c', subtle: 'rgba(255,255,255,0.1)' },
+            'light':   { bg: '#f8fafc', text: '#0f172a', accent: '#3b82f6', subtle: 'rgba(0,0,0,0.05)' },
+        };
+
+        const resolveTheme = (themeName) => THEMES[themeName] || THEMES['dark'];
+
+        const getSlideBackground = (slide, docTheme) => {
+            if (slide.bgColor) return slide.bgColor;
+            if (slide.background) return slide.background;
+            return resolveTheme(docTheme).bg;
+        };
+
+        const makeWrapStyle = (slide, docTheme) => {
+            const bg = getSlideBackground(slide, docTheme);
+            if (typeof bg === 'string' && (bg.includes('gradient') || bg.includes('linear') || bg.includes('radial'))) {
+                return { background: bg };
+            }
+            return { backgroundColor: bg };
+        };
+
+        // ============================================================
+        // MINI-MARKDOWN PARSER: **bold**, __underline__, *italic*
         // ============================================================
         const parseMiniMarkdown = (text) => {
             if (!text) return null;
             const parts = [];
-            // Regex: **bold** or __underline__ or *italic*
             const regex = /(\*\*(.+?)\*\*|__(.+?)__|(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*))/g;
             let lastIndex = 0;
             let match;
             while ((match = regex.exec(text)) !== null) {
-                if (match.index > lastIndex) {
-                    parts.push(text.slice(lastIndex, match.index));
-                }
-                if (match[2]) parts.push(<strong key={match.index} className="font-black text-white">{match[2]}</strong>);
+                if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+                if (match[2]) parts.push(<strong key={match.index} className="font-black">{match[2]}</strong>);
                 else if (match[3]) parts.push(<span key={match.index} className="underline decoration-2 underline-offset-4">{match[3]}</span>);
-                else if (match[4]) parts.push(<em key={match.index} className="italic text-blue-300">{match[4]}</em>);
+                else if (match[4]) parts.push(<em key={match.index} className="italic opacity-80">{match[4]}</em>);
                 lastIndex = match.index + match[0].length;
             }
             if (lastIndex < text.length) parts.push(text.slice(lastIndex));
             return parts.length > 0 ? parts : text;
         };
 
-        // Detect if text has a numbered-list pattern like "1. xxx 2. yyy" or "1. xxx\n2.yyy"
+        // Detect "1. xxx 2. yyy" patterns in a string
         const parseTextWithLists = (text) => {
-            if (!text) return null;
-            // Pattern: digit(s) followed by . and space, repeated 2+ times
+            if (!text || typeof text !== 'string') return { type: 'plain', text: text || '' };
             const listPattern = /(?:^|\n)\s*\d+\.\s+/g;
             const matches = text.match(listPattern);
             if (matches && matches.length >= 2) {
-                // Split into items by the numbered pattern
                 const items = text.split(/(?:^|\n)\s*\d+\.\s+/).filter(s => s.trim());
-                // Check if there's a heading before the first number
                 const firstNumIdx = text.search(/\d+\.\s+/);
                 const heading = firstNumIdx > 0 ? text.slice(0, firstNumIdx).trim() : null;
                 return { type: 'numbered-list', heading, items };
@@ -133,19 +152,24 @@
         };
 
         // ============================================================
-        // THEORY SLIDE — supports ALL layouts from SCHEMES-FASE2-BOT
+        // THEORY SLIDE — ALL schema layouts
         // ============================================================
-        const TheorySlide = ({ slide }) => {
+        const TheorySlide = ({ slide, theme }) => {
+            const t = resolveTheme(theme);
+            const wrapStyle = makeWrapStyle(slide, theme);
+
+            // Safe text extractor — never returns null
+            const getText = () => slide.text || slide.heading || slide.centerLabel || slide.quote || '';
 
             // --- Layout: COVER ---
             if (slide.layout === 'cover') {
                 return (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-center px-8 animate-popIn">
-                        <h1 className="text-4xl md:text-6xl lg:text-7xl font-black text-white leading-tight mb-4 max-w-3xl">
-                            {parseMiniMarkdown(slide.heading || slide.text)}
+                    <div className="w-full h-full flex flex-col items-center justify-center text-center px-8 animate-popIn" style={wrapStyle}>
+                        <h1 className="text-4xl md:text-6xl lg:text-7xl font-black leading-tight mb-4 max-w-3xl">
+                            {parseMiniMarkdown(slide.heading || slide.text || '')}
                         </h1>
-                        {slide.subtitle && <p className="text-lg md:text-2xl text-zinc-400 font-medium max-w-2xl">{parseMiniMarkdown(slide.subtitle)}</p>}
-                        {slide.branding && <p className="text-sm text-zinc-600 mt-6 font-bold uppercase tracking-widest">{slide.branding}</p>}
+                        {slide.subtitle && <p className="text-lg md:text-2xl opacity-60 font-medium max-w-2xl">{parseMiniMarkdown(slide.subtitle)}</p>}
+                        {slide.branding && <p className="text-sm opacity-40 mt-6 font-bold uppercase tracking-widest">{slide.branding}</p>}
                     </div>
                 );
             }
@@ -153,17 +177,17 @@
             // --- Layout: TITLE-BULLETS ---
             if (slide.layout === 'title-bullets') {
                 return (
-                    <div className="w-full h-full flex flex-col items-center justify-center px-8 md:px-16 animate-popIn">
+                    <div className="w-full h-full flex flex-col items-center justify-center px-8 md:px-16 animate-popIn" style={wrapStyle}>
                         <div className="max-w-3xl w-full text-center">
-                            <h2 className="text-3xl md:text-5xl font-black text-white mb-8 leading-tight">
-                                {parseMiniMarkdown(slide.heading || slide.text)}
+                            <h2 className="text-3xl md:text-5xl font-black mb-8 leading-tight">
+                                {parseMiniMarkdown(slide.heading || '')}
                             </h2>
                             {slide.bullets && (
                                 <ul className="space-y-3 text-left mx-auto max-w-2xl">
                                     {slide.bullets.map((b, i) => (
                                         <li key={i} className="flex items-start gap-3 animate-fadeIn" style={{ animationDelay: `${i * 0.1}s`, opacity: 0 }}>
-                                            <span className="text-brand font-black text-lg mt-0.5 shrink-0">{i + 1}.</span>
-                                            <span className="text-xl md:text-2xl text-zinc-200 font-semibold leading-snug">{parseMiniMarkdown(b)}</span>
+                                            <span className="font-black text-lg mt-0.5 shrink-0" style={{ color: t.accent }}>{i + 1}.</span>
+                                            <span className="text-xl md:text-2xl font-semibold leading-snug opacity-90">{parseMiniMarkdown(b)}</span>
                                         </li>
                                     ))}
                                 </ul>
@@ -176,18 +200,18 @@
             // --- Layout: TWO-COLUMNS ---
             if (slide.layout === 'two-columns') {
                 return (
-                    <div className="w-full h-full flex flex-col items-center justify-center px-8 md:px-16 animate-popIn">
-                        <h2 className="text-3xl md:text-5xl font-black text-white mb-10 text-center max-w-3xl">
-                            {parseMiniMarkdown(slide.heading)}
+                    <div className="w-full h-full flex flex-col items-center justify-center px-8 md:px-16 animate-popIn" style={wrapStyle}>
+                        <h2 className="text-3xl md:text-5xl font-black mb-10 text-center max-w-3xl">
+                            {parseMiniMarkdown(slide.heading || '')}
                         </h2>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl w-full">
                             {[slide.leftColumn, slide.rightColumn].map((col, ci) => col && (
-                                <div key={ci} className="bg-white/5 rounded-2xl p-6 border border-white/10">
-                                    <h3 className="text-lg font-black text-brand mb-4 uppercase tracking-wider">{col.title}</h3>
+                                <div key={ci} className="rounded-2xl p-6 border" style={{ backgroundColor: t.subtle, borderColor: t.subtle }}>
+                                    <h3 className="text-lg font-black mb-4 uppercase tracking-wider" style={{ color: t.accent }}>{col.title}</h3>
                                     <ul className="space-y-2">
                                         {col.items?.map((item, i) => (
-                                            <li key={i} className="text-zinc-300 font-medium text-base flex items-start gap-2">
-                                                <span className="text-brand mt-1">•</span>
+                                            <li key={i} className="font-medium text-base flex items-start gap-2 opacity-90">
+                                                <span style={{ color: t.accent }} className="mt-1">•</span>
                                                 <span>{parseMiniMarkdown(item)}</span>
                                             </li>
                                         ))}
@@ -202,26 +226,26 @@
             // --- Layout: TABLE-NOTES ---
             if (slide.layout === 'table-notes') {
                 return (
-                    <div className="w-full h-full flex flex-col items-center justify-center px-6 md:px-16 animate-popIn overflow-y-auto">
+                    <div className="w-full h-full flex flex-col items-center justify-center px-6 md:px-16 animate-popIn overflow-y-auto" style={wrapStyle}>
                         <div className="max-w-4xl w-full">
-                            <h2 className="text-3xl md:text-4xl font-black text-white mb-8 text-center">
-                                {parseMiniMarkdown(slide.heading)}
+                            <h2 className="text-3xl md:text-4xl font-black mb-8 text-center">
+                                {parseMiniMarkdown(slide.heading || '')}
                             </h2>
                             {slide.table && (
-                                <div className="overflow-x-auto rounded-2xl border border-white/10 mb-6">
+                                <div className="overflow-x-auto rounded-2xl border mb-6" style={{ borderColor: t.subtle }}>
                                     <table className="w-full text-left">
                                         <thead>
-                                            <tr className="bg-white/10">
+                                            <tr style={{ backgroundColor: t.subtle }}>
                                                 {slide.table.headers?.map((h, i) => (
-                                                    <th key={i} className="px-5 py-3 text-sm font-black text-brand uppercase tracking-wider">{h}</th>
+                                                    <th key={i} className="px-5 py-3 text-sm font-black uppercase tracking-wider" style={{ color: t.accent }}>{h}</th>
                                                 ))}
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {slide.table.rows?.map((row, ri) => (
-                                                <tr key={ri} className={ri % 2 === 0 ? 'bg-white/5' : ''}>
+                                                <tr key={ri} style={ri % 2 === 0 ? { backgroundColor: t.subtle } : {}}>
                                                     {row.map((cell, ci) => (
-                                                        <td key={ci} className="px-5 py-3 text-zinc-200 font-medium text-sm">{parseMiniMarkdown(cell)}</td>
+                                                        <td key={ci} className="px-5 py-3 font-medium text-sm opacity-90">{parseMiniMarkdown(cell)}</td>
                                                     ))}
                                                 </tr>
                                             ))}
@@ -229,13 +253,9 @@
                                     </table>
                                 </div>
                             )}
-                            {slide.notes && (
-                                <div className="space-y-2">
-                                    {slide.notes.map((n, i) => (
-                                        <p key={i} className="text-zinc-400 text-sm font-medium">💡 {parseMiniMarkdown(n)}</p>
-                                    ))}
-                                </div>
-                            )}
+                            {slide.notes && slide.notes.map((n, i) => (
+                                <p key={i} className="text-sm font-medium opacity-60">💡 {parseMiniMarkdown(n)}</p>
+                            ))}
                         </div>
                     </div>
                 );
@@ -244,16 +264,16 @@
             // --- Layout: MIND-MAP ---
             if (slide.layout === 'mind-map') {
                 return (
-                    <div className="w-full h-full flex flex-col items-center justify-center px-8 animate-popIn">
-                        <div className="bg-white/10 rounded-full px-8 py-4 mb-10 border border-white/20">
-                            <h2 className="text-2xl md:text-4xl font-black text-white text-center">{slide.centerLabel}</h2>
+                    <div className="w-full h-full flex flex-col items-center justify-center px-8 animate-popIn" style={wrapStyle}>
+                        <div className="rounded-full px-8 py-4 mb-10 border-2" style={{ borderColor: t.accent, backgroundColor: t.subtle }}>
+                            <h2 className="text-2xl md:text-4xl font-black text-center">{slide.centerLabel || ''}</h2>
                         </div>
                         <div className="flex flex-wrap justify-center gap-4 max-w-4xl">
                             {slide.branches?.map((b, i) => (
                                 <div key={i} className="rounded-2xl px-5 py-3 border-2 animate-fadeIn flex flex-col items-center"
-                                     style={{ borderColor: b.color || '#3b82f6', animationDelay: `${i * 0.08}s`, opacity: 0 }}>
-                                    <span className="text-lg font-black text-white">{b.term}</span>
-                                    {b.translation && <span className="text-sm text-zinc-400">{b.translation}</span>}
+                                     style={{ borderColor: b.color || t.accent, animationDelay: `${i * 0.08}s`, opacity: 0 }}>
+                                    <span className="text-lg font-black">{b.term}</span>
+                                    {b.translation && <span className="text-sm opacity-60">{b.translation}</span>}
                                 </div>
                             ))}
                         </div>
@@ -264,27 +284,27 @@
             // --- Layout: QUOTE ---
             if (slide.layout === 'quote') {
                 return (
-                    <div className="w-full h-full flex flex-col items-center justify-center px-8 text-center animate-popIn">
+                    <div className="w-full h-full flex flex-col items-center justify-center px-8 text-center animate-popIn" style={wrapStyle}>
                         <div className="max-w-3xl">
-                            <span className="text-6xl text-brand/40 font-black leading-none">"</span>
-                            <p className="text-2xl md:text-4xl font-bold text-white leading-snug -mt-6">{parseMiniMarkdown(slide.quote || slide.text)}</p>
-                            {slide.attribution && <p className="text-zinc-500 font-bold mt-6 text-lg">— {slide.attribution}</p>}
+                            <span className="text-6xl font-black leading-none" style={{ color: t.accent, opacity: 0.4 }}>"</span>
+                            <p className="text-2xl md:text-4xl font-bold leading-snug -mt-6">{parseMiniMarkdown(slide.quote || slide.text || '')}</p>
+                            {slide.attribution && <p className="opacity-50 font-bold mt-6 text-lg">— {slide.attribution}</p>}
                         </div>
                     </div>
                 );
             }
 
-            // --- Layout: SPLIT-TEXT-IMAGE-LEFT or SPLIT-TEXT-IMAGE-RIGHT ---
+            // --- Layout: SPLIT-TEXT-IMAGE-LEFT / RIGHT (bot schema) ---
             if (slide.layout === 'split-text-image-left' || slide.layout === 'split-text-image-right') {
                 const textSide = (
-                    <div className="flex flex-col justify-center items-center md:items-start text-center md:text-left">
-                        {slide.heading && <h2 className="text-2xl md:text-4xl font-black text-white mb-4 leading-tight">{parseMiniMarkdown(slide.heading)}</h2>}
-                        {slide.text && <p className="text-lg md:text-xl text-zinc-300 font-medium mb-4 leading-relaxed">{parseMiniMarkdown(slide.text)}</p>}
+                    <div className="flex flex-col justify-center">
+                        {slide.heading && <h2 className="text-2xl md:text-3xl font-black mb-3 leading-tight">{parseMiniMarkdown(slide.heading)}</h2>}
+                        {slide.text && <p className="text-lg md:text-xl font-medium mb-3 leading-relaxed opacity-85">{parseMiniMarkdown(slide.text)}</p>}
                         {slide.bullets && (
                             <ul className="space-y-2 mt-2">
                                 {slide.bullets.map((b, i) => (
-                                    <li key={i} className="text-zinc-300 font-medium text-base flex items-start gap-2">
-                                        <span className="text-brand mt-1 shrink-0">•</span>
+                                    <li key={i} className="font-medium text-base flex items-start gap-2 opacity-90">
+                                        <span style={{ color: t.accent }} className="mt-1 shrink-0">•</span>
                                         <span>{parseMiniMarkdown(b)}</span>
                                     </li>
                                 ))}
@@ -299,9 +319,11 @@
                 );
                 const isLeft = slide.layout === 'split-text-image-left';
                 return (
-                    <div className="w-full h-full flex flex-col md:grid md:grid-cols-5 items-center gap-6 px-8 md:px-16 animate-popIn">
-                        <div className="md:col-span-3 flex flex-col justify-center">{isLeft ? textSide : emojiSide}</div>
-                        <div className="md:col-span-2 flex items-center justify-center">{isLeft ? emojiSide : textSide}</div>
+                    <div className="w-full h-full flex items-center justify-center px-8 md:px-12" style={wrapStyle}>
+                        <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-3 items-center gap-8 animate-popIn">
+                            <div className="md:col-span-2">{isLeft ? textSide : emojiSide}</div>
+                            <div className="md:col-span-1 flex justify-center">{isLeft ? emojiSide : textSide}</div>
+                        </div>
                     </div>
                 );
             }
@@ -309,9 +331,9 @@
             // --- Layout: HORIZONTAL-EMOJI-BAND ---
             if (slide.layout === 'horizontal-emoji-band') {
                 return (
-                    <div className="w-full h-full flex flex-col items-center justify-center px-8 gap-6 animate-popIn">
-                        <h2 className="text-3xl md:text-5xl font-black text-white text-center leading-tight max-w-3xl">
-                            {parseMiniMarkdown(slide.text)}
+                    <div className="w-full h-full flex flex-col items-center justify-center px-8 gap-6 animate-popIn" style={wrapStyle}>
+                        <h2 className="text-3xl md:text-5xl font-black text-center leading-tight max-w-3xl">
+                            {parseMiniMarkdown(slide.text || '')}
                         </h2>
                         <div className="flex gap-6 text-5xl md:text-7xl mt-2">
                             {(slide.emojis || '').split(' ').filter(Boolean).map((e, i) => <span key={i} className="animate-popIn" style={{ animationDelay: `${i * 0.1}s` }}>{e}</span>)}
@@ -321,11 +343,9 @@
             }
 
             // ============================================================
-            // FALLBACK / LEGACY LAYOUTS: hero-emoji-center, hero-emoji-top,
-            // split-text-left, split-text-right, AND generic "hero"
-            // Also handles plain text with auto-list detection
+            // FALLBACK / LEGACY LAYOUTS
             // ============================================================
-            const textContent = slide.text || '';
+            const textContent = getText();
             const parsed = parseTextWithLists(textContent);
 
             const renderTextBlock = () => {
@@ -333,15 +353,15 @@
                     return (
                         <div className="max-w-3xl w-full animate-popIn text-center" style={{ animationDelay: '0.1s' }}>
                             {parsed.heading && (
-                                <h2 className="text-2xl md:text-4xl lg:text-5xl font-black text-white leading-tight mb-6 drop-shadow-lg">
+                                <h2 className="text-2xl md:text-4xl lg:text-5xl font-black leading-tight mb-6 drop-shadow-lg">
                                     {parseMiniMarkdown(parsed.heading)}
                                 </h2>
                             )}
                             <ol className="space-y-3 text-left mx-auto max-w-2xl">
                                 {parsed.items.map((item, i) => (
                                     <li key={i} className="flex items-start gap-3 animate-fadeIn" style={{ animationDelay: `${(i + 1) * 0.12}s`, opacity: 0 }}>
-                                        <span className="text-brand font-black text-xl mt-0.5 shrink-0">{i + 1}.</span>
-                                        <span className="text-xl md:text-2xl text-zinc-200 font-semibold leading-snug">{parseMiniMarkdown(item.trim())}</span>
+                                        <span className="font-black text-xl mt-0.5 shrink-0" style={{ color: t.accent }}>{i + 1}.</span>
+                                        <span className="text-xl md:text-2xl font-semibold leading-snug opacity-90">{parseMiniMarkdown(item.trim())}</span>
                                     </li>
                                 ))}
                             </ol>
@@ -349,62 +369,57 @@
                     );
                 }
                 return (
-                    <h2 className="text-3xl md:text-5xl lg:text-6xl font-black text-white leading-tight animate-popIn drop-shadow-lg max-w-3xl text-center"
+                    <h2 className="text-3xl md:text-5xl lg:text-6xl font-black leading-tight animate-popIn drop-shadow-lg max-w-3xl text-center"
                         style={{ animationDelay: '0.1s' }}>
                         {parseMiniMarkdown(textContent)}
                     </h2>
                 );
             };
 
-            const emojiBlock = (extraClass = '') => (
-                <div className={`text-5xl md:text-7xl animate-popIn ${extraClass}`}>
+            const emojiBlock = (size = 'text-5xl md:text-7xl') => (
+                <div className={`${size} animate-popIn`}>
                     {slide.emojis || '📝'}
                 </div>
             );
 
-            // hero / hero-emoji-center (default)
-            if (!slide.layout || slide.layout === 'hero' || slide.layout === 'hero-emoji-center') {
+            // hero / hero-emoji-center / hero-emoji-top (default)
+            if (!slide.layout || slide.layout === 'hero' || slide.layout === 'hero-emoji-center' || slide.layout === 'hero-emoji-top') {
                 return (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-center px-8 gap-4">
+                    <div className="w-full h-full flex flex-col items-center justify-center text-center px-8 gap-5" style={wrapStyle}>
                         {emojiBlock()}
                         {renderTextBlock()}
+                        {slide.subtext && <p className="text-lg md:text-xl opacity-50 max-w-2xl font-medium mt-2">{parseMiniMarkdown(slide.subtext)}</p>}
                     </div>
                 );
             }
 
-            // hero-emoji-top
-            if (slide.layout === 'hero-emoji-top') {
-                return (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-center px-8 gap-4">
-                        {emojiBlock()}
-                        {renderTextBlock()}
-                    </div>
-                );
-            }
-
-            // split-text-left (text left, emoji right) — legacy
+            // split-text-left (legacy)
             if (slide.layout === 'split-text-left') {
                 return (
-                    <div className="w-full h-full flex flex-col md:grid md:grid-cols-5 items-center gap-6 px-8 md:px-16">
-                        <div className="md:col-span-3 flex items-center justify-center">{renderTextBlock()}</div>
-                        <div className="md:col-span-2 flex items-center justify-center">{emojiBlock()}</div>
+                    <div className="w-full h-full flex items-center justify-center px-8 md:px-12" style={wrapStyle}>
+                        <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-3 items-center gap-8">
+                            <div className="md:col-span-2 flex justify-center">{renderTextBlock()}</div>
+                            <div className="md:col-span-1 flex justify-center">{emojiBlock()}</div>
+                        </div>
                     </div>
                 );
             }
 
-            // split-text-right (emoji left, text right) — legacy
+            // split-text-right (legacy)
             if (slide.layout === 'split-text-right') {
                 return (
-                    <div className="w-full h-full flex flex-col md:grid md:grid-cols-5 items-center gap-6 px-8 md:px-16">
-                        <div className="md:col-span-2 flex items-center justify-center">{emojiBlock()}</div>
-                        <div className="md:col-span-3 flex items-center justify-center">{renderTextBlock()}</div>
+                    <div className="w-full h-full flex items-center justify-center px-8 md:px-12" style={wrapStyle}>
+                        <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-3 items-center gap-8">
+                            <div className="md:col-span-1 flex justify-center">{emojiBlock()}</div>
+                            <div className="md:col-span-2 flex justify-center">{renderTextBlock()}</div>
+                        </div>
                     </div>
                 );
             }
 
             // Absolute fallback
             return (
-                <div className="w-full h-full flex flex-col items-center justify-center text-center px-8 gap-4">
+                <div className="w-full h-full flex flex-col items-center justify-center text-center px-8 gap-5" style={wrapStyle}>
                     {emojiBlock()}
                     {renderTextBlock()}
                 </div>
@@ -412,7 +427,7 @@
         };
 
         // ============================================================
-        // INTERACTIVE SLIDE COMPONENTS (quiz types)
+        // INTERACTIVE SLIDES
         // ============================================================
         const MultipleChoiceSlide = ({ slide, onComplete }) => {
             const [qIndex, setQIndex] = useState(0);
@@ -421,7 +436,7 @@
             const questions = slide.questions || slide.data?.questions || [slide]; 
             const q = questions[qIndex];
 
-            if (!q || !q.options) return <div className="text-center text-white">Error loading question data</div>;
+            if (!q || !q.options) return <div className="text-center text-white p-8">Error loading question data</div>;
 
             const handleAnswer = (idx) => {
                 if (idx === q.correctIndex || idx === q.correct) {
@@ -438,7 +453,7 @@
                 <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto">
                     <div className="bg-zinc-900 rounded-3xl p-8 md:p-12 w-full shadow-2xl border border-zinc-800 animate-popIn">
                         <h3 className="text-sm font-bold text-zinc-400 mb-2 uppercase tracking-wider text-center">Quiz Time!</h3>
-                        <h2 className="text-3xl md:text-5xl font-black mb-10 text-center">{q.question}</h2>
+                        <h2 className="text-3xl md:text-5xl font-black mb-10 text-center text-white">{q.question}</h2>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                             {q.options.map((opt, idx) => (
                                 <button key={idx} onClick={() => handleAnswer(idx)}
@@ -453,12 +468,19 @@
             );
         };
 
-        const FillBlankSlide = ({ slide, onComplete }) => {
-             return <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn"><h2 className="text-4xl font-black text-white">Fill in the Blanks (WIP)</h2><button onClick={onComplete} className="mt-8 bg-brand text-white px-6 py-3 rounded-xl font-bold touch-safe">Skip for now</button></div>
-        }
-        const SentenceScrambleSlide = ({ slide, onComplete }) => {
-            return <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn"><h2 className="text-4xl font-black text-white">Sentence Scramble (WIP)</h2><button onClick={onComplete} className="mt-8 bg-brand text-white px-6 py-3 rounded-xl font-bold touch-safe">Skip for now</button></div>
-        }
+        const FillBlankSlide = ({ slide, onComplete }) => (
+            <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn">
+                <h2 className="text-4xl font-black text-white">Fill in the Blanks (WIP)</h2>
+                <button onClick={onComplete} className="mt-8 bg-brand text-white px-6 py-3 rounded-xl font-bold touch-safe">Skip for now</button>
+            </div>
+        );
+        
+        const SentenceScrambleSlide = ({ slide, onComplete }) => (
+            <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn">
+                <h2 className="text-4xl font-black text-white">Sentence Scramble (WIP)</h2>
+                <button onClick={onComplete} className="mt-8 bg-brand text-white px-6 py-3 rounded-xl font-bold touch-safe">Skip for now</button>
+            </div>
+        );
 
         // ============================================================
         // MAIN APP
@@ -480,13 +502,11 @@
                 hideTimer.current = setTimeout(() => setArrowsVisible(false), 2000);
             }, []);
 
-            // On slide change or entering presentation, flash arrows then hide
             useEffect(() => {
                 showArrows();
                 return () => clearTimeout(hideTimer.current);
             }, [currentIdx, isPresenting, showArrows]);
 
-            // Listen for touch/mouse to re-show arrows
             useEffect(() => {
                 const handler = () => showArrows();
                 document.addEventListener('touchstart', handler, { passive: true });
@@ -502,22 +522,14 @@
                     const params = new URLSearchParams(window.location.search);
                     const id = params.get('id');
                     
-                    if (!id) {
-                        setErrorMsg("No ID provided in URL.");
-                        setLoading(false);
-                        return;
-                    }
+                    if (!id) { setErrorMsg("No ID provided in URL."); setLoading(false); return; }
 
                     try {
                         await signInAnonymously(auth);
-                        const docRef = doc(db, QUIZZES_PATH, id);
-                        const docSnap = await getDoc(docRef);
+                        const docSnap = await getDoc(doc(db, QUIZZES_PATH, id));
                         
-                        if (docSnap.exists()) {
-                            setPresentation(docSnap.data());
-                        } else {
-                            setErrorMsg("Presentation not found.");
-                        }
+                        if (docSnap.exists()) setPresentation(docSnap.data());
+                        else setErrorMsg("Presentation not found.");
                     } catch (error) {
                         console.error("Error fetching presentation:", error);
                         setErrorMsg(error.message);
@@ -525,23 +537,20 @@
                         setLoading(false);
                     }
                 };
-
                 initAndFetch();
             }, []);
 
             if (loading) return <div className="h-[100dvh] flex items-center justify-center"><div className="animate-spin h-12 w-12 border-t-4 border-brand rounded-full"></div></div>;
-            if (errorMsg) return <div className="h-[100dvh] flex items-center justify-center text-red-500 font-bold text-xl">{errorMsg}</div>;
+            if (errorMsg) return <div className="h-[100dvh] flex items-center justify-center text-red-500 font-bold text-xl p-8 text-center">{errorMsg}</div>;
             if (!presentation || !presentation.content) return <div className="h-[100dvh] flex items-center justify-center text-white">Invalid presentation data.</div>;
 
+            const docTheme = presentation.theme || 'dark';
+            const stageBg = resolveTheme(docTheme).bg;
             const slides = presentation.content.slides || presentation.content;
             
             const allSlides = [...slides];
             if (presentation.miniGame && presentation.miniGame.type !== 'none') {
-                allSlides.push({
-                    id: "minigame-final",
-                    type: presentation.miniGame.type,
-                    ...presentation.miniGame.data
-                });
+                allSlides.push({ id: "minigame-final", type: presentation.miniGame.type, ...presentation.miniGame.data });
             }
 
             const currentSlide = allSlides[currentIdx];
@@ -551,11 +560,10 @@
             const prevSlide = () => { if (currentIdx > 0) setCurrentIdx(currentIdx - 1); };
 
             const renderSlide = () => {
-                // If it has a layout field OR type is theory, render as TheorySlide
-                if (currentSlide.layout || currentSlide.type === 'theory' || (!currentSlide.type)) {
-                    return <TheorySlide slide={currentSlide} key={currentSlide.id || currentIdx} />;
+                // Theory: has layout OR type=theory OR no type at all
+                if (currentSlide.layout || currentSlide.type === 'theory' || !currentSlide.type) {
+                    return <TheorySlide slide={currentSlide} theme={docTheme} key={currentSlide.id || currentIdx} />;
                 }
-                
                 switch(currentSlide.type) {
                     case 'multipleChoice': return <MultipleChoiceSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id || currentIdx} />;
                     case 'fillBlank': return <FillBlankSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id || currentIdx} />;
@@ -565,19 +573,18 @@
             };
 
             return (
-                <div className="h-[100dvh] w-full flex flex-col bg-zinc-950 text-white overflow-hidden font-sans">
+                <div className="h-[100dvh] w-full flex flex-col text-white overflow-hidden font-sans" style={{ backgroundColor: stageBg }}>
                     
                     {/* 1. TOP BANNER */}
                     {!isPresenting && (
-                        <header className="h-16 md:h-20 shrink-0 border-b border-zinc-800 bg-zinc-900 flex items-center justify-between px-4 md:px-8 z-20">
+                        <header className="h-16 md:h-20 shrink-0 border-b border-white/10 flex items-center justify-between px-4 md:px-8 z-20" style={{ backgroundColor: 'rgba(0,0,0,0.3)' }}>
                             <div className="flex items-center gap-4">
-                                <button onClick={() => window.location.href='index.html'} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-white transition-colors touch-safe" title="Back to Hub">
+                                <button onClick={() => window.location.href='index.html'} className="p-2 hover:bg-white/10 rounded-full opacity-60 hover:opacity-100 transition-all touch-safe">
                                     <ArrowLeft size={24} />
                                 </button>
                                 <h1 className="text-lg md:text-2xl font-black truncate max-w-[200px] md:max-w-md">{presentation.title || "Presentación"}</h1>
                             </div>
-                            <button 
-                                onClick={() => setIsPresenting(true)}
+                            <button onClick={() => setIsPresenting(true)}
                                 className="bg-brand hover:bg-blue-600 text-white font-bold py-2 px-6 rounded-full flex items-center gap-2 transition-transform hover-scale shadow-lg shadow-brand/20 touch-safe">
                                 <Play size={18} fill="currentColor" />
                                 <span className="hidden md:inline">Presentar</span>
@@ -586,7 +593,7 @@
                     )}
 
                     {/* 2. MAIN STAGE */}
-                    <main className={`flex-1 relative transition-all duration-500 flex flex-col ${isPresenting ? 'h-[100dvh] bg-black z-50' : 'bg-zinc-950'}`}>
+                    <main className={`flex-1 relative transition-all duration-500 flex flex-col ${isPresenting ? 'h-[100dvh] z-50' : ''}`}>
                         
                         {isPresenting && (
                             <button onClick={() => setIsPresenting(false)} className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white z-50 backdrop-blur-md transition-colors touch-safe">
@@ -598,7 +605,7 @@
                             {renderSlide()}
                         </div>
 
-                        {/* NAV ARROWS — auto-hide after 2s */}
+                        {/* NAV ARROWS — auto-hide 2s */}
                         <div className={`nav-arrows ${arrowsVisible ? 'visible-arrows' : 'hidden-arrows'} absolute top-1/2 -translate-y-1/2 w-full flex justify-between px-4 md:px-8 z-10`}>
                             <button onClick={prevSlide} disabled={currentIdx === 0}
                                 className={`pointer-events-auto touch-safe p-3 md:p-5 rounded-full backdrop-blur-md transition-all
@@ -621,21 +628,21 @@
 
                     {/* 3. BOTTOM STRIP */}
                     {!isPresenting && (
-                        <footer className="h-36 md:h-48 shrink-0 border-t border-zinc-800 bg-zinc-900 flex items-center px-4 md:px-8 overflow-x-auto gap-4 custom-scrollbar z-20">
+                        <footer className="h-36 md:h-48 shrink-0 border-t border-white/10 flex items-center px-4 md:px-8 overflow-x-auto gap-4 custom-scrollbar z-20" style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}>
                             {allSlides.map((slide, idx) => (
                                 <button 
                                     key={slide.id || idx} 
                                     onClick={() => setCurrentIdx(idx)}
                                     className={`shrink-0 h-24 w-36 md:h-32 md:w-48 rounded-xl border-2 flex flex-col items-center justify-center p-2 relative overflow-hidden transition-all hover-scale touch-safe
-                                        ${idx === currentIdx ? 'border-brand ring-4 ring-brand/20 bg-zinc-800' : 'border-zinc-700 bg-zinc-950 hover:border-zinc-500'}`}
+                                        ${idx === currentIdx ? 'border-brand ring-4 ring-brand/20 bg-white/10' : 'border-white/10 bg-black/30 hover:border-white/30'}`}
                                 >
-                                    <span className="text-xs font-bold text-zinc-500 absolute top-2 left-3">{idx + 1}</span>
+                                    <span className="text-xs font-bold opacity-40 absolute top-2 left-3">{idx + 1}</span>
                                     {(slide.type === 'theory' || !slide.type) ? (
                                         <span className="text-3xl md:text-5xl mt-2">{(slide.emojis || "📝").split(' ')[0]}</span>
                                     ) : (
-                                        <LayoutTemplate size={32} className="text-zinc-600 mt-2" />
+                                        <LayoutTemplate size={32} className="opacity-40 mt-2" />
                                     )}
-                                    <p className="text-[10px] md:text-xs text-zinc-400 font-bold mt-2 truncate w-full px-2">
+                                    <p className="text-[10px] md:text-xs font-bold mt-2 truncate w-full px-2 opacity-60">
                                         {(slide.type === 'theory' || !slide.type) ? (slide.heading || slide.text || slide.centerLabel || '') : `${slide.type} Quiz`}
                                     </p>
                                 </button>
