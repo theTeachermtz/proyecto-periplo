@@ -65,6 +65,9 @@
         
         .drag-active { cursor: grabbing !important; z-index: 50; }
         .word-card { touch-action: none; }
+        
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
     </style>
 </head>
 <body class="bg-slate-900 text-white h-[100dvh] w-screen">
@@ -75,9 +78,8 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Zap, Heart, Trophy, Play, AlertCircle, RefreshCcw, ArrowLeft } from 'lucide-react';
+        import { Zap, Heart, Trophy, Play, AlertCircle, RefreshCcw, ArrowLeft, Pause, BookOpen, UserCircle2 } from 'lucide-react';
 
-        // Configuración Firebase de Periplo
         const firebaseConfig = { 
             apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", 
             authDomain: "proyecto-periplo.firebaseapp.com", 
@@ -89,65 +91,61 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        // CORRECCIÓN: Amarillo ahora usa amber-500 para mejor contraste con texto blanco
         const CATEGORY_COLORS = [
-            { bg: 'bg-blue-500', border: 'border-blue-600', shadow: 'shadow-blue-500/50', text: 'text-blue-100' },
-            { bg: 'bg-red-500', border: 'border-red-600', shadow: 'shadow-red-500/50', text: 'text-red-100' },
-            { bg: 'bg-yellow-400', border: 'border-yellow-500', shadow: 'shadow-yellow-400/50', text: 'text-yellow-900' },
-            { bg: 'bg-green-500', border: 'border-green-600', shadow: 'shadow-green-500/50', text: 'text-green-100' }
+            { bg: 'bg-blue-500', border: 'border-blue-600', shadow: 'shadow-blue-500/50', text: 'text-white' },
+            { bg: 'bg-red-500', border: 'border-red-600', shadow: 'shadow-red-500/50', text: 'text-white' },
+            { bg: 'bg-amber-500', border: 'border-amber-600', shadow: 'shadow-amber-500/50', text: 'text-white' },
+            { bg: 'bg-green-500', border: 'border-green-600', shadow: 'shadow-green-500/50', text: 'text-white' }
         ];
 
-        // --- SISTEMA DE AUDIO NATIVO (Sin dependencias externas) ---
+        // --- SISTEMA DE AUDIO NATIVO ---
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
         const playPopSound = () => {
             if (audioCtx.state === 'suspended') audioCtx.resume();
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
+            osc.connect(gain); gain.connect(audioCtx.destination);
             osc.type = 'sine';
             osc.frequency.setValueAtTime(400, audioCtx.currentTime);
             osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.1);
             gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
             gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.1);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.1);
         };
 
         const playSuccessSound = () => {
             if (audioCtx.state === 'suspended') audioCtx.resume();
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
+            osc.connect(gain); gain.connect(audioCtx.destination);
             osc.type = 'triangle';
             osc.frequency.setValueAtTime(800, audioCtx.currentTime);
             osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.15);
             gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
             gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.3);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.3);
         };
 
         const playErrorSound = () => {
             if (audioCtx.state === 'suspended') audioCtx.resume();
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
+            osc.connect(gain); gain.connect(audioCtx.destination);
             osc.type = 'sawtooth';
             osc.frequency.setValueAtTime(200, audioCtx.currentTime);
             osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.2);
             gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
             gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.2);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.2);
         };
 
         const CascadeGame = () => {
-            const [gameState, setGameState] = useState('loading'); 
+            const [gameState, setGameState] = useState('loading'); // loading, error, menu, playing, paused, gameover, library
             const [gameData, setGameData] = useState(null);
             const [errorMessage, setErrorMessage] = useState("");
+            const [playerName, setPlayerName] = useState("");
 
             const [wordPool, setWordPool] = useState([]);
             const [currentWord, setCurrentWord] = useState(null);
@@ -164,7 +162,6 @@
             const [dragPos, setDragPos] = useState({ x: 0, y: 0 });
             const [isWrong, setIsWrong] = useState(false);
 
-            // 1. CARGA DE DATOS (Word Cascade Format)
             useEffect(() => {
                 const params = new URLSearchParams(window.location.search);
                 const gameId = params.get('id');
@@ -196,9 +193,12 @@
                 loadGame();
             }, []);
 
-            // 2. PREPARACIÓN DEL POOL (Mapeando emojis y palabras)
             const startGame = () => {
-                // Iniciar AudioContext en interacción del usuario
+                if(!playerName.trim()) {
+                    alert("Por favor, ingresa tu nombre para registrar tu puntaje.");
+                    return;
+                }
+                
                 if (audioCtx.state === 'suspended') audioCtx.resume();
 
                 let allWords = [];
@@ -217,7 +217,6 @@
                     }
                 });
                 
-                // Shuffle array (Fisher-Yates)
                 for (let i = allWords.length - 1; i > 0; i--) {
                     const j = Math.floor(Math.random() * (i + 1));
                     [allWords[i], allWords[j]] = [allWords[j], allWords[i]];
@@ -253,10 +252,9 @@
                 setIsWrong(false);
                 isDraggingRef.current = false;
                 
-                playPopSound(); // Sonido al aparecer
+                playPopSound();
             };
 
-            // 3. GAME LOOP
             useEffect(() => {
                 if (gameState !== 'playing' || !currentWord) return;
 
@@ -287,7 +285,11 @@
                 spawnNextWord(wordPool);
             };
 
-            // 4. LÓGICA DE DRAG AND DROP
+            const togglePause = () => {
+                if (gameState === 'playing') setGameState('paused');
+                else if (gameState === 'paused') setGameState('playing');
+            };
+
             const handlePointerDown = (e) => {
                 if (gameState !== 'playing' || isWrong) return;
                 isDraggingRef.current = true;
@@ -296,12 +298,12 @@
             };
 
             const handlePointerMove = (e) => {
-                if (!isDraggingRef.current) return;
+                if (!isDraggingRef.current || gameState !== 'playing') return;
                 setDragPos({ x: e.clientX, y: e.clientY });
             };
 
             const handlePointerUp = (e) => {
-                if (!isDraggingRef.current) return;
+                if (!isDraggingRef.current || gameState !== 'playing') return;
                 isDraggingRef.current = false;
                 e.target.releasePointerCapture(e.pointerId);
 
@@ -360,7 +362,6 @@
                 frame();
             };
 
-            // 5. RENDERIZADO
             if (gameState === 'loading') return <div className="flex h-full items-center justify-center"><Zap className="animate-pulse text-indigo-500" size={48} /></div>;
             
             if (gameState === 'error') return (
@@ -383,12 +384,23 @@
                     
                     <div className="flex-1 flex flex-col items-center justify-center p-6 text-center z-10">
                         <h1 className="text-5xl font-black mb-4 text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400 animate-pop-in">{gameData.title}</h1>
-                        <p className="text-slate-400 mb-12 text-lg max-w-sm">Arrastra cada palabra a su categoría correcta antes de que toque el suelo.</p>
+                        <p className="text-slate-400 mb-8 text-lg max-w-sm">Arrastra cada palabra a su categoría correcta antes de que toque el suelo.</p>
                         
+                        <div className="bg-slate-800/50 p-4 rounded-2xl border border-white/10 mb-8 w-full max-w-xs flex items-center gap-3">
+                            <UserCircle2 className="text-indigo-400 shrink-0"/>
+                            <input 
+                                type="text" 
+                                value={playerName} 
+                                onChange={(e) => setPlayerName(e.target.value)} 
+                                placeholder="Escribe tu nombre..." 
+                                className="bg-transparent border-none outline-none text-white font-bold w-full placeholder-slate-500"
+                            />
+                        </div>
+
                         <div className="grid grid-cols-2 gap-4 mb-12 w-full max-w-md">
                             {gameData.content.categories.map((cat, i) => (
                                 <div key={i} className={`${CATEGORY_COLORS[i].bg} bg-opacity-20 border border-white/10 rounded-2xl p-4 flex flex-col items-center justify-center backdrop-blur-sm`}>
-                                    <span className={`font-black text-sm uppercase text-center ${CATEGORY_COLORS[i].text}`}>{cat.name}</span>
+                                    <span className={`font-black text-sm uppercase text-center ${CATEGORY_COLORS[i].text} drop-shadow`}>{cat.name}</span>
                                 </div>
                             ))}
                         </div>
@@ -401,28 +413,63 @@
             );
 
             if (gameState === 'gameover') return (
-                <div className="flex flex-col h-full bg-slate-900 items-center justify-center p-6 text-center">
-                    <Trophy className="text-yellow-400 mb-6 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]" size={80} />
-                    <h2 className="text-4xl font-black mb-2 animate-pop-in text-white">{lives > 0 ? '¡Dominación Total!' : '¡Juego Terminado!'}</h2>
-                    <p className="text-slate-400 mb-8 text-xl">Tu puntuación final</p>
+                <div className="flex flex-col h-full bg-slate-900 items-center justify-center p-6 text-center relative">
+                    <div className="absolute top-6 right-6">
+                         <button onClick={() => setGameState('library')} className="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors border border-white/10 shadow-lg text-indigo-300">
+                             <BookOpen size={18}/> Biblioteca
+                         </button>
+                    </div>
+
+                    <Trophy className="text-yellow-400 mb-4 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]" size={80} />
+                    <h2 className="text-4xl font-black mb-1 animate-pop-in text-white">{lives > 0 ? '¡Dominación Total!' : '¡Juego Terminado!'}</h2>
+                    <p className="text-slate-400 mb-8 font-bold">Jugador: <span className="text-indigo-400">{playerName}</span></p>
                     
+                    <p className="text-slate-400 text-xl">Tu puntuación final</p>
                     <div className="text-7xl font-black text-transparent bg-clip-text bg-gradient-to-b from-yellow-300 to-amber-600 mb-12 animate-pop-in" style={{animationDelay: '0.2s'}}>
                         {score}
                     </div>
 
                     <div className="flex gap-4">
-                        <button onClick={() => window.history.back()} className="bg-slate-800 px-6 py-4 rounded-2xl font-bold flex items-center gap-2 active-scale text-white"><ArrowLeft size={20}/> Salir</button>
+                        <button onClick={() => window.history.back()} className="bg-slate-800 px-6 py-4 rounded-2xl font-bold flex items-center gap-2 active-scale text-white border border-white/10"><ArrowLeft size={20}/> Salir</button>
                         <button onClick={startGame} className="bg-indigo-600 px-8 py-4 rounded-2xl font-bold flex items-center gap-2 active-scale shadow-lg shadow-indigo-600/30 text-white"><RefreshCcw size={20}/> Jugar de Nuevo</button>
                     </div>
                 </div>
             );
 
-            // RENDER JUEGO ACTIVO
+            if (gameState === 'library') return (
+                <div className="flex flex-col h-full bg-slate-950 p-6 overflow-hidden">
+                    <div className="flex items-center justify-between mb-6 shrink-0">
+                        <h2 className="text-2xl font-black text-white flex items-center gap-2"><BookOpen className="text-indigo-400"/> Biblioteca de Palabras</h2>
+                        <button onClick={() => setGameState('gameover')} className="p-2 bg-slate-800 text-slate-400 rounded-full hover:bg-slate-700 transition-colors">
+                            <ArrowLeft size={24} />
+                        </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6 pr-2">
+                        {gameData.content.categories.map((cat, i) => (
+                            <div key={i} className="bg-slate-900 rounded-2xl border border-white/5 overflow-hidden">
+                                <div className={`px-4 py-3 ${CATEGORY_COLORS[i].bg} bg-opacity-20 border-b border-white/5 font-black uppercase text-sm ${CATEGORY_COLORS[i].text} drop-shadow`}>
+                                    {cat.name}
+                                </div>
+                                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    {(cat.items || []).filter(item => item.word.trim() !== "").map((item, idx) => (
+                                        <div key={idx} className="flex items-center gap-3 bg-slate-950 p-3 rounded-xl border border-white/5">
+                                            <div className="text-2xl w-10 h-10 bg-slate-800 rounded-lg flex items-center justify-center shrink-0">{item.emoji}</div>
+                                            <span className="font-bold text-slate-200">{item.word}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+
+            // RENDER JUEGO ACTIVO (O PAUSADO)
             return (
                 <div className="h-full w-full bg-slate-900 flex flex-col relative overflow-hidden touch-none">
                     <div className="absolute top-0 w-full p-4 flex justify-between items-start z-10 pointer-events-none">
                         <div className="flex flex-col gap-1">
-                            <div className="bg-slate-800/80 backdrop-blur px-4 py-2 rounded-2xl border border-white/10 flex items-center gap-2 text-xl font-black">
+                            <div className="bg-slate-800/80 backdrop-blur px-4 py-2 rounded-2xl border border-white/10 flex items-center gap-2 text-xl font-black pointer-events-auto">
                                 <Trophy size={20} className="text-yellow-400" /> {score}
                             </div>
                             {combo > 1 && (
@@ -432,18 +479,22 @@
                             )}
                         </div>
                         
-                        <div className="flex gap-1 bg-slate-800/80 backdrop-blur px-3 py-2 rounded-2xl border border-white/10">
-                            {[...Array(3)].map((_, i) => (
-                                <Heart key={i} size={24} className={`${i < lives ? 'text-rose-500 fill-rose-500' : 'text-slate-600'}`} />
-                            ))}
+                        <div className="flex gap-2 pointer-events-auto">
+                            <div className="flex gap-1 bg-slate-800/80 backdrop-blur px-3 py-2 rounded-2xl border border-white/10">
+                                {[...Array(3)].map((_, i) => (
+                                    <Heart key={i} size={24} className={`${i < lives ? 'text-rose-500 fill-rose-500' : 'text-slate-600'}`} />
+                                ))}
+                            </div>
+                            <button onClick={togglePause} className="bg-slate-800/80 backdrop-blur px-3 py-2 rounded-2xl border border-white/10 hover:bg-slate-700 transition shadow-lg">
+                                <Pause size={24} className="text-white"/>
+                            </button>
                         </div>
                     </div>
 
                     <div className="flex-1 relative">
                         <div className="absolute top-20 right-4 text-white/20 font-black text-4xl pointer-events-none">{wordPool.length}</div>
 
-                        {/* LA PALABRA QUE CAE (Modificada para Emoji Grande) */}
-                        {currentWord && (
+                        {currentWord && gameState === 'playing' && (
                             <div 
                                 ref={wordRef}
                                 onPointerDown={handlePointerDown}
@@ -460,6 +511,16 @@
                             >
                                 <span className="text-6xl mb-3 drop-shadow-md">{currentWord.emoji}</span>
                                 <span className={`font-black text-2xl md:text-3xl ${isWrong ? 'text-red-600' : 'text-slate-900'}`}>{currentWord.text}</span>
+                            </div>
+                        )}
+                        
+                        {currentWord && gameState === 'paused' && (
+                            <div 
+                                className="absolute left-1/2 -translate-x-1/2 p-6 rounded-3xl bg-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] border-b-[6px] border-slate-300 select-none flex flex-col items-center justify-center whitespace-nowrap z-40 opacity-50 blur-sm"
+                                style={{ top: `${fallingY}%`, left: '50%', transform: 'translateX(-50%)' }}
+                            >
+                                <span className="text-6xl mb-3 drop-shadow-md">{currentWord.emoji}</span>
+                                <span className="font-black text-2xl md:text-3xl text-slate-900">{currentWord.text}</span>
                             </div>
                         )}
                     </div>
@@ -481,6 +542,20 @@
                             );
                         })}
                     </div>
+                    
+                    {/* OVERLAY DE PAUSA */}
+                    {gameState === 'paused' && (
+                        <div className="absolute inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-center text-white p-6 text-center animate-in fade-in">
+                            <Pause size={64} className="mb-6 text-indigo-500" />
+                            <h3 className="text-3xl font-black mb-8 tracking-tighter uppercase">Juego en Pausa</h3>
+                            <button onClick={togglePause} className="px-8 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-indigo-600/30 hover:scale-105 transition-transform mb-4 active-scale">
+                                Reanudar Partida
+                            </button>
+                            <button onClick={() => window.location.href='index.html'} className="px-8 py-4 bg-transparent text-slate-400 rounded-2xl font-bold uppercase tracking-widest hover:text-white transition-colors">
+                                Salir al Hub
+                            </button>
+                        </div>
+                    )}
                 </div>
             );
         };
