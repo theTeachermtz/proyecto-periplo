@@ -468,17 +468,30 @@
             );
         };
 
-        // ============================================================
+// ============================================================
         // INTERACTIVE SLIDES (MINIGAMES)
         // ============================================================
+        
         const MultipleChoiceSlide = ({ slide, onComplete }) => {
-            const [qIndex, setQIndex] = useState(0);
+            const questions = slide.questions || slide.data?.questions || [slide]; 
+            // Leemos del slide para ver si ya había progreso guardado
+            const [qIndex, setQIndex] = useState(slide.savedQIndex || 0);
+            const [isFinished, setIsFinished] = useState(slide.isFinished || false);
             const [errorIdx, setErrorIdx] = useState(null);
             const [successIdx, setSuccessIdx] = useState(null);
             const [isTransitioning, setIsTransitioning] = useState(false);
             
-            const questions = slide.questions || slide.data?.questions || [slide]; 
             const q = questions[qIndex];
+
+            if (isFinished) {
+                return (
+                    <div className="flex flex-col items-center justify-center h-full p-8 text-center animate-popIn">
+                        <span className="text-6xl md:text-8xl mb-6">🎉</span>
+                        <h2 className="text-3xl md:text-5xl font-black text-white mb-4">¡Quiz Completado!</h2>
+                        <p className="text-zinc-400 text-lg md:text-xl">Ya respondiste estas preguntas.</p>
+                    </div>
+                );
+            }
 
             if (!q || !q.options) return <div className="text-center text-white p-8">Error loading question data</div>;
 
@@ -492,11 +505,15 @@
                     
                     setTimeout(() => {
                         if (qIndex < questions.length - 1) {
-                            setQIndex(qIndex + 1);
+                            const nextIdx = qIndex + 1;
+                            setQIndex(nextIdx);
+                            slide.savedQIndex = nextIdx; // Guardamos en memoria
                             setSuccessIdx(null);
                             setErrorIdx(null);
                             setIsTransitioning(false);
                         } else {
+                            setIsFinished(true);
+                            slide.isFinished = true; // Marcamos el slide como completado
                             onComplete();
                         }
                     }, 1000);
@@ -508,37 +525,31 @@
 
             return (
                 <div className="flex flex-col items-center justify-center h-full p-6 md:p-8 w-full max-w-4xl mx-auto">
-                    
                     <div className="mb-8 text-center animate-fadeIn flex flex-col items-center">
-                        <h3 className="text-xl md:text-2xl font-bold text-zinc-400 mb-3 uppercase tracking-widest">
-                            Quiz Time!
-                        </h3>
-                        <p className="text-lg md:text-xl text-zinc-200 font-medium bg-zinc-800/80 inline-block px-8 py-2.5 rounded-full border border-zinc-700 shadow-lg">
+                        <h3 className="text-xl md:text-2xl font-bold text-zinc-400 mb-3 uppercase tracking-widest">Quiz Time!</h3>
+                        <p className="text-base md:text-lg text-zinc-200 font-medium bg-zinc-800/80 inline-block px-6 py-2 rounded-full border border-zinc-700 shadow-lg">
                             {q.instruction || slide.instruction || "Choose the correct option"}
                         </p>
                     </div>
 
                     <div className="bg-zinc-900 rounded-3xl p-8 md:p-12 w-full shadow-2xl border border-zinc-800 animate-popIn">
-                        <h2 className="text-3xl md:text-4xl lg:text-5xl font-black mb-10 text-center text-white leading-tight">
+                        <h2 className="text-2xl md:text-4xl lg:text-5xl font-black mb-8 text-center text-white leading-tight">
                             {q.question}
                         </h2>
                         
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+                        {/* Botones Stackeados al Centro */}
+                        <div className="flex flex-col items-center gap-3 md:gap-4 w-full max-w-lg mx-auto">
                             {q.options.map((opt, idx) => {
                                 let buttonClasses = 'border-zinc-700 bg-zinc-800 hover:border-brand hover:bg-zinc-800/80 text-white';
-                                
-                                if (errorIdx === idx) {
-                                    buttonClasses = 'border-red-500 bg-red-500/20 animate-shake text-red-100';
-                                } else if (successIdx === idx) {
-                                    buttonClasses = 'border-green-500 bg-green-500/20 text-green-100 scale-[1.02] shadow-lg shadow-green-500/20';
-                                }
+                                if (errorIdx === idx) buttonClasses = 'border-red-500 bg-red-500/20 animate-shake text-red-100';
+                                else if (successIdx === idx) buttonClasses = 'border-green-500 bg-green-500/20 text-green-100 scale-[1.02] shadow-lg shadow-green-500/20';
 
                                 return (
                                     <button 
                                         key={idx} 
                                         onClick={() => handleAnswer(idx)}
                                         disabled={isTransitioning}
-                                        className={`touch-safe text-xl md:text-2xl font-bold py-6 px-4 rounded-2xl transition-all duration-200 border-2 flex items-center justify-center text-center min-h-[100px] disabled:opacity-90 disabled:cursor-default ${buttonClasses}`}
+                                        className={`touch-safe w-full text-lg md:text-xl font-bold py-4 px-6 rounded-2xl transition-all duration-200 border-2 flex items-center justify-center text-center min-h-[64px] disabled:opacity-90 disabled:cursor-default ${buttonClasses}`}
                                     >
                                         {opt}
                                     </button>
@@ -550,19 +561,250 @@
             );
         };
 
-        const FillBlankSlide = ({ slide, onComplete }) => (
-            <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn">
-                <h2 className="text-4xl font-black text-white">Fill in the Blanks (WIP)</h2>
-                <button onClick={onComplete} className="mt-8 bg-brand text-white px-6 py-3 rounded-xl font-bold touch-safe">Skip for now</button>
-            </div>
-        );
+        const FillBlankSlide = ({ slide, onComplete }) => {
+            const [isFinished, setIsFinished] = useState(slide.isFinished || false);
+            
+            // Extraer las partes del texto y las respuestas correctas de los corchetes
+            const { segments, blanks } = React.useMemo(() => {
+                const text = slide.text || '';
+                const regex = /\[(.*?)\]/g;
+                const segments = [];
+                const blanks = [];
+                let lastIdx = 0;
+                let match;
+                while ((match = regex.exec(text)) !== null) {
+                    segments.push(text.slice(lastIdx, match.index));
+                    blanks.push(match[1]);
+                    lastIdx = regex.lastIndex;
+                }
+                segments.push(text.slice(lastIdx));
+                return { segments, blanks };
+            }, [slide.text]);
+
+            const [userAnswers, setUserAnswers] = useState(slide.savedUserAnswers || Array(blanks.length).fill(null));
+            const [availableWords, setAvailableWords] = useState(() => {
+                if (slide.savedAvailable) return slide.savedAvailable;
+                const words = [...(slide.wordBank || blanks)];
+                return words.sort(() => Math.random() - 0.5); // Shuffle inicial
+            });
+
+            if (isFinished) {
+                return (
+                    <div className="flex flex-col items-center justify-center h-full p-8 text-center animate-popIn">
+                        <span className="text-6xl md:text-8xl mb-6">🎉</span>
+                        <h2 className="text-3xl md:text-5xl font-black text-white mb-4">¡Texto Completado!</h2>
+                    </div>
+                );
+            }
+
+            const handleWordClick = (word, index) => {
+                const firstEmpty = userAnswers.findIndex(a => a === null);
+                if (firstEmpty !== -1) {
+                    const newAnswers = [...userAnswers];
+                    newAnswers[firstEmpty] = word;
+                    setUserAnswers(newAnswers);
+                    slide.savedUserAnswers = newAnswers;
+
+                    const newAvailable = [...availableWords];
+                    newAvailable.splice(index, 1);
+                    setAvailableWords(newAvailable);
+                    slide.savedAvailable = newAvailable;
+                }
+            };
+
+            const handleRemoveAnswer = (word, index) => {
+                const newAnswers = [...userAnswers];
+                newAnswers[index] = null;
+                setUserAnswers(newAnswers);
+                slide.savedUserAnswers = newAnswers;
+
+                const newAvailable = [...availableWords, word];
+                setAvailableWords(newAvailable);
+                slide.savedAvailable = newAvailable;
+            };
+
+            const checkAnswers = () => {
+                if (userAnswers.join(',') === blanks.join(',')) {
+                    triggerConfetti();
+                    slide.isFinished = true;
+                    setTimeout(() => {
+                        setIsFinished(true);
+                        onComplete();
+                    }, 1500);
+                } else {
+                    const container = document.getElementById('fb-container');
+                    container.classList.add('animate-shake');
+                    setTimeout(() => container.classList.remove('animate-shake'), 500);
+                }
+            };
+
+            const isFull = !userAnswers.includes(null);
+
+            return (
+                <div id="fb-container" className="flex flex-col items-center justify-center h-full p-6 w-full max-w-4xl mx-auto">
+                    <div className="bg-zinc-900 rounded-3xl p-8 md:p-12 w-full shadow-2xl border border-zinc-800 animate-popIn">
+                        <h3 className="text-xl font-bold text-zinc-400 mb-8 uppercase tracking-widest text-center">Fill in the Blanks</h3>
+                        
+                        {/* Area de Texto */}
+                        <div className="text-2xl md:text-3xl font-medium leading-relaxed text-zinc-200 mb-10 text-center flex flex-wrap justify-center items-center gap-y-4">
+                            {segments.map((seg, i) => (
+                                <React.Fragment key={i}>
+                                    <span>{seg}</span>
+                                    {i < blanks.length && (
+                                        <button 
+                                            onClick={() => userAnswers[i] && handleRemoveAnswer(userAnswers[i], i)}
+                                            className={`inline-block mx-2 px-4 py-1 border-b-4 rounded-lg min-w-[100px] text-center transition-colors font-bold ${userAnswers[i] ? 'bg-zinc-800 border-brand text-brand cursor-pointer hover:bg-zinc-700' : 'bg-zinc-950 border-zinc-700 text-transparent'}`}
+                                        >
+                                            {userAnswers[i] || '___'}
+                                        </button>
+                                    )}
+                                </React.Fragment>
+                            ))}
+                        </div>
+
+                        {/* Banco de Palabras */}
+                        <div className="flex flex-wrap justify-center gap-3 mb-8">
+                            {availableWords.map((word, i) => (
+                                <button 
+                                    key={i} 
+                                    onClick={() => handleWordClick(word, i)}
+                                    className="bg-zinc-800 hover:bg-zinc-700 border-2 border-zinc-700 text-white font-bold py-2 px-4 rounded-xl transition-all touch-safe"
+                                >
+                                    {word}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="flex justify-center">
+                            <button 
+                                onClick={checkAnswers}
+                                disabled={!isFull}
+                                className="bg-brand hover:bg-blue-600 disabled:bg-zinc-700 disabled:opacity-50 text-white font-black py-4 px-12 rounded-2xl transition-all touch-safe"
+                            >
+                                VERIFICAR
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
         
-        const SentenceScrambleSlide = ({ slide, onComplete }) => (
-            <div className="flex flex-col items-center justify-center h-full p-8 w-full max-w-4xl mx-auto animate-popIn">
-                <h2 className="text-4xl font-black text-white">Sentence Scramble (WIP)</h2>
-                <button onClick={onComplete} className="mt-8 bg-brand text-white px-6 py-3 rounded-xl font-bold touch-safe">Skip for now</button>
-            </div>
-        );
+        const SentenceScrambleSlide = ({ slide, onComplete }) => {
+            const sentences = slide.sentences || [];
+            const [sIndex, setSIndex] = useState(slide.savedSIndex || 0);
+            const [isFinished, setIsFinished] = useState(slide.isFinished || false);
+
+            const currentS = sentences[sIndex];
+
+            const [userWords, setUserWords] = useState(slide.savedUserWords || []);
+            const [availableWords, setAvailableWords] = useState(() => {
+                if (slide.savedAvailableWords) return slide.savedAvailableWords;
+                if (!currentS) return [];
+                return currentS.text.split(' ').sort(() => Math.random() - 0.5); // Shuffle inicial
+            });
+
+            if (isFinished || !currentS) {
+                return (
+                    <div className="flex flex-col items-center justify-center h-full p-8 text-center animate-popIn">
+                        <span className="text-6xl md:text-8xl mb-6">🎉</span>
+                        <h2 className="text-3xl md:text-5xl font-black text-white mb-4">¡Frases Completadas!</h2>
+                    </div>
+                );
+            }
+
+            const handleAdd = (word, idx) => {
+                const newU = [...userWords, word];
+                const newA = [...availableWords];
+                newA.splice(idx, 1);
+                setUserWords(newU);
+                setAvailableWords(newA);
+                slide.savedUserWords = newU;
+                slide.savedAvailableWords = newA;
+            };
+
+            const handleRemove = (word, idx) => {
+                const newU = [...userWords];
+                newU.splice(idx, 1);
+                const newA = [...availableWords, word];
+                setUserWords(newU);
+                setAvailableWords(newA);
+                slide.savedUserWords = newU;
+                slide.savedAvailableWords = newA;
+            };
+
+            const checkAnswer = () => {
+                if (userWords.join(' ') === currentS.text) {
+                    triggerConfetti();
+                    setTimeout(() => {
+                        if (sIndex < sentences.length - 1) {
+                            const nextIdx = sIndex + 1;
+                            setSIndex(nextIdx);
+                            slide.savedSIndex = nextIdx;
+                            // Resetear para la siguiente frase
+                            setUserWords([]);
+                            setAvailableWords(sentences[nextIdx].text.split(' ').sort(() => Math.random() - 0.5));
+                            slide.savedUserWords = null;
+                            slide.savedAvailableWords = null;
+                        } else {
+                            setIsFinished(true);
+                            slide.isFinished = true;
+                            onComplete();
+                        }
+                    }, 1500);
+                } else {
+                    const container = document.getElementById('ss-container');
+                    container.classList.add('animate-shake');
+                    setTimeout(() => container.classList.remove('animate-shake'), 500);
+                }
+            };
+
+            const isFull = availableWords.length === 0;
+
+            return (
+                <div id="ss-container" className="flex flex-col items-center justify-center h-full p-6 w-full max-w-4xl mx-auto">
+                    <div className="bg-zinc-900 rounded-3xl p-8 md:p-12 w-full shadow-2xl border border-zinc-800 animate-popIn flex flex-col items-center">
+                        <h3 className="text-xl font-bold text-zinc-400 mb-2 uppercase tracking-widest text-center">Sentence Scramble</h3>
+                        <p className="text-base md:text-lg text-zinc-500 mb-8 text-center">Ordena las palabras para formar la frase correcta.</p>
+                        
+                        {/* Traducción */}
+                        <div className="text-2xl md:text-4xl font-black text-emerald-400 mb-10 text-center">
+                            "{currentS.translation}"
+                        </div>
+
+                        {/* Drop Zone */}
+                        <div className="flex flex-wrap justify-center gap-3 w-full min-h-[70px] p-4 bg-zinc-950 rounded-2xl border-2 border-dashed border-zinc-700 mb-8">
+                            {userWords.length === 0 && <span className="text-zinc-600 font-medium italic mt-2">Toca las palabras abajo...</span>}
+                            {userWords.map((word, i) => (
+                                <button key={i} onClick={() => handleRemove(word, i)}
+                                    className="bg-brand text-white font-bold py-2 px-4 rounded-xl shadow-lg hover:bg-blue-600 transition-colors animate-popIn">
+                                    {word}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Banco de Palabras */}
+                        <div className="flex flex-wrap justify-center gap-3 mb-10 min-h-[50px]">
+                            {availableWords.map((word, i) => (
+                                <button key={i} onClick={() => handleAdd(word, i)}
+                                    className="bg-zinc-800 border-2 border-zinc-700 text-white font-bold py-2 px-4 rounded-xl hover:bg-zinc-700 transition-colors">
+                                    {word}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="flex justify-center">
+                            <button 
+                                onClick={checkAnswer}
+                                disabled={!isFull}
+                                className="bg-emerald-500 hover:bg-emerald-600 disabled:bg-zinc-700 disabled:opacity-50 text-white font-black py-4 px-12 rounded-2xl transition-all touch-safe shadow-lg shadow-emerald-500/20 disabled:shadow-none"
+                            >
+                                VERIFICAR
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
 
         // ============================================================
         // MAIN APP
