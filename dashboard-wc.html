@@ -34,7 +34,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
-        import { Zap, Save, ArrowLeft, Loader2, Sun, Moon, Sparkles, KeyRound, Wand2, X, Tags, Layout, Hash } from 'lucide-react';
+        import { Zap, Save, ArrowLeft, Loader2, Sparkles, KeyRound, X, Layout, Hash, ListRestart, CheckCircle2 } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -48,15 +48,16 @@
         ];
 
         const DashboardWC = () => {
+            const [view, setView] = useState('bulk'); // 'bulk' o 'review'
             const [gameTitle, setGameTitle] = useState("");
-            const [activeTab, setActiveTab] = useState(0);
             const [categories, setCategories] = useState(["", "", "", ""]);
-            const [items, setItems] = useState([[], [], [], []]); // Array de {word, emoji}
+            const [rawWords, setRawWords] = useState(["", "", "", ""]); // Textareas brutos
+            const [items, setItems] = useState([[], [], [], []]); // Array procesado {word, emoji}
+            const [activeTab, setActiveTab] = useState(0);
             
             const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || "");
             const [isGenerating, setIsGenerating] = useState(false);
             const [isSaving, setIsSaving] = useState(false);
-            const [isDarkMode, setIsDarkMode] = useState(true);
 
             useEffect(() => {
                 const params = new URLSearchParams(window.location.search);
@@ -69,6 +70,8 @@
                             if (data.content?.categories) {
                                 setCategories(data.content.categories.map(c => c.name));
                                 setItems(data.content.categories.map(c => c.items || []));
+                                // Reconstruir el raw text para la vista Bulk
+                                setRawWords(data.content.categories.map(c => (c.items || []).map(i => i.word).join('\n')));
                             }
                         }
                     });
@@ -77,20 +80,40 @@
 
             const generateWithAI = async () => {
                 if (!apiKey) return alert("Pega tu API Key de Gemini");
-                if (!gameTitle) return alert("Escribe un tema general en el título primero");
+                
+                const hasTheme = gameTitle.trim() !== "";
+                const hasCats = categories.some(c => c.trim() !== "");
+                const hasWords = rawWords.some(w => w.trim() !== "");
+
+                if (!hasTheme && !hasCats) return alert("Debes escribir al menos el Título General o los Títulos de las 4 Categorías para que la IA sepa de qué trata.");
 
                 setIsGenerating(true);
                 try {
-                    const prompt = `Actúa como experto en pedagogía. Basado en el tema "${gameTitle}", genera 4 campos semánticos diferentes. 
-                    Regla: Cada campo debe tener entre 15 y 19 palabras únicas e irrepetibles entre sí. 
-                    Cada palabra debe incluir un emoji representativo. 
-                    Responde ÚNICAMENTE con un JSON válido:
+                    const prompt = `Actúa como experto en pedagogía. Devuelve ÚNICAMENTE un JSON válido con esta estructura exacta:
                     {
-                      "0": { "name": "Nombre Categoría 1", "items": [{"word": "Sun", "emoji": "☀️"}, ...] },
-                      "1": { "name": "Nombre Categoría 2", "items": [...] },
-                      "2": { "name": "Nombre Categoría 3", "items": [...] },
-                      "3": { "name": "Nombre Categoría 4", "items": [...] }
-                    }`;
+                      "title": "Tema General del Juego",
+                      "categories": [
+                        { "name": "Nombre Cat 1", "items": [{"word": "Sun", "emoji": "☀️"}, ...] },
+                        { "name": "Nombre Cat 2", "items": [...] },
+                        { "name": "Nombre Cat 3", "items": [...] },
+                        { "name": "Nombre Cat 4", "items": [...] }
+                      ]
+                    }
+
+                    REGLAS OBLIGATORIAS:
+                    1. Rango estricto: Cada categoría debe tener entre 15 y 20 palabras únicas.
+                    2. Si el usuario proporcionó palabras, TU ÚNICO TRABAJO ES ENCONTRAR UN EMOJI PARA CADA UNA. Ignora las que excedan de 20.
+                    3. Si el usuario dejó palabras vacías, genéralas.
+                    4. Si falta el Título General, invéntalo basándote en los nombres de las categorías.
+                    5. Si faltan los nombres de las categorías, invéntalos basándote en el Título General.
+
+                    DATOS DEL USUARIO ACTUALES:
+                    - Título General: ${hasTheme ? gameTitle : "(Vacío - Genéralo)"}
+                    - Cat 1 (${categories[0] || "Vacío - Genéralo"}): \n${rawWords[0] || "(Vacío - Genera palabras)"}
+                    - Cat 2 (${categories[1] || "Vacío - Genéralo"}): \n${rawWords[1] || "(Vacío - Genera palabras)"}
+                    - Cat 3 (${categories[2] || "Vacío - Genéralo"}): \n${rawWords[2] || "(Vacío - Genera palabras)"}
+                    - Cat 4 (${categories[3] || "Vacío - Genéralo"}): \n${rawWords[3] || "(Vacío - Genera palabras)"}
+                    `;
 
                     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
                         method: 'POST',
@@ -102,10 +125,22 @@
                     let text = data.candidates[0].content.parts[0].text.replace(/```json|```/g, "").trim();
                     const parsed = JSON.parse(text);
 
-                    setCategories([parsed["0"].name, parsed["1"].name, parsed["2"].name, parsed["3"].name]);
-                    setItems([parsed["0"].items, parsed["1"].items, parsed["2"].items, parsed["3"].items]);
+                    setGameTitle(parsed.title);
+                    setCategories([parsed.categories[0].name, parsed.categories[1].name, parsed.categories[2].name, parsed.categories[3].name]);
+                    setItems([parsed.categories[0].items, parsed.categories[1].items, parsed.categories[2].items, parsed.categories[3].items]);
+                    
+                    // Actualizar también los textareas por si vuelve atrás
+                    setRawWords([
+                        parsed.categories[0].items.map(i => i.word).join('\n'),
+                        parsed.categories[1].items.map(i => i.word).join('\n'),
+                        parsed.categories[2].items.map(i => i.word).join('\n'),
+                        parsed.categories[3].items.map(i => i.word).join('\n')
+                    ]);
+
+                    setView('review'); // Pasamos a la vista de revisión de emojis
                 } catch (e) {
-                    alert("Error con la IA: " + e.message);
+                    alert("Error procesando con la IA: Asegúrate de tener conexión y una API Key válida.");
+                    console.error(e);
                 } finally {
                     setIsGenerating(false);
                 }
@@ -113,6 +148,13 @@
 
             const handleSave = async () => {
                 if (!gameTitle) return alert("Título requerido");
+                
+                // Validar que se hayan generado los items (emojis)
+                if (items.some(cat => cat.length < 15)) {
+                    const confirmSave = confirm("Algunas categorías tienen menos de 15 palabras (lo ideal para Word Cascade). ¿Guardar de todos modos?");
+                    if (!confirmSave) return;
+                }
+
                 setIsSaving(true);
                 try {
                     const payload = {
@@ -137,88 +179,135 @@
             };
 
             return (
-                <div className="h-screen flex flex-col dark:text-white">
+                <div className="h-screen flex flex-col dark:text-white bg-zinc-950">
                     {/* Header */}
-                    <div className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900">
+                    <div className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900 z-10">
                         <div className="flex items-center gap-3">
                             <button onClick={() => window.history.back()} className="p-2 hover:bg-zinc-800 rounded-lg"><ArrowLeft size={20}/></button>
                             <h1 className="font-black text-indigo-400 flex items-center gap-2 tracking-tighter"><Zap size={18}/> WC BUILDER</h1>
                         </div>
                         <div className="flex items-center gap-2">
-                            <button onClick={generateWithAI} disabled={isGenerating} className="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-xl text-xs font-black flex items-center gap-2 transition disabled:opacity-50">
-                                {isGenerating ? <Loader2 className="animate-spin" size={14}/> : <Sparkles size={14}/>} MAGIA IA
-                            </button>
-                            <button onClick={handleSave} className="bg-emerald-600 p-2 rounded-xl hover:bg-emerald-500 transition"><Save size={20}/></button>
+                            {view === 'review' && (
+                                <button onClick={() => setView('bulk')} className="bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-xl text-xs font-black flex items-center gap-2 transition text-zinc-300">
+                                    <ListRestart size={14}/> VOLVER A TEXTO
+                                </button>
+                            )}
+                            {view === 'bulk' && (
+                                <button onClick={generateWithAI} disabled={isGenerating} className="bg-indigo-600 hover:bg-indigo-500 px-6 py-2 rounded-xl text-xs font-black flex items-center gap-2 transition disabled:opacity-50 shadow-[0_0_15px_rgba(79,70,229,0.4)]">
+                                    {isGenerating ? <Loader2 className="animate-spin" size={14}/> : <Sparkles size={14}/>} PROCESAR EMOJIS
+                                </button>
+                            )}
+                            {view === 'review' && (
+                                <button onClick={handleSave} disabled={isSaving} className="bg-emerald-600 hover:bg-emerald-500 px-6 py-2 rounded-xl text-xs font-black flex items-center gap-2 transition disabled:opacity-50 shadow-[0_0_15px_rgba(16,185,129,0.4)]">
+                                    {isSaving ? <Loader2 className="animate-spin" size={14}/> : <Save size={14}/>} GUARDAR JUEGO
+                                </button>
+                            )}
                         </div>
                     </div>
 
-                    <div className="flex-1 overflow-hidden flex flex-col p-4 gap-4 max-w-2xl mx-auto w-full">
-                        <input 
-                            value={gameTitle} 
-                            onChange={e => setGameTitle(e.target.value)}
-                            placeholder="Tema del Juego (ej: The Solar System)"
-                            className="bg-transparent text-3xl font-black outline-none border-b-2 border-zinc-800 focus:border-indigo-500 pb-2 transition-all"
-                        />
-
-                        {/* Sistema de Tabs */}
-                        <div className="flex bg-zinc-900 p-1 rounded-2xl border border-zinc-800">
-                            {CATEGORY_STYLES.map((tab) => (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => setActiveTab(tab.id)}
-                                    className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === tab.id ? `${tab.bg} ${tab.color} shadow-lg` : 'text-zinc-500'}`}
-                                >
-                                    Cat {tab.id + 1}
-                                </button>
-                            ))}
-                        </div>
-
-                        {/* Área de Edición de Tab Activo */}
-                        <div className={`flex-1 rounded-[2.5rem] border-2 p-6 flex flex-col gap-4 overflow-hidden transition-all ${CATEGORY_STYLES[activeTab].border} ${CATEGORY_STYLES[activeTab].bg}`}>
-                            <div className="flex gap-2">
-                                <div className="p-3 bg-zinc-900 rounded-2xl border border-white/5"><Layout size={20} className={CATEGORY_STYLES[activeTab].color}/></div>
-                                <input 
-                                    value={categories[activeTab]}
-                                    onChange={e => { const c = [...categories]; c[activeTab] = e.target.value; setCategories(c); }}
-                                    placeholder="Nombre de la categoría..."
-                                    className="flex-1 bg-zinc-900 border border-white/5 rounded-2xl px-4 font-bold outline-none focus:border-white/20"
-                                />
-                            </div>
-
-                            <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
-                                {items[activeTab].map((item, idx) => (
-                                    <div key={idx} className="flex gap-2 animate-pop-in">
-                                        <input 
-                                            value={item.emoji} 
-                                            onChange={e => { const ni = [...items]; ni[activeTab][idx].emoji = e.target.value; setItems(ni); }}
-                                            className="w-12 bg-zinc-900 border border-white/5 rounded-xl p-2 text-center outline-none"
-                                        />
-                                        <input 
-                                            value={item.word} 
-                                            onChange={e => { const ni = [...items]; ni[activeTab][idx].word = e.target.value; setItems(ni); }}
-                                            className="flex-1 bg-zinc-900 border border-white/5 rounded-xl p-2 px-4 outline-none font-medium"
-                                        />
-                                        <button onClick={() => { const ni = [...items]; ni[activeTab].splice(idx,1); setItems(ni); }} className="text-zinc-600 hover:text-red-400 p-2"><X size={16}/></button>
-                                    </div>
-                                ))}
-                                <button 
-                                    onClick={() => { const ni = [...items]; ni[activeTab].push({word: "", emoji: "❓"}); setItems(ni); }}
-                                    className="w-full py-4 border-2 border-dashed border-white/10 rounded-2xl text-zinc-500 font-bold hover:bg-white/5 transition"
-                                >
-                                    + Añadir Palabra
-                                </button>
-                            </div>
+                    <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar">
+                        <div className="max-w-6xl mx-auto w-full space-y-6 pb-20">
                             
-                            <div className="flex justify-between items-center pt-2 border-t border-white/5">
-                                <span className="text-[10px] font-black uppercase text-zinc-500 tracking-widest flex items-center gap-1"><Hash size={12}/> {items[activeTab].length} Palabras</span>
-                                <span className="text-[10px] font-black uppercase opacity-40 italic">Mínimo sugerido: 15</span>
-                            </div>
+                            <input 
+                                value={gameTitle} 
+                                onChange={e => setGameTitle(e.target.value)}
+                                placeholder="Tema General del Juego (ej: The Solar System)"
+                                className="w-full bg-transparent text-3xl md:text-5xl font-black outline-none border-b-4 border-zinc-800 focus:border-indigo-500 pb-2 transition-all placeholder-zinc-700"
+                            />
+
+                            {/* ======================================= */}
+                            {/* VISTA 1: BULK INPUT (Textareas estilo UNO) */}
+                            {/* ======================================= */}
+                            {view === 'bulk' && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in slide-in-from-bottom-4">
+                                    {CATEGORY_STYLES.map((c, i) => {
+                                        const validWordsCount = rawWords[i].split('\n').filter(w => w.trim() !== '').length;
+                                        // Regla de 15-20 estricta
+                                        const isOptimal = validWordsCount >= 15 && validWordsCount <= 20;
+                                        
+                                        return (
+                                            <div key={i} className={`p-4 rounded-3xl border-2 ${c.border} ${c.bg} shadow-sm relative flex flex-col h-[50vh]`}>
+                                                <input 
+                                                    value={categories[i]} 
+                                                    onChange={e => { const nc = [...categories]; nc[i] = e.target.value; setCategories(nc); }} 
+                                                    placeholder={`Categoría ${i+1}`} 
+                                                    className="w-full text-xl font-black bg-zinc-900 text-white p-3 rounded-xl mb-2 outline-none border border-zinc-700 focus:border-indigo-500 placeholder-zinc-600"
+                                                />
+                                                <div className="flex justify-between items-center px-1 mb-2">
+                                                    <span className="text-[10px] uppercase font-black text-zinc-500">Pega tu lista:</span>
+                                                    <span className={`text-xs font-black transition-colors ${isOptimal ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                                        {validWordsCount}/20
+                                                    </span>
+                                                </div>
+                                                <textarea 
+                                                    value={rawWords[i]} 
+                                                    onChange={e => { const nw = [...rawWords]; nw[i] = e.target.value; setRawWords(nw); }} 
+                                                    className="flex-1 w-full bg-zinc-900 text-white p-4 rounded-xl text-sm outline-none border border-zinc-700 resize-none custom-scrollbar placeholder-zinc-700 font-medium" 
+                                                    placeholder="Palabra 1&#10;Palabra 2&#10;Palabra 3..."
+                                                ></textarea>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {/* ======================================= */}
+                            {/* VISTA 2: REVIEW (Ajuste fino de Emojis) */}
+                            {/* ======================================= */}
+                            {view === 'review' && (
+                                <div className="max-w-3xl mx-auto flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-4 h-[70vh]">
+                                    <div className="flex bg-zinc-900 p-1 rounded-2xl border border-zinc-800 shrink-0">
+                                        {CATEGORY_STYLES.map((tab) => (
+                                            <button
+                                                key={tab.id}
+                                                onClick={() => setActiveTab(tab.id)}
+                                                className={`flex-1 py-3 rounded-xl text-[10px] md:text-xs font-black uppercase tracking-widest transition-all ${activeTab === tab.id ? `${tab.bg} ${tab.color} shadow-lg` : 'text-zinc-500 hover:bg-zinc-800'}`}
+                                            >
+                                                {categories[tab.id] || `Cat ${tab.id + 1}`}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <div className={`flex-1 rounded-[2rem] border-2 p-4 md:p-6 flex flex-col gap-4 overflow-hidden transition-all ${CATEGORY_STYLES[activeTab].border} ${CATEGORY_STYLES[activeTab].bg}`}>
+                                        <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
+                                            {items[activeTab].map((item, idx) => (
+                                                <div key={idx} className="flex gap-2 animate-pop-in">
+                                                    <input 
+                                                        value={item.emoji} 
+                                                        onChange={e => { const ni = [...items]; ni[activeTab][idx].emoji = e.target.value; setItems(ni); }}
+                                                        className="w-14 bg-zinc-900 border border-white/5 rounded-xl p-2 text-xl text-center outline-none focus:border-indigo-500 transition-colors"
+                                                    />
+                                                    <input 
+                                                        value={item.word} 
+                                                        onChange={e => { const ni = [...items]; ni[activeTab][idx].word = e.target.value; setItems(ni); }}
+                                                        className="flex-1 bg-zinc-900 border border-white/5 rounded-xl p-2 px-4 outline-none font-bold text-lg focus:border-indigo-500 transition-colors"
+                                                    />
+                                                    <button onClick={() => { const ni = [...items]; ni[activeTab].splice(idx,1); setItems(ni); }} className="text-zinc-600 hover:text-red-400 p-2 transition-colors"><X size={20}/></button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div className="shrink-0 pt-4 border-t border-white/10 flex justify-between items-center">
+                                            <div className="flex items-center gap-2 text-zinc-400 font-black text-sm uppercase">
+                                                <CheckCircle2 size={16} className={items[activeTab].length >= 15 && items[activeTab].length <= 20 ? "text-emerald-500" : "text-rose-500"}/> 
+                                                <span className={items[activeTab].length >= 15 && items[activeTab].length <= 20 ? "text-emerald-500" : "text-rose-500"}>{items[activeTab].length} Palabras</span>
+                                            </div>
+                                            <button 
+                                                onClick={() => { const ni = [...items]; ni[activeTab].push({word: "", emoji: "❓"}); setItems(ni); }}
+                                                className="px-6 py-2 bg-zinc-800 hover:bg-zinc-700 text-white font-bold rounded-xl transition"
+                                            >
+                                                + Añadir Fila
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
                         </div>
                     </div>
                     
-                    {/* Floating API Key Config */}
-                    <div className="fixed bottom-4 left-4">
-                         <button onClick={() => { const k = prompt("Gemini API Key:", apiKey); if(k){setApiKey(k); localStorage.setItem('gemini_api_key', k);}}} className="p-3 bg-zinc-900 rounded-full border border-zinc-800 text-zinc-500 hover:text-indigo-400 transition"><KeyRound size={20}/></button>
+                    {/* Botón flotante para la API Key */}
+                    <div className="fixed bottom-4 left-4 z-50">
+                         <button onClick={() => { const k = prompt("Gemini API Key:", apiKey); if(k){setApiKey(k); localStorage.setItem('gemini_api_key', k);}}} className="p-3 bg-zinc-900 rounded-full border border-zinc-800 text-zinc-500 hover:text-indigo-400 shadow-lg transition"><KeyRound size={20}/></button>
                     </div>
                 </div>
             );
