@@ -6,6 +6,13 @@
     <title>Word Buildings | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <script>
+        // 🍏 FIX SAFARI: Evita el "Sticky Hover" en móviles
+        tailwind.config = { 
+            future: { hoverOnlyWhenSupported: true },
+            darkMode: 'class' 
+        }; 
+    </script>
     <script type="importmap">
     {
       "imports": {
@@ -20,7 +27,7 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;800;900&display=swap');
-        body { font-family: 'Plus Jakarta Sans', sans-serif; overflow: hidden; background-color: #09090b; touch-action: none; user-select: none; }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; overflow: hidden; background-color: #09090b; touch-action: none; user-select: none; -webkit-tap-highlight-color: transparent; }
         
         .building-bg {
             background: linear-gradient(to top, 
@@ -105,6 +112,93 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        // --- SISTEMA DE AUDIO NATIVO (Web Audio API) ---
+        const AudioManager = {
+            ctx: null,
+            droneOsc: null,
+            droneGain: null,
+            init: function() {
+                if (!this.ctx) {
+                    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (this.ctx.state === 'suspended') this.ctx.resume();
+            },
+            playThud: function() {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.connect(gain); gain.connect(this.ctx.destination);
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(150, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(40, this.ctx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.5, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.1);
+                osc.start(); osc.stop(this.ctx.currentTime + 0.1);
+            },
+            playPerfect: function() {
+                if (!this.ctx) return;
+                const playNote = (freq, delay) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.connect(gain); gain.connect(this.ctx.destination);
+                    osc.type = 'sine';
+                    osc.frequency.value = freq;
+                    gain.gain.setValueAtTime(0, this.ctx.currentTime + delay);
+                    gain.gain.linearRampToValueAtTime(0.3, this.ctx.currentTime + delay + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + delay + 0.3);
+                    osc.start(this.ctx.currentTime + delay);
+                    osc.stop(this.ctx.currentTime + delay + 0.3);
+                };
+                playNote(523.25, 0);    // C5
+                playNote(659.25, 0.05); // E5
+                playNote(783.99, 0.1);  // G5
+                playNote(1046.50, 0.15); // C6
+            },
+            playGameOver: function() {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.connect(gain); gain.connect(this.ctx.destination);
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(200, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(50, this.ctx.currentTime + 0.5);
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.5);
+                osc.start(); osc.stop(this.ctx.currentTime + 0.5);
+            },
+            updateTension: function(widthRatio) {
+                if (!this.ctx) return;
+                
+                if (!this.droneOsc) {
+                    this.droneOsc = this.ctx.createOscillator();
+                    this.droneGain = this.ctx.createGain();
+                    this.droneOsc.connect(this.droneGain);
+                    this.droneGain.connect(this.ctx.destination);
+                    this.droneOsc.type = 'sawtooth';
+                    this.droneGain.gain.value = 0;
+                    this.droneOsc.start();
+                }
+                
+                // Si el bloque es menor al 50% de su ancho inicial, empezamos la tensión
+                if (widthRatio < 0.5) {
+                    // Normalizamos tension de 0 a 1 (0.5 = 0, 0.1 = ~1)
+                    const tension = 1.0 - (widthRatio / 0.5); 
+                    const vol = Math.min(tension * 0.08, 0.08); // Volumen max sutil
+                    const freq = 50 + (tension * 60); // Sube de 50hz a 110hz
+                    
+                    this.droneGain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.5);
+                    this.droneOsc.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.5);
+                } else {
+                    this.droneGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.5);
+                }
+            },
+            stopTension: function() {
+                if (this.droneGain) {
+                    this.droneGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.2);
+                }
+            }
+        };
+
         // Constantes Físicas
         const GAME_AREA_WIDTH = 400; 
         const INITIAL_BLOCK_WIDTH = 250;
@@ -161,7 +255,6 @@
                 const id = params.get('id');
                 if (!id) return setGameState('ERROR');
 
-                // Cargar progreso guardado
                 const prog = localStorage.getItem(`wb_prog_${id}`);
                 if(prog) setSavedProgress(JSON.parse(prog));
 
@@ -194,6 +287,8 @@
                 let interval;
                 if (gameState === 'PLAYING') {
                     interval = setInterval(() => setTimeElapsed(t => t + 1), 1000);
+                } else {
+                    AudioManager.stopTension(); // Detenemos música de tensión si salimos de jugar
                 }
                 return () => clearInterval(interval);
             }, [gameState]);
@@ -257,6 +352,8 @@
 
             const handleStartNew = () => {
                 if(!playerName.trim()) return alert("Ingresa tu nombre para el registro de obra.");
+                AudioManager.init(); // Inicializar Audio en el primer click
+                
                 const quizId = new URLSearchParams(window.location.search).get('id');
                 localStorage.setItem('wb_playerName', playerName);
                 localStorage.removeItem(`wb_prog_${quizId}`);
@@ -269,8 +366,9 @@
 
             const handleResume = () => {
                 if(!playerName.trim()) return alert("Ingresa tu nombre para continuar.");
-                localStorage.setItem('wb_playerName', playerName);
+                AudioManager.init(); // Inicializar Audio
                 
+                localStorage.setItem('wb_playerName', playerName);
                 setTimeElapsed(savedProgress.time);
                 setMaxCombo(0); 
                 startLevel(savedProgress.level);
@@ -306,6 +404,9 @@
                     blockDOMRef.current.style.transition = 'none';
                     blockDOMRef.current.style.top = `${BLOCK_Y}px`;
                 }
+                
+                // Reiniciar tensión
+                AudioManager.updateTension(1.0);
                 setGameState('PLAYING');
             };
 
@@ -361,6 +462,7 @@
                     setCombo(newCombo);
                     if (newCombo > maxCombo) setMaxCombo(newCombo);
                     
+                    AudioManager.playPerfect();
                     triggerConfettiStars(newX, newCombo);
                     setFloatingTexts(prev => [...prev, { id: Date.now(), text: `x${newCombo}`, x: GAME_AREA_WIDTH/2, y: TOWER_ANCHOR_Y - 100 }]);
 
@@ -369,6 +471,7 @@
                     if (Math.abs(deltaLeft) >= prevBlock.width) {
                         missed = true;
                     } else {
+                        AudioManager.playThud();
                         newWidth = prevBlock.width - Math.abs(deltaLeft);
                         if (deltaLeft > 0) {
                             newX = (currentX - mb.width/2) + (newWidth / 2);
@@ -381,6 +484,8 @@
                 }
 
                 if (missed) {
+                    AudioManager.playGameOver();
+                    AudioManager.stopTension();
                     setShake(true); 
                     setTimeout(() => setShake(false), 400);
                     saveToLeaderboard(getBaseScoreForLevel(currentLevel) + score, maxCombo, timeElapsed);
@@ -388,6 +493,7 @@
                     return;
                 }
 
+                // Dificultad Dinámica
                 const blocksPlaced = score + 1;
                 let shouldIncreaseSpeed = false;
                 if (currentLevel === 0 && blocksPlaced % 3 === 0) shouldIncreaseSpeed = true;
@@ -410,8 +516,12 @@
                 setLevelScore(nextScore);
                 setTotalScore(getBaseScoreForLevel(currentLevel) + nextScore);
                 setCameraY(blocks.length * BLOCK_HEIGHT);
+                
+                // Actualizar Tensión basada en el ancho restante
+                AudioManager.updateTension(newWidth / INITIAL_BLOCK_WIDTH);
 
                 if (nextScore >= levels[currentLevel].items.length) {
+                    AudioManager.stopTension();
                     confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 } });
                     
                     const quizId = new URLSearchParams(window.location.search).get('id');
@@ -419,10 +529,9 @@
                     setTimeout(() => {
                         if (currentLevel >= levels.length - 1) {
                             saveToLeaderboard(getBaseScoreForLevel(currentLevel) + nextScore, maxCombo, timeElapsed);
-                            localStorage.removeItem(`wb_prog_${quizId}`); // Borrar progreso al ganar
+                            localStorage.removeItem(`wb_prog_${quizId}`);
                             setGameState('VICTORY');
                         } else {
-                            // Guardar Progreso
                             const progObj = { level: currentLevel + 1, time: timeElapsed };
                             localStorage.setItem(`wb_prog_${quizId}`, JSON.stringify(progObj));
                             setSavedProgress(progObj);
@@ -444,7 +553,6 @@
 
             useEffect(() => {
                 const handlePointerDown = (e) => {
-                    if(e.target.closest('.no-drop')) return;
                     handleDrop();
                 };
                 if (gameState === 'PLAYING') window.addEventListener('pointerdown', handlePointerDown);
@@ -457,13 +565,18 @@
                 return `${m}:${s.toString().padStart(2, '0')}`;
             };
 
+            const openLibrary = () => {
+                setPrevState(gameState);
+                setGameState('LIBRARY');
+            };
+
             if (gameState === 'LOADING') return <div className="h-screen flex items-center justify-center bg-zinc-950 text-white"><div className="animate-spin w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full"></div></div>;
             if (gameState === 'ERROR') return <div className="h-screen flex items-center justify-center bg-zinc-950 text-rose-500 font-bold">Error cargando datos. Verifica el ID.</div>;
 
             if (gameState === 'MENU') {
                 return (
-                    <div className="h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center building-bg" style={{backgroundPosition: '0% 100%'}}>
-                        <button onClick={() => { setPrevState('MENU'); setGameState('LIBRARY'); }} className="absolute top-6 right-6 bg-white/10 hover:bg-white/20 p-3 rounded-2xl flex items-center gap-2 backdrop-blur-md transition">
+                    <div className="h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center building-bg touch-manipulation" style={{backgroundPosition: '0% 100%'}}>
+                        <button onPointerDown={(e) => { e.stopPropagation(); setPrevState('MENU'); setGameState('LIBRARY'); }} className="absolute top-6 right-6 bg-white/10 hover:bg-white/20 p-3 rounded-2xl flex items-center gap-2 backdrop-blur-md transition">
                             <BookOpen size={20}/> <span className="font-bold text-sm hidden sm:block">Planos</span>
                         </button>
 
@@ -492,14 +605,14 @@
 
                         <div className="flex flex-col gap-3 w-full max-w-sm">
                             {savedProgress && (
-                                <button onClick={handleResume} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 w-full py-4 rounded-2xl font-black text-lg shadow-[0_5px_20px_rgba(245,158,11,0.4)] transition active:scale-95 flex items-center justify-center gap-3">
-                                    <Play fill="currentColor" size={20}/> CONTINUAR OBRA (Edificio {savedProgress.level + 1})
+                                <button onPointerDown={(e) => { e.stopPropagation(); handleResume(); }} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 w-full py-4 rounded-2xl font-black text-lg shadow-[0_5px_20px_rgba(245,158,11,0.4)] transition active:scale-95 flex items-center justify-center gap-3">
+                                    <Play fill="currentColor" size={20}/> CONTINUAR OBRA (Edif {savedProgress.level + 1})
                                 </button>
                             )}
-                            <button onClick={handleStartNew} className={`${savedProgress ? 'bg-zinc-800 hover:bg-zinc-700 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-[0_10px_25px_rgba(16,185,129,0.4)]'} w-full py-4 rounded-2xl font-black text-lg transition active:scale-95 flex items-center justify-center gap-3`}>
-                                {savedProgress ? <RotateCcw size={20}/> : <Play fill="currentColor" size={20}/>} {savedProgress ? 'NUEVA OBRA DESDE CERO' : 'INICIAR OBRA'}
+                            <button onPointerDown={(e) => { e.stopPropagation(); handleStartNew(); }} className={`${savedProgress ? 'bg-zinc-800 hover:bg-zinc-700 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-[0_10px_25px_rgba(16,185,129,0.4)]'} w-full py-4 rounded-2xl font-black text-lg transition active:scale-95 flex items-center justify-center gap-3`}>
+                                {savedProgress ? <RotateCcw size={20}/> : <Play fill="currentColor" size={20}/>} {savedProgress ? 'OBRA DESDE CERO' : 'INICIAR OBRA'}
                             </button>
-                            <button onClick={loadLeaderboard} className="bg-indigo-600 hover:bg-indigo-500 text-white w-full py-4 rounded-2xl font-black text-lg shadow-[0_5px_20px_rgba(79,70,229,0.4)] transition active:scale-95 flex items-center justify-center gap-3 mt-2">
+                            <button onPointerDown={(e) => { e.stopPropagation(); loadLeaderboard(); }} className="bg-indigo-600 hover:bg-indigo-500 text-white w-full py-4 rounded-2xl font-black text-lg shadow-[0_5px_20px_rgba(79,70,229,0.4)] transition active:scale-95 flex items-center justify-center gap-3 mt-2">
                                 <Trophy size={20}/> VER RANKING
                             </button>
                         </div>
@@ -509,10 +622,10 @@
 
             if (gameState === 'LEADERBOARD') {
                 return (
-                    <div className="flex flex-col h-screen bg-zinc-950 p-6 overflow-hidden text-white building-bg" style={{backgroundPosition: '0% 50%'}}>
+                    <div className="flex flex-col h-screen bg-zinc-950 p-6 overflow-hidden text-white building-bg touch-manipulation" style={{backgroundPosition: '0% 50%'}}>
                         <div className="flex items-center justify-between mb-8 shrink-0">
                             <h2 className="text-3xl font-black flex items-center gap-3"><Trophy className="text-yellow-400" size={32}/> Top Constructores</h2>
-                            <button onClick={() => setGameState('MENU')} className="p-3 bg-zinc-800/80 text-zinc-300 rounded-full hover:bg-zinc-700 transition-colors backdrop-blur-md">
+                            <button onPointerDown={(e) => { e.stopPropagation(); setGameState('MENU'); }} className="p-3 bg-zinc-800/80 text-zinc-300 rounded-full hover:bg-zinc-700 transition-colors backdrop-blur-md">
                                 <X size={24} />
                             </button>
                         </div>
@@ -544,10 +657,10 @@
 
             if (gameState === 'LIBRARY') {
                 return (
-                    <div className="flex flex-col h-screen bg-zinc-950 p-6 overflow-hidden text-white">
+                    <div className="flex flex-col h-screen bg-zinc-950 p-6 overflow-hidden text-white touch-manipulation">
                         <div className="flex items-center justify-between mb-6 shrink-0">
                             <h2 className="text-2xl font-black flex items-center gap-2"><BookOpen className="text-indigo-400"/> Archivos de Obra</h2>
-                            <button onClick={() => setGameState(prevState)} className="p-3 bg-zinc-800 text-zinc-400 rounded-full hover:bg-zinc-700 transition-colors">
+                            <button onPointerDown={(e) => { e.stopPropagation(); setGameState(prevState); }} className="p-3 bg-zinc-800 text-zinc-400 rounded-full hover:bg-zinc-700 transition-colors">
                                 <X size={24} />
                             </button>
                         </div>
@@ -578,7 +691,7 @@
 
             if (gameState === 'LEVEL_TRANSITION') {
                 return (
-                    <div className="h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center building-bg" style={{backgroundPosition: '0% 0%'}}>
+                    <div className="h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center building-bg touch-manipulation" style={{backgroundPosition: '0% 0%'}}>
                         <div className="w-24 h-24 bg-emerald-500 rounded-3xl flex items-center justify-center mb-8 transform rotate-6 shadow-[0_0_50px_rgba(16,185,129,0.5)]">
                             <Building2 size={48} className="text-white"/>
                         </div>
@@ -587,7 +700,7 @@
                             Sector: {levels[currentLevel].name}
                         </p>
                         
-                        <button onClick={() => startLevel(currentLevel + 1)} className="bg-indigo-600 hover:bg-indigo-500 text-white w-full max-w-sm py-5 rounded-2xl font-black text-xl shadow-lg transition active:scale-95 flex items-center justify-center gap-3">
+                        <button onPointerDown={(e) => { e.stopPropagation(); startLevel(currentLevel + 1); }} className="bg-indigo-600 hover:bg-indigo-500 text-white w-full max-w-sm py-5 rounded-2xl font-black text-xl shadow-lg transition active:scale-95 flex items-center justify-center gap-3">
                             CONSTRUIR EDIFICIO {currentLevel + 2} <ChevronRight size={24}/>
                         </button>
                     </div>
@@ -597,8 +710,8 @@
             if (gameState === 'GAMEOVER' || gameState === 'VICTORY') {
                 const isVictory = gameState === 'VICTORY';
                 return (
-                    <div className="h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center building-bg" style={{backgroundPosition: isVictory ? '0% 0%' : '0% 100%'}}>
-                        <button onClick={() => { setPrevState(gameState); setGameState('LIBRARY'); }} className="absolute top-6 right-6 bg-white/10 hover:bg-white/20 p-3 rounded-2xl flex items-center gap-2 backdrop-blur-md transition">
+                    <div className="h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center building-bg touch-manipulation" style={{backgroundPosition: isVictory ? '0% 0%' : '0% 100%'}}>
+                        <button onPointerDown={(e) => { e.stopPropagation(); setPrevState(gameState); setGameState('LIBRARY'); }} className="absolute top-6 right-6 bg-white/10 hover:bg-white/20 p-3 rounded-2xl flex items-center gap-2 backdrop-blur-md transition">
                             <BookOpen size={20}/>
                         </button>
 
@@ -624,10 +737,11 @@
                         </div>
 
                         <div className="flex gap-4 w-full max-w-sm">
-                            <button onClick={() => window.location.href='index.html'} className="bg-zinc-800 hover:bg-zinc-700 text-white p-5 rounded-2xl font-black transition active:scale-95 flex items-center justify-center shrink-0">
+                            <button onPointerDown={(e) => { e.stopPropagation(); window.location.href='index.html'; }} className="bg-zinc-800 hover:bg-zinc-700 text-white p-5 rounded-2xl font-black transition active:scale-95 flex items-center justify-center shrink-0">
                                 <Home />
                             </button>
-                            <button onClick={() => { 
+                            <button onPointerDown={(e) => { 
+                                e.stopPropagation();
                                 if(isVictory) { setGameState('MENU'); } 
                                 else { startLevel(currentLevel); }
                             }} className={`${isVictory ? 'bg-indigo-600' : 'bg-rose-600'} flex-1 text-white py-5 rounded-2xl font-black text-lg shadow-lg transition active:scale-95 flex items-center justify-center gap-2`}>
@@ -645,7 +759,7 @@
             const isInSpace = bgProgress < 40; 
 
             return (
-                <div className={`h-screen w-full flex justify-center building-bg overflow-hidden ${shake ? 'shake-active' : ''}`} style={{backgroundPosition: `0% ${bgProgress}%`}}>
+                <div className={`h-screen w-full flex justify-center building-bg overflow-hidden touch-manipulation ${shake ? 'shake-active' : ''}`} style={{backgroundPosition: `0% ${bgProgress}%`}}>
                     
                     <div className={`absolute inset-0 space-stars pointer-events-none ${isInSpace ? 'opacity-100' : 'opacity-0'}`}></div>
 
@@ -667,7 +781,7 @@
                                     <Timer className="text-amber-400" size={16}/>
                                     <span className="text-white font-bold font-mono">{formatTime(timeElapsed)}</span>
                                 </div>
-                                <button onClick={() => { setPrevState('PLAYING'); setGameState('PAUSED'); }} className="bg-black/40 backdrop-blur-md p-2 rounded-2xl border border-white/10 hover:bg-white/20 transition active:scale-95 no-drop">
+                                <button onPointerDown={(e) => { e.stopPropagation(); setPrevState('PLAYING'); setGameState('PAUSED'); }} className="bg-black/40 backdrop-blur-md p-2 rounded-2xl border border-white/10 hover:bg-white/20 transition active:scale-95">
                                     <Pause className="text-white" size={20}/>
                                 </button>
                             </div>
@@ -749,13 +863,13 @@
                             <p className="text-zinc-400 mb-8">Edificio {currentLevel + 1}: {currentLvlData.name}</p>
                             
                             <div className="flex flex-col gap-3 w-full max-w-xs">
-                                <button onClick={() => setGameState('PLAYING')} className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg active:scale-95 transition-transform">
+                                <button onPointerDown={(e) => { e.stopPropagation(); setGameState('PLAYING'); }} className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg active:scale-95 transition-transform">
                                     Reanudar Obra
                                 </button>
-                                <button onClick={openLibrary} className="w-full py-4 bg-zinc-800 hover:bg-zinc-700 text-white rounded-2xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-transform">
+                                <button onPointerDown={(e) => { e.stopPropagation(); openLibrary(); }} className="w-full py-4 bg-zinc-800 hover:bg-zinc-700 text-white rounded-2xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-transform">
                                     <BookOpen size={20}/> Ver Planos
                                 </button>
-                                <button onClick={() => window.location.href='index.html'} className="w-full py-4 bg-transparent text-zinc-500 hover:text-white rounded-2xl font-bold uppercase tracking-widest transition-colors mt-4">
+                                <button onPointerDown={(e) => { e.stopPropagation(); window.location.href='index.html'; }} className="w-full py-4 bg-transparent text-zinc-500 hover:text-white rounded-2xl font-bold uppercase tracking-widest transition-colors mt-4">
                                     Salir al Hub
                                 </button>
                             </div>
