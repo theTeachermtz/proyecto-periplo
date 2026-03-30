@@ -33,10 +33,10 @@
                 #000000 100%  /* Vacío absoluto */
             );
             background-size: 100% 500%;
-            transition: background-position 1s ease-out;
+            transition: background-position 1.5s ease-out;
         }
 
-        /* Estrellas estáticas sutiles (aparecen arriba por CSS) */
+        /* Estrellas estáticas sutiles */
         .space-stars {
             background-image: 
                 radial-gradient(1px 1px at 10% 10%, white 100%, transparent),
@@ -50,7 +50,7 @@
                 radial-gradient(1px 1px at 90% 40%, white 100%, transparent);
             background-size: 200px 200px;
             opacity: 0;
-            transition: opacity 1s;
+            transition: opacity 2s;
         }
 
         .crane-cable {
@@ -113,18 +113,18 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // Constantes del Motor Físico y Layout (Ajustadas según el croquis)
+        // Constantes del Motor Físico
         const GAME_AREA_WIDTH = 400; 
         const INITIAL_BLOCK_WIDTH = 250;
         const BLOCK_HEIGHT = 60;
         const SWING_SPEED_BASE = 0.003;
         const PERFECT_TOLERANCE = 8; 
 
-        // ANCLAJES (Reduciendo el Gap/Tramote)
-        const CRANE_TOP = 60; // Altura donde nace la cuerda
+        // ANCLAJES (Fieles al croquis)
+        const CRANE_TOP = 0; // La cuerda nace en el techo
         const CABLE_LENGTH = 120; // Longitud de la cuerda
-        const BLOCK_Y = CRANE_TOP + CABLE_LENGTH; // 180px
-        const TOWER_ANCHOR_Y = BLOCK_Y + BLOCK_HEIGHT + 10; // 250px (Solo 10px de gap visual para el salto)
+        const BLOCK_Y = CRANE_TOP + CABLE_LENGTH; // Dónde cuelga el bloque (120px)
+        const TOWER_ANCHOR_Y = 380; // La base receptora. ¡Deja 200px de caída libre!
 
         const COLORS = ['bg-blue-500', 'bg-red-500', 'bg-amber-500', 'bg-green-500', 'bg-indigo-500', 'bg-fuchsia-500', 'bg-emerald-500'];
 
@@ -132,25 +132,20 @@
             const [gameState, setGameState] = useState('LOADING'); // LOADING, MENU, PLAYING, PAUSED, LIBRARY, LEVEL_TRANSITION, GAMEOVER, VICTORY
             const [gameData, setGameData] = useState(null);
             
-            // Estructura de Niveles (4 Edificios)
             const [levels, setLevels] = useState([]);
             const [currentLevel, setCurrentLevel] = useState(0);
             
-            // Stats (Por nivel y global)
             const [levelScore, setLevelScore] = useState(0); 
             const [totalScore, setTotalScore] = useState(0);
             const [combo, setCombo] = useState(0);
             const [maxCombo, setMaxCombo] = useState(0);
             const [timeElapsed, setTimeElapsed] = useState(0);
             
-            // Rendering del juego
             const [blocks, setBlocks] = useState([]);
             const [debris, setDebris] = useState([]);
             const [floatingTexts, setFloatingTexts] = useState([]);
             const [cameraY, setCameraY] = useState(0);
             const [shake, setShake] = useState(false);
-            
-            // Navegación
             const [prevState, setPrevState] = useState('MENU');
 
             const requestRef = useRef();
@@ -158,6 +153,13 @@
             const movingBlockRef = useRef({ x: 0, width: INITIAL_BLOCK_WIDTH, direction: 1, speed: SWING_SPEED_BASE });
             const blockDOMRef = useRef(null);
             const isDroppingRef = useRef(false);
+
+            // Refs para solucionar estado viejo dentro de setTimeouts (Gravedad)
+            const stateRefs = useRef({ blocks: [], combo: 0, score: 0, maxCombo: 0, currentLevel: 0, levels: [] });
+
+            useEffect(() => {
+                stateRefs.current = { blocks, combo, score: levelScore, maxCombo, currentLevel, levels };
+            }, [blocks, combo, levelScore, maxCombo, currentLevel, levels]);
 
             useEffect(() => {
                 const params = new URLSearchParams(window.location.search);
@@ -169,12 +171,10 @@
                         const data = snap.data();
                         setGameData(data);
                         
-                        // Parsear categorías a niveles independientes
                         let parsedLevels = [];
                         if (data.content && data.content.categories) {
                             data.content.categories.forEach(cat => {
                                 let validItems = (cat.items || []).filter(i => (i.en || i.word || '').trim() !== '');
-                                // Mezclar palabras dentro del nivel
                                 validItems = validItems.sort(() => Math.random() - 0.5);
                                 if (validItems.length > 0) {
                                     parsedLevels.push({ name: cat.name, items: validItems });
@@ -202,6 +202,7 @@
             const animate = time => {
                 if (gameState !== 'PLAYING') return;
 
+                // Solo si NO está cayendo, balanceamos el bloque
                 if (!isDroppingRef.current && blockDOMRef.current) {
                     const mb = movingBlockRef.current;
                     const center = GAME_AREA_WIDTH / 2;
@@ -210,7 +211,8 @@
                     mb.x = center + Math.sin(time * mb.speed) * swingAmplitude;
                     
                     blockDOMRef.current.style.left = `${mb.x - (mb.width/2)}px`;
-                    blockDOMRef.current.style.width = `${mb.width}px`;
+                    // Asegurarnos que siempre esté anclado a la cuerda mientras no cae
+                    blockDOMRef.current.style.top = `${BLOCK_Y}px`;
                 }
 
                 timeRef.current = time;
@@ -230,9 +232,6 @@
                 setDebris([]);
                 setFloatingTexts([]);
                 
-                // Color base dependiendo del nivel
-                const baseColor = COLORS[lvlIndex % COLORS.length];
-
                 setBlocks([{
                     id: `base-${lvlIndex}`,
                     x: GAME_AREA_WIDTH / 2,
@@ -246,10 +245,14 @@
                 movingBlockRef.current = {
                     x: GAME_AREA_WIDTH / 2,
                     width: INITIAL_BLOCK_WIDTH,
-                    speed: SWING_SPEED_BASE + (lvlIndex * 0.0005) // Cada nivel es ligerísimamente más rápido
+                    speed: SWING_SPEED_BASE + (lvlIndex * 0.0005) 
                 };
 
                 isDroppingRef.current = false;
+                if(blockDOMRef.current) {
+                    blockDOMRef.current.style.transition = 'none';
+                    blockDOMRef.current.style.top = `${BLOCK_Y}px`;
+                }
                 setGameState('PLAYING');
             };
 
@@ -260,11 +263,11 @@
             };
 
             const triggerConfettiStars = (hitX, currentCombo) => {
-                // Coordenada Y relativa donde chocan los bloques
-                const dropY = TOWER_ANCHOR_Y / window.innerHeight;
+                // Genera estrellas en la zona del impacto
+                const dropY = (TOWER_ANCHOR_Y - BLOCK_HEIGHT/2) / window.innerHeight;
                 
                 confetti({
-                    particleCount: 15 + (currentCombo * 8), // Más estrellas con combos altos
+                    particleCount: 15 + (currentCombo * 8), 
                     spread: 60 + (currentCombo * 5),
                     origin: { x: hitX / window.innerWidth, y: dropY },
                     colors: ['#FBBF24', '#FCD34D', '#FFFBEB'], 
@@ -279,11 +282,31 @@
 
             const handleDrop = () => {
                 if (gameState !== 'PLAYING' || isDroppingRef.current) return;
+                
+                // 1. Bloqueamos la interacción y el balanceo
                 isDroppingRef.current = true; 
 
+                // 2. Activamos la gravedad vía CSS
+                if(blockDOMRef.current) {
+                    // Animación de caída libre fluida
+                    blockDOMRef.current.style.transition = 'top 0.25s cubic-bezier(0.55, 0.085, 0.68, 0.53)'; 
+                    // El bloque viaja desde BLOCK_Y (120) hasta justo arriba de la torre (320)
+                    blockDOMRef.current.style.top = `${TOWER_ANCHOR_Y - BLOCK_HEIGHT}px`;
+                }
+
+                // 3. Esperamos que termine de caer para evaluar el golpe
+                setTimeout(() => {
+                    finalizeDrop();
+                }, 250); 
+            };
+
+            const finalizeDrop = () => {
+                // Recuperamos el estado fresco
+                const { blocks, combo, score, maxCombo, currentLevel, levels } = stateRefs.current;
                 const mb = movingBlockRef.current;
                 const prevBlock = blocks[blocks.length - 1]; 
 
+                // Evaluamos colisión usando el mb.x congelado
                 const currentX = mb.x;
                 const prevX = prevBlock.x;
                 
@@ -298,7 +321,7 @@
                 let debrisPiece = null;
 
                 if (Math.abs(deltaLeft) <= PERFECT_TOLERANCE) {
-                    // PERFECT HIT
+                    // GOLPE PERFECTO
                     isPerfect = true;
                     newX = prevX; 
                     newWidth = prevBlock.width; 
@@ -310,17 +333,17 @@
                     mb.speed = Math.min(mb.speed + 0.0002, 0.006);
                     
                     triggerConfettiStars(newX, newCombo);
-                    addFloatingText(`x${newCombo}`, 'perfect', GAME_AREA_WIDTH/2, BLOCK_Y);
+                    addFloatingText(`x${newCombo}`, 'perfect', GAME_AREA_WIDTH/2, TOWER_ANCHOR_Y - 100);
 
                 } else {
                     // RESET COMBO
                     setCombo(0);
 
                     if (Math.abs(deltaLeft) >= prevBlock.width) {
-                        // TOTAL MISS
+                        // FALLO TOTAL
                         missed = true;
                     } else {
-                        // PARTIAL HIT
+                        // CORTE PARCIAL
                         newWidth = prevBlock.width - Math.abs(deltaLeft);
                         
                         if (deltaLeft > 0) {
@@ -340,28 +363,30 @@
                     return;
                 }
 
-                const currentWord = levels[currentLevel].items[levelScore];
+                // Colocamos el bloque definitivo en la torre
+                const currentWord = levels[currentLevel].items[score];
                 const newBlock = {
-                    id: `block-${levelScore}`,
+                    id: `block-${score}`,
                     x: newX,
                     width: newWidth,
                     y: blocks.length,
                     textEs: currentWord.es || currentWord.word,
                     emoji: currentWord.emoji,
-                    color: COLORS[currentLevel % COLORS.length], // Mismo color por nivel
+                    color: COLORS[currentLevel % COLORS.length], 
                     isPerfect: isPerfect
                 };
 
                 setBlocks(prev => [...prev, newBlock]);
                 if (debrisPiece) setDebris(prev => [...prev, debrisPiece]);
 
-                const nextScore = levelScore + 1;
+                const nextScore = score + 1;
                 setLevelScore(nextScore);
                 setTotalScore(prev => prev + 1);
 
+                // Bajamos la cámara
                 setCameraY((blocks.length) * BLOCK_HEIGHT);
 
-                // Check Level/Game Completion
+                // Verificamos si ganamos
                 if (nextScore >= levels[currentLevel].items.length) {
                     confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 } });
                     setTimeout(() => {
@@ -370,17 +395,21 @@
                         } else {
                             setGameState('LEVEL_TRANSITION');
                         }
-                    }, 500); // Pequeño delay para ver la última pieza
+                    }, 500); 
                     return;
                 }
 
-                setTimeout(() => {
-                    movingBlockRef.current.width = newWidth; 
-                    movingBlockRef.current.x = GAME_AREA_WIDTH / 2; 
-                    isDroppingRef.current = false; 
-                }, 50); // Drop casi instantáneo
+                // Reseteamos el bloque colgante para el siguiente tiro
+                if(blockDOMRef.current) {
+                    blockDOMRef.current.style.transition = 'none'; // Quitamos transición para teletransportarlo arriba
+                    blockDOMRef.current.style.top = `${BLOCK_Y}px`;
+                }
+                movingBlockRef.current.width = newWidth; 
+                movingBlockRef.current.x = GAME_AREA_WIDTH / 2; 
+                isDroppingRef.current = false; // Desbloqueamos
             };
 
+            // Controles Táctiles
             useEffect(() => {
                 const handlePointerDown = (e) => {
                     if(e.target.closest('.no-drop')) return;
@@ -388,7 +417,7 @@
                 };
                 if (gameState === 'PLAYING') window.addEventListener('pointerdown', handlePointerDown);
                 return () => window.removeEventListener('pointerdown', handlePointerDown);
-            }, [gameState, blocks, combo, levelScore, currentLevel, levels]);
+            }, [gameState]);
 
             const formatTime = (seconds) => {
                 const m = Math.floor(seconds / 60);
@@ -401,7 +430,7 @@
                 setGameState('LIBRARY');
             };
 
-            // RENDER SCREENS
+            // ================== RENDER SCREENS ================== //
             if (gameState === 'LOADING') return <div className="h-screen flex items-center justify-center bg-zinc-950 text-white"><div className="animate-spin w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full"></div></div>;
             if (gameState === 'ERROR') return <div className="h-screen flex items-center justify-center bg-zinc-950 text-rose-500 font-bold">Error cargando datos. Verifica el ID.</div>;
 
@@ -409,7 +438,7 @@
                 return (
                     <div className="h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center building-bg" style={{backgroundPosition: '0% 100%'}}>
                         <button onClick={openLibrary} className="absolute top-6 right-6 bg-white/10 hover:bg-white/20 p-3 rounded-2xl flex items-center gap-2 backdrop-blur-md transition">
-                            <BookOpen size={20}/> <span className="font-bold text-sm hidden sm:block">Ver Palabras</span>
+                            <BookOpen size={20}/> <span className="font-bold text-sm hidden sm:block">Planos</span>
                         </button>
 
                         <div className="w-24 h-24 bg-gradient-to-br from-emerald-400 to-teal-600 rounded-3xl flex items-center justify-center shadow-[0_0_50px_rgba(16,185,129,0.5)] mb-8 transform -rotate-6 border-4 border-white/20">
@@ -533,17 +562,17 @@
             const currentLvlData = levels[currentLevel];
             const currentWord = currentLvlData.items[levelScore];
             
-            // Background Progress: de 100% (Abajo/Ciudad) a 0% (Arriba/Espacio)
+            // Calculamos el progreso para mover el fondo (100% es ciudad, 0% es espacio exterior)
             const bgProgress = Math.max(0, 100 - (levelScore / currentLvlData.items.length) * 100);
-            const isInSpace = bgProgress < 40; // Aparecer estrellas cuando pasamos el 60% del edificio
+            const isInSpace = bgProgress < 40; // Aparecen las estrellas en el tercio superior
 
             return (
                 <div className={`h-screen w-full flex justify-center building-bg overflow-hidden ${shake ? 'shake-active' : ''}`} style={{backgroundPosition: `0% ${bgProgress}%`}}>
                     
-                    {/* Estrellas dinámicas */}
+                    {/* Estrellas Estáticas (Espacio) */}
                     <div className={`absolute inset-0 space-stars pointer-events-none ${isInSpace ? 'opacity-100' : 'opacity-0'}`}></div>
 
-                    {/* UI Layer */}
+                    {/* Interfaz Superior */}
                     <div className="absolute top-0 inset-x-0 p-4 flex justify-between items-start z-50 pointer-events-none">
                         <div className="flex flex-col gap-2">
                             <div className="bg-black/40 backdrop-blur-md px-4 py-2 rounded-2xl border border-white/10 flex items-center gap-3">
@@ -574,20 +603,20 @@
                         </div>
                     </div>
 
-                    {/* GAME AREA */}
+                    {/* ZONA DE JUEGO */}
                     <div className="relative w-full max-w-[400px] h-full overflow-hidden">
                         
-                        {/* 1. LA GRÚA Y EL BLOQUE COLGANTE */}
+                        {/* 1. LA GRÚA Y EL BLOQUE QUE CUELGA */}
                         <div className="absolute top-0 inset-x-0 z-40">
-                            {/* Cable */}
+                            {/* Cuerda Larga */}
                             <div className="crane-cable" style={{ top: `${CRANE_TOP}px`, height: `${CABLE_LENGTH}px` }}></div>
                             
-                            {/* The Block */}
+                            {/* Bloque Colgando */}
                             {currentWord && (
                                 <div 
                                     ref={blockDOMRef}
                                     className={`absolute h-[60px] rounded-xl shadow-2xl flex items-center justify-center text-white border-2 border-white/20 block-texture z-40 ${COLORS[currentLevel % COLORS.length]}`}
-                                    style={{ top: `${BLOCK_Y}px`, left: '0px', width: `${INITIAL_BLOCK_WIDTH}px`, willChange: 'left, width' }}
+                                    style={{ top: `${BLOCK_Y}px`, left: '0px', width: `${INITIAL_BLOCK_WIDTH}px`, willChange: 'left, width, top' }}
                                 >
                                     <div className="px-4 text-center truncate font-bold drop-shadow-md text-lg">
                                         <span className="mr-2 text-xl">{currentWord.emoji}</span>
@@ -597,7 +626,7 @@
                             )}
                         </div>
 
-                        {/* 2. LA TORRE (Anclada justo debajo del bloque) */}
+                        {/* 2. LA TORRE ANCLADA ABAJO */}
                         <div className="absolute inset-x-0 w-full" style={{ top: `${TOWER_ANCHOR_Y}px`, transform: `translateY(${cameraY}px)`, transition: 'transform 0.2s ease-out' }}>
                             {blocks.map((b) => (
                                 <div 
@@ -617,7 +646,7 @@
                             ))}
                         </div>
 
-                        {/* 3. ESCOMBROS */}
+                        {/* 3. ESCOMBROS (Caída Infinita) */}
                         {debris.map(d => (
                             <div 
                                 key={d.id}
@@ -626,11 +655,11 @@
                             ></div>
                         ))}
 
-                        {/* 4. TEXTOS FLOTANTES */}
+                        {/* 4. TEXTOS FLOTANTES DE COMBO */}
                         {floatingTexts.map(ft => (
                             <div 
                                 key={ft.id} 
-                                className="absolute text-yellow-400 font-black text-3xl drop-shadow-lg float-text z-50 whitespace-nowrap tracking-tighter"
+                                className="absolute text-yellow-400 font-black text-4xl drop-shadow-lg float-text z-50 whitespace-nowrap tracking-tighter"
                                 style={{ left: `${ft.x}px`, top: `${ft.y}px`, transform: 'translateX(-50%)' }}
                             >
                                 {ft.text}
@@ -651,7 +680,7 @@
                                     Reanudar Obra
                                 </button>
                                 <button onClick={openLibrary} className="w-full py-4 bg-zinc-800 hover:bg-zinc-700 text-white rounded-2xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-transform">
-                                    <BookOpen size={20}/> Ver Planos (Palabras)
+                                    <BookOpen size={20}/> Ver Planos
                                 </button>
                                 <button onClick={() => window.location.href='index.html'} className="w-full py-4 bg-transparent text-zinc-500 hover:text-white rounded-2xl font-bold uppercase tracking-widest transition-colors mt-4">
                                     Salir al Hub
