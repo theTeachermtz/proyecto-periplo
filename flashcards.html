@@ -2,13 +2,39 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Flashcards Pro | Periplo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Word Cascade | Periplo Games</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>☄️</text></svg>">
+    
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    
     <script>
-        tailwind.config = { darkMode: 'class' };
-        document.documentElement.classList.add('dark');
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    animation: {
+                        'shake': 'shake 0.4s cubic-bezier(.36,.07,.19,.97) both',
+                        'pop-in': 'popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards',
+                    },
+                    keyframes: {
+                        shake: {
+                            '10%, 90%': { transform: 'translate3d(-2px, 0, 0)' },
+                            '20%, 80%': { transform: 'translate3d(4px, 0, 0)' },
+                            '30%, 50%, 70%': { transform: 'translate3d(-6px, 0, 0)' },
+                            '40%, 60%': { transform: 'translate3d(6px, 0, 0)' }
+                        },
+                        popIn: {
+                            '0%': { transform: 'scale(0.8)', opacity: '0' },
+                            '100%': { transform: 'scale(1)', opacity: '1' }
+                        }
+                    }
+                }
+            }
+        };
     </script>
+    
     <script type="importmap">
     {
       "imports": {
@@ -16,422 +42,526 @@
         "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
         "lucide-react": "https://esm.sh/lucide-react@0.263.1",
         "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
-        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
         "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
       }
     }
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap'); 
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800;900&display=swap'); 
+        body { 
+            font-family: 'Plus Jakarta Sans', sans-serif; 
+            overflow: hidden; 
+            touch-action: none; 
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        
+        @media (hover: hover) {
+            .hover-scale:hover { transform: scale(1.05); transition: transform 0.2s; }
+        }
+        .active-scale:active { transform: scale(0.95); transition: transform 0.1s; }
+        
+        .drag-active { cursor: grabbing !important; z-index: 50; }
+        .word-card { touch-action: none; }
+        
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
     </style>
 </head>
-<body class="text-zinc-100">
-    <div id="root"></div>
+<body class="bg-slate-900 text-white h-[100dvh] w-screen">
+    <div id="root" class="h-full w-full"></div>
+
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useCallback } from 'react';
+        import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { ChevronLeft, ChevronRight, RotateCcw, Volume2, CheckCircle2, XCircle, CircleDashed, Check, X, Trophy, Pause, Play, RefreshCw, ArrowLeft } from 'lucide-react';
+        import { Zap, Heart, Trophy, Play, AlertCircle, RefreshCcw, ArrowLeft, Pause, BookOpen, UserCircle2 } from 'lucide-react';
 
-        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
+        const firebaseConfig = { 
+            apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", 
+            authDomain: "proyecto-periplo.firebaseapp.com", 
+            projectId: "proyecto-periplo", 
+            storageBucket: "proyecto-periplo.firebasestorage.app", 
+            messagingSenderId: "236795998392", 
+            appId: "1:236795998392:web:0da24b4f018611b55c844d" 
+        };
         const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
         const db = getFirestore(app);
 
-        export default function FlashcardsApp() {
-            const [user, setUser] = useState(null);
-            const [quizId, setQuizId] = useState(new URLSearchParams(window.location.search).get('id'));
-            const [quizData, setQuizData] = useState(null);
-            const [flashcardsData, setFlashcardsData] = useState([]);
-            const [loading, setLoading] = useState(true);
+        // CORRECCIÓN: Amarillo ahora usa amber-500 para mejor contraste con texto blanco
+        const CATEGORY_COLORS = [
+            { bg: 'bg-blue-500', border: 'border-blue-600', shadow: 'shadow-blue-500/50', text: 'text-white' },
+            { bg: 'bg-red-500', border: 'border-red-600', shadow: 'shadow-red-500/50', text: 'text-white' },
+            { bg: 'bg-amber-500', border: 'border-amber-600', shadow: 'shadow-amber-500/50', text: 'text-white' },
+            { bg: 'bg-green-500', border: 'border-green-600', shadow: 'shadow-green-500/50', text: 'text-white' }
+        ];
 
-            const [gameState, setGameState] = useState('playing'); 
-            const [currentIndex, setCurrentIndex] = useState(0);
-            const [isFlipped, setIsFlipped] = useState(false);
+        // --- SISTEMA DE AUDIO NATIVO ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        const playPopSound = () => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+        };
+
+        const playSuccessSound = () => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+        };
+
+        const playErrorSound = () => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.2);
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+        };
+
+        const CascadeGame = () => {
+            const [gameState, setGameState] = useState('loading'); // loading, error, menu, playing, paused, gameover, library
+            const [gameData, setGameData] = useState(null);
+            const [errorMessage, setErrorMessage] = useState("");
+            const [playerName, setPlayerName] = useState("");
+
+            const [wordPool, setWordPool] = useState([]);
+            const [currentWord, setCurrentWord] = useState(null);
+            const [score, setScore] = useState(0);
+            const [lives, setLives] = useState(3);
+            const [combo, setCombo] = useState(0);
+            const [fallingY, setFallingY] = useState(0); 
             
-            const [isAnimating, setIsAnimating] = useState(false);
-            const [isVisible, setIsVisible] = useState(true); 
-            const [shake, setShake] = useState(false);
-            const [feedback, setFeedback] = useState(null);
+            const gameLoopRef = useRef(null);
+            const fallSpeedRef = useRef(0.15); 
+            const isDraggingRef = useRef(false);
+            const wordRef = useRef(null);
+            
+            const [dragPos, setDragPos] = useState({ x: 0, y: 0 });
+            const [isWrong, setIsWrong] = useState(false);
 
-            const [hasSeenBack, setHasSeenBack] = useState({}); 
-            const [cardStatuses, setCardStatuses] = useState({}); 
+            useEffect(() => {
+                const params = new URLSearchParams(window.location.search);
+                const gameId = params.get('id');
 
-            const playAudio = (text, lang = 'en-US', e) => {
-                if (e) { e.preventDefault(); e.stopPropagation(); }
-                if ('speechSynthesis' in window) {
-                    const utterance = new SpeechSynthesisUtterance(text);
-                    utterance.lang = lang;
-                    utterance.rate = 0.9; 
-                    window.speechSynthesis.speak(utterance);
+                if (!gameId) {
+                    setErrorMessage("No se encontró ID de juego en la URL.");
+                    setGameState('error');
+                    return;
                 }
+
+                const loadGame = async () => {
+                    try {
+                        const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', gameId);
+                        const docSnap = await getDoc(docRef);
+                        
+                        if (docSnap.exists()) {
+                            const data = docSnap.data();
+                            if(!data.content || !data.content.categories) throw new Error("Estructura de datos inválida");
+                            setGameData(data);
+                            setGameState('menu');
+                        } else {
+                            throw new Error("El juego no existe.");
+                        }
+                    } catch (error) {
+                        setErrorMessage(error.message);
+                        setGameState('error');
+                    }
+                };
+                loadGame();
+            }, []);
+
+            const startGame = () => {
+                if(!playerName.trim()) {
+                    alert("Por favor, ingresa tu nombre para registrar tu puntaje.");
+                    return;
+                }
+                
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+
+                let allWords = [];
+                gameData.content.categories.forEach((cat, index) => {
+                    if(cat.items && Array.isArray(cat.items)) {
+                        cat.items.forEach(item => {
+                            if(item.word.trim() !== "") {
+                                allWords.push({ 
+                                    text: item.word, 
+                                    emoji: item.emoji || "❓", 
+                                    categoryId: index, 
+                                    categoryName: cat.name 
+                                });
+                            }
+                        });
+                    }
+                });
+                
+                for (let i = allWords.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [allWords[i], allWords[j]] = [allWords[j], allWords[i]];
+                }
+
+                if(allWords.length === 0) {
+                    alert("No hay palabras válidas en este juego.");
+                    setGameState('menu');
+                    return;
+                }
+
+                setWordPool(allWords);
+                setScore(0);
+                setLives(3);
+                setCombo(0);
+                fallSpeedRef.current = 0.15;
+                spawnNextWord(allWords);
+                setGameState('playing');
+            };
+
+            const spawnNextWord = (pool) => {
+                if (pool.length === 0) {
+                    setGameState('gameover');
+                    triggerVictoryConfetti();
+                    return;
+                }
+                const nextPool = [...pool];
+                const next = nextPool.pop();
+                
+                setWordPool(nextPool);
+                setCurrentWord(next);
+                setFallingY(0);
+                setIsWrong(false);
+                isDraggingRef.current = false;
+                
+                playPopSound();
             };
 
             useEffect(() => {
-                signInAnonymously(auth);
-                const unsub = onAuthStateChanged(auth, setUser);
-                if (quizId) {
-                    getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId)).then(snap => {
-                        if(snap.exists()) {
-                            const data = snap.data();
-                            setQuizData(data);
-                            
-                            const rawWords = data.content?.cards || data.content?.pairs || [];
-                            const normalizedWords = rawWords.map((w, i) => ({
-                                id: w.id || i,
-                                wordEn: w.wordEn || w.c1 || '',
-                                wordEs: w.wordEs || w.c3 || '',
-                                emojis: w.emojis || '🎯',
-                                exampleEn: w.exampleEn || w.c2 || ''
-                            }));
+                if (gameState !== 'playing' || !currentWord) return;
 
-                            setFlashcardsData(normalizedWords);
-                        } else {
-                            alert("Mazo no encontrado");
-                        }
-                        setLoading(false);
-                    });
-                } else { setLoading(false); }
-                return () => unsub();
-            }, [quizId]);
-
-            const totalCards = flashcardsData.length;
-            const currentCard = flashcardsData[currentIndex] || {};
-            const correctCount = Object.values(cardStatuses).filter(v => v === 'correct').length;
-            const incorrectCount = Object.values(cardStatuses).filter(v => v === 'incorrect').length;
-            const pendingCount = totalCards - correctCount - incorrectCount;
-            const canNavigate = !(hasSeenBack[currentIndex] && !cardStatuses[currentIndex]);
-
-            const changeCard = useCallback((direction) => {
-                if (isAnimating || feedback || gameState !== 'playing' || totalCards === 0) return;
+                const loop = () => {
+                    if (!isDraggingRef.current) {
+                        setFallingY(prev => {
+                            const nextY = prev + fallSpeedRef.current;
+                            if (nextY >= 90) { handleMiss(); return 0; }
+                            return nextY;
+                        });
+                    }
+                    gameLoopRef.current = requestAnimationFrame(loop);
+                };
                 
-                if (!canNavigate) {
-                    setShake(true); setTimeout(() => setShake(false), 500); return;
-                }
+                gameLoopRef.current = requestAnimationFrame(loop);
+                return () => cancelAnimationFrame(gameLoopRef.current);
+            }, [gameState, currentWord]);
 
-                setIsAnimating(true); setIsVisible(false);
-
-                setTimeout(() => {
-                    let next = currentIndex; let loops = 0;
-                    do {
-                        next = direction === 'next' ? (next === totalCards - 1 ? 0 : next + 1) : (next === 0 ? totalCards - 1 : next - 1);
-                        loops++;
-                    } while (cardStatuses[next] === 'correct' && loops <= totalCards);
-
-                    setCurrentIndex(next); setIsFlipped(!!cardStatuses[next]); setIsVisible(true);
-                    setTimeout(() => setIsAnimating(false), 300);
-                }, 300);
-            }, [currentIndex, isAnimating, canNavigate, cardStatuses, totalCards, feedback, gameState]);
-
-            const handleNext = () => changeCard('next');
-            const handlePrev = () => changeCard('prev');
-
-            const handleFlip = () => {
-                if (isAnimating || feedback || gameState !== 'playing') return;
-                const newFlippedState = !isFlipped;
-                setIsFlipped(newFlippedState);
-                if (newFlippedState && !hasSeenBack[currentIndex]) setHasSeenBack(prev => ({ ...prev, [currentIndex]: true }));
+            const handleMiss = () => {
+                cancelAnimationFrame(gameLoopRef.current);
+                playErrorSound();
+                setCombo(0);
+                setLives(prev => {
+                    const next = prev - 1;
+                    if (next <= 0) { setGameState('gameover'); return 0; }
+                    return next;
+                });
+                spawnNextWord(wordPool);
             };
 
-            const handleGrade = (status, e) => {
-                e.stopPropagation();
-                if (isAnimating || feedback) return;
+            const togglePause = () => {
+                if (gameState === 'playing') setGameState('paused');
+                else if (gameState === 'paused') setGameState('playing');
+            };
 
-                setFeedback(status);
+            const handlePointerDown = (e) => {
+                if (gameState !== 'playing' || isWrong) return;
+                isDraggingRef.current = true;
+                e.target.setPointerCapture(e.pointerId);
+                setDragPos({ x: e.clientX, y: e.clientY });
+            };
 
-                setTimeout(() => {
-                    setIsAnimating(true); setIsVisible(false); 
+            const handlePointerMove = (e) => {
+                if (!isDraggingRef.current || gameState !== 'playing') return;
+                setDragPos({ x: e.clientX, y: e.clientY });
+            };
+
+            const handlePointerUp = (e) => {
+                if (!isDraggingRef.current || gameState !== 'playing') return;
+                isDraggingRef.current = false;
+                e.target.releasePointerCapture(e.pointerId);
+
+                const wordElement = wordRef.current;
+                if(wordElement) wordElement.style.display = 'none';
+                
+                const elementBelow = document.elementFromPoint(e.clientX, e.clientY);
+                
+                if(wordElement) wordElement.style.display = 'flex'; 
+
+                const dropZone = elementBelow?.closest('[data-category]');
+                
+                if (dropZone) {
+                    const categoryId = parseInt(dropZone.getAttribute('data-category'), 10);
+                    evaluateMatch(categoryId, dropZone);
+                } else {
+                    setDragPos({ x: 0, y: 0 });
+                }
+            };
+
+            const evaluateMatch = (selectedId, dropElement) => {
+                if (selectedId === currentWord.categoryId) {
+                    playSuccessSound();
+                    const newCombo = combo + 1;
+                    setCombo(newCombo);
+                    setScore(prev => prev + (10 * newCombo));
+                    
+                    fallSpeedRef.current = Math.min(0.5, 0.15 + (score / 1000)); 
+                    
+                    dropElement.classList.remove('animate-pop-in');
+                    void dropElement.offsetWidth;
+                    dropElement.classList.add('animate-pop-in');
+                    
+                    confetti({ particleCount: 15, spread: 40, origin: { x: dropElement.getBoundingClientRect().left / window.innerWidth + 0.1, y: 0.9 }, colors: ['#ffffff', '#fde047'] });
+                    spawnNextWord(wordPool);
+                } else {
+                    playErrorSound();
+                    setCombo(0);
+                    setIsWrong(true);
                     
                     setTimeout(() => {
-                        const newStatuses = { ...cardStatuses, [currentIndex]: status };
-                        const correct = Object.values(newStatuses).filter(s => s === 'correct').length;
-                        const incorrect = Object.values(newStatuses).filter(s => s === 'incorrect').length;
-                        const pending = totalCards - correct - incorrect;
-
-                        setFeedback(null);
-
-                        if (pending === 0) {
-                            if (incorrect === 0) {
-                                setCardStatuses(newStatuses); setGameState('victory'); setIsAnimating(false); return; 
-                            } else {
-                                const nextRoundStatuses = { ...newStatuses }; const nextRoundSeen = { ...hasSeenBack };
-                                const firstIncorrectIdx = flashcardsData.findIndex((_, i) => newStatuses[i] === 'incorrect');
-                                flashcardsData.forEach((_, i) => { if (newStatuses[i] === 'incorrect') { delete nextRoundStatuses[i]; delete nextRoundSeen[i]; } });
-                                setCardStatuses(nextRoundStatuses); setHasSeenBack(nextRoundSeen); setCurrentIndex(firstIncorrectIdx); setIsFlipped(false);
-                            }
-                        } else {
-                            setCardStatuses(newStatuses);
-                            let next = currentIndex; let loops = 0;
-                            do {
-                                next = next === totalCards - 1 ? 0 : next + 1; loops++;
-                                if (loops > totalCards) break;
-                            } while (newStatuses[next] === 'correct');
-                            setCurrentIndex(next); setIsFlipped(false);
-                        }
-                        setIsVisible(true); setTimeout(() => setIsAnimating(false), 300);
-                    }, 300); 
-                }, 1200); 
+                        setIsWrong(false);
+                        setDragPos({ x: 0, y: 0 });
+                    }, 400); 
+                }
             };
 
-            const restartGame = () => { setCardStatuses({}); setHasSeenBack({}); setCurrentIndex(0); setIsFlipped(false); setFeedback(null); setGameState('playing'); };
-            const togglePause = () => { if (gameState === 'playing') setGameState('paused'); else if (gameState === 'paused') setGameState('playing'); };
-
-            useEffect(() => {
-                const handleKeyDown = (e) => {
-                    if (gameState !== 'playing') return;
-                    if (e.key === 'ArrowRight') handleNext();
-                    if (e.key === 'ArrowLeft') handlePrev();
-                    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); handleFlip(); }
+            const triggerVictoryConfetti = () => {
+                const duration = 3000;
+                const end = Date.now() + duration;
+                const frame = () => {
+                    confetti({ particleCount: 5, angle: 60, spread: 55, origin: { x: 0 }, colors: ['#3b82f6', '#ef4444', '#eab308', '#22c55e'] });
+                    confetti({ particleCount: 5, angle: 120, spread: 55, origin: { x: 1 }, colors: ['#3b82f6', '#ef4444', '#eab308', '#22c55e'] });
+                    if (Date.now() < end) requestAnimationFrame(frame);
                 };
-                window.addEventListener('keydown', handleKeyDown);
-                return () => window.removeEventListener('keydown', handleKeyDown);
-            }, [handleNext, handlePrev, handleFlip, gameState]);
+                frame();
+            };
 
-            if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-sky-500 font-black animate-pulse">Cargando Tarjetas...</div>;
-            if (totalCards === 0) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-zinc-500 font-bold">No hay datos en este mazo.</div>;
+            if (gameState === 'loading') return <div className="flex h-full items-center justify-center"><Zap className="animate-pulse text-indigo-500" size={48} /></div>;
+            
+            if (gameState === 'error') return (
+                <div className="flex flex-col h-full items-center justify-center p-8 text-center bg-slate-950">
+                    <AlertCircle className="text-red-500 mb-4" size={64}/>
+                    <h2 className="text-2xl font-bold mb-2">Oops...</h2>
+                    <p className="text-slate-400 max-w-md mb-6">{errorMessage}</p>
+                    <button onClick={() => window.history.back()} className="bg-slate-800 px-6 py-3 rounded-xl font-bold flex items-center gap-2 active-scale"><ArrowLeft size={20}/> Volver</button>
+                </div>
+            );
 
-            return (
-                <div className="h-[100dvh] bg-zinc-950 flex flex-col items-center p-4 sm:p-8 font-sans overflow-hidden relative">
+            if (gameState === 'menu') return (
+                <div className="flex flex-col h-full bg-slate-900 overflow-hidden relative">
+                    <div className="absolute inset-0 bg-gradient-to-b from-indigo-900/20 to-slate-900 z-0"></div>
+                    <div className="relative z-10 p-6 flex items-center justify-between border-b border-white/10">
+                        <button onClick={() => window.history.back()} className="p-2 bg-white/5 hover:bg-white/10 rounded-xl transition active-scale"><ArrowLeft size={20}/></button>
+                        <div className="flex items-center gap-2 text-indigo-400 font-bold"><Zap size={20}/> Word Cascade</div>
+                        <div className="w-10"></div>
+                    </div>
                     
-                    <style dangerouslySetInnerHTML={{__html: `
-                        .perspective-1000 { perspective: 1000px; }
-                        .transform-style-3d { transform-style: preserve-3d; }
-                        .backface-hidden { backface-visibility: hidden; }
-                        .rotate-y-180 { transform: rotateY(180deg); }
-                        @keyframes float { 0%, 100% { transform: translateY(0px) rotate(-1deg); } 50% { transform: translateY(-8px) rotate(1deg); } }
-                        .animate-float { animation: float 6s ease-in-out infinite; }
-                        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-8px) rotate(-2deg); } 50% { transform: translateX(8px) rotate(2deg); } 75% { transform: translateX(-8px) rotate(-2deg); } }
-                        .animate-shake { animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both; }
-                        @keyframes explodeUp { 0% { transform: translateY(0) scale(0.5); opacity: 1; } 100% { transform: translateY(-80px) scale(1.5); opacity: 0; } }
-                        .particle { animation: explodeUp 1s ease-out forwards; position: absolute; font-size: 2rem; }
-                        .card-texture { background-color: #18181b; background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100' height='100' filter='url(%23noise)' opacity='0.02'/%3E%3C/svg%3E"); }
-                        .index-card-lines { background-image: linear-gradient(to bottom, transparent 4rem, #9f1239 4rem, #9f1239 4.1rem, transparent 4.1rem), linear-gradient(to bottom, #27272a 1px, transparent 1px); background-size: 100% 100%, 100% 2.5rem; background-position: 0 0, 0 6.6rem; }
-                    `}} />
-
-                    {/* HEADER BRANDING PERIPLO */}
-                    <div className="w-full max-w-4xl flex justify-between items-center mb-6 z-20">
-                        <div className="flex items-center gap-4">
-                            <button onClick={() => window.location.href='index.html'} className="flex items-center gap-2 font-black text-xl tracking-tight text-white hover:text-sky-400 transition-colors">
-                                <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white text-base shadow-lg shadow-indigo-600/20">P</div>
-                            </button>
-                            <div className="hidden sm:block w-px h-8 bg-zinc-800 mx-2"></div>
-                            <div>
-                                <h1 className="text-lg font-black text-white leading-none tracking-tight">{quizData?.title || 'Actividad Periplo'}</h1>
-                                <p className="text-[10px] font-bold text-sky-500 uppercase tracking-widest mt-1">Modo: Flashcards</p>
-                            </div>
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center z-10">
+                        <h1 className="text-5xl font-black mb-4 text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400 animate-pop-in">{gameData.title}</h1>
+                        <p className="text-slate-400 mb-8 text-lg max-w-sm">Arrastra cada palabra a su categoría correcta antes de que toque el suelo.</p>
+                        
+                        <div className="bg-slate-800/50 p-4 rounded-2xl border border-white/10 mb-8 w-full max-w-xs flex items-center gap-3">
+                            <UserCircle2 className="text-indigo-400 shrink-0"/>
+                            <input 
+                                type="text" 
+                                value={playerName} 
+                                onChange={(e) => setPlayerName(e.target.value)} 
+                                placeholder="Escribe tu nombre..." 
+                                className="bg-transparent border-none outline-none text-white font-bold w-full placeholder-slate-500"
+                            />
                         </div>
-                        <div className="flex space-x-3 w-full sm:w-auto justify-center">
-                            <button onClick={togglePause} disabled={gameState === 'victory' || gameState === 'wordList'} className="flex items-center px-4 py-2 bg-zinc-900 text-zinc-300 rounded-full shadow-sm hover:bg-zinc-800 transition-colors font-bold text-sm border border-zinc-800 disabled:opacity-50">
-                                {gameState === 'paused' ? <><Play size={16} className="mr-2"/> Reanudar</> : <><Pause size={16} className="mr-2"/> Pausa</>}
-                            </button>
-                            <button onClick={restartGame} className="flex items-center px-4 py-2 bg-zinc-900 text-zinc-300 rounded-full shadow-sm hover:bg-zinc-800 hover:text-rose-500 transition-colors font-bold text-sm border border-zinc-800 hidden sm:flex">
-                                <RefreshCw size={16} className="mr-2" /> Reiniciar
+
+                        <div className="grid grid-cols-2 gap-4 mb-12 w-full max-w-md">
+                            {gameData.content.categories.map((cat, i) => (
+                                <div key={i} className={`${CATEGORY_COLORS[i].bg} bg-opacity-20 border border-white/10 rounded-2xl p-4 flex flex-col items-center justify-center backdrop-blur-sm`}>
+                                    <span className={`font-black text-sm uppercase text-center ${CATEGORY_COLORS[i].text} drop-shadow`}>{cat.name}</span>
+                                </div>
+                            ))}
+                        </div>
+
+                        <button onClick={startGame} className="bg-emerald-500 hover:bg-emerald-400 text-slate-900 px-10 py-5 rounded-full font-black text-xl flex items-center gap-3 shadow-[0_10px_40px_rgba(16,185,129,0.4)] active-scale hover-scale transition-all">
+                            <Play fill="currentColor" size={24}/> JUGAR AHORA
+                        </button>
+                    </div>
+                </div>
+            );
+
+            if (gameState === 'gameover') return (
+                <div className="flex flex-col h-full bg-slate-900 items-center justify-center p-6 text-center relative">
+                    <div className="absolute top-6 right-6">
+                         <button onClick={() => setGameState('library')} className="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors border border-white/10 shadow-lg text-indigo-300">
+                             <BookOpen size={18}/> Biblioteca
+                         </button>
+                    </div>
+
+                    <Trophy className="text-yellow-400 mb-4 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]" size={80} />
+                    <h2 className="text-4xl font-black mb-1 animate-pop-in text-white">{lives > 0 ? '¡Dominación Total!' : '¡Juego Terminado!'}</h2>
+                    <p className="text-slate-400 mb-8 font-bold">Jugador: <span className="text-indigo-400">{playerName}</span></p>
+                    
+                    <p className="text-slate-400 text-xl">Tu puntuación final</p>
+                    <div className="text-7xl font-black text-transparent bg-clip-text bg-gradient-to-b from-yellow-300 to-amber-600 mb-12 animate-pop-in" style={{animationDelay: '0.2s'}}>
+                        {score}
+                    </div>
+
+                    <div className="flex gap-4">
+                        <button onClick={() => window.history.back()} className="bg-slate-800 px-6 py-4 rounded-2xl font-bold flex items-center gap-2 active-scale text-white border border-white/10"><ArrowLeft size={20}/> Salir</button>
+                        <button onClick={startGame} className="bg-indigo-600 px-8 py-4 rounded-2xl font-bold flex items-center gap-2 active-scale shadow-lg shadow-indigo-600/30 text-white"><RefreshCcw size={20}/> Jugar de Nuevo</button>
+                    </div>
+                </div>
+            );
+
+            if (gameState === 'library') return (
+                <div className="flex flex-col h-full bg-slate-950 p-6 overflow-hidden">
+                    <div className="flex items-center justify-between mb-6 shrink-0">
+                        <h2 className="text-2xl font-black text-white flex items-center gap-2"><BookOpen className="text-indigo-400"/> Biblioteca de Palabras</h2>
+                        <button onClick={() => setGameState('gameover')} className="p-2 bg-slate-800 text-slate-400 rounded-full hover:bg-slate-700 transition-colors">
+                            <ArrowLeft size={24} />
+                        </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6 pr-2">
+                        {gameData.content.categories.map((cat, i) => (
+                            <div key={i} className="bg-slate-900 rounded-2xl border border-white/5 overflow-hidden">
+                                <div className={`px-4 py-3 ${CATEGORY_COLORS[i].bg} bg-opacity-20 border-b border-white/5 font-black uppercase text-sm ${CATEGORY_COLORS[i].text} drop-shadow`}>
+                                    {cat.name}
+                                </div>
+                                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    {(cat.items || []).filter(item => item.word.trim() !== "").map((item, idx) => (
+                                        <div key={idx} className="flex items-center gap-3 bg-slate-950 p-3 rounded-xl border border-white/5">
+                                            <div className="text-2xl w-10 h-10 bg-slate-800 rounded-lg flex items-center justify-center shrink-0">{item.emoji}</div>
+                                            <span className="font-bold text-slate-200">{item.word}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+
+            // RENDER JUEGO ACTIVO (O PAUSADO)
+            return (
+                <div className="h-full w-full bg-slate-900 flex flex-col relative overflow-hidden touch-none">
+                    <div className="absolute top-0 w-full p-4 flex justify-between items-start z-10 pointer-events-none">
+                        <div className="flex flex-col gap-1">
+                            <div className="bg-slate-800/80 backdrop-blur px-4 py-2 rounded-2xl border border-white/10 flex items-center gap-2 text-xl font-black pointer-events-auto">
+                                <Trophy size={20} className="text-yellow-400" /> {score}
+                            </div>
+                            {combo > 1 && (
+                                <div className="text-emerald-400 font-black text-lg ml-2 animate-pop-in flex items-center gap-1 drop-shadow-md">
+                                    <Zap size={16} fill="currentColor"/> {combo}x Combo
+                                </div>
+                            )}
+                        </div>
+                        
+                        <div className="flex gap-2 pointer-events-auto">
+                            <div className="flex gap-1 bg-slate-800/80 backdrop-blur px-3 py-2 rounded-2xl border border-white/10">
+                                {[...Array(3)].map((_, i) => (
+                                    <Heart key={i} size={24} className={`${i < lives ? 'text-rose-500 fill-rose-500' : 'text-slate-600'}`} />
+                                ))}
+                            </div>
+                            <button onClick={togglePause} className="bg-slate-800/80 backdrop-blur px-3 py-2 rounded-2xl border border-white/10 hover:bg-slate-700 transition shadow-lg">
+                                <Pause size={24} className="text-white"/>
                             </button>
                         </div>
                     </div>
 
-                    {/* PANTALLAS ALTERNAS (VICTORIA Y LISTA) */}
-                    {gameState === 'victory' && (
-                        <div className="flex flex-col items-center justify-center flex-grow w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500 text-center">
-                            <div className="w-32 h-32 bg-amber-500/10 border border-amber-500/20 rounded-full flex items-center justify-center mb-6 shadow-inner relative">
-                                <Trophy size={64} className="text-amber-500 absolute z-10" />
-                                <div className="absolute inset-0 flex items-center justify-center animate-spin-slow text-4xl">✨✨✨</div>
+                    <div className="flex-1 relative">
+                        <div className="absolute top-20 right-4 text-white/20 font-black text-4xl pointer-events-none">{wordPool.length}</div>
+
+                        {currentWord && gameState === 'playing' && (
+                            <div 
+                                ref={wordRef}
+                                onPointerDown={handlePointerDown}
+                                onPointerMove={handlePointerMove}
+                                onPointerUp={handlePointerUp}
+                                onPointerCancel={handlePointerUp}
+                                className={`word-card absolute left-1/2 -translate-x-1/2 p-6 rounded-3xl bg-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] border-b-[6px] border-slate-300 select-none flex flex-col items-center justify-center whitespace-nowrap z-50 transition-colors min-w-[140px] ${isDraggingRef.current ? 'drag-active scale-110 rotate-3 shadow-indigo-500/50' : ''} ${isWrong ? 'animate-shake bg-red-100 border-red-300' : ''}`}
+                                style={{ 
+                                    top: isDraggingRef.current ? `${dragPos.y}px` : `${fallingY}%`,
+                                    left: isDraggingRef.current ? `${dragPos.x}px` : '50%',
+                                    transform: isDraggingRef.current ? 'translate(-50%, -50%) scale(1.1)' : 'translateX(-50%)',
+                                    transition: isDraggingRef.current ? 'none' : (isWrong ? 'top 0.3s ease-out' : 'none')
+                                }}
+                            >
+                                <span className="text-6xl mb-3 drop-shadow-md">{currentWord.emoji}</span>
+                                <span className={`font-black text-2xl md:text-3xl ${isWrong ? 'text-red-600' : 'text-slate-900'}`}>{currentWord.text}</span>
                             </div>
-                            <h2 className="text-4xl font-black text-white mb-2">¡Dominado!</h2>
-                            <p className="text-lg text-zinc-500 mb-8">Has memorizado todas las tarjetas de este set.</p>
-                            <div className="flex flex-col w-full space-y-3">
-                                <button onClick={restartGame} className="w-full py-4 bg-sky-500 text-black rounded-2xl font-black text-lg hover:bg-sky-400 shadow-lg hover:shadow-sky-500/30 transition-all active:scale-95">
-                                    Jugar de nuevo
-                                </button>
-                                <button onClick={() => setGameState('wordList')} className="w-full py-4 bg-zinc-900 text-zinc-300 border-2 border-zinc-800 rounded-2xl font-bold text-lg hover:bg-zinc-800 hover:border-zinc-700 transition-all active:scale-95">
-                                    Ver resumen del mazo
-                                </button>
-                                <button onClick={() => window.location.href='index.html'} className="w-full py-4 text-zinc-500 font-bold text-sm hover:text-zinc-300 transition-colors">
-                                    Salir al Hub
-                                </button>
+                        )}
+                        
+                        {currentWord && gameState === 'paused' && (
+                            <div 
+                                className="absolute left-1/2 -translate-x-1/2 p-6 rounded-3xl bg-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] border-b-[6px] border-slate-300 select-none flex flex-col items-center justify-center whitespace-nowrap z-40 opacity-50 blur-sm"
+                                style={{ top: `${fallingY}%`, left: '50%', transform: 'translateX(-50%)' }}
+                            >
+                                <span className="text-6xl mb-3 drop-shadow-md">{currentWord.emoji}</span>
+                                <span className="font-black text-2xl md:text-3xl text-slate-900">{currentWord.text}</span>
                             </div>
-                        </div>
-                    )}
+                        )}
+                    </div>
 
-                    {gameState === 'wordList' && (
-                        <div className="flex flex-col flex-grow w-full max-w-2xl bg-zinc-900 rounded-3xl shadow-2xl border border-zinc-800 p-6 sm:p-8 animate-in fade-in zoom-in-95 duration-300 relative z-30">
-                            <div className="flex items-center justify-between mb-6">
-                                <h2 className="text-2xl font-black text-white">Resumen del Mazo</h2>
-                                <button onClick={() => setGameState(correctCount === totalCards ? 'victory' : 'playing')} className="p-2 bg-zinc-800 text-zinc-400 rounded-full hover:bg-zinc-700 transition-colors">
-                                    <ArrowLeft size={24} />
-                                </button>
-                            </div>
-                            <div className="flex-grow overflow-y-auto pr-2 space-y-4 max-h-[60vh] custom-scrollbar">
-                                {flashcardsData.map((card) => (
-                                    <div key={card.id} className="flex flex-col sm:flex-row items-start sm:items-center p-4 bg-zinc-950/50 rounded-2xl border border-zinc-800 gap-4">
-                                        <div className="text-4xl bg-zinc-900 w-16 h-16 flex items-center justify-center rounded-xl shadow-sm border border-zinc-800 flex-shrink-0">
-                                            {card.emojis}
-                                        </div>
-                                        <div className="flex-grow w-full">
-                                            <div className="flex justify-between items-start">
-                                                <h4 className="text-lg font-bold text-white">{card.wordEn}</h4>
-                                                <button onClick={(e) => playAudio(card.wordEn, 'en-US', e)} className="p-1.5 text-zinc-500 hover:text-sky-400 transition-colors rounded-lg bg-zinc-900">
-                                                    <Volume2 size={16} />
-                                                </button>
-                                            </div>
-                                            <p className="text-amber-500 font-bold text-sm mb-1">{card.wordEs}</p>
-                                            <p className="text-zinc-500 text-xs italic">"{card.exampleEn}"</p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* ÁREA PRINCIPAL DEL JUEGO */}
-                    {(gameState === 'playing' || gameState === 'paused') && (
-                        <div className="flex flex-col items-center flex-grow mt-4 w-full">
-                            
-                            <div className="mb-8 w-full max-w-sm sm:max-w-md flex justify-between items-center bg-zinc-900 p-3 rounded-2xl shadow-md border border-zinc-800 z-10">
-                                <div className="flex flex-col items-center px-4">
-                                    <CircleDashed size={20} className="text-zinc-500 mb-1" />
-                                    <span className="text-[10px] font-black tracking-widest text-zinc-600">PENDIENTES</span>
-                                    <span className="text-lg font-black text-white">{pendingCount}</span>
-                                </div>
-                                <div className="w-px h-10 bg-zinc-800"></div>
-                                <div className="flex flex-col items-center px-4">
-                                    <XCircle size={20} className="text-rose-500 mb-1" />
-                                    <span className="text-[10px] font-black tracking-widest text-rose-500">REPASAR</span>
-                                    <span className="text-lg font-black text-rose-500">{incorrectCount}</span>
-                                </div>
-                                <div className="w-px h-10 bg-zinc-800"></div>
-                                <div className="flex flex-col items-center px-4">
-                                    <CheckCircle2 size={20} className="text-emerald-500 mb-1" />
-                                    <span className="text-[10px] font-black tracking-widest text-emerald-500">CORRECTAS</span>
-                                    <span className="text-lg font-black text-emerald-500">{correctCount}</span>
-                                </div>
-                            </div>
-
-                            <div className={`transition-opacity duration-300 relative w-full flex justify-center ${isVisible ? 'opacity-100' : 'opacity-0'}`}>
-                                <div className={`relative w-[90%] sm:w-80 h-[65vh] max-h-[500px] perspective-1000 group ${!isAnimating && gameState === 'playing' && !feedback ? 'animate-float' : ''} ${shake ? 'animate-shake' : ''}`}>
-                                    <div className={`relative w-full h-full duration-500 ease-out transform-style-3d shadow-2xl rounded-[2rem] transition-all ${isFlipped ? 'rotate-y-180 shadow-sky-900/20' : 'shadow-black/50'} ${gameState === 'playing' && !feedback && !isFlipped ? 'hover:-translate-y-2 hover:shadow-sky-500/10' : ''} ${shake ? 'ring-4 ring-rose-500 ring-offset-4 ring-offset-zinc-950' : ''}`}>
-                                        
-                                        <div onClick={handleFlip} className="absolute inset-0 backface-hidden card-texture rounded-[2rem] border border-zinc-800 flex flex-col items-center justify-center p-8 overflow-hidden cursor-pointer z-10">
-                                            <div className="z-10 flex flex-col items-center w-full text-center space-y-6">
-                                                <div className="text-7xl sm:text-8xl drop-shadow-2xl">
-                                                    {currentCard.emojis}
-                                                </div>
-                                                <div className="space-y-4 w-full">
-                                                    <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight px-2">
-                                                        {currentCard.wordEn}
-                                                    </h2>
-                                                    <button onClick={(e) => playAudio(currentCard.wordEn, 'en-US', e)} className="mx-auto flex items-center justify-center space-x-2 text-zinc-400 hover:text-sky-400 bg-zinc-950 px-6 py-3 rounded-xl border border-zinc-800 transition-colors shadow-sm relative z-50 pointer-events-auto">
-                                                        <Volume2 size={24} />
-                                                        <span className="text-xs font-black uppercase tracking-widest">Escuchar</span>
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            <div className="absolute bottom-6 flex items-center text-zinc-600 text-xs font-black tracking-widest space-x-2 pointer-events-none">
-                                                <RotateCcw size={16} /> <span>TOCA PARA VOLTEAR</span>
-                                            </div>
-                                        </div>
-
-                                        <div onClick={handleFlip} className="absolute inset-0 backface-hidden rotate-y-180 card-texture index-card-lines rounded-[2rem] border border-zinc-800 flex flex-col overflow-hidden shadow-inner cursor-pointer">
-                                            <div className="z-10 flex flex-col h-full p-6 sm:p-8 relative">
-                                                
-                                                <button onClick={(e) => { e.stopPropagation(); handleFlip(); }} disabled={!!feedback} className="absolute top-4 right-4 text-zinc-400 hover:text-white flex items-center gap-1 text-[10px] uppercase tracking-widest font-black bg-zinc-900/80 backdrop-blur-sm px-3 py-1.5 rounded-full shadow-sm border border-zinc-700 transition-colors z-50 pointer-events-auto active:scale-95">
-                                                    <RotateCcw size={14} /> Frente
-                                                </button>
-
-                                                {feedback && (
-                                                    <div className={`absolute inset-0 z-40 flex items-center justify-center backdrop-blur-sm rounded-[2rem] transition-all duration-300 ${feedback === 'correct' ? 'bg-emerald-950/80' : 'bg-rose-950/80'}`}>
-                                                        {feedback === 'correct' ? (
-                                                            <div className="relative pointer-events-none">
-                                                                <span className="text-8xl block animate-bounce">🎉</span>
-                                                                <span className="particle" style={{ left: '-50px', top: '10px', animationDelay: '0.1s' }}>✨</span>
-                                                                <span className="particle" style={{ right: '-50px', top: '20px', animationDelay: '0.2s' }}>✅</span>
-                                                                <span className="particle" style={{ left: '20px', top: '-40px', animationDelay: '0s' }}>🎊</span>
-                                                            </div>
-                                                        ) : (
-                                                            <div className="relative pointer-events-none">
-                                                                <span className="text-8xl block animate-pulse">🤔</span>
-                                                                <span className="particle" style={{ left: '-40px', top: '0px', animationDelay: '0.1s' }}>💭</span>
-                                                                <span className="particle" style={{ right: '-40px', top: '10px', animationDelay: '0.2s' }}>❌</span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-
-                                                <div className="relative z-10 flex-grow pt-4 pointer-events-none">
-                                                    <h3 onClick={(e) => e.stopPropagation()} className="text-2xl sm:text-3xl font-black text-amber-400 mb-8 pl-1 tracking-tight leading-tight pointer-events-auto cursor-default inline-block">
-                                                        {currentCard.wordEs}
-                                                    </h3>
-                                                    <div className="pl-1 mt-4">
-                                                        <div onClick={(e) => e.stopPropagation()} className="flex flex-col bg-zinc-950/80 p-4 rounded-2xl backdrop-blur-sm border border-zinc-800 shadow-inner pointer-events-auto cursor-default">
-                                                            <p className="text-zinc-300 text-lg sm:text-xl font-medium mb-3 italic">
-                                                                "{currentCard.exampleEn}"
-                                                            </p>
-                                                            <button onClick={(e) => playAudio(currentCard.exampleEn, 'en-US', e)} className="self-end flex items-center gap-2 text-zinc-500 hover:text-sky-400 transition-colors p-2 rounded-lg hover:bg-zinc-900 z-50">
-                                                                <Volume2 size={16}/> <span className="text-[10px] font-black uppercase tracking-widest">Audio</span>
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                </div>
-
-                                                <div onClick={(e) => e.stopPropagation()} className="relative z-50 flex space-x-3 mt-auto pt-4 pointer-events-auto cursor-default">
-                                                    <button onClick={(e) => handleGrade('incorrect', e)} disabled={!!feedback} className="flex-1 flex flex-col items-center justify-center py-3 bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white border border-rose-500/20 rounded-xl font-black uppercase tracking-widest text-xs transition-all shadow-sm active:scale-95 disabled:opacity-50">
-                                                        <X size={20} className="mb-1" /> A repasar
-                                                    </button>
-                                                    <button onClick={(e) => handleGrade('correct', e)} disabled={!!feedback} className="flex-1 flex flex-col items-center justify-center py-3 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500 hover:text-white border border-emerald-500/20 rounded-xl font-black uppercase tracking-widest text-xs transition-all shadow-sm active:scale-95 disabled:opacity-50">
-                                                        <Check size={20} className="mb-1" /> Me la supe
-                                                    </button>
-                                                </div>
-
-                                            </div>
-                                        </div>
-
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className={`mt-8 flex items-center space-x-6 z-10 transition-opacity duration-300 ${feedback || gameState !== 'playing' ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
-                                <button onClick={handlePrev} disabled={!canNavigate || isAnimating} className={`p-4 rounded-full shadow-lg transition-all ${canNavigate ? 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-white hover:bg-zinc-800 active:scale-95' : 'bg-zinc-950 text-zinc-800 cursor-not-allowed'}`}>
-                                    <ChevronLeft size={24} />
-                                </button>
-
-                                <div className="flex flex-col items-center bg-zinc-900 px-6 py-2 rounded-full shadow-sm border border-zinc-800">
-                                    <span className="text-base font-black text-zinc-300 tracking-widest">
-                                        {currentIndex + 1} <span className="text-zinc-600 font-normal mx-1">/</span> {totalCards}
+                    <div className="h-48 md:h-56 grid grid-cols-4 gap-2 md:gap-4 p-2 md:p-4 bg-slate-950/50 backdrop-blur-md border-t border-white/5 z-20">
+                        {gameData.content.categories.map((cat, i) => {
+                            const color = CATEGORY_COLORS[i];
+                            return (
+                                <div 
+                                    key={i} 
+                                    data-category={i}
+                                    className={`relative flex items-center justify-center p-2 rounded-t-3xl rounded-b-xl border-t-4 ${color.bg} ${color.border} ${color.shadow} shadow-lg transition-transform`}
+                                >
+                                    <span className={`text-center font-black text-sm md:text-lg uppercase leading-tight ${color.text} drop-shadow-md pointer-events-none`}>
+                                        {cat.name}
                                     </span>
+                                    <div className="absolute top-0 w-full h-4 bg-black/20 rounded-full blur-[2px] pointer-events-none"></div>
                                 </div>
-
-                                <button onClick={handleNext} disabled={!canNavigate || isAnimating} className={`p-4 rounded-full shadow-lg transition-all ${canNavigate ? 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-white hover:bg-zinc-800 active:scale-95' : 'bg-zinc-950 text-zinc-800 cursor-not-allowed'}`}>
-                                    <ChevronRight size={24} />
-                                </button>
-                            </div>
-                        </div>
-                    )}
-
+                            );
+                        })}
+                    </div>
+                    
+                    {/* OVERLAY DE PAUSA */}
                     {gameState === 'paused' && (
-                        <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center text-white p-6 text-center">
-                            <Pause size={64} className="mb-6 text-zinc-600" />
-                            <h3 className="text-3xl font-black mb-8 tracking-tighter uppercase">Pausa</h3>
-                            <button onClick={togglePause} className="px-8 py-4 bg-sky-500 text-black rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-sky-500/20 hover:scale-105 transition-transform mb-4">
-                                Reanudar Estudio
+                        <div className="absolute inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-center text-white p-6 text-center animate-in fade-in">
+                            <Pause size={64} className="mb-6 text-indigo-500" />
+                            <h3 className="text-3xl font-black mb-8 tracking-tighter uppercase">Juego en Pausa</h3>
+                            <button onClick={togglePause} className="px-8 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-indigo-600/30 hover:scale-105 transition-transform mb-4 active-scale">
+                                Reanudar Partida
                             </button>
-                            <button onClick={() => window.location.href='index.html'} className="px-8 py-4 bg-transparent text-zinc-400 rounded-2xl font-bold uppercase tracking-widest hover:text-white transition-colors">
+                            <button onClick={() => window.location.href='index.html'} className="px-8 py-4 bg-transparent text-slate-400 rounded-2xl font-bold uppercase tracking-widest hover:text-white transition-colors">
                                 Salir al Hub
                             </button>
                         </div>
                     )}
-
                 </div>
             );
-        }
+        };
 
         const root = createRoot(document.getElementById('root'));
-        root.render(<FlashcardsApp />);
+        root.render(<CascadeGame />);
     </script>
 </body>
 </html>
