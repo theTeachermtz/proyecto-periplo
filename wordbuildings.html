@@ -22,21 +22,14 @@
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;800;900&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; overflow: hidden; background-color: #09090b; touch-action: none; user-select: none; }
         
-        /* Fondo Dinámico: Ciudad -> Cielo -> Estratosfera -> Espacio */
         .building-bg {
             background: linear-gradient(to top, 
-                #1e293b 0%,   /* Ciudad / Noche baja */
-                #0ea5e9 20%,  /* Cielo de día */
-                #3b82f6 40%,  /* Cielo alto */
-                #1e3a8a 60%,  /* Estratosfera */
-                #0f172a 80%,  /* Espacio profundo */
-                #000000 100%  /* Vacío absoluto */
+                #1e293b 0%, #0ea5e9 20%, #3b82f6 40%, #1e3a8a 60%, #0f172a 80%, #000000 100%
             );
             background-size: 100% 500%;
             transition: background-position 1.5s ease-out;
         }
 
-        /* Estrellas estáticas sutiles */
         .space-stars {
             background-image: 
                 radial-gradient(1px 1px at 10% 10%, white 100%, transparent),
@@ -68,7 +61,6 @@
             background-size: 20px 20px;
         }
 
-        /* Temblor solo para Game Over */
         @keyframes shake {
             0% { transform: translate(1px, 1px) rotate(0deg); }
             10% { transform: translate(-2px, -2px) rotate(-1deg); }
@@ -106,14 +98,14 @@
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Building2, Play, RotateCcw, Home, Timer, Trophy, Star, AlertTriangle, Layers, Pause, BookOpen, ChevronRight, X } from 'lucide-react';
+        import { getFirestore, doc, getDoc, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+        import { Building2, Play, RotateCcw, Home, Timer, Trophy, Star, AlertTriangle, Layers, Pause, BookOpen, ChevronRight, X, UserCircle2, ListOrdered } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // Constantes del Motor Físico
+        // Constantes Físicas
         const GAME_AREA_WIDTH = 400; 
         const INITIAL_BLOCK_WIDTH = 250;
         const BLOCK_HEIGHT = 60;
@@ -123,17 +115,21 @@
         // ANCLAJES
         const CRANE_TOP = 0; 
         const CABLE_LENGTH = 200; 
-        const BLOCK_Y = CRANE_TOP + CABLE_LENGTH; // 200px
-        const TOWER_ANCHOR_Y = 380; // Zona de colisión
+        const BLOCK_Y = CRANE_TOP + CABLE_LENGTH; 
+        const TOWER_ANCHOR_Y = 380; 
 
         const COLORS = ['bg-blue-500', 'bg-red-500', 'bg-amber-500', 'bg-green-500', 'bg-indigo-500', 'bg-fuchsia-500', 'bg-emerald-500'];
 
         const WordBuildings = () => {
-            const [gameState, setGameState] = useState('LOADING'); 
+            const [gameState, setGameState] = useState('LOADING'); // LOADING, MENU, PLAYING, PAUSED, LIBRARY, LEVEL_TRANSITION, GAMEOVER, VICTORY, LEADERBOARD
             const [gameData, setGameData] = useState(null);
             
             const [levels, setLevels] = useState([]);
             const [currentLevel, setCurrentLevel] = useState(0);
+            
+            const [playerName, setPlayerName] = useState(() => localStorage.getItem('wb_playerName') || "");
+            const [savedProgress, setSavedProgress] = useState(null);
+            const [leaderboard, setLeaderboard] = useState([]);
             
             const [levelScore, setLevelScore] = useState(0); 
             const [totalScore, setTotalScore] = useState(0);
@@ -164,6 +160,10 @@
                 const params = new URLSearchParams(window.location.search);
                 const id = params.get('id');
                 if (!id) return setGameState('ERROR');
+
+                // Cargar progreso guardado
+                const prog = localStorage.getItem(`wb_prog_${id}`);
+                if(prog) setSavedProgress(JSON.parse(prog));
 
                 getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id)).then(snap => {
                     if (snap.exists()) {
@@ -221,9 +221,65 @@
                 return () => cancelAnimationFrame(requestRef.current);
             }, [gameState]);
 
+            const getBaseScoreForLevel = (lvl) => {
+                if (levels.length === 0) return 0;
+                return levels.slice(0, lvl).reduce((acc, l) => acc + l.items.length, 0);
+            };
+
+            const saveToLeaderboard = async (finalScore, finalCombo, finalTime) => {
+                try {
+                    const quizId = new URLSearchParams(window.location.search).get('id');
+                    await addDoc(collection(db, `artifacts/periplo-app-v1/users/teacher_builder_001/quizzes/${quizId}/leaderboard`), {
+                        playerName: playerName || 'Constructor Anónimo',
+                        score: finalScore,
+                        maxCombo: finalCombo,
+                        timeElapsed: finalTime,
+                        date: serverTimestamp()
+                    });
+                } catch(e) {
+                    console.error("Error guardando score:", e);
+                }
+            };
+
+            const loadLeaderboard = async () => {
+                setGameState('LOADING');
+                try {
+                    const quizId = new URLSearchParams(window.location.search).get('id');
+                    const q = query(collection(db, `artifacts/periplo-app-v1/users/teacher_builder_001/quizzes/${quizId}/leaderboard`), orderBy('score', 'desc'), orderBy('timeElapsed', 'asc'), limit(10));
+                    const snap = await getDocs(q);
+                    setLeaderboard(snap.docs.map(d => d.data()));
+                    setGameState('LEADERBOARD');
+                } catch(e) {
+                    alert("No hay registros en el ranking aún.");
+                    setGameState('MENU');
+                }
+            };
+
+            const handleStartNew = () => {
+                if(!playerName.trim()) return alert("Ingresa tu nombre para el registro de obra.");
+                const quizId = new URLSearchParams(window.location.search).get('id');
+                localStorage.setItem('wb_playerName', playerName);
+                localStorage.removeItem(`wb_prog_${quizId}`);
+                setSavedProgress(null);
+                
+                setTimeElapsed(0);
+                setMaxCombo(0);
+                startLevel(0);
+            };
+
+            const handleResume = () => {
+                if(!playerName.trim()) return alert("Ingresa tu nombre para continuar.");
+                localStorage.setItem('wb_playerName', playerName);
+                
+                setTimeElapsed(savedProgress.time);
+                setMaxCombo(0); 
+                startLevel(savedProgress.level);
+            };
+
             const startLevel = (lvlIndex) => {
                 setCurrentLevel(lvlIndex);
                 setLevelScore(0);
+                setTotalScore(getBaseScoreForLevel(lvlIndex));
                 setCombo(0);
                 setCameraY(0);
                 setDebris([]);
@@ -253,15 +309,8 @@
                 setGameState('PLAYING');
             };
 
-            const addFloatingText = (text, type, x, y) => {
-                const id = Date.now();
-                setFloatingTexts(prev => [...prev, { id, text, type, x, y }]);
-                setTimeout(() => setFloatingTexts(prev => prev.filter(ft => ft.id !== id)), 800);
-            };
-
             const triggerConfettiStars = (hitX, currentCombo) => {
                 const dropY = (TOWER_ANCHOR_Y - BLOCK_HEIGHT/2) / window.innerHeight;
-                
                 confetti({
                     particleCount: 15 + (currentCombo * 8), 
                     spread: 60 + (currentCombo * 5),
@@ -278,7 +327,6 @@
 
             const handleDrop = () => {
                 if (gameState !== 'PLAYING' || isDroppingRef.current) return;
-                
                 isDroppingRef.current = true; 
 
                 if(blockDOMRef.current) {
@@ -286,9 +334,7 @@
                     blockDOMRef.current.style.top = `${TOWER_ANCHOR_Y - BLOCK_HEIGHT}px`;
                 }
 
-                setTimeout(() => {
-                    finalizeDrop();
-                }, 250); 
+                setTimeout(finalizeDrop, 250); 
             };
 
             const finalizeDrop = () => {
@@ -298,10 +344,7 @@
 
                 const currentX = mb.x;
                 const prevX = prevBlock.x;
-                
-                const currentLeft = currentX - (mb.width / 2);
-                const prevLeft = prevX - (prevBlock.width / 2);
-                const deltaLeft = currentLeft - prevLeft;
+                const deltaLeft = (currentX - mb.width/2) - (prevX - prevBlock.width/2);
 
                 let newWidth = mb.width;
                 let newX = currentX;
@@ -319,22 +362,20 @@
                     if (newCombo > maxCombo) setMaxCombo(newCombo);
                     
                     triggerConfettiStars(newX, newCombo);
-                    addFloatingText(`x${newCombo}`, 'perfect', GAME_AREA_WIDTH/2, TOWER_ANCHOR_Y - 100);
+                    setFloatingTexts(prev => [...prev, { id: Date.now(), text: `x${newCombo}`, x: GAME_AREA_WIDTH/2, y: TOWER_ANCHOR_Y - 100 }]);
 
                 } else {
                     setCombo(0);
-
                     if (Math.abs(deltaLeft) >= prevBlock.width) {
                         missed = true;
                     } else {
                         newWidth = prevBlock.width - Math.abs(deltaLeft);
-                        
                         if (deltaLeft > 0) {
-                            newX = currentLeft + (newWidth / 2);
-                            debrisPiece = { id: Date.now(), x: currentLeft + newWidth, width: Math.abs(deltaLeft), color: COLORS[currentLevel % COLORS.length] };
+                            newX = (currentX - mb.width/2) + (newWidth / 2);
+                            debrisPiece = { id: Date.now(), x: (currentX - mb.width/2) + newWidth, width: Math.abs(deltaLeft), color: COLORS[currentLevel % COLORS.length] };
                         } else {
-                            newX = (currentLeft + mb.width) - (newWidth / 2);
-                            debrisPiece = { id: Date.now(), x: currentLeft, width: Math.abs(deltaLeft), color: COLORS[currentLevel % COLORS.length] };
+                            newX = ((currentX - mb.width/2) + mb.width) - (newWidth / 2);
+                            debrisPiece = { id: Date.now(), x: currentX - mb.width/2, width: Math.abs(deltaLeft), color: COLORS[currentLevel % COLORS.length] };
                         }
                     }
                 }
@@ -342,32 +383,24 @@
                 if (missed) {
                     setShake(true); 
                     setTimeout(() => setShake(false), 400);
+                    saveToLeaderboard(getBaseScoreForLevel(currentLevel) + score, maxCombo, timeElapsed);
                     setGameState('GAMEOVER');
                     return;
                 }
 
-                // DIFICULTAD
                 const blocksPlaced = score + 1;
                 let shouldIncreaseSpeed = false;
-
                 if (currentLevel === 0 && blocksPlaced % 3 === 0) shouldIncreaseSpeed = true;
                 else if ((currentLevel === 1 || currentLevel === 2) && blocksPlaced % 2 === 0) shouldIncreaseSpeed = true;
                 else if (currentLevel >= 3) shouldIncreaseSpeed = true; 
 
-                if (shouldIncreaseSpeed) {
-                    mb.speed = Math.min(mb.speed + 0.0003, 0.007);
-                }
+                if (shouldIncreaseSpeed) mb.speed = Math.min(mb.speed + 0.0003, 0.007);
 
                 const currentWord = levels[currentLevel].items[score];
                 const newBlock = {
-                    id: `block-${score}`,
-                    x: newX,
-                    width: newWidth,
-                    y: blocks.length,
-                    textEs: currentWord.es || currentWord.word,
-                    emoji: currentWord.emoji,
-                    color: COLORS[currentLevel % COLORS.length], 
-                    isPerfect: isPerfect
+                    id: `block-${score}`, x: newX, width: newWidth, y: blocks.length,
+                    textEs: currentWord.es || currentWord.word, emoji: currentWord.emoji,
+                    color: COLORS[currentLevel % COLORS.length], isPerfect: isPerfect
                 };
 
                 setBlocks(prev => [...prev, newBlock]);
@@ -375,23 +408,30 @@
 
                 const nextScore = score + 1;
                 setLevelScore(nextScore);
-                setTotalScore(prev => prev + 1);
-
-                setCameraY((blocks.length) * BLOCK_HEIGHT);
+                setTotalScore(getBaseScoreForLevel(currentLevel) + nextScore);
+                setCameraY(blocks.length * BLOCK_HEIGHT);
 
                 if (nextScore >= levels[currentLevel].items.length) {
                     confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 } });
+                    
+                    const quizId = new URLSearchParams(window.location.search).get('id');
+                    
                     setTimeout(() => {
                         if (currentLevel >= levels.length - 1) {
+                            saveToLeaderboard(getBaseScoreForLevel(currentLevel) + nextScore, maxCombo, timeElapsed);
+                            localStorage.removeItem(`wb_prog_${quizId}`); // Borrar progreso al ganar
                             setGameState('VICTORY');
                         } else {
+                            // Guardar Progreso
+                            const progObj = { level: currentLevel + 1, time: timeElapsed };
+                            localStorage.setItem(`wb_prog_${quizId}`, JSON.stringify(progObj));
+                            setSavedProgress(progObj);
                             setGameState('LEVEL_TRANSITION');
                         }
                     }, 500); 
                     return;
                 }
 
-                // ESTA ES LA MAGIA QUE ARREGLA EL TAMAÑO
                 movingBlockRef.current.width = newWidth; 
                 movingBlockRef.current.x = GAME_AREA_WIDTH / 2; 
 
@@ -399,7 +439,6 @@
                     blockDOMRef.current.style.transition = 'none'; 
                     blockDOMRef.current.style.top = `${BLOCK_Y}px`;
                 }
-                
                 isDroppingRef.current = false; 
             };
 
@@ -418,18 +457,13 @@
                 return `${m}:${s.toString().padStart(2, '0')}`;
             };
 
-            const openLibrary = () => {
-                setPrevState(gameState);
-                setGameState('LIBRARY');
-            };
-
             if (gameState === 'LOADING') return <div className="h-screen flex items-center justify-center bg-zinc-950 text-white"><div className="animate-spin w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full"></div></div>;
             if (gameState === 'ERROR') return <div className="h-screen flex items-center justify-center bg-zinc-950 text-rose-500 font-bold">Error cargando datos. Verifica el ID.</div>;
 
             if (gameState === 'MENU') {
                 return (
                     <div className="h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center building-bg" style={{backgroundPosition: '0% 100%'}}>
-                        <button onClick={openLibrary} className="absolute top-6 right-6 bg-white/10 hover:bg-white/20 p-3 rounded-2xl flex items-center gap-2 backdrop-blur-md transition">
+                        <button onClick={() => { setPrevState('MENU'); setGameState('LIBRARY'); }} className="absolute top-6 right-6 bg-white/10 hover:bg-white/20 p-3 rounded-2xl flex items-center gap-2 backdrop-blur-md transition">
                             <BookOpen size={20}/> <span className="font-bold text-sm hidden sm:block">Planos</span>
                         </button>
 
@@ -437,22 +471,73 @@
                             <Building2 size={48} className="text-white"/>
                         </div>
                         <h1 className="text-4xl sm:text-5xl font-black mb-2 tracking-tight drop-shadow-lg">{gameData.title}</h1>
-                        <p className="text-emerald-300 font-bold uppercase tracking-widest text-sm mb-12">Proyecto: 4 Edificios</p>
+                        <p className="text-emerald-300 font-bold uppercase tracking-widest text-sm mb-12">Proyecto: {levels.length} Edificios</p>
                         
                         <div className="bg-black/40 backdrop-blur-md p-6 rounded-3xl w-full max-w-sm border border-white/10 mb-8">
-                            <div className="flex justify-between items-center mb-4">
-                                <span className="text-zinc-400 font-bold">Edificios a construir</span>
-                                <span className="text-2xl font-black">{levels.length}</span>
+                            <div className="flex items-center gap-3 bg-zinc-900/80 p-3 rounded-2xl border border-white/5 mb-4 focus-within:border-emerald-500 transition-colors">
+                                <UserCircle2 className="text-emerald-400 shrink-0"/>
+                                <input 
+                                    type="text" 
+                                    value={playerName} 
+                                    onChange={e => {setPlayerName(e.target.value); localStorage.setItem('wb_playerName', e.target.value);}} 
+                                    placeholder="Tu nombre de constructor..." 
+                                    className="bg-transparent border-none outline-none text-white font-bold w-full placeholder-zinc-500"
+                                />
                             </div>
                             <div className="flex justify-between items-center">
-                                <span className="text-zinc-400 font-bold">Total Palabras</span>
-                                <span className="text-xl font-black">{levels.reduce((acc, lvl) => acc + lvl.items.length, 0)}</span>
+                                <span className="text-zinc-400 font-bold text-sm">Total Palabras</span>
+                                <span className="text-lg font-black">{levels.reduce((acc, lvl) => acc + lvl.items.length, 0)}</span>
                             </div>
                         </div>
 
-                        <button onClick={() => { setTotalScore(0); startLevel(0); }} className="bg-emerald-500 hover:bg-emerald-400 text-zinc-950 w-full max-w-sm py-5 rounded-2xl font-black text-xl shadow-[0_10px_25px_rgba(16,185,129,0.4)] transition active:scale-95 flex items-center justify-center gap-3">
-                            <Play fill="currentColor" /> INICIAR OBRA
-                        </button>
+                        <div className="flex flex-col gap-3 w-full max-w-sm">
+                            {savedProgress && (
+                                <button onClick={handleResume} className="bg-amber-500 hover:bg-amber-400 text-zinc-950 w-full py-4 rounded-2xl font-black text-lg shadow-[0_5px_20px_rgba(245,158,11,0.4)] transition active:scale-95 flex items-center justify-center gap-3">
+                                    <Play fill="currentColor" size={20}/> CONTINUAR OBRA (Edificio {savedProgress.level + 1})
+                                </button>
+                            )}
+                            <button onClick={handleStartNew} className={`${savedProgress ? 'bg-zinc-800 hover:bg-zinc-700 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-[0_10px_25px_rgba(16,185,129,0.4)]'} w-full py-4 rounded-2xl font-black text-lg transition active:scale-95 flex items-center justify-center gap-3`}>
+                                {savedProgress ? <RotateCcw size={20}/> : <Play fill="currentColor" size={20}/>} {savedProgress ? 'NUEVA OBRA DESDE CERO' : 'INICIAR OBRA'}
+                            </button>
+                            <button onClick={loadLeaderboard} className="bg-indigo-600 hover:bg-indigo-500 text-white w-full py-4 rounded-2xl font-black text-lg shadow-[0_5px_20px_rgba(79,70,229,0.4)] transition active:scale-95 flex items-center justify-center gap-3 mt-2">
+                                <Trophy size={20}/> VER RANKING
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (gameState === 'LEADERBOARD') {
+                return (
+                    <div className="flex flex-col h-screen bg-zinc-950 p-6 overflow-hidden text-white building-bg" style={{backgroundPosition: '0% 50%'}}>
+                        <div className="flex items-center justify-between mb-8 shrink-0">
+                            <h2 className="text-3xl font-black flex items-center gap-3"><Trophy className="text-yellow-400" size={32}/> Top Constructores</h2>
+                            <button onClick={() => setGameState('MENU')} className="p-3 bg-zinc-800/80 text-zinc-300 rounded-full hover:bg-zinc-700 transition-colors backdrop-blur-md">
+                                <X size={24} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2 pb-10">
+                            {leaderboard.map((entry, i) => (
+                                <div key={i} className={`flex items-center justify-between p-4 rounded-2xl border ${i===0?'bg-yellow-500/20 border-yellow-500/50':'bg-black/40 border-white/5'} backdrop-blur-md`}>
+                                    <div className="flex items-center gap-4">
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-lg ${i===0?'bg-yellow-500 text-black': i===1?'bg-zinc-300 text-black' : i===2?'bg-amber-700 text-white' : 'bg-zinc-800 text-zinc-400'}`}>
+                                            {i + 1}
+                                        </div>
+                                        <div>
+                                            <div className={`font-black text-lg ${i===0?'text-yellow-400':'text-white'}`}>{entry.playerName}</div>
+                                            <div className="text-xs font-bold text-zinc-400 flex gap-3">
+                                                <span>⏱️ {formatTime(entry.timeElapsed)}</span>
+                                                <span>⭐ x{entry.maxCombo}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className={`text-3xl font-black ${i===0?'text-yellow-400':'text-emerald-400'}`}>{entry.score}</div>
+                                        <div className="text-[10px] uppercase font-bold text-zinc-500 tracking-widest">Pisos</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 );
             }
@@ -513,16 +598,16 @@
                 const isVictory = gameState === 'VICTORY';
                 return (
                     <div className="h-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-white text-center building-bg" style={{backgroundPosition: isVictory ? '0% 0%' : '0% 100%'}}>
-                        <button onClick={openLibrary} className="absolute top-6 right-6 bg-white/10 hover:bg-white/20 p-3 rounded-2xl flex items-center gap-2 backdrop-blur-md transition">
+                        <button onClick={() => { setPrevState(gameState); setGameState('LIBRARY'); }} className="absolute top-6 right-6 bg-white/10 hover:bg-white/20 p-3 rounded-2xl flex items-center gap-2 backdrop-blur-md transition">
                             <BookOpen size={20}/>
                         </button>
 
-                        <div className={`w-24 h-24 rounded-3xl flex items-center justify-center mb-8 transform rotate-6 shadow-2xl ${isVictory ? 'bg-emerald-500' : 'bg-rose-500'}`}>
-                            {isVictory ? <Trophy size={48} className="text-white"/> : <AlertTriangle size={48} className="text-white"/>}
+                        <div className={`w-24 h-24 rounded-3xl flex items-center justify-center mb-8 transform rotate-6 shadow-2xl ${isVictory ? 'bg-yellow-500' : 'bg-rose-500'}`}>
+                            {isVictory ? <Trophy size={48} className="text-black"/> : <AlertTriangle size={48} className="text-white"/>}
                         </div>
                         <h1 className="text-4xl sm:text-5xl font-black mb-2">{isVictory ? '¡Ciudad Completada!' : '¡Derrumbe!'}</h1>
-                        <p className={`font-bold uppercase tracking-widest text-sm mb-12 ${isVictory ? 'text-emerald-300' : 'text-rose-300'}`}>
-                            {isVictory ? 'Eres un Maestro Constructor' : `Caíste en el Edificio ${currentLevel + 1}`}
+                        <p className={`font-bold uppercase tracking-widest text-sm mb-12 ${isVictory ? 'text-yellow-400' : 'text-rose-300'}`}>
+                            {isVictory ? 'Tu récord ya está en el Ranking' : `Caíste en el Edificio ${currentLevel + 1}`}
                         </p>
                         
                         <div className="bg-black/40 backdrop-blur-md p-6 rounded-3xl w-full max-w-sm border border-white/10 mb-8 grid grid-cols-2 gap-4">
@@ -542,8 +627,11 @@
                             <button onClick={() => window.location.href='index.html'} className="bg-zinc-800 hover:bg-zinc-700 text-white p-5 rounded-2xl font-black transition active:scale-95 flex items-center justify-center shrink-0">
                                 <Home />
                             </button>
-                            <button onClick={() => { setTotalScore(0); startLevel(0); }} className={`${isVictory ? 'bg-indigo-600' : 'bg-rose-600'} flex-1 text-white py-5 rounded-2xl font-black text-lg shadow-lg transition active:scale-95 flex items-center justify-center gap-2`}>
-                                <RotateCcw /> REINICIAR OBRA
+                            <button onClick={() => { 
+                                if(isVictory) { setGameState('MENU'); } 
+                                else { startLevel(currentLevel); }
+                            }} className={`${isVictory ? 'bg-indigo-600' : 'bg-rose-600'} flex-1 text-white py-5 rounded-2xl font-black text-lg shadow-lg transition active:scale-95 flex items-center justify-center gap-2`}>
+                                {isVictory ? <ListOrdered/> : <RotateCcw/>} {isVictory ? 'VOLVER AL MENÚ' : 'REINICIAR EDIFICIO'}
                             </button>
                         </div>
                     </div>
@@ -559,7 +647,6 @@
             return (
                 <div className={`h-screen w-full flex justify-center building-bg overflow-hidden ${shake ? 'shake-active' : ''}`} style={{backgroundPosition: `0% ${bgProgress}%`}}>
                     
-                    {/* Estrellas Estáticas (Espacio) */}
                     <div className={`absolute inset-0 space-stars pointer-events-none ${isInSpace ? 'opacity-100' : 'opacity-0'}`}></div>
 
                     {/* Interfaz Superior */}
@@ -580,7 +667,7 @@
                                     <Timer className="text-amber-400" size={16}/>
                                     <span className="text-white font-bold font-mono">{formatTime(timeElapsed)}</span>
                                 </div>
-                                <button onClick={() => setGameState('PAUSED')} className="bg-black/40 backdrop-blur-md p-2 rounded-2xl border border-white/10 hover:bg-white/20 transition active:scale-95 no-drop">
+                                <button onClick={() => { setPrevState('PLAYING'); setGameState('PAUSED'); }} className="bg-black/40 backdrop-blur-md p-2 rounded-2xl border border-white/10 hover:bg-white/20 transition active:scale-95 no-drop">
                                     <Pause className="text-white" size={20}/>
                                 </button>
                             </div>
@@ -596,10 +683,8 @@
                     {/* ZONA DE JUEGO */}
                     <div className="relative w-full max-w-[400px] h-full overflow-hidden">
                         
-                        {/* GUÍA VISUAL DE LA BASE */}
                         <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 pointer-events-none border-x-2 border-white/10 bg-white/[0.02] z-0" style={{ width: `${INITIAL_BLOCK_WIDTH}px` }}></div>
 
-                        {/* 1. LA GRÚA Y EL BLOQUE QUE CUELGA */}
                         <div className="absolute top-0 inset-x-0 z-40">
                             <div className="crane-cable" style={{ top: `${CRANE_TOP}px`, height: `${CABLE_LENGTH}px` }}></div>
                             
@@ -617,7 +702,6 @@
                             )}
                         </div>
 
-                        {/* 2. LA TORRE ANCLADA ABAJO */}
                         <div className="absolute inset-x-0 w-full" style={{ top: `${TOWER_ANCHOR_Y}px`, transform: `translateY(${cameraY}px)`, transition: 'transform 0.2s ease-out' }}>
                             {blocks.map((b) => (
                                 <div 
@@ -637,7 +721,6 @@
                             ))}
                         </div>
 
-                        {/* 3. ESCOMBROS */}
                         {debris.map(d => (
                             <div 
                                 key={d.id}
@@ -646,7 +729,6 @@
                             ></div>
                         ))}
 
-                        {/* 4. TEXTOS FLOTANTES DE COMBO */}
                         {floatingTexts.map(ft => (
                             <div 
                                 key={ft.id} 
