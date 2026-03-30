@@ -113,23 +113,23 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // Constantes del Motor Físico
+        // Constantes del Motor Físico (Velocidad más amable)
         const GAME_AREA_WIDTH = 400; 
         const INITIAL_BLOCK_WIDTH = 250;
         const BLOCK_HEIGHT = 60;
-        const SWING_SPEED_BASE = 0.003;
+        const SWING_SPEED_BASE = 0.0025; // <-- Reducido para un inicio más tranquilo
         const PERFECT_TOLERANCE = 8; 
 
-        // ANCLAJES (Fieles al croquis)
-        const CRANE_TOP = 0; // La cuerda nace en el techo
-        const CABLE_LENGTH = 120; // Longitud de la cuerda
-        const BLOCK_Y = CRANE_TOP + CABLE_LENGTH; // Dónde cuelga el bloque (120px)
-        const TOWER_ANCHOR_Y = 380; // La base receptora. ¡Deja 200px de caída libre!
+        // ANCLAJES (Cuerda extendida)
+        const CRANE_TOP = 0; 
+        const CABLE_LENGTH = 200; // <-- Cuerda más larga
+        const BLOCK_Y = CRANE_TOP + CABLE_LENGTH; // 200px
+        const TOWER_ANCHOR_Y = 380; // La base receptora. Quedan ~120px de caída
 
         const COLORS = ['bg-blue-500', 'bg-red-500', 'bg-amber-500', 'bg-green-500', 'bg-indigo-500', 'bg-fuchsia-500', 'bg-emerald-500'];
 
         const WordBuildings = () => {
-            const [gameState, setGameState] = useState('LOADING'); // LOADING, MENU, PLAYING, PAUSED, LIBRARY, LEVEL_TRANSITION, GAMEOVER, VICTORY
+            const [gameState, setGameState] = useState('LOADING'); 
             const [gameData, setGameData] = useState(null);
             
             const [levels, setLevels] = useState([]);
@@ -154,7 +154,6 @@
             const blockDOMRef = useRef(null);
             const isDroppingRef = useRef(false);
 
-            // Refs para solucionar estado viejo dentro de setTimeouts (Gravedad)
             const stateRefs = useRef({ blocks: [], combo: 0, score: 0, maxCombo: 0, currentLevel: 0, levels: [] });
 
             useEffect(() => {
@@ -202,7 +201,6 @@
             const animate = time => {
                 if (gameState !== 'PLAYING') return;
 
-                // Solo si NO está cayendo, balanceamos el bloque
                 if (!isDroppingRef.current && blockDOMRef.current) {
                     const mb = movingBlockRef.current;
                     const center = GAME_AREA_WIDTH / 2;
@@ -211,7 +209,6 @@
                     mb.x = center + Math.sin(time * mb.speed) * swingAmplitude;
                     
                     blockDOMRef.current.style.left = `${mb.x - (mb.width/2)}px`;
-                    // Asegurarnos que siempre esté anclado a la cuerda mientras no cae
                     blockDOMRef.current.style.top = `${BLOCK_Y}px`;
                 }
 
@@ -245,7 +242,7 @@
                 movingBlockRef.current = {
                     x: GAME_AREA_WIDTH / 2,
                     width: INITIAL_BLOCK_WIDTH,
-                    speed: SWING_SPEED_BASE + (lvlIndex * 0.0005) 
+                    speed: SWING_SPEED_BASE + (lvlIndex * 0.0004) 
                 };
 
                 isDroppingRef.current = false;
@@ -263,7 +260,6 @@
             };
 
             const triggerConfettiStars = (hitX, currentCombo) => {
-                // Genera estrellas en la zona del impacto
                 const dropY = (TOWER_ANCHOR_Y - BLOCK_HEIGHT/2) / window.innerHeight;
                 
                 confetti({
@@ -283,30 +279,23 @@
             const handleDrop = () => {
                 if (gameState !== 'PLAYING' || isDroppingRef.current) return;
                 
-                // 1. Bloqueamos la interacción y el balanceo
                 isDroppingRef.current = true; 
 
-                // 2. Activamos la gravedad vía CSS
                 if(blockDOMRef.current) {
-                    // Animación de caída libre fluida
                     blockDOMRef.current.style.transition = 'top 0.25s cubic-bezier(0.55, 0.085, 0.68, 0.53)'; 
-                    // El bloque viaja desde BLOCK_Y (120) hasta justo arriba de la torre (320)
                     blockDOMRef.current.style.top = `${TOWER_ANCHOR_Y - BLOCK_HEIGHT}px`;
                 }
 
-                // 3. Esperamos que termine de caer para evaluar el golpe
                 setTimeout(() => {
                     finalizeDrop();
                 }, 250); 
             };
 
             const finalizeDrop = () => {
-                // Recuperamos el estado fresco
                 const { blocks, combo, score, maxCombo, currentLevel, levels } = stateRefs.current;
                 const mb = movingBlockRef.current;
                 const prevBlock = blocks[blocks.length - 1]; 
 
-                // Evaluamos colisión usando el mb.x congelado
                 const currentX = mb.x;
                 const prevX = prevBlock.x;
                 
@@ -321,7 +310,6 @@
                 let debrisPiece = null;
 
                 if (Math.abs(deltaLeft) <= PERFECT_TOLERANCE) {
-                    // GOLPE PERFECTO
                     isPerfect = true;
                     newX = prevX; 
                     newWidth = prevBlock.width; 
@@ -330,20 +318,15 @@
                     setCombo(newCombo);
                     if (newCombo > maxCombo) setMaxCombo(newCombo);
                     
-                    mb.speed = Math.min(mb.speed + 0.0002, 0.006);
-                    
                     triggerConfettiStars(newX, newCombo);
                     addFloatingText(`x${newCombo}`, 'perfect', GAME_AREA_WIDTH/2, TOWER_ANCHOR_Y - 100);
 
                 } else {
-                    // RESET COMBO
                     setCombo(0);
 
                     if (Math.abs(deltaLeft) >= prevBlock.width) {
-                        // FALLO TOTAL
                         missed = true;
                     } else {
-                        // CORTE PARCIAL
                         newWidth = prevBlock.width - Math.abs(deltaLeft);
                         
                         if (deltaLeft > 0) {
@@ -363,7 +346,19 @@
                     return;
                 }
 
-                // Colocamos el bloque definitivo en la torre
+                // --- NUEVO SISTEMA DE DIFICULTAD (SPEED INCREMENT) ---
+                const blocksPlaced = score + 1;
+                let shouldIncreaseSpeed = false;
+
+                if (currentLevel === 0 && blocksPlaced % 3 === 0) shouldIncreaseSpeed = true;
+                else if ((currentLevel === 1 || currentLevel === 2) && blocksPlaced % 2 === 0) shouldIncreaseSpeed = true;
+                else if (currentLevel >= 3) shouldIncreaseSpeed = true; // El nivel 4 aumenta cada bloque
+
+                if (shouldIncreaseSpeed) {
+                    mb.speed = Math.min(mb.speed + 0.0003, 0.007);
+                }
+                // -----------------------------------------------------
+
                 const currentWord = levels[currentLevel].items[score];
                 const newBlock = {
                     id: `block-${score}`,
@@ -383,10 +378,8 @@
                 setLevelScore(nextScore);
                 setTotalScore(prev => prev + 1);
 
-                // Bajamos la cámara
                 setCameraY((blocks.length) * BLOCK_HEIGHT);
 
-                // Verificamos si ganamos
                 if (nextScore >= levels[currentLevel].items.length) {
                     confetti({ particleCount: 150, spread: 100, origin: { y: 0.6 } });
                     setTimeout(() => {
@@ -399,17 +392,15 @@
                     return;
                 }
 
-                // Reseteamos el bloque colgante para el siguiente tiro
                 if(blockDOMRef.current) {
-                    blockDOMRef.current.style.transition = 'none'; // Quitamos transición para teletransportarlo arriba
+                    blockDOMRef.current.style.transition = 'none'; 
                     blockDOMRef.current.style.top = `${BLOCK_Y}px`;
                 }
                 movingBlockRef.current.width = newWidth; 
                 movingBlockRef.current.x = GAME_AREA_WIDTH / 2; 
-                isDroppingRef.current = false; // Desbloqueamos
+                isDroppingRef.current = false; 
             };
 
-            // Controles Táctiles
             useEffect(() => {
                 const handlePointerDown = (e) => {
                     if(e.target.closest('.no-drop')) return;
@@ -430,7 +421,6 @@
                 setGameState('LIBRARY');
             };
 
-            // ================== RENDER SCREENS ================== //
             if (gameState === 'LOADING') return <div className="h-screen flex items-center justify-center bg-zinc-950 text-white"><div className="animate-spin w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full"></div></div>;
             if (gameState === 'ERROR') return <div className="h-screen flex items-center justify-center bg-zinc-950 text-rose-500 font-bold">Error cargando datos. Verifica el ID.</div>;
 
@@ -558,13 +548,11 @@
                 );
             }
 
-            // ================== PLAYING / PAUSED SCREEN ================== //
             const currentLvlData = levels[currentLevel];
             const currentWord = currentLvlData.items[levelScore];
             
-            // Calculamos el progreso para mover el fondo (100% es ciudad, 0% es espacio exterior)
             const bgProgress = Math.max(0, 100 - (levelScore / currentLvlData.items.length) * 100);
-            const isInSpace = bgProgress < 40; // Aparecen las estrellas en el tercio superior
+            const isInSpace = bgProgress < 40; 
 
             return (
                 <div className={`h-screen w-full flex justify-center building-bg overflow-hidden ${shake ? 'shake-active' : ''}`} style={{backgroundPosition: `0% ${bgProgress}%`}}>
@@ -606,12 +594,13 @@
                     {/* ZONA DE JUEGO */}
                     <div className="relative w-full max-w-[400px] h-full overflow-hidden">
                         
+                        {/* GUÍA VISUAL DE LA BASE */}
+                        <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 pointer-events-none border-x-2 border-white/10 bg-white/[0.02] z-0" style={{ width: `${INITIAL_BLOCK_WIDTH}px` }}></div>
+
                         {/* 1. LA GRÚA Y EL BLOQUE QUE CUELGA */}
                         <div className="absolute top-0 inset-x-0 z-40">
-                            {/* Cuerda Larga */}
                             <div className="crane-cable" style={{ top: `${CRANE_TOP}px`, height: `${CABLE_LENGTH}px` }}></div>
                             
-                            {/* Bloque Colgando */}
                             {currentWord && (
                                 <div 
                                     ref={blockDOMRef}
@@ -646,7 +635,7 @@
                             ))}
                         </div>
 
-                        {/* 3. ESCOMBROS (Caída Infinita) */}
+                        {/* 3. ESCOMBROS */}
                         {debris.map(d => (
                             <div 
                                 key={d.id}
