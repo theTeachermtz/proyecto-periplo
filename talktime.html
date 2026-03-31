@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Talk Time | Periplo Games</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    animation: {
+                        'shake': 'shake 0.5s cubic-bezier(.36,.07,.19,.97) both',
+                        'pop-in': 'popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards',
+                        'spin-fast': 'spin 0.5s linear infinite',
+                    },
+                    keyframes: {
+                        shake: {
+                            '10%, 90%': { transform: 'translate3d(-2px, 0, 0) rotate(-2deg)' },
+                            '20%, 80%': { transform: 'translate3d(4px, 0, 0) rotate(2deg)' },
+                            '30%, 50%, 70%': { transform: 'translate3d(-6px, 0, 0) rotate(-4deg)' },
+                            '40%, 60%': { transform: 'translate3d(6px, 0, 0) rotate(4deg)' }
+                        },
+                        popIn: {
+                            '0%': { transform: 'scale(0.8)', opacity: '0' },
+                            '100%': { transform: 'scale(1)', opacity: '1' }
+                        }
+                    }
+                }
+            }
+        };
+    </script>
+    
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800;900&display=swap'); 
+        body { font-family: 'Plus Jakarta Sans', sans-serif; overflow: hidden; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+        
+        @media (hover: hover) { .hover-scale:hover { transform: scale(1.05); transition: transform 0.2s; } }
+        .active-scale:active { transform: scale(0.95); transition: transform 0.1s; }
+        
+        .table-gradient { background: radial-gradient(circle, #082f49 0%, #020617 80%); }
+        .avatar-glow { box-shadow: 0 0 25px rgba(14, 165, 233, 0.5); }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-slate-950 text-white h-[100dvh] w-screen">
+    <div id="root" class="h-full w-full"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, updateDoc, arrayUnion } from 'firebase/firestore';
+        import { Users, Play, Crown, Eye, ArrowRight, ShieldCheck, HeartCrack, Info, Zap, Mic, Clock, Check, X as XIcon, RotateCcw, Pause, Play as PlayIcon } from 'lucide-react';
+
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        const AVATARS = ["🗣️", "😎", "🤓", "👽", "🤠", "🤖", "🦊", "🦁", "👻", "🤫", "🤯", "🧐"];
+        const LIGHT_COLORS = ['bg-emerald-500', 'bg-lime-400', 'bg-yellow-400', 'bg-orange-500', 'bg-rose-500', 'bg-rose-700'];
+        const CATEGORIES = {
+            'story': { name: 'Story Time', color: 'text-blue-400', bg: 'bg-blue-600', border: 'border-blue-500' },
+            'questions': { name: 'Deep Questions', color: 'text-rose-400', bg: 'bg-rose-600', border: 'border-rose-500' },
+            'facts': { name: 'Shocking Facts', color: 'text-amber-400', bg: 'bg-amber-600', border: 'border-amber-500' },
+            'dilemmas': { name: 'Dilemma (Mystery Box)', color: 'text-emerald-400', bg: 'bg-emerald-600', border: 'border-emerald-500' }
+        };
+
+        const generateId = () => Math.random().toString(36).substring(2, 6).toUpperCase();
+
+        // Audio System
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const playTick = () => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.type = 'sine'; osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.05, audioCtx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.05);
+        };
+        const playAlarm = () => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.type = 'triangle'; osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.5);
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1);
+            osc.start(); osc.stop(audioCtx.currentTime + 1);
+        };
+
+        const TalkTimeGame = () => {
+            const [localPlayerId] = useState(() => localStorage.getItem('tt_playerId') || generateId());
+            const [gameState, setGameState] = useState('loading'); 
+            const [sessionMode, setSessionMode] = useState(null); 
+            const [sessionCode, setSessionCode] = useState("");
+            const [playerName, setPlayerName] = useState("");
+            const [playerEmoji, setPlayerEmoji] = useState(AVATARS[0]);
+            const [sessionData, setSessionData] = useState(null);
+            const [errorMsg, setErrorMsg] = useState("");
+            const [localTimeLeft, setLocalTimeLeft] = useState(0);
+
+            const timerRef = useRef(null);
+
+            useEffect(() => {
+                localStorage.setItem('tt_playerId', localPlayerId);
+                const params = new URLSearchParams(window.location.search);
+                const quizId = params.get('id');
+                const joinCode = params.get('session');
+
+                if (joinCode) {
+                    setSessionMode('join');
+                    setSessionCode(joinCode.toUpperCase());
+                    setGameState('setup');
+                } else if (quizId) {
+                    setSessionMode('host');
+                    initializeHostSession(quizId);
+                } else {
+                    setErrorMsg("Falta ID de juego o Código de Sala.");
+                    setGameState('error');
+                }
+            }, []);
+
+            const initializeHostSession = async (quizId) => {
+                try {
+                    const quizRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId);
+                    const quizSnap = await getDoc(quizRef);
+                    if (!quizSnap.exists()) throw new Error("Juego no encontrado.");
+                    
+                    const data = quizSnap.data();
+                    
+                    const newCode = generateId();
+                    const sessionRef = doc(db, 'artifacts/periplo-app-v1/sessions', newCode);
+                    
+                    await setDoc(sessionRef, {
+                        hostId: localPlayerId,
+                        quizTitle: data.title,
+                        type: 'TALKTIME',
+                        state: 'lobby', // lobby, idle (ready to spin), spin, choose, reading, timer, judging, gameover
+                        content: data.content,
+                        playedItems: [], // Guarda los IDs/Títulos ya jugados
+                        players: [], // { id, name, emoji, lights: 6 }
+                        currentTurn: {
+                            playerId: null,
+                            categoryId: null,
+                            options: [], // 3 opciones si no es verde
+                            selectedItem: null // {title, content}
+                        },
+                        timer: {
+                            active: false,
+                            phase: 'prep', // prep o speaking
+                            endTime: 0,
+                            duration: 0,
+                            pausedLeft: 0
+                        },
+                        createdAt: new Date().toISOString()
+                    });
+
+                    setSessionCode(newCode);
+                    setGameState('setup');
+                } catch (e) { setErrorMsg(e.message); setGameState('error'); }
+            };
+
+            useEffect(() => {
+                if (!sessionCode || gameState === 'setup' || gameState === 'loading') return;
+                
+                const sessionRef = doc(db, 'artifacts/periplo-app-v1/sessions', sessionCode);
+                const unsubscribe = onSnapshot(sessionRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        setSessionData(data);
+                        
+                        // Sincronizar timer local
+                        if (data.timer && data.timer.active) {
+                            if (data.timer.pausedLeft > 0) {
+                                setLocalTimeLeft(data.timer.pausedLeft);
+                            } else {
+                                updateLocalTimer(data.timer.endTime);
+                            }
+                        } else {
+                            setLocalTimeLeft(data.timer?.duration || 0);
+                        }
+
+                    } else {
+                        setErrorMsg("La sala se ha cerrado.");
+                        setGameState('error');
+                    }
+                });
+                return () => unsubscribe();
+            }, [sessionCode, gameState]);
+
+            const updateLocalTimer = (endTime) => {
+                if (timerRef.current) cancelAnimationFrame(timerRef.current);
+                const loop = () => {
+                    const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+                    setLocalTimeLeft(remaining);
+                    if (remaining > 0 && remaining <= 5) playTick(); // Tick final
+                    if (remaining === 0) playAlarm();
+                    if (remaining > 0) timerRef.current = requestAnimationFrame(loop);
+                };
+                timerRef.current = requestAnimationFrame(loop);
+            };
+
+            const joinGame = async () => {
+                if (!playerName.trim()) return alert("Escribe tu nombre");
+                setGameState('loading');
+                
+                const sessionRef = doc(db, 'artifacts/periplo-app-v1/sessions', sessionCode);
+                const snap = await getDoc(sessionRef);
+                
+                if (snap.exists()) {
+                    const data = snap.data();
+                    const existingPlayer = data.players.find(p => p.id === localPlayerId);
+                    
+                    if (!existingPlayer) {
+                        const newPlayer = { id: localPlayerId, name: playerName, emoji: playerEmoji, lights: 6 };
+                        await updateDoc(sessionRef, { players: arrayUnion(newPlayer) });
+                    }
+                    setGameState('playing');
+                } else {
+                    setErrorMsg("Código de sala inválido.");
+                    setGameState('error');
+                }
+            };
+
+            // --- HOST CONTROLS ---
+            const startGame = async () => {
+                if(sessionData.players.length < 1) return alert("Se necesita al menos 1 jugador.");
+                await updateDoc(doc(db, 'artifacts/periplo-app-v1/sessions', sessionCode), { state: 'idle' });
+            };
+
+            const spinRoulette = async () => {
+                const sessionRef = doc(db, 'artifacts/periplo-app-v1/sessions', sessionCode);
+                
+                // 1. Elegir Jugador (que tenga luces > 0)
+                const alivePlayers = sessionData.players.filter(p => p.lights > 0);
+                const randomPlayer = alivePlayers[Math.floor(Math.random() * alivePlayers.length)];
+                
+                // 2. Elegir Categoría
+                const cats = ['story', 'questions', 'facts', 'dilemmas'];
+                const randomCat = cats[Math.floor(Math.random() * cats.length)];
+
+                await updateDoc(sessionRef, { 
+                    state: 'spin', 
+                    currentTurn: { playerId: randomPlayer.id, categoryId: randomCat, options: [], selectedItem: null },
+                    'timer.active': false
+                });
+
+                // Simular 3s de ruleta y luego asignar opciones
+                setTimeout(async () => {
+                    const freshData = (await getDoc(sessionRef)).data();
+                    const catData = freshData.content.categories.find(c => c.id === randomCat);
+                    const availableItems = catData.items.filter(i => !freshData.playedItems.includes(i.title));
+                    
+                    if (availableItems.length === 0) {
+                        alert("¡Se acabaron los temas de esta categoría!");
+                        await updateDoc(sessionRef, { state: 'idle' });
+                        return;
+                    }
+
+                    if (randomCat === 'dilemmas') {
+                        // Caja Misteriosa: Solo 1, sin opciones
+                        const chosen = availableItems[Math.floor(Math.random() * availableItems.length)];
+                        await updateDoc(sessionRef, {
+                            state: 'reading',
+                            'currentTurn.selectedItem': chosen,
+                            playedItems: arrayUnion(chosen.title)
+                        });
+                    } else {
+                        // Elegir hasta 3 opciones
+                        const shuffled = availableItems.sort(() => 0.5 - Math.random());
+                        const options = shuffled.slice(0, 3);
+                        await updateDoc(sessionRef, {
+                            state: 'choose',
+                            'currentTurn.options': options
+                        });
+                    }
+                }, 3000);
+            };
+
+            // --- PLAYER CONTROLS ---
+            const selectOption = async (item) => {
+                const sessionRef = doc(db, 'artifacts/periplo-app-v1/sessions', sessionCode);
+                await updateDoc(sessionRef, {
+                    state: 'reading',
+                    'currentTurn.selectedItem': item,
+                    playedItems: arrayUnion(item.title)
+                });
+            };
+
+            // --- TIMER CONTROLS (HOST) ---
+            const startTimer = async (seconds, phase) => {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                const sessionRef = doc(db, 'artifacts/periplo-app-v1/sessions', sessionCode);
+                await updateDoc(sessionRef, {
+                    state: 'timer',
+                    timer: { active: true, phase: phase, endTime: Date.now() + (seconds * 1000), duration: seconds, pausedLeft: 0 }
+                });
+            };
+
+            const togglePauseTimer = async () => {
+                const sessionRef = doc(db, 'artifacts/periplo-app-v1/sessions', sessionCode);
+                if (sessionData.timer.pausedLeft > 0) {
+                    // Reanudar
+                    await updateDoc(sessionRef, {
+                        'timer.pausedLeft': 0,
+                        'timer.endTime': Date.now() + (sessionData.timer.pausedLeft * 1000)
+                    });
+                } else {
+                    // Pausar
+                    await updateDoc(sessionRef, { 'timer.pausedLeft': localTimeLeft });
+                }
+            };
+
+            // --- JUDGING (HOST) ---
+            const endTurn = async (passed) => {
+                const sessionRef = doc(db, 'artifacts/periplo-app-v1/sessions', sessionCode);
+                
+                if (passed) {
+                    // Apagar luz
+                    const updatedPlayers = sessionData.players.map(p => {
+                        if (p.id === sessionData.currentTurn.playerId) return { ...p, lights: Math.max(0, p.lights - 1) };
+                        return p;
+                    });
+                    
+                    const winner = updatedPlayers.find(p => p.lights === 0);
+                    
+                    await updateDoc(sessionRef, {
+                        state: winner ? 'gameover' : 'judging_pass',
+                        players: updatedPlayers,
+                        'timer.active': false
+                    });
+
+                    if(!winner) setTimeout(() => updateDoc(sessionRef, { state: 'idle' }), 3000);
+
+                } else {
+                    await updateDoc(sessionRef, { state: 'judging_fail', 'timer.active': false });
+                    setTimeout(() => updateDoc(sessionRef, { state: 'idle' }), 3000);
+                }
+            };
+
+            // --- RENDERIZADORES ---
+            if (gameState === 'loading') return <div className="h-full flex items-center justify-center"><Zap className="animate-pulse text-sky-500" size={48} /></div>;
+            if (gameState === 'error') return <div className="h-full flex flex-col items-center justify-center text-center p-6"><HeartCrack className="text-rose-500 mb-4" size={64}/> <h2 className="text-2xl font-bold mb-2">Error</h2><p className="text-slate-400">{errorMsg}</p></div>;
+
+            if (gameState === 'setup') return (
+                <div className="flex flex-col h-full bg-slate-950 items-center justify-center p-6 relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-b from-sky-900/20 to-slate-950 z-0"></div>
+                    <div className="relative z-10 w-full max-w-md flex flex-col items-center">
+                        <div className="bg-slate-900 border border-white/10 p-8 rounded-[2.5rem] shadow-2xl w-full text-center">
+                            <h1 className="text-3xl font-black mb-2 text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-indigo-400">Talk Time</h1>
+                            <p className="text-slate-400 text-sm font-bold uppercase tracking-widest mb-8">Sala: {sessionCode}</p>
+                            
+                            <div className="mb-6">
+                                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2 text-left">Tu Nombre</label>
+                                <input type="text" value={playerName} onChange={e => setPlayerName(e.target.value)} maxLength="12" placeholder="Ej. Carlos" className="w-full bg-slate-950 border border-white/10 rounded-2xl p-4 text-center font-black text-xl outline-none focus:border-sky-500 text-white"/>
+                            </div>
+
+                            <div className="mb-8">
+                                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2 text-left">Tu Avatar</label>
+                                <div className="grid grid-cols-4 gap-2">
+                                    {AVATARS.map(emoji => (
+                                        <button key={emoji} onClick={() => setPlayerEmoji(emoji)} className={`text-3xl p-2 rounded-xl transition-all ${playerEmoji === emoji ? 'bg-sky-500/20 border-2 border-sky-500 scale-110' : 'bg-slate-950 border-2 border-transparent hover:bg-slate-800'}`}>
+                                            {emoji}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <button onClick={joinGame} className="w-full bg-sky-600 hover:bg-sky-500 text-white py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-2 shadow-[0_10px_25px_rgba(14,165,233,0.3)] transition-all active-scale">
+                                Entrar a la Mesa
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            if (sessionData) {
+                const isHost = sessionData.hostId === localPlayerId;
+                const myPlayer = sessionData.players.find(p => p.id === localPlayerId);
+                const isMyTurn = sessionData.currentTurn.playerId === localPlayerId;
+                const activePlayer = sessionData.players.find(p => p.id === sessionData.currentTurn.playerId);
+                const catInfo = sessionData.currentTurn.categoryId ? CATEGORIES[sessionData.currentTurn.categoryId] : null;
+
+                const renderTable = () => {
+                    const radius = 38; 
+                    const total = sessionData.players.length;
+                    
+                    return (
+                        <div className="relative w-full max-w-lg aspect-square mx-auto mt-4 mb-8">
+                            {/* La Mesa Física */}
+                            <div className="absolute inset-8 rounded-full border-[8px] border-slate-800 table-gradient shadow-[inset_0_0_50px_rgba(0,0,0,0.8)] flex items-center justify-center p-8 text-center z-0 overflow-hidden">
+                                
+                                {sessionData.state === 'lobby' && (
+                                    <div className="animate-pulse flex flex-col items-center">
+                                        <Users className="text-slate-500 mb-2" size={32}/>
+                                        <p className="text-slate-400 font-bold uppercase tracking-widest text-sm">Esperando Jugadores...</p>
+                                        <p className="text-sky-400 font-black text-2xl mt-2">{sessionCode}</p>
+                                    </div>
+                                )}
+
+                                {sessionData.state === 'idle' && (
+                                    <div className="flex flex-col items-center">
+                                        <Mic className="text-slate-600 mb-2 opacity-50" size={48}/>
+                                        <p className="text-slate-500 font-black uppercase tracking-widest">Listos para girar</p>
+                                    </div>
+                                )}
+
+                                {sessionData.state === 'spin' && (
+                                    <div className="flex flex-col items-center animate-pop-in">
+                                        <div className="w-20 h-20 border-4 border-sky-500 border-t-transparent rounded-full animate-spin-fast mb-4"></div>
+                                        <p className="text-sky-400 font-black uppercase tracking-widest">Sorteando Turno...</p>
+                                    </div>
+                                )}
+
+                                {sessionData.state === 'choose' && (
+                                    <div className="flex flex-col items-center w-full h-full justify-center">
+                                        <span className={`text-[10px] font-black ${catInfo?.color} uppercase tracking-widest mb-2 border border-current px-2 py-0.5 rounded-full`}>{catInfo?.name}</span>
+                                        <p className="text-white font-bold text-sm mb-4">Turno de <span className={catInfo?.color}>{activePlayer?.name}</span></p>
+                                        
+                                        {isMyTurn ? (
+                                            <div className="w-full space-y-2 flex-1 overflow-y-auto custom-scrollbar pr-1">
+                                                {sessionData.currentTurn.options.map((opt, i) => (
+                                                    <button key={i} onClick={() => selectOption(opt)} className={`w-full p-3 rounded-xl border-2 ${catInfo?.border} bg-slate-900/80 hover:${catInfo?.bg} hover:text-white transition-colors text-left text-sm font-bold shadow-lg`}>
+                                                        {opt.title}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <p className="text-slate-400 italic text-sm animate-pulse">Eligiendo opción...</p>
+                                        )}
+                                    </div>
+                                )}
+
+                                {(sessionData.state === 'reading' || sessionData.state === 'timer') && sessionData.currentTurn.selectedItem && (
+                                    <div className="flex flex-col items-center w-full h-full">
+                                        <span className={`text-[10px] font-black ${catInfo?.color} uppercase tracking-widest mb-2 border border-current px-2 py-0.5 rounded-full shrink-0`}>{catInfo?.name}</span>
+                                        
+                                        <div className="flex-1 w-full overflow-y-auto custom-scrollbar flex flex-col items-center justify-center">
+                                            <h3 className="text-white font-black text-lg leading-tight mb-2">{sessionData.currentTurn.selectedItem.title}</h3>
+                                            <p className="text-slate-300 text-sm">{sessionData.currentTurn.selectedItem.content}</p>
+                                        </div>
+
+                                        {/* Timer Visual en el centro de la mesa */}
+                                        {sessionData.state === 'timer' && (
+                                            <div className="w-full mt-4 shrink-0">
+                                                <div className="flex justify-between text-[10px] font-black uppercase text-slate-400 mb-1">
+                                                    <span>{sessionData.timer.phase === 'prep' ? 'Prep Time' : 'Speaking'}</span>
+                                                    <span className={localTimeLeft <= 5 ? 'text-rose-500 animate-pulse' : ''}>{localTimeLeft}s</span>
+                                                </div>
+                                                <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                                                    <div 
+                                                        className={`h-full transition-all duration-1000 linear ${sessionData.timer.phase === 'prep' ? 'bg-amber-500' : 'bg-emerald-500'} ${localTimeLeft <= 5 ? 'bg-rose-500' : ''}`}
+                                                        style={{ width: `${(localTimeLeft / sessionData.timer.duration) * 100}%` }}
+                                                    ></div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {sessionData.state === 'judging_pass' && (
+                                    <div className="flex flex-col items-center animate-pop-in">
+                                        <div className="w-20 h-20 bg-emerald-500 rounded-full flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(16,185,129,0.6)]"><Check size={40} className="text-black"/></div>
+                                        <p className="text-emerald-400 font-black uppercase tracking-widest text-xl">¡Aprobado!</p>
+                                        <p className="text-slate-300 text-sm mt-1">-1 Luz para {activePlayer?.name}</p>
+                                    </div>
+                                )}
+
+                                {sessionData.state === 'judging_fail' && (
+                                    <div className="flex flex-col items-center animate-pop-in">
+                                        <div className="w-20 h-20 bg-rose-600 rounded-full flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(225,29,72,0.6)]"><XIcon size={40} className="text-white"/></div>
+                                        <p className="text-rose-400 font-black uppercase tracking-widest text-xl">Intenta de nuevo</p>
+                                        <p className="text-slate-400 text-sm mt-1">La luz se queda prendida</p>
+                                    </div>
+                                )}
+
+                                {sessionData.state === 'gameover' && (
+                                    <div className="flex flex-col items-center animate-pop-in">
+                                        <Crown className="text-yellow-400 mb-2 drop-shadow-lg" size={64}/>
+                                        <h2 className="text-3xl font-black text-white uppercase tracking-tighter">¡Ganador!</h2>
+                                        <p className="text-sky-400 font-black text-xl mt-2 bg-sky-500/20 px-4 py-1 rounded-full">{sessionData.players.find(p => p.lights === 0)?.name}</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Avatares */}
+                            {sessionData.players.map((p, index) => {
+                                const angle = (index / total) * 2 * Math.PI - (Math.PI / 2);
+                                const left = 50 + radius * Math.cos(angle);
+                                const top = 50 + radius * Math.sin(angle);
+                                
+                                const isMe = p.id === localPlayerId;
+                                const isTurn = sessionData.currentTurn.playerId === p.id && sessionData.state !== 'idle' && sessionData.state !== 'lobby';
+                                const won = p.lights === 0;
+
+                                return (
+                                    <div key={p.id} 
+                                        className={`absolute w-16 md:w-20 flex flex-col items-center z-10 transition-all duration-500 transform -translate-x-1/2 -translate-y-1/2 ${isTurn ? 'scale-110' : ''}`}
+                                        style={{ left: `${left}%`, top: `${top}%` }}
+                                    >
+                                        <div className={`text-3xl md:text-4xl w-14 h-14 md:w-16 md:h-16 bg-slate-900 rounded-full flex items-center justify-center border-4 relative transition-colors ${isTurn ? (catInfo ? catInfo.border : 'border-sky-500') : 'border-slate-700'} ${isMe ? 'avatar-glow' : ''}`}>
+                                            {won ? "🏆" : p.emoji}
+                                            
+                                            {/* Speaking Indicator */}
+                                            {isTurn && sessionData.timer?.active && sessionData.timer?.phase === 'speaking' && (
+                                                <div className="absolute -top-2 -right-2 bg-emerald-500 w-6 h-6 rounded-full border-2 border-slate-900 flex items-center justify-center animate-pulse"><Mic size={12} className="text-slate-900"/></div>
+                                            )}
+                                        </div>
+                                        <span className={`text-[10px] font-black uppercase mt-1 px-2 py-0.5 rounded truncate max-w-full ${isTurn ? 'text-white bg-sky-600' : 'text-slate-300 bg-slate-950/80'}`}>{p.name}</span>
+                                        
+                                        {/* 6 Lights */}
+                                        <div className="flex gap-0.5 mt-1 bg-slate-950/50 p-1 rounded-full border border-white/5">
+                                            {[0,1,2,3,4,5].map(lightIdx => (
+                                                <div key={lightIdx} className={`w-1.5 h-1.5 md:w-2 md:h-2 rounded-full transition-colors ${lightIdx >= (6 - p.lights) ? LIGHT_COLORS[lightIdx] : 'bg-slate-800 shadow-[inset_0_2px_4px_rgba(0,0,0,0.5)]'}`}></div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    );
+                };
+
+                return (
+                    <div className="flex flex-col h-full bg-slate-950 overflow-hidden">
+                        {/* HEADER */}
+                        <div className="p-4 flex justify-between items-center bg-slate-900/50 border-b border-white/5 shrink-0 z-20">
+                            <div className="flex items-center gap-2">
+                                <span className="bg-sky-500 text-black text-xs font-black px-2 py-1 rounded uppercase tracking-widest">SALA: {sessionCode}</span>
+                                {isHost && <Crown size={16} className="text-yellow-400"/>}
+                            </div>
+                            <div className="text-slate-400 font-bold text-sm">
+                                Jugadores: <span className="text-white">{sessionData.players.length}</span>
+                            </div>
+                        </div>
+
+                        {/* MESA CIRCULAR */}
+                        <div className="flex-1 flex flex-col justify-center items-center p-4 relative z-10 overflow-hidden">
+                            {renderTable()}
+                        </div>
+
+                        {/* CONTROLES INFERIORES */}
+                        <div className="p-4 md:p-6 bg-slate-900 border-t border-white/5 shrink-0 rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.5)] z-20 min-h-[120px] flex items-center justify-center">
+                            
+                            {/* Panel Host */}
+                            {isHost ? (
+                                <div className="w-full max-w-lg space-y-3">
+                                    <div className="flex items-center gap-2 justify-center mb-2">
+                                        <Crown size={14} className="text-yellow-400"/>
+                                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Panel del Maestro</span>
+                                    </div>
+
+                                    {sessionData.state === 'lobby' && (
+                                        <button onClick={startGame} className="w-full bg-sky-600 hover:bg-sky-500 text-white py-4 rounded-xl font-black uppercase text-sm flex items-center justify-center gap-2 transition shadow-lg"><Play size={18}/> Iniciar Partida</button>
+                                    )}
+
+                                    {sessionData.state === 'idle' && (
+                                        <button onClick={spinRoulette} className="w-full bg-fuchsia-600 hover:bg-fuchsia-500 text-white py-4 rounded-xl font-black uppercase text-sm flex items-center justify-center gap-2 transition shadow-[0_0_20px_rgba(192,38,211,0.4)]"><RotateCcw size={18}/> Girar Ruleta</button>
+                                    )}
+
+                                    {sessionData.state === 'reading' && (
+                                        <div className="flex gap-2">
+                                            <button onClick={() => startTimer(45, 'prep')} className="flex-1 bg-amber-500 hover:bg-amber-400 text-slate-900 py-4 rounded-xl font-black uppercase text-xs sm:text-sm flex items-center justify-center gap-2 transition shadow-lg"><Clock size={16}/> Prep 45s</button>
+                                            <button onClick={() => startTimer(60, 'speaking')} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-xl font-black uppercase text-xs sm:text-sm flex items-center justify-center gap-2 transition shadow-lg"><Mic size={16}/> Speak 60s</button>
+                                        </div>
+                                    )}
+
+                                    {sessionData.state === 'timer' && (
+                                        <div className="flex gap-2">
+                                            <button onClick={togglePauseTimer} className="px-6 bg-slate-800 hover:bg-slate-700 text-white py-4 rounded-xl font-black transition">
+                                                {sessionData.timer.pausedLeft > 0 ? <PlayIcon size={20}/> : <Pause size={20}/>}
+                                            </button>
+                                            {sessionData.timer.phase === 'prep' ? (
+                                                <button onClick={() => startTimer(60, 'speaking')} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-xl font-black uppercase text-sm flex items-center justify-center gap-2 transition shadow-lg"><Mic size={16}/> Saltar a Speak</button>
+                                            ) : (
+                                                <div className="flex-1 flex gap-2">
+                                                    <button onClick={() => endTurn(true)} className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-slate-900 py-4 rounded-xl font-black uppercase text-xs sm:text-sm flex items-center justify-center gap-1 transition"><Check size={16}/> Aprobado</button>
+                                                    <button onClick={() => endTurn(false)} className="flex-1 bg-rose-600 hover:bg-rose-500 text-white py-4 rounded-xl font-black uppercase text-xs sm:text-sm flex items-center justify-center gap-1 transition"><XIcon size={16}/> Falló</button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {sessionData.state === 'gameover' && (
+                                        <button onClick={() => window.location.href='index.html'} className="w-full bg-slate-800 text-white py-4 rounded-xl font-black uppercase text-sm border border-white/10">Salir al Hub</button>
+                                    )}
+                                </div>
+                            ) : (
+                                /* Panel Jugador (Lo ven todos los alumnos) */
+                                <div className="text-center w-full">
+                                    {isMyTurn && sessionData.state === 'choose' ? (
+                                        <div className="animate-pulse text-sky-400 font-black uppercase tracking-widest text-lg flex items-center justify-center gap-2">
+                                            👆 Elige en la mesa
+                                        </div>
+                                    ) : isMyTurn && sessionData.state === 'timer' && sessionData.timer.phase === 'speaking' ? (
+                                        <div className="text-emerald-400 font-black uppercase tracking-widest text-2xl flex items-center justify-center gap-3 animate-pulse">
+                                            <Mic size={28}/> ¡HABLA AHORA!
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-col items-center">
+                                            <Info className="text-slate-500 mb-2" size={24}/>
+                                            <p className="text-slate-400 font-bold uppercase text-sm">Presta atención a la mesa</p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+            
+            return null;
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<TalkTimeGame />);
+    </script>
+</body>
+</html>
