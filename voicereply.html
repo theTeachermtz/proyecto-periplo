@@ -12,7 +12,9 @@
         "react": "https://esm.sh/react@18.2.0",
         "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
         "lucide-react": "https://esm.sh/lucide-react@0.263.1",
-        "canvas-confetti": "https://esm.sh/canvas-confetti@1.9.3"
+        "canvas-confetti": "https://esm.sh/canvas-confetti@1.9.3",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
       }
     }
     </script>
@@ -40,6 +42,12 @@
         import { createRoot } from 'react-dom/client';
         import confetti from 'canvas-confetti';
         import { Loader2, Mic, MicOff, Volume2, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, CheckCircle2, AlertCircle, Ear } from 'lucide-react';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
 
         // TTS Helper for word-by-word
         const speakWord = (text, rate=0.6) => {
@@ -72,7 +80,6 @@
             const words = useMemo(() => expectedAnswer.split(' ').filter(w => w.trim() !== ''), [expectedAnswer]);
 
             useEffect(() => {
-                // Initialize Speech Recognition
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 if (SpeechRecognition) {
                     recognitionRef.current = new SpeechRecognition();
@@ -122,7 +129,6 @@
                 }
             };
 
-            // Tolerance Algorithm (Fuzzy Match)
             const checkPronunciation = (spokenText) => {
                 const cleanStr = (s) => s.toLowerCase().replace(/[^\w\s]/gi, '').trim();
                 const targetWords = cleanStr(expectedAnswer).split(' ');
@@ -133,11 +139,9 @@
                     if (spokenWords.includes(word)) matches++;
                 });
 
-                // Calculate percentage of target words hit
                 const score = matches / targetWords.length;
                 setSimilarity(Math.round(score * 100));
 
-                // 75% tolerance to pass
                 if (score >= 0.75) {
                     setStatus('success');
                     confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
@@ -171,7 +175,6 @@
             return (
                 <div className="flex flex-col items-end w-full animate-pop space-y-4 mt-4">
                     
-                    {/* INSTRUCTION & WORD-BY-WORD */}
                     <div className="w-[90%] sm:w-[85%] bg-zinc-800/80 border border-zinc-700 rounded-2xl p-4 shadow-sm">
                         <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center gap-2">
                             <Ear size={14}/> Lee esto en voz alta:
@@ -190,7 +193,6 @@
                         </div>
                     </div>
 
-                    {/* MIC CONTROLS & FEEDBACK */}
                     <div className="w-[90%] sm:w-[85%] flex flex-col items-center">
                         <button 
                             onClick={toggleListening}
@@ -209,7 +211,6 @@
                             {isListening ? 'Escuchando...' : 'Toca para hablar'}
                         </p>
 
-                        {/* Transcript Feedback */}
                         {transcript && status !== 'idle' && status !== 'success' && (
                             <div className={`w-full p-3 rounded-xl text-sm font-bold text-center animate-slide-up ${
                                 status === 'error' ? 'bg-rose-500/10 border border-rose-500/20 text-rose-400' : 'bg-zinc-800 text-zinc-300'
@@ -229,20 +230,47 @@
         // ====== MAIN APP ======
         const App = () => {
             const mockData = [
-                { id: 1, introContext: "¿Cómo le digo que el reporte es para mañana?", expectedAnswer: "The report is due tomorrow.", userHint: "El reporte se entrega mañana." },
-                { id: 2, introContext: "Dile que necesitamos programar una junta.", expectedAnswer: "We need to schedule a meeting.", userHint: "Necesitamos programar una reunión." },
-                { id: 3, introContext: "Pídele que envíe los archivos antes del mediodía.", expectedAnswer: "Send the files before noon.", userHint: "Envía los archivos antes del mediodía." }
+                { id: 1, botMessage: "¿Cómo le digo que el reporte es para mañana?", expectedAnswer: "The report is due tomorrow.", userHint: "El reporte se entrega mañana." },
+                { id: 2, botMessage: "Dile que necesitamos programar una junta.", expectedAnswer: "We need to schedule a meeting.", userHint: "Necesitamos programar una reunión." },
+                { id: 3, botMessage: "Pídele que envíe los archivos antes del mediodía.", expectedAnswer: "Send the files before noon.", userHint: "Envía los archivos antes del mediodía." }
             ];
 
-            const [chatFlow, setChatFlow] = useState(mockData);
+            const [chatFlow, setChatFlow] = useState([]);
             const [gameTitle, setGameTitle] = useState('Voice Reply Challenge');
             const [screen, setScreen] = useState('name'); 
             const [playerName, setPlayerName] = useState('');
             const [totalScore, setTotalScore] = useState(0);
             const [currentStep, setCurrentStep] = useState(0);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
             
             const messagesEndRef = useRef(null);
             useEffect(() => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 200); }, [currentStep, screen]);
+
+            useEffect(() => {
+                const quizId = new URLSearchParams(window.location.search).get('id');
+                if (!quizId) {
+                    setChatFlow(mockData);
+                    setLoading(false);
+                    return;
+                }
+                
+                const load = async () => {
+                    try {
+                        const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId));
+                        if (snap.exists()) {
+                            const d = snap.data();
+                            setGameTitle(d.title || 'Voice Reply Challenge');
+                            // Regla de fallback que acordamos:
+                            setChatFlow(d.content?.flow || d.content || []);
+                        } else {
+                            setError("Juego no encontrado.");
+                        }
+                    } catch (e) { setError(e.message); }
+                    setLoading(false);
+                }; 
+                load();
+            }, []);
 
             const startGame = () => setScreen('game');
 
@@ -253,6 +281,9 @@
                     setScreen('result');
                 }
             };
+
+            if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-indigo-500" size={40}/></div>;
+            if (error) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-400 font-bold p-6 text-center">{error}</div>;
 
             // --- SCREEN 1: NAME ---
             if (screen === 'name') return (
@@ -296,7 +327,7 @@
                                 <div className="flex gap-2 w-full">
                                     <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto opacity-50">🤖</div>
                                     <div className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[85%] text-sm font-medium">
-                                        {data.introContext}
+                                        {data.botMessage}
                                     </div>
                                 </div>
                                 <div className="flex flex-col items-end w-full">
@@ -312,7 +343,7 @@
                             <div className="flex gap-2 w-full animate-pop">
                                 <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">🤖</div>
                                 <div className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[85%] text-sm leading-relaxed font-medium">
-                                    {chatFlow[currentStep].introContext}
+                                    {chatFlow[currentStep].botMessage}
                                 </div>
                             </div>
                             <VoiceReplyBubble 
