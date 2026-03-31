@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Say it with Emoji | Periplo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' };
+        document.documentElement.classList.add('dark');
+    </script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap'); 
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow: hidden; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-5px); }
+            40%, 80% { transform: translateX(5px); }
+        }
+        .animate-shake { animation: shake 0.4s ease-in-out; }
+        
+        @keyframes pop {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        .animate-pop { animation: pop 0.3s ease-out; }
+    </style>
+</head>
+<body class="text-zinc-100 h-[100dvh] flex flex-col">
+    <div id="root" class="h-full flex flex-col"></div>
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useCallback } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+        import { Check, X, ArrowRight, RotateCcw, Keyboard, Award, Home, Share2, ChevronLeft, ChevronRight, Volume2 } from 'lucide-react';
+
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        const shuffleArray = (array) => {
+            const newArray = [...array];
+            for (let i = newArray.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+            }
+            return newArray;
+        };
+
+        const EmojiSpellApp = () => {
+            const [user, setUser] = useState(null);
+            const [quizId, setQuizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [isStudent, setIsStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
+            const [quizData, setQuizData] = useState(null);
+            const [loading, setLoading] = useState(true);
+
+            // Estados de Inicio y Jugador
+            const [gameStarted, setGameStarted] = useState(false);
+            const [playerName, setPlayerName] = useState('');
+            const [toastMsg, setToastMsg] = useState(null);
+
+            const [fullWordList, setFullWordList] = useState([]);
+            const [showWordList, setShowWordList] = useState(false);
+
+            // --- ESTADOS NAVEGACIÓN ---
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [cardStatuses, setCardStatuses] = useState({}); 
+            const [availableLetters, setAvailableLetters] = useState([]);
+            const [inputSlots, setInputSlots] = useState([]);
+            const [status, setStatus] = useState('playing'); 
+            const [shake, setShake] = useState(false);
+
+            useEffect(() => {
+                signInAnonymously(auth);
+                const unsub = onAuthStateChanged(auth, setUser);
+                if (quizId) {
+                    getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId)).then(snap => {
+                        if(snap.exists()) {
+                            const data = snap.data();
+                            setQuizData(data);
+                            
+                            const rawWords = data.content?.cards || data.content?.pairs || [];
+                            const cleanWords = rawWords.map((w, i) => ({
+                                id: w.id || i, wordEn: w.wordEn || w.c1 || '', wordEs: w.wordEs || w.c3 || '',
+                                exampleEn: w.exampleEn || w.c2 || '', emojis: w.emojis || w.c2 || '❓'
+                            })).filter(w => w.wordEn);
+                            
+                            const shuffledWords = [...cleanWords].sort(() => 0.5 - Math.random());
+                            setFullWordList(shuffledWords);
+                        } else { alert("Juego no encontrado"); }
+                        setLoading(false);
+                    });
+                } else { setLoading(false); }
+                return () => unsub();
+            }, [quizId]);
+
+            const totalWords = fullWordList.length;
+            const globalWin = totalWords > 0 && Object.keys(cardStatuses).length === totalWords;
+
+            // Cargar el nivel actual o restaurarlo si ya fue resuelto
+            useEffect(() => {
+                if (totalWords === 0 || globalWin || !gameStarted) return;
+
+                const currentData = fullWordList[currentIndex];
+                const currentWord = currentData.wordEn.toUpperCase();
+                const letters = currentWord.replace(/\s+/g, '').split('');
+
+                if (cardStatuses[currentIndex] === 'correct') {
+                    setInputSlots(letters.map(char => ({ id: Math.random(), char })));
+                    setAvailableLetters([]);
+                    setStatus('correct');
+                } else {
+                    let shuffled = shuffleArray(letters);
+                    let attempts = 0;
+                    const isAllSame = letters.every(l => l === letters[0]);
+                    
+                    if (!isAllSame) {
+                        while (shuffled.join('') === letters.join('') && attempts < 10) {
+                            shuffled = shuffleArray(letters);
+                            attempts++;
+                        }
+                    }
+
+                    const mappedAvailable = shuffled.map((char, index) => ({ id: `avail-${index}`, char }));
+                    setAvailableLetters(mappedAvailable);
+                    setInputSlots(Array(letters.length).fill(null));
+                    setStatus('playing');
+                }
+            }, [currentIndex, fullWordList, cardStatuses, globalWin, gameStarted, totalWords]);
+
+            // --- FUNCIONES DE AUDIO ---
+            const playAudio = (text) => {
+                if ('speechSynthesis' in window && text) {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.lang = 'en-US';
+                    utterance.rate = 0.9;
+                    window.speechSynthesis.speak(utterance);
+                }
+            };
+
+            const stopAudio = () => {
+                if ('speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                }
+            };
+
+            const handleAddLetter = (item, index) => {
+                if (status !== 'playing') return;
+                const emptySlotIndex = inputSlots.findIndex(slot => slot === null);
+                if (emptySlotIndex === -1) return; 
+
+                const newSlots = [...inputSlots];
+                newSlots[emptySlotIndex] = item;
+                setInputSlots(newSlots);
+
+                const newAvailable = [...availableLetters];
+                newAvailable.splice(index, 1);
+                setAvailableLetters(newAvailable);
+                
+                if (status === 'error') setStatus('playing');
+            };
+
+            const handleRemoveLetter = (slotIndex, item) => {
+                if (status === 'correct' || !item) return;
+
+                const newSlots = [...inputSlots];
+                newSlots[slotIndex] = null;
+                setInputSlots(newSlots);
+
+                setAvailableLetters([...availableLetters, item]);
+                if (status === 'error') setStatus('playing');
+            };
+
+            const handleRetry = () => {
+                const itemsToReturn = inputSlots.filter(slot => slot !== null);
+                setAvailableLetters(prev => [...prev, ...itemsToReturn]);
+                setInputSlots(Array(inputSlots.length).fill(null));
+                setStatus('playing');
+            };
+
+            const checkAnswer = () => {
+                const currentData = fullWordList[currentIndex];
+                const targetWord = currentData.wordEn.toUpperCase().replace(/\s+/g, '');
+                const currentGuess = inputSlots.map(s => s ? s.char : '').join('');
+
+                if (currentGuess.length < targetWord.length) return;
+
+                if (currentGuess === targetWord) {
+                    setStatus('correct');
+                    setCardStatuses(prev => ({...prev, [currentIndex]: 'correct'}));
+                    
+                    if (currentData.exampleEn) {
+                        playAudio(currentData.exampleEn);
+                    } else {
+                        // Si no hay ejemplo, que al menos lea la palabra que acaba de adivinar
+                        playAudio(currentData.wordEn);
+                    }
+                } else {
+                    setStatus('error');
+                    setShake(true);
+                    setTimeout(() => setShake(false), 500); 
+                }
+            };
+
+            // Teclado
+            useEffect(() => {
+                if (!gameStarted || globalWin) return;
+
+                const handleKeyDown = (e) => {
+                    if (status === 'correct') {
+                        if (e.key === 'Enter') handleNext();
+                        return;
+                    }
+
+                    const key = e.key.toUpperCase();
+
+                    if (e.key === 'Backspace') {
+                        e.preventDefault();
+                        for (let i = inputSlots.length - 1; i >= 0; i--) {
+                            if (inputSlots[i] !== null) {
+                                handleRemoveLetter(i, inputSlots[i]);
+                                break;
+                            }
+                        }
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (status === 'error') {
+                            handleRetry();
+                        } else {
+                            checkAnswer();
+                        }
+                    } else if (e.key === 'ArrowRight') {
+                        handleNext();
+                    } else if (e.key === 'ArrowLeft') {
+                        handlePrev();
+                    } else if (/^[A-ZÑ]$/.test(key) && status === 'playing') {
+                        const availableIndex = availableLetters.findIndex(item => item.char === key);
+                        if (availableIndex !== -1) {
+                            handleAddLetter(availableLetters[availableIndex], availableIndex);
+                        }
+                    }
+                };
+
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [status, inputSlots, availableLetters, gameStarted, globalWin, currentIndex, totalWords]);
+
+            const handleNext = () => {
+                stopAudio();
+                setCurrentIndex(prev => (prev === totalWords - 1 ? 0 : prev + 1));
+            };
+
+            const handlePrev = () => {
+                stopAudio();
+                setCurrentIndex(prev => (prev === 0 ? totalWords - 1 : prev - 1));
+            };
+
+            const handleRestart = () => {
+                stopAudio();
+                window.location.reload();
+            };
+
+            const copyLink = () => {
+                const studentUrl = `${window.location.origin}${window.location.pathname}?id=${quizId}&student=true`;
+                navigator.clipboard.writeText(studentUrl).then(() => {
+                    setToastMsg('¡Link para alumno copiado al portapapeles!');
+                    setTimeout(() => setToastMsg(null), 3000);
+                });
+            };
+
+            if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-black animate-pulse">Analizando Emojis...</div>;
+            if (!fullWordList || totalWords === 0) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-500 font-bold p-6 text-center">No se pudo generar el juego. El banco de palabras está vacío.</div>;
+
+            // --- PANTALLA DE INICIO ---
+            if (!gameStarted) {
+                return (
+                    <div className="h-[100dvh] bg-zinc-950 flex flex-col items-center justify-center p-4 relative overflow-hidden">
+                        <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[2.5rem] shadow-2xl max-w-md w-full text-center z-10 animate-in zoom-in-95">
+                            <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center text-white text-4xl font-black shadow-lg shadow-indigo-600/20 mx-auto mb-6">🤔</div>
+                            <h1 className="text-3xl font-black text-rose-500 mb-2 leading-tight">{quizData?.title || 'Say it with Emoji'}</h1>
+                            <p className="text-zinc-400 mb-8 font-medium">Adivina la palabra oculta detrás de los emojis.</p>
+                            
+                            <input 
+                                type="text" 
+                                placeholder="Tu nombre..." 
+                                value={playerName}
+                                onChange={(e) => setPlayerName(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && playerName.trim() && setGameStarted(true)}
+                                className="w-full bg-zinc-950 border-2 border-zinc-800 rounded-xl p-4 text-center text-xl font-bold text-white mb-6 outline-none focus:border-rose-500 transition-colors"
+                            />
+                            
+                            <button 
+                                disabled={!playerName.trim()}
+                                onClick={() => setGameStarted(true)}
+                                className="w-full bg-rose-500 hover:bg-rose-400 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-white font-black text-lg py-4 rounded-xl transition-all shadow-lg active:scale-95 uppercase tracking-widest"
+                            >
+                                Empezar Juego
+                            </button>
+                            
+                            {!isStudent && (
+                                <button onClick={() => window.location.href='index.html'} className="mt-6 text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-widest">
+                                    Volver al Hub (Maestro)
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            const currentData = fullWordList[currentIndex];
+            const isComplete = inputSlots.every(slot => slot !== null);
+
+            const renderSlots = () => {
+                if (!currentData) return null;
+                let slotIndex = 0;
+                const words = currentData.wordEn.split(' ');
+
+                return words.map((word, wIdx) => (
+                    <div key={`word-${wIdx}`} className="flex flex-nowrap justify-center gap-1.5 sm:gap-2">
+                        {word.split('').map((char, cIdx) => {
+                            const currentIdx = slotIndex++;
+                            const slot = inputSlots[currentIdx];
+                            return (
+                                <button
+                                    key={`slot-${currentIdx}`}
+                                    onClick={() => handleRemoveLetter(currentIdx, slot)}
+                                    disabled={!slot || status === 'correct'}
+                                    className={`
+                                        w-9 h-12 sm:w-12 sm:h-14 rounded-xl text-xl sm:text-2xl font-black flex items-center justify-center shrink-0 uppercase
+                                        transition-all duration-200 select-none
+                                        ${slot ? 'bg-zinc-800 border-b-4 border-zinc-900 text-white cursor-pointer hover:bg-zinc-700 animate-pop' : 'bg-zinc-900/50 border-2 border-dashed border-zinc-800/50 text-transparent cursor-default'}
+                                        ${status === 'correct' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 border-b-2' : ''}
+                                        ${status === 'error' && slot ? 'bg-rose-500/20 border-rose-500 text-rose-400 border-b-2' : ''}
+                                    `}
+                                >
+                                    {slot ? slot.char : ''}
+                                </button>
+                            );
+                        })}
+                    </div>
+                ));
+            };
+
+            return (
+                <div className="h-[100dvh] bg-zinc-950 text-zinc-100 font-sans flex flex-col overflow-hidden relative">
+                    
+                    {toastMsg && (
+                        <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-emerald-500 text-black px-6 py-3 rounded-full font-black text-sm shadow-xl z-[120] animate-in slide-in-from-top-4 flex items-center gap-2">
+                            <Check size={16} /> {toastMsg}
+                        </div>
+                    )}
+
+                    {/* CONFETI GLOBAL & MENU DE VICTORIA */}
+                    {globalWin && (
+                        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in p-4">
+                            <div className="bg-zinc-900 border border-zinc-700 text-white p-8 rounded-[2rem] text-center shadow-2xl w-full max-w-md">
+                                <Award className="w-24 h-24 text-rose-500 mx-auto mb-6 animate-bounce"/>
+                                <h2 className="text-4xl font-black mb-2">¡Completado, {playerName}!</h2>
+                                <p className="text-zinc-400 font-bold uppercase tracking-widest mb-8">Puntaje Perfecto</p>
+                                
+                                <div className="flex flex-col gap-4 w-full">
+                                    <button onClick={() => { stopAudio(); setShowWordList(true); }} className="w-full bg-zinc-800 border-2 border-zinc-700 hover:bg-zinc-700 text-white font-black px-6 py-4 rounded-xl transition-all shadow-md active:scale-95 text-sm sm:text-base">
+                                        📖 VER LAS {fullWordList.length} PALABRAS
+                                    </button>
+                                    <button onClick={handleRestart} className="w-full bg-rose-500 hover:bg-rose-400 text-white font-black px-6 py-4 rounded-xl transition-all shadow-md active:scale-95 text-sm sm:text-base">
+                                        🔄 JUGAR OTRA VEZ
+                                    </button>
+                                    {!isStudent && (
+                                        <button onClick={() => window.location.href='index.html'} className="mt-2 text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-widest">
+                                            SALIR AL HUB
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* OVERLAY DE LISTA DE PALABRAS */}
+                    {showWordList && (
+                        <div className="absolute inset-0 z-[110] bg-zinc-950 flex flex-col p-4 sm:p-8 animate-in slide-in-from-bottom-10">
+                            <div className="max-w-3xl mx-auto w-full flex flex-col h-full bg-zinc-900 rounded-[2rem] border border-zinc-800 p-6 shadow-2xl">
+                                <div className="flex items-center justify-between mb-6 shrink-0">
+                                    <h2 className="text-2xl sm:text-3xl font-black text-white">Vocabulario del Paquete</h2>
+                                    <button onClick={() => setShowWordList(false)} className="p-3 bg-zinc-800 text-zinc-400 rounded-full hover:bg-zinc-700 hover:text-white transition-colors">
+                                        <X size={20} />
+                                    </button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar pb-6">
+                                    {fullWordList.map(card => (
+                                        <div key={card.id} className="flex flex-col sm:flex-row items-start sm:items-center p-4 bg-zinc-950/50 rounded-2xl border border-zinc-800 gap-4">
+                                            <div className="text-4xl bg-zinc-900 w-16 h-16 flex items-center justify-center rounded-xl shadow-sm border border-zinc-800 flex-shrink-0">
+                                                {card.emojis}
+                                            </div>
+                                            <div className="flex-grow w-full">
+                                                <h4 className="text-lg font-black text-white">{card.wordEn}</h4>
+                                                {/* En el repaso final SÍ mostramos el español para que aprendan */}
+                                                <p className="text-rose-500 font-bold text-sm mb-1">{card.wordEs}</p>
+                                                {card.exampleEn && <p className="text-zinc-500 text-xs italic">"{card.exampleEn}"</p>}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* HEADER */}
+                    <header className="p-4 sm:p-6 w-full flex justify-between items-center shrink-0 border-b border-zinc-800/50 bg-zinc-900/50 backdrop-blur-md z-40">
+                        <div className="flex items-center gap-3">
+                            {!isStudent && (
+                                <button onClick={() => window.location.href='index.html'} className="p-2.5 bg-zinc-800 text-zinc-400 rounded-xl hover:bg-zinc-700 hover:text-white transition-colors border border-zinc-700">
+                                    <Home size={20}/>
+                                </button>
+                            )}
+                            {!isStudent && <div className="w-px h-8 bg-zinc-800 mx-1 hidden sm:block"></div>}
+                            {!isStudent && (
+                                <button onClick={copyLink} className="p-2.5 bg-zinc-800 text-sky-400 rounded-xl hover:bg-zinc-700 hover:text-sky-300 transition-colors border border-zinc-700" title="Copiar link para alumnos">
+                                    <Share2 size={20}/>
+                                </button>
+                            )}
+                            <div className={!isStudent ? "ml-2" : ""}>
+                                <h1 className="text-lg font-black text-rose-500 leading-none tracking-tight">{quizData?.title || 'Actividad Periplo'}</h1>
+                                <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1">Modo: Say It With Emoji</p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                            <span className="text-emerald-500 font-black text-xs tracking-widest bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-md">
+                                ✓ {Object.keys(cardStatuses).length} / {fullWordList.length}
+                            </span>
+                        </div>
+                    </header>
+
+                    {/* ÁREA PRINCIPAL */}
+                    <div className="flex-1 w-full flex flex-col items-center p-4 overflow-y-auto mt-2 sm:mt-6">
+                        {!globalWin && currentData && (
+                            <div className="w-full max-w-xl flex flex-col flex-1">
+                                
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 w-full shadow-2xl flex flex-col">
+                                    
+                                    <div className="text-center space-y-2 mb-8">
+                                        <h2 className="text-sm sm:text-base font-black text-zinc-500 uppercase tracking-widest mb-4">
+                                            ¿Qué palabra es?
+                                        </h2>
+                                        <div className="text-6xl sm:text-8xl tracking-widest select-none flex justify-center gap-2 drop-shadow-xl">
+                                            {currentData.emojis}
+                                        </div>
+                                        
+                                        {/* EL EJEMPLO APARECE SOLO SI ES CORRECTO */}
+                                        {status === 'correct' && (
+                                            <div className="flex flex-col items-center justify-center gap-2 animate-in fade-in mt-6">
+                                                {currentData.exampleEn && (
+                                                    <p className="text-zinc-400 italic text-sm sm:text-base flex items-center justify-center gap-2">
+                                                        <Keyboard className="w-4 h-4 opacity-50" />
+                                                        "{currentData.exampleEn}"
+                                                    </p>
+                                                )}
+                                                <button onClick={() => playAudio(currentData.exampleEn || currentData.wordEn)} className="mt-2 flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-sky-400 px-4 py-2 rounded-lg text-xs font-black uppercase tracking-widest transition-colors border border-zinc-700">
+                                                    <Volume2 size={14}/> {currentData.exampleEn ? 'Repetir Audio' : 'Escuchar Palabra'}
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className={`flex flex-wrap justify-center gap-x-6 gap-y-3 mb-10 min-h-[4rem] ${shake ? 'animate-shake' : ''}`}>
+                                        {renderSlots()}
+                                    </div>
+
+                                    {/* ZONA DE LETRAS DISPONIBLES */}
+                                    {status !== 'correct' && (
+                                        <div className="flex flex-wrap justify-center gap-2 sm:gap-3 mb-10 min-h-[4rem] animate-in fade-in duration-300">
+                                            {availableLetters.map((item, idx) => (
+                                                <button
+                                                    key={item.id}
+                                                    onClick={() => handleAddLetter(item, idx)}
+                                                    disabled={status !== 'playing'}
+                                                    className={`
+                                                        w-10 h-12 sm:w-12 sm:h-14 bg-zinc-800 border-b-4 border-zinc-950 rounded-xl 
+                                                        text-xl sm:text-2xl font-black text-white flex items-center justify-center uppercase
+                                                        hover:bg-zinc-700 hover:-translate-y-1 active:translate-y-0 active:border-b-0 
+                                                        transition-all duration-150 select-none cursor-pointer shrink-0 shadow-sm
+                                                        ${status !== 'playing' ? 'opacity-50 cursor-not-allowed transform-none border-b-0 translate-y-1' : ''}
+                                                    `}
+                                                >
+                                                    {item.char}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* Botones de Acción del Juego */}
+                                    <div className="mt-auto flex gap-3">
+                                        {status === 'playing' || status === 'error' ? (
+                                            <button
+                                                onClick={status === 'error' ? handleRetry : checkAnswer}
+                                                disabled={!isComplete && status !== 'error'}
+                                                className={`
+                                                    flex-1 py-4 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-2 uppercase tracking-widest shadow-md
+                                                    ${isComplete || status === 'error'
+                                                        ? 'bg-rose-500 hover:bg-rose-400 active:scale-95 text-white shadow-rose-500/20' 
+                                                        : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'}
+                                                `}
+                                            >
+                                                {status === 'error' ? <RotateCcw className="w-5 h-5" /> : <Check className="w-5 h-5" />}
+                                                <span>{status === 'error' ? 'Reintentar' : 'Comprobar'}</span>
+                                            </button>
+                                        ) : (
+                                            <button
+                                                onClick={handleNext}
+                                                className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black rounded-2xl font-black text-lg transition-all animate-pop flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 uppercase tracking-widest"
+                                            >
+                                                <span>Siguiente Palabra</span> <ArrowRight className="w-5 h-5" />
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* CONTROLES DE NAVEGACIÓN ESTILO FLASHCARDS */}
+                                <div className="mt-6 flex items-center justify-center space-x-6 z-10 w-full">
+                                    <button onClick={handlePrev} className="p-4 rounded-full shadow-lg transition-all bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-white hover:bg-zinc-800 active:scale-95">
+                                        <ChevronLeft size={24} />
+                                    </button>
+
+                                    <div className="flex flex-col items-center bg-zinc-900 px-6 py-2 rounded-full shadow-sm border border-zinc-800">
+                                        <span className="text-base font-black text-zinc-300 tracking-widest">
+                                            {currentIndex + 1} <span className="text-zinc-600 font-normal mx-1">/</span> {totalWords}
+                                        </span>
+                                    </div>
+
+                                    <button onClick={handleNext} className="p-4 rounded-full shadow-lg transition-all bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-white hover:bg-zinc-800 active:scale-95">
+                                        <ChevronRight size={24} />
+                                    </button>
+                                </div>
+
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<EmojiSpellApp />);
+    </script>
+</body>
+</html>
