@@ -41,20 +41,21 @@
         import React, { useState, useEffect, useRef, useMemo } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, doc, getDoc, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
         import confetti from 'canvas-confetti';
-        import { Loader2, Volume2, Lightbulb, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, Eye, Forward, Send, CheckCircle2 } from 'lucide-react';
+        import { Loader2, Volume2, Lightbulb, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, Eye, Forward, Send, CheckCircle2, Info, Plus, Mic } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // TTS Helper
-        const stripEmoji = (s) => s.replace(/[\u{1F600}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1FA00}-\u{1FAFF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '').trim();
+        // TTS Helper & Emoji Stripper
+        const stripEmoji = (s) => s.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1FA00}-\u{1FAFF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '').trim();
         const speak = (text, lang='en-US', rate=0.85, onEnd) => {
             if(!window.speechSynthesis) { if(onEnd) onEnd(); return; }
             window.speechSynthesis.cancel();
-            const u = new SpeechSynthesisUtterance(stripEmoji(text)); u.lang=lang; u.rate=rate; u.pitch=1;
+            const cleanText = stripEmoji(text);
+            const u = new SpeechSynthesisUtterance(cleanText); u.lang=lang; u.rate=rate; u.pitch=1;
             const voices = window.speechSynthesis.getVoices();
             const v = voices.find(v=>v.lang.startsWith(lang.split('-')[0])&&v.name.includes('Google')) || voices.find(v=>v.lang.startsWith(lang.split('-')[0]));
             if(v) u.voice=v;
@@ -88,7 +89,6 @@
                         ))}
                     </div>
                 </div>
-                {/* Duración simulada basada en caracteres */}
                 <div className="text-right mt-1">
                     <span className="text-[10px] text-zinc-500 font-bold">0:{String(Math.ceil(text.length/10)).padStart(2,'0')}</span>
                 </div>
@@ -100,35 +100,35 @@
             const originalWords = useMemo(() => expectedAnswer.split(' ').filter(w => w.trim() !== ''), [expectedAnswer]);
             const [wordPool, setWordPool] = useState([]);
             const [selectedWords, setSelectedWords] = useState([]);
-            const [status, setStatus] = useState('playing_audio'); // playing_audio, unscrambling, error, correct
+            const [status, setStatus] = useState('playing_audio'); // playing_audio, unscrambling, error, correct, max_attempts
             const [showHint, setShowHint] = useState(false);
             const [attempts, setAttempts] = useState(0);
+            
+            const maxAttempts = 3;
 
             useEffect(() => {
                 const w = originalWords.map((word, id) => ({ id, word }));
                 setWordPool(shuffleArray(w));
             }, [originalWords]);
 
-            // Auto-transition from audio to unscramble
             useEffect(() => {
                 if (!isPlaying && status === 'playing_audio') setStatus('unscrambling');
             }, [isPlaying]);
 
             const handleSelect = (wordObj) => {
-                if (status === 'correct' || status === 'playing_audio') return;
+                if (status === 'correct' || status === 'playing_audio' || status === 'error' || status === 'max_attempts') return;
                 setWordPool(prev => prev.filter(w => w.id !== wordObj.id));
                 setSelectedWords(prev => [...prev, wordObj]);
             };
 
             const handleDeselect = (wordObj) => {
-                if (status === 'correct' || status === 'playing_audio') return;
+                if (status === 'correct' || status === 'playing_audio' || status === 'error' || status === 'max_attempts') return;
                 setSelectedWords(prev => prev.filter(w => w.id !== wordObj.id));
                 setWordPool(prev => [...prev, wordObj]);
             };
 
-            // Check answer when all words selected
             useEffect(() => {
-                if (selectedWords.length === originalWords.length && selectedWords.length > 0) {
+                if (selectedWords.length === originalWords.length && selectedWords.length > 0 && status === 'unscrambling') {
                     const currentSentence = selectedWords.map(w => w.word).join(' ');
                     if (currentSentence === expectedAnswer) {
                         setStatus('correct');
@@ -137,17 +137,25 @@
                         addScore(score);
                         setTimeout(() => speak(expectedAnswer, 'en-US', 0.85), 500);
                     } else {
-                        setStatus('error');
-                        setAttempts(p => p + 1);
-                        setTimeout(() => {
-                            // Reset everything to pool on error
-                            setWordPool(shuffleArray([...selectedWords, ...wordPool]));
-                            setSelectedWords([]);
-                            setStatus('unscrambling');
-                        }, 800);
+                        const currentAttempts = attempts + 1;
+                        setAttempts(currentAttempts);
+                        if (currentAttempts >= maxAttempts) {
+                            setStatus('max_attempts');
+                            addScore(1); // 1 punto por el esfuerzo
+                        } else {
+                            setStatus('error');
+                        }
                     }
                 }
-            }, [selectedWords, originalWords.length, expectedAnswer, wordPool, attempts]);
+            }, [selectedWords, originalWords.length, expectedAnswer, status, attempts]);
+
+            const handleRetry = () => {
+                // Return words to pool and shuffle
+                const w = originalWords.map((word, id) => ({ id, word }));
+                setWordPool(shuffleArray(w));
+                setSelectedWords([]);
+                setStatus('unscrambling');
+            };
 
             if (status === 'playing_audio') return (
                 <div className="flex flex-col items-end w-full animate-pop">
@@ -156,11 +164,11 @@
             );
 
             if (status === 'correct') return (
-                <div className="flex flex-col items-end w-full animate-pop">
+                <div className="flex flex-col items-end w-full animate-pop mt-2">
                     <div className="bg-emerald-600 text-white p-4 rounded-2xl rounded-tr-sm w-[90%] sm:w-[85%] shadow-lg">
                         <div className="flex items-center gap-2 mb-2">
                             <CheckCircle2 size={18} className="text-emerald-200"/>
-                            <span className="font-black text-sm uppercase tracking-widest text-emerald-200">Traducción enviada</span>
+                            <span className="font-black text-sm uppercase tracking-widest text-emerald-200">Traducción correcta</span>
                         </div>
                         <p className="font-bold text-lg leading-relaxed">{expectedAnswer}</p>
                         <div className="mt-4 text-right flex justify-between items-center border-t border-emerald-500/50 pt-3">
@@ -171,8 +179,29 @@
                 </div>
             );
 
+            if (status === 'max_attempts') return (
+                <div className="flex flex-col items-end w-full animate-pop mt-2">
+                    <div className="bg-zinc-800 border border-zinc-700 p-4 rounded-2xl rounded-tr-sm w-[90%] sm:w-[85%] shadow-lg">
+                        <div className="flex items-center gap-2 mb-3">
+                            <Info size={18} className="text-indigo-400"/>
+                            <span className="font-black text-sm uppercase tracking-widest text-indigo-400">Intentos agotados</span>
+                        </div>
+                        <p className="text-sm font-medium text-zinc-300 leading-relaxed mb-4">
+                            ¡Estaba difícil! La frase correcta que dice el audio es:
+                        </p>
+                        <div className="bg-zinc-950/50 border border-zinc-800 p-3 rounded-xl mb-4 text-center">
+                            <p className="font-bold text-white text-base">{expectedAnswer}</p>
+                        </div>
+                        <div className="text-right border-t border-zinc-700 pt-3 flex justify-between items-center">
+                            <button onClick={() => speak(expectedAnswer, 'en-US', 0.85)} className="text-zinc-400 hover:text-white flex items-center gap-1 text-xs font-bold"><Volume2 size={14}/> Escuchar</button>
+                            <button onClick={onNext} className="bg-indigo-600 text-white font-black py-2 px-4 rounded-xl shadow-sm text-sm flex items-center gap-1 active:scale-95 transition-transform">Siguiente <ChevronRight size={16}/></button>
+                        </div>
+                    </div>
+                </div>
+            );
+
             return (
-                <div className="flex flex-col items-end w-full animate-pop space-y-3">
+                <div className="flex flex-col items-end w-full animate-pop space-y-3 mt-2">
                     {/* HINT */}
                     {showHint && (
                         <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-3 rounded-xl text-sm font-bold w-[90%] sm:w-[85%] animate-slide-up flex gap-2">
@@ -181,24 +210,45 @@
                     )}
 
                     {/* BUILDER AREA */}
-                    <div className={`w-[90%] sm:w-[85%] bg-indigo-600/20 border-2 ${status==='error'?'border-rose-500 bg-rose-500/20 animate-shake':'border-indigo-500/30'} rounded-2xl p-4 min-h-[80px] flex flex-wrap gap-2 content-start transition-colors`}>
+                    <div className={`w-[90%] sm:w-[85%] bg-indigo-600/10 border-2 ${status==='error'?'border-rose-500/50 bg-rose-500/5':'border-indigo-500/30'} rounded-2xl p-4 min-h-[80px] flex flex-wrap gap-2 content-start transition-colors`}>
                         {selectedWords.length === 0 && <span className="text-indigo-400/50 font-bold text-sm m-auto">Toca las palabras para ordenar...</span>}
-                        {selectedWords.map(w => (
-                            <button key={w.id} onClick={() => handleDeselect(w)} className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg font-bold text-sm shadow-sm active:scale-95 transition-transform">
-                                {w.word}
-                            </button>
-                        ))}
+                        
+                        {selectedWords.map((w, i) => {
+                            // Validar posición si estamos en error
+                            const isCorrectPos = status === 'error' ? (w.word === originalWords[i]) : null;
+                            
+                            return (
+                                <button key={w.id} onClick={() => handleDeselect(w)} disabled={status === 'error'} 
+                                    className={`px-3 py-1.5 rounded-lg font-bold text-sm shadow-sm transition-all
+                                        ${status === 'error' 
+                                            ? (isCorrectPos ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white animate-shake') 
+                                            : 'bg-indigo-600 text-white active:scale-95'
+                                        }`
+                                    }>
+                                    {w.word}
+                                </button>
+                            );
+                        })}
                     </div>
 
                     {/* WORD POOL & CONTROLS */}
                     <div className="w-[90%] sm:w-[85%] flex flex-col gap-3">
-                        <div className="flex flex-wrap gap-2 justify-end">
-                            {wordPool.map(w => (
-                                <button key={w.id} onClick={() => handleSelect(w)} className="bg-zinc-800 border border-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg font-bold text-sm shadow-sm active:scale-95 hover:bg-zinc-700 transition-all">
-                                    {w.word}
+                        {status === 'error' ? (
+                            <div className="flex justify-end animate-pop">
+                                <button onClick={handleRetry} className="bg-rose-500 hover:bg-rose-600 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm flex items-center gap-2 active:scale-95">
+                                    <RotateCcw size={16}/> Reintentar ({attempts}/{maxAttempts})
                                 </button>
-                            ))}
-                        </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-wrap gap-2 justify-end">
+                                {wordPool.map(w => (
+                                    <button key={w.id} onClick={() => handleSelect(w)} className="bg-zinc-800 border border-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg font-bold text-sm shadow-sm active:scale-95 hover:bg-zinc-700 transition-all">
+                                        {w.word}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        
                         <div className="flex justify-between items-center mt-2">
                             <button onClick={playAudio} className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1 text-xs font-bold px-3 py-2 bg-indigo-500/10 rounded-xl active:scale-95">
                                 <Volume2 size={16}/> Re-escuchar
@@ -214,11 +264,9 @@
 
         // ====== MAIN APP ======
         const App = () => {
-            // Mock data for immediate testing if no Firebase ID is provided
             const mockData = [
-                { id: 1, expectedAnswer: "The report is due tomorrow.", userHint: "El reporte se entrega mañana." },
-                { id: 2, expectedAnswer: "We need to schedule a meeting.", userHint: "Necesitamos programar una reunión." },
-                { id: 3, expectedAnswer: "Send the files before noon.", userHint: "Envía los archivos antes del mediodía." }
+                { id: 1, botMessage: "Me pidió esto urgente y no entiendo", expectedAnswer: "The report is due tomorrow.", userHint: "El reporte se entrega mañana." },
+                { id: 2, botMessage: "Dice que hay un problema con la agenda", expectedAnswer: "We need to schedule a meeting.", userHint: "Necesitamos programar una reunión." }
             ];
 
             const [chatFlow, setChatFlow] = useState([]);
@@ -226,11 +274,10 @@
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
             
-            const [screen, setScreen] = useState('name'); // name, intro, game, result
+            const [screen, setScreen] = useState('name'); 
             const [playerName, setPlayerName] = useState('');
             const [totalScore, setTotalScore] = useState(0);
             
-            // Game progress
             const [currentStep, setCurrentStep] = useState(0);
             const [isPlayingBot, setIsPlayingBot] = useState(false);
             const messagesEndRef = useRef(null);
@@ -238,7 +285,6 @@
             useEffect(() => {
                 const quizId = new URLSearchParams(window.location.search).get('id');
                 if (!quizId) {
-                    // Load mock data if no ID
                     setChatFlow(mockData);
                     setLoading(false);
                     return;
@@ -266,7 +312,6 @@
                 if (isPlayingBot) return;
                 setIsPlayingBot(true);
                 speak(text, 'en-US', 0.85, () => setIsPlayingBot(false));
-                // Fallback timeout
                 setTimeout(() => setIsPlayingBot(false), Math.max(2000, text.length * 80));
             };
 
@@ -325,15 +370,22 @@
                         <div className="flex gap-2 w-full animate-pop">
                             <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">😎</div>
                             <div className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[85%] text-sm leading-relaxed font-medium">
-                                ¡Hey {playerName}! Mi jefe (que solo habla inglés 🙄) me acaba de reenviar unos audios urgentes. ¿Me ayudas a traducirlos? No entiendo nada.
+                                ¡Hey {playerName}! Me acaban de enviar unos audios urgentes sobre <b>{gameTitle}</b> y no entiendo nada. ¿Me ayudas a traducirlos? 😭
                             </div>
                         </div>
                     </div>
+                    
                     <div className="bg-zinc-900 p-4 border-t border-zinc-800 shrink-0 animate-slide-up">
                         <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest text-center mb-3">Respuestas Rápidas</p>
                         <button onClick={startGame} className="w-full bg-indigo-600 text-white font-black py-3.5 rounded-xl shadow-lg active:scale-95 text-sm flex items-center justify-center gap-2 border-b-4 border-indigo-800">
                             Yes, send them please! <Send size={16}/>
                         </button>
+                    </div>
+                    {/* FAKE BOTTOM BAR */}
+                    <div className="bg-zinc-900 px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0 opacity-50 pointer-events-none">
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-zinc-500 shrink-0"><Plus size={20} /></div>
+                        <div className="flex-1 bg-zinc-950 rounded-full h-10 px-4 flex items-center border border-zinc-800"><span className="text-zinc-600 text-sm font-medium">Mensaje...</span></div>
+                        <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-indigo-400/50 shrink-0"><Mic size={18} /></div>
                     </div>
                 </div>
             );
@@ -359,7 +411,14 @@
                             <div key={idx} className="space-y-3 opacity-60">
                                 <div className="flex gap-2 w-full">
                                     <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto opacity-50">😎</div>
-                                    <ForwardedAudio text={data.expectedAnswer} isPlaying={false} onPlay={() => speak(data.expectedAnswer, 'en-US', 0.85)} />
+                                    <div className="flex flex-col gap-2 max-w-[85%]">
+                                        {data.botMessage && (
+                                            <div className="bg-zinc-800 text-zinc-300 px-3 py-2 rounded-2xl rounded-bl-sm border border-zinc-700/50 text-xs italic">
+                                                {data.botMessage}
+                                            </div>
+                                        )}
+                                        <ForwardedAudio text={data.expectedAnswer} isPlaying={false} onPlay={() => speak(data.expectedAnswer, 'en-US', 0.85)} />
+                                    </div>
                                 </div>
                                 <div className="flex flex-col items-end w-full">
                                     <div className="bg-emerald-900/40 text-emerald-200 p-3 rounded-2xl rounded-tr-sm w-[85%] text-sm font-bold border border-emerald-500/20">
@@ -373,13 +432,23 @@
                         <div className="space-y-4">
                             <div className="flex gap-2 w-full animate-pop">
                                 <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">😎</div>
-                                <ForwardedAudio 
-                                    text={chatFlow[currentStep].expectedAnswer} 
-                                    isPlaying={isPlayingBot} 
-                                    onPlay={() => playCurrentBot(chatFlow[currentStep].expectedAnswer)} 
-                                />
+                                <div className="flex flex-col gap-2 max-w-[85%] w-full">
+                                    {chatFlow[currentStep].botMessage && (
+                                        <div className="bg-zinc-800 text-zinc-300 px-3 py-2 rounded-2xl rounded-bl-sm border border-zinc-700/50 text-xs italic w-fit">
+                                            {chatFlow[currentStep].botMessage}
+                                        </div>
+                                    )}
+                                    <ForwardedAudio 
+                                        text={chatFlow[currentStep].expectedAnswer} 
+                                        isPlaying={isPlayingBot} 
+                                        onPlay={() => playCurrentBot(chatFlow[currentStep].expectedAnswer)} 
+                                    />
+                                </div>
                             </div>
+                            
+                            {/* KEY AÑADIDA PARA ARREGLAR BUG */}
                             <UnscrambleBubble 
+                                key={currentStep}
                                 expectedAnswer={chatFlow[currentStep].expectedAnswer}
                                 userHint={chatFlow[currentStep].userHint}
                                 isPlaying={isPlayingBot}
@@ -389,6 +458,13 @@
                             />
                         </div>
                         <div ref={messagesEndRef}/>
+                    </div>
+
+                    {/* FAKE BOTTOM BAR */}
+                    <div className="bg-zinc-900 px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0 opacity-50 pointer-events-none">
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-zinc-500 shrink-0"><Plus size={20} /></div>
+                        <div className="flex-1 bg-zinc-950 rounded-full h-10 px-4 flex items-center border border-zinc-800"><span className="text-zinc-600 text-sm font-medium">Escribe un mensaje...</span></div>
+                        <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-indigo-400/50 shrink-0"><Mic size={18} /></div>
                     </div>
                 </div>
             );
