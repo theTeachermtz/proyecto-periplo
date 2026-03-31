@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Voice Reply | Periplo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' }; document.documentElement.classList.add('dark');</script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "canvas-confetti": "https://esm.sh/canvas-confetti@1.9.3"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; user-select: none; -webkit-user-select: none; overflow: hidden; touch-action: manipulation; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+        @keyframes popIn { 0%{opacity:0;transform:scale(0.9) translateY(10px)} 100%{opacity:1;transform:scale(1) translateY(0)} }
+        .animate-pop { animation: popIn 0.35s cubic-bezier(0.175,0.885,0.32,1.275) forwards; }
+        @keyframes slideUp { 0%{opacity:0;transform:translateY(16px)} 100%{opacity:1;transform:translateY(0)} }
+        .animate-slide-up { animation: slideUp 0.25s ease-out forwards; }
+        @keyframes pulse-ring { 0%{transform:scale(0.8);box-shadow:0 0 0 0 rgba(99,102,241,0.7)} 70%{transform:scale(1);box-shadow:0 0 0 15px rgba(99,102,241,0)} 100%{transform:scale(0.8);box-shadow:0 0 0 0 rgba(99,102,241,0)} }
+        .mic-listening { animation: pulse-ring 1.5s infinite cubic-bezier(0.215, 0.61, 0.355, 1); }
+        @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(5px)} }
+        .animate-shake { animation: shake 0.35s ease-in-out; }
+    </style>
+</head>
+<body class="text-zinc-100 h-[100dvh]">
+    <div id="root" class="h-full"></div>
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useMemo } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import confetti from 'canvas-confetti';
+        import { Loader2, Mic, MicOff, Volume2, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, CheckCircle2, AlertCircle, Ear } from 'lucide-react';
+
+        // TTS Helper for word-by-word
+        const speakWord = (text, rate=0.6) => {
+            if(!window.speechSynthesis) return;
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(text); 
+            u.lang = 'en-US'; 
+            u.rate = rate; // Slower for pronunciation help
+            window.speechSynthesis.speak(u);
+        };
+
+        const speakPhrase = (text) => {
+            if(!window.speechSynthesis) return;
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(text); 
+            u.lang = 'en-US'; 
+            u.rate = 0.85; 
+            window.speechSynthesis.speak(u);
+        };
+
+        // ====== VOICE BUBBLE COMPONENT ======
+        const VoiceReplyBubble = ({ expectedAnswer, userHint, onNext, addScore }) => {
+            const [isListening, setIsListening] = useState(false);
+            const [transcript, setTranscript] = useState("");
+            const [status, setStatus] = useState('idle'); // idle, listening, success, error
+            const [similarity, setSimilarity] = useState(0);
+            const [attempts, setAttempts] = useState(0);
+            const recognitionRef = useRef(null);
+
+            const words = useMemo(() => expectedAnswer.split(' ').filter(w => w.trim() !== ''), [expectedAnswer]);
+
+            useEffect(() => {
+                // Initialize Speech Recognition
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (SpeechRecognition) {
+                    recognitionRef.current = new SpeechRecognition();
+                    recognitionRef.current.continuous = false;
+                    recognitionRef.current.interimResults = false;
+                    recognitionRef.current.lang = 'en-US';
+
+                    recognitionRef.current.onstart = () => {
+                        setIsListening(true);
+                        setStatus('listening');
+                        setTranscript("");
+                    };
+
+                    recognitionRef.current.onresult = (event) => {
+                        const currentTranscript = event.results[0][0].transcript;
+                        setTranscript(currentTranscript);
+                        checkPronunciation(currentTranscript);
+                    };
+
+                    recognitionRef.current.onerror = (event) => {
+                        console.error("Speech recognition error", event.error);
+                        setIsListening(false);
+                        if(event.error === 'no-speech') {
+                            setTranscript("No te escuché bien, intenta de nuevo.");
+                            setStatus('error');
+                        } else {
+                            setTranscript("Error con el micrófono.");
+                            setStatus('error');
+                        }
+                    };
+
+                    recognitionRef.current.onend = () => {
+                        setIsListening(false);
+                    };
+                } else {
+                    setTranscript("Tu navegador no soporta reconocimiento de voz.");
+                    setStatus('error');
+                }
+            }, [expectedAnswer]);
+
+            const toggleListening = () => {
+                if (isListening) {
+                    recognitionRef.current?.stop();
+                } else {
+                    setStatus('idle');
+                    recognitionRef.current?.start();
+                }
+            };
+
+            // Tolerance Algorithm (Fuzzy Match)
+            const checkPronunciation = (spokenText) => {
+                const cleanStr = (s) => s.toLowerCase().replace(/[^\w\s]/gi, '').trim();
+                const targetWords = cleanStr(expectedAnswer).split(' ');
+                const spokenWords = cleanStr(spokenText).split(' ');
+
+                let matches = 0;
+                targetWords.forEach(word => {
+                    if (spokenWords.includes(word)) matches++;
+                });
+
+                // Calculate percentage of target words hit
+                const score = matches / targetWords.length;
+                setSimilarity(Math.round(score * 100));
+
+                // 75% tolerance to pass
+                if (score >= 0.75) {
+                    setStatus('success');
+                    confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+                    addScore(Math.max(10 - (attempts * 2), 2));
+                } else {
+                    setStatus('error');
+                    setAttempts(p => p + 1);
+                }
+            };
+
+            if (status === 'success') return (
+                <div className="flex flex-col items-end w-full animate-pop mt-4">
+                    <div className="bg-emerald-600 text-white p-4 rounded-2xl rounded-tr-sm w-[90%] sm:w-[85%] shadow-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                            <CheckCircle2 size={18} className="text-emerald-200"/>
+                            <span className="font-black text-sm uppercase tracking-widest text-emerald-200">¡Excelente pronunciación!</span>
+                        </div>
+                        <p className="font-bold text-lg leading-relaxed">{expectedAnswer}</p>
+                        <p className="text-xs text-emerald-200 mt-2 font-medium bg-emerald-700/50 p-2 rounded-lg">
+                            Te escuché decir: "{transcript}"
+                        </p>
+                        <div className="mt-4 text-right">
+                            <button onClick={onNext} className="bg-white text-emerald-700 font-black py-2.5 px-6 rounded-xl shadow-sm text-sm flex items-center gap-1 active:scale-95 transition-transform ml-auto">
+                                Siguiente <ChevronRight size={16}/>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="flex flex-col items-end w-full animate-pop space-y-4 mt-4">
+                    
+                    {/* INSTRUCTION & WORD-BY-WORD */}
+                    <div className="w-[90%] sm:w-[85%] bg-zinc-800/80 border border-zinc-700 rounded-2xl p-4 shadow-sm">
+                        <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                            <Ear size={14}/> Lee esto en voz alta:
+                        </p>
+                        <p className="text-xl font-black text-white mb-4 text-center">{expectedAnswer}</p>
+                        
+                        <div className="border-t border-zinc-700 pt-3">
+                            <p className="text-[10px] text-zinc-500 font-bold mb-2 text-center">Toca una palabra para escucharla</p>
+                            <div className="flex flex-wrap justify-center gap-1.5">
+                                {words.map((w, i) => (
+                                    <button key={i} onClick={() => speakWord(w)} className="bg-zinc-700 hover:bg-zinc-600 text-zinc-200 px-2.5 py-1.5 rounded-lg text-xs font-bold active:scale-95 transition-transform">
+                                        {w}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* MIC CONTROLS & FEEDBACK */}
+                    <div className="w-[90%] sm:w-[85%] flex flex-col items-center">
+                        <button 
+                            onClick={toggleListening}
+                            className={`w-20 h-20 rounded-full flex items-center justify-center transition-all mb-4 ${
+                                isListening 
+                                ? 'bg-indigo-600 text-white mic-listening' 
+                                : status === 'error' 
+                                    ? 'bg-rose-500 text-white animate-shake' 
+                                    : 'bg-zinc-800 border-2 border-indigo-500/50 text-indigo-400 hover:bg-indigo-900/30'
+                            }`}
+                        >
+                            {isListening ? <Mic size={32} /> : <Mic size={32} />}
+                        </button>
+                        
+                        <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2">
+                            {isListening ? 'Escuchando...' : 'Toca para hablar'}
+                        </p>
+
+                        {/* Transcript Feedback */}
+                        {transcript && status !== 'idle' && status !== 'success' && (
+                            <div className={`w-full p-3 rounded-xl text-sm font-bold text-center animate-slide-up ${
+                                status === 'error' ? 'bg-rose-500/10 border border-rose-500/20 text-rose-400' : 'bg-zinc-800 text-zinc-300'
+                            }`}>
+                                {status === 'error' && <AlertCircle size={16} className="inline mr-1 mb-0.5"/>}
+                                {transcript}
+                                {status === 'error' && similarity > 0 && (
+                                    <div className="text-[10px] mt-1 opacity-70">Precisión: {similarity}% (Necesitas 75%)</div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // ====== MAIN APP ======
+        const App = () => {
+            const mockData = [
+                { id: 1, introContext: "¿Cómo le digo que el reporte es para mañana?", expectedAnswer: "The report is due tomorrow.", userHint: "El reporte se entrega mañana." },
+                { id: 2, introContext: "Dile que necesitamos programar una junta.", expectedAnswer: "We need to schedule a meeting.", userHint: "Necesitamos programar una reunión." },
+                { id: 3, introContext: "Pídele que envíe los archivos antes del mediodía.", expectedAnswer: "Send the files before noon.", userHint: "Envía los archivos antes del mediodía." }
+            ];
+
+            const [chatFlow, setChatFlow] = useState(mockData);
+            const [gameTitle, setGameTitle] = useState('Voice Reply Challenge');
+            const [screen, setScreen] = useState('name'); 
+            const [playerName, setPlayerName] = useState('');
+            const [totalScore, setTotalScore] = useState(0);
+            const [currentStep, setCurrentStep] = useState(0);
+            
+            const messagesEndRef = useRef(null);
+            useEffect(() => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 200); }, [currentStep, screen]);
+
+            const startGame = () => setScreen('game');
+
+            const handleNext = () => {
+                if (currentStep < chatFlow.length - 1) {
+                    setCurrentStep(prev => prev + 1);
+                } else {
+                    setScreen('result');
+                }
+            };
+
+            // --- SCREEN 1: NAME ---
+            if (screen === 'name') return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950">
+                    <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-6 rounded-[2rem] shadow-2xl text-center">
+                        <div className="w-16 h-16 bg-indigo-500/20 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-indigo-500/30">
+                            <Mic size={32} />
+                        </div>
+                        <h1 className="text-2xl font-black text-white mb-2">{gameTitle}</h1>
+                        <p className="text-zinc-500 text-sm font-bold mb-8">Practica tu pronunciación respondiendo mensajes de voz.</p>
+                        
+                        <input value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="TU NOMBRE" 
+                            className="w-full bg-zinc-950 border-2 border-zinc-800 rounded-xl p-3 text-center text-lg font-bold text-white mb-4 outline-none focus:border-indigo-500 uppercase"/>
+                        
+                        <button disabled={!playerName.trim()} onClick={startGame} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm flex justify-center items-center gap-2">
+                            Iniciar Práctica <Play size={16}/>
+                        </button>
+                    </div>
+                </div>
+            );
+
+            // --- SCREEN 2: GAME ---
+            if (screen === 'game') return (
+                <div className="h-[100dvh] flex flex-col bg-zinc-950 max-w-lg mx-auto sm:my-4 sm:rounded-[2rem] sm:border sm:border-zinc-800 sm:shadow-2xl overflow-hidden sm:h-[calc(100dvh-2rem)]">
+                    <header className="bg-zinc-900 px-4 py-3 flex items-center justify-between border-b border-zinc-800 shrink-0">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-xl border border-indigo-500/30 relative">
+                                🤖<div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900"/>
+                            </div>
+                            <div><h1 className="font-black text-white text-sm">AI Coach</h1><p className="text-[10px] text-zinc-500 font-bold">{currentStep + 1} de {chatFlow.length}</p></div>
+                        </div>
+                        <div className="flex items-center gap-1 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20">
+                            <Star size={14} className="text-amber-400"/><span className="text-amber-400 font-black text-sm">{totalScore}</span>
+                        </div>
+                    </header>
+                    
+                    <div className="flex-1 overflow-y-auto px-4 py-6 custom-scrollbar flex flex-col gap-6">
+                        {/* History */}
+                        {chatFlow.slice(0, currentStep).map((data, idx) => (
+                            <div key={idx} className="space-y-3 opacity-60">
+                                <div className="flex gap-2 w-full">
+                                    <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto opacity-50">🤖</div>
+                                    <div className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[85%] text-sm font-medium">
+                                        {data.introContext}
+                                    </div>
+                                </div>
+                                <div className="flex flex-col items-end w-full">
+                                    <div className="bg-emerald-900/40 text-emerald-200 p-3 rounded-2xl rounded-tr-sm w-[85%] text-sm font-bold border border-emerald-500/20">
+                                        🎤 {data.expectedAnswer}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+
+                        {/* Current Active Step */}
+                        <div className="space-y-2">
+                            <div className="flex gap-2 w-full animate-pop">
+                                <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">🤖</div>
+                                <div className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[85%] text-sm leading-relaxed font-medium">
+                                    {chatFlow[currentStep].introContext}
+                                </div>
+                            </div>
+                            <VoiceReplyBubble 
+                                expectedAnswer={chatFlow[currentStep].expectedAnswer}
+                                userHint={chatFlow[currentStep].userHint}
+                                onNext={handleNext}
+                                addScore={(pts) => setTotalScore(p => p + pts)}
+                            />
+                        </div>
+                        <div ref={messagesEndRef}/>
+                    </div>
+                </div>
+            );
+
+            // --- SCREEN 3: RESULTS ---
+            if (screen === 'result') return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950">
+                    <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-8 rounded-[2rem] shadow-2xl text-center animate-pop">
+                        <Trophy size={56} className="text-amber-400 mx-auto mb-4"/>
+                        <h1 className="text-2xl font-black text-white mb-2 uppercase tracking-wide">¡Gran Trabajo!</h1>
+                        <p className="text-zinc-400 text-sm font-medium mb-6">Tu pronunciación está mejorando rápido.</p>
+                        
+                        <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6 mb-8">
+                            <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest mb-2">Puntuación Final</p>
+                            <div className="flex justify-center items-center gap-2">
+                                <Star size={24} className="text-amber-400 fill-amber-400/20"/>
+                                <span className="text-5xl font-black text-white">{totalScore}</span>
+                            </div>
+                        </div>
+
+                        <button onClick={() => window.location.reload()} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm flex justify-center items-center gap-2 mb-3">
+                            <RotateCcw size={16}/> Volver a Practicar
+                        </button>
+                    </div>
+                </div>
+            );
+
+            return null;
+        };
+
+        createRoot(document.getElementById('root')).render(<App/>);
+    </script>
+</body>
+</html>
