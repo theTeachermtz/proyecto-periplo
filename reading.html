@@ -18,9 +18,7 @@
     <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/scroll-behaviour.min.js"></script>
     <script>
         window.onload = function() {
-            MobileDragDrop.polyfill({ 
-                holdToDrag: 300
-            }); 
+            MobileDragDrop.polyfill({ holdToDrag: 300 }); 
             window.addEventListener('touchmove', function() {}, {passive: false});
         };
     </script>
@@ -45,6 +43,7 @@
         .token-base {
             display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
             padding: 0 0.5em; min-width: 3em; height: 1.8em; transition: all 0.2s ease;
+            touch-action: manipulation;
         }
 
         .token-start { border-top-left-radius: 0.3em; border-bottom-left-radius: 0.3em; margin-left: 0.2em; border-left-width: 2px !important; }
@@ -60,23 +59,59 @@
 
         @keyframes shrink { from { width: 100%; } to { width: 0%; } }
         @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes scaleIn { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+        @keyframes pulseGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4); } 50% { box-shadow: 0 0 0 12px rgba(99, 102, 241, 0); } }
         
         .timer-bar { animation: shrink linear forwards; }
         .animate-shake { animation: shake 0.4s; }
+        .animate-fadeUp { animation: fadeUp 0.6s ease both; }
+        .animate-scaleIn { animation: scaleIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) both; }
+        .animate-pulseGlow { animation: pulseGlow 2s infinite; }
         
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
         .dark .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; }
+
+        /* Safari iOS hover trap fix */
+        @media (hover: hover) {
+            .hover-lift:hover { transform: translateY(-4px); }
+            .hover-glow:hover { box-shadow: 0 0 30px rgba(99, 102, 241, 0.3); }
+        }
+
+        .btn-juicy {
+            touch-action: manipulation;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+        .btn-juicy:active { transform: scale(0.96) !important; }
+
+        /* Sentence click target for Q&A */
+        .sentence-target {
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Word bank chip for mobile tap */
+        .word-chip {
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* Progress dots */
+        .progress-dot { width: 8px; height: 8px; border-radius: 50%; transition: all 0.3s ease; }
+        .progress-dot.active { width: 24px; border-radius: 4px; }
     </style>
 </head>
 <body>
     <div id="root"></div>
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef, useMemo } from 'react';
+        import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Loader2, CheckCircle2, RotateCcw, ArrowLeft, Lightbulb, Puzzle, Moon, Sun, ZoomIn, ZoomOut, Timer, Swords, ArrowRight, PlayCircle, BookOpen, Edit2, LayoutGrid, Award, GraduationCap } from 'lucide-react';
+        import { Loader2, CheckCircle2, RotateCcw, ArrowLeft, Lightbulb, Puzzle, Moon, Sun, ZoomIn, ZoomOut, Timer, Swords, ArrowRight, PlayCircle, BookOpen, Edit2, LayoutGrid, Award, GraduationCap, Quote, Star, Trophy, Sparkles, X } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -90,16 +125,18 @@
         ];
 
         const ReadingActivity = () => {
-            // 1. Estados
+            // ═══════════════ 1. ESTADOS ═══════════════
             const [loading, setLoading] = useState(true);
             const [activityData, setActivityData] = useState(null);
             const [activityId, setActivityId] = useState(null);
             const [stories, setStories] = useState([]);
             const [curIdx, setCurIdx] = useState(-1); 
+            const [isStudent, setIsStudent] = useState(false);
 
             const [currentSlide, setCurrentSlide] = useState(0); 
             const [slideResult, setSlideResult] = useState(null); 
             const [dropped, setDropped] = useState({});
+            const [selectedWord, setSelectedWord] = useState(null);
             
             const [isDarkMode, setIsDarkMode] = useState(true);
             const [fontSize, setFontSize] = useState(window.innerWidth < 768 ? 18 : 22);
@@ -111,18 +148,21 @@
             const [showParagraphHelp, setShowParagraphHelp] = useState(false);
             const [qaFinished, setQaFinished] = useState(false);
             const [score, setScore] = useState(0);
+            const [answeredQ, setAnsweredQ] = useState({});
             const timerRef = useRef(null);
 
-            // 2. Funciones Clave (Arriba de los useEffects)
+            // ═══════════════ 2. FUNCIONES CLAVE ═══════════════
             const startStory = (index) => {
                 setCurIdx(index);
                 setCurrentSlide(0); 
                 setDropped({});
                 setSlideResult(null);
+                setSelectedWord(null);
                 setQaMode(false);
                 setQaFinished(false);
                 setCurrentQIdx(0);
                 setScore(0);
+                setAnsweredQ({});
             };
 
             const toggleTheme = () => { 
@@ -130,7 +170,7 @@
                 localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light'); 
             };
 
-            // 3. Variables Derivadas
+            // ═══════════════ 3. VARIABLES DERIVADAS ═══════════════
             const currentStory = curIdx !== -1 ? stories[curIdx] : null;
 
             const wordBank = useMemo(() => {
@@ -138,7 +178,7 @@
                 return currentStory.flatTokens.filter(t => t.isHidden).map(t => t.text).sort(() => Math.random() - 0.5); 
             }, [currentStory]);
 
-            // 4. Efectos (Después de que las funciones existen)
+            // ═══════════════ 4. EFECTOS ═══════════════
             useEffect(() => {
                 if (isDarkMode) document.documentElement.classList.add('dark');
                 else document.documentElement.classList.remove('dark');
@@ -151,6 +191,7 @@
                 const init = async () => {
                     const params = new URLSearchParams(window.location.search);
                     const id = params.get('id');
+                    if (params.get('student') === 'true') setIsStudent(true);
                     if (!id) return;
                     setActivityId(id);
                     
@@ -198,7 +239,6 @@
                         });
 
                         setStories(processed);
-                        // ¡Aquí es donde tronaba, pero como startStory ya está definida arriba, ahora es seguro!
                         if (processed.length === 1) startStory(0);
                     }
                     setLoading(false);
@@ -240,7 +280,7 @@
                 };
             }, []);
 
-            // 5. Resto de Funciones Auxiliares
+            // ═══════════════ 5. FUNCIONES AUXILIARES ═══════════════
             const handleExit = () => {
                 if (activityData && activityData.parentPath) window.location.href = `index.html?folder=${encodeURIComponent(activityData.parentPath)}`;
                 else window.location.href = 'index.html';
@@ -257,6 +297,7 @@
                 window.location.href = `dashboard-reading.html?edit=${activityId}${folderParam}`;
             };
 
+            // ── Drag & Drop ──
             const handleDragStart = (e, word) => { e.dataTransfer.setData("text/plain", word); };
             const handleDragOver = (e) => e.preventDefault();
             const handleDrop = (e, index) => {
@@ -265,7 +306,8 @@
                 const word = e.dataTransfer.getData("text/plain");
                 if(!word) return;
                 setDropped(prev => ({ ...prev, [index]: word }));
-                setSlideResult(null); 
+                setSlideResult(null);
+                setSelectedWord(null);
             };
             const removeDrop = (index) => { 
                 if (slideResult === 'correct') return;
@@ -274,7 +316,31 @@
                 setDropped(newDropped); 
                 setSlideResult(null);
             };
+
+            // ── Tap-to-Place (mobile friendly) ──
+            const handleWordTap = (word) => {
+                if (slideResult === 'correct') return;
+                if (selectedWord === word) {
+                    setSelectedWord(null);
+                    return;
+                }
+                setSelectedWord(word);
+            };
+
+            const handleBlankTap = (tokenId) => {
+                if (slideResult === 'correct') return;
+                if (dropped[tokenId]) {
+                    removeDrop(tokenId);
+                    return;
+                }
+                if (selectedWord) {
+                    setDropped(prev => ({ ...prev, [tokenId]: selectedWord }));
+                    setSlideResult(null);
+                    setSelectedWord(null);
+                }
+            };
             
+            // ── Check & Navigate ──
             const checkSlideAnswers = () => {
                 if (!currentStory) return;
                 const currentTokens = currentStory.paragraphs[currentSlide - 1];
@@ -282,19 +348,35 @@
                 const isAllCorrect = hidden.every(t => dropped[t.id] === t.text);
                 
                 setSlideResult(isAllCorrect ? 'correct' : 'wrong');
-                if (isAllCorrect) confetti({ particleCount: 150, spread: 70, origin: { y: 0.7 } });
+                if (isAllCorrect) {
+                    confetti({ particleCount: 150, spread: 70, origin: { y: 0.7 } });
+                } else {
+                    // Auto-clear wrong answers after shake
+                    setTimeout(() => {
+                        const newDropped = { ...dropped };
+                        hidden.forEach(t => {
+                            if (newDropped[t.id] !== t.text) delete newDropped[t.id];
+                        });
+                        setDropped(newDropped);
+                        setSlideResult(null);
+                    }, 1200);
+                }
             };
 
             const nextSlide = () => {
                 setSlideResult(null);
+                setSelectedWord(null);
                 setCurrentSlide(c => c + 1);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
             };
 
+            // ── Q&A Challenge ──
             const startChallenge = () => {
                 if (!currentStory.questions || currentStory.questions.length === 0) { alert("Esta lectura no tiene preguntas."); return; }
                 setQaMode(true);
                 setCurrentQIdx(0);
                 setScore(0);
+                setAnsweredQ({});
                 setTimerStarted(false); 
                 setTimeLeft(12);
                 setShowParagraphHelp(false);
@@ -317,20 +399,55 @@
                 }, 1000);
             };
 
+            // ══════════════════════════════════════════════════════
+            // FIX CRÍTICO: handleSentenceClick ahora usa q.a 
+            // El schema de la IA genera {q, a, paragraph_index}
+            // NO {options, correctIndex}
+            // ══════════════════════════════════════════════════════
             const handleSentenceClick = (sentence) => {
                 const q = currentStory.questions[currentQIdx];
-                const correctAnswer = q.options ? q.options[q.correctIndex] : "";
-                const cleanAnswer = correctAnswer.toLowerCase().replace(/[^a-z0-9]/g, '');
-                const cleanSentence = sentence.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-                if (cleanAnswer && (cleanSentence.includes(cleanAnswer) || cleanAnswer.includes(cleanSentence.substring(0, 10)))) {
-                    confetti({ particleCount: 50, spread: 30, origin: { y: 0.8 } });
+                
+                // Soportar ambos schemas: legacy (options/correctIndex) y actual (a)
+                let correctAnswer = "";
+                if (q.a) {
+                    correctAnswer = q.a;
+                } else if (q.options && typeof q.correctIndex === 'number') {
+                    correctAnswer = q.options[q.correctIndex] || "";
+                }
+                
+                if (!correctAnswer) {
+                    // Si no hay respuesta definida, dar punto por intentar y avanzar
                     setScore(s => s + 1);
                     nextQuestion();
+                    return;
+                }
+
+                const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+                const cleanAnswer = normalize(correctAnswer);
+                const cleanSentence = normalize(sentence);
+
+                // Matching más robusto: checar si la oración CONTIENE la respuesta
+                // o si la respuesta contiene al menos un fragmento significativo de la oración
+                const answerWords = cleanAnswer.split(' ').filter(w => w.length > 3);
+                const matchCount = answerWords.filter(w => cleanSentence.includes(w)).length;
+                const matchRatio = answerWords.length > 0 ? matchCount / answerWords.length : 0;
+
+                const isMatch = cleanSentence.includes(cleanAnswer) || 
+                                cleanAnswer.includes(cleanSentence.substring(0, Math.min(30, cleanSentence.length))) ||
+                                matchRatio >= 0.6;
+
+                if (isMatch) {
+                    confetti({ particleCount: 50, spread: 30, origin: { y: 0.8 } });
+                    setScore(s => s + 1);
+                    setAnsweredQ(prev => ({ ...prev, [currentQIdx]: 'correct' }));
+                    setTimeout(() => nextQuestion(), 600);
                 } else {
+                    setAnsweredQ(prev => ({ ...prev, [currentQIdx]: 'wrong' }));
                     const el = document.getElementById('qa-box');
-                    el.classList.add('bg-red-100', 'animate-shake');
-                    setTimeout(() => el.classList.remove('bg-red-100', 'animate-shake'), 500);
+                    if (el) {
+                        el.classList.add('animate-shake');
+                        setTimeout(() => el.classList.remove('animate-shake'), 500);
+                    }
                 }
             };
 
@@ -352,32 +469,50 @@
                 if (!currentStory || !currentStory.questions) return [];
                 const q = currentStory.questions[currentQIdx];
                 const pIndex = q.paragraph_index || 0;
-                const paragraphs = currentStory.text.split(/\n\n+/);
+                // Limpiamos los brackets del texto original para que el alumno vea el texto limpio
+                const cleanText = currentStory.text.replace(/\[([^\]]+)\]/g, '$1');
+                const paragraphs = cleanText.split(/\n\n+/);
                 const targetP = paragraphs[pIndex] || paragraphs[0]; 
-                return targetP.split(/(?<=\.)\s+/).filter(s => s.trim().length > 0);
+                return targetP.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 0);
             };
 
-            // 6. Validaciones de Renderizado Iniciales
-            if (loading) return <div className="h-screen flex items-center justify-center text-slate-400 bg-slate-50 dark:bg-zinc-950"><Loader2 className="animate-spin mr-2"/> Cargando...</div>;
-            if (!activityData) return <div className="h-screen flex items-center justify-center text-red-400 dark:bg-zinc-950">Lectura no encontrada</div>;
+            // ═══════════════ 6. VALIDACIONES RENDER ═══════════════
+            if (loading) return (
+                <div className="h-screen flex items-center justify-center bg-slate-950">
+                    <div className="text-center">
+                        <Loader2 className="animate-spin text-indigo-500 mx-auto mb-4" size={40}/>
+                        <p className="text-slate-400 font-bold tracking-widest text-xs uppercase">Cargando lectura...</p>
+                    </div>
+                </div>
+            );
+            if (!activityData) return (
+                <div className="h-screen flex flex-col items-center justify-center bg-slate-950 text-center p-8">
+                    <BookOpen size={64} className="text-slate-700 mb-6"/>
+                    <h2 className="text-2xl font-black text-white mb-2">Lectura no encontrada</h2>
+                    <p className="text-slate-500 mb-8">El enlace puede estar incompleto o la lectura fue eliminada.</p>
+                    <button onClick={() => window.location.href = 'index.html'} className="btn-juicy bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold">Volver al Inicio</button>
+                </div>
+            );
 
-            // 7. Renderizado (Menú / Juego)
+            // ═══════════════ 7. MENÚ (Multi-story) ═══════════════
             if (curIdx === -1) {
                 return (
                     <div className={`min-h-screen font-sans flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-800'}`}>
                         <div className={`px-6 py-4 flex items-center justify-between shrink-0 shadow-sm transition-colors ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200 border-b'}`}>
                             <div className="flex items-center gap-4">
-                                <button onClick={handleExit} className={`p-2 rounded-full transition-colors ${isDarkMode ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`} title="Regresar a la Bóveda"><ArrowLeft size={20}/></button>
+                                <button onClick={handleExit} className={`p-2 rounded-full transition-colors btn-juicy ${isDarkMode ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`} title="Regresar a la Bóveda"><ArrowLeft size={20}/></button>
                                 <div className="flex items-center gap-2">
                                     <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 text-white flex items-center justify-center"><BookOpen size={16}/></div>
                                     <span className="font-bold uppercase tracking-widest text-xs opacity-50">Reading Module</span>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
-                                <button onClick={handleEdit} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors border ${isDarkMode ? 'border-slate-600 hover:bg-slate-700 text-slate-300' : 'border-slate-300 hover:bg-slate-100 text-slate-600'}`}>
-                                    <Edit2 size={14}/> Editar Módulo
-                                </button>
-                                <button onClick={toggleTheme} className={`p-2 rounded-full transition-colors ${isDarkMode ? 'hover:bg-slate-700 text-yellow-400' : 'hover:bg-slate-100 text-slate-600'}`}>
+                                {!isStudent && (
+                                    <button onClick={handleEdit} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors border btn-juicy ${isDarkMode ? 'border-slate-600 hover:bg-slate-700 text-slate-300' : 'border-slate-300 hover:bg-slate-100 text-slate-600'}`}>
+                                        <Edit2 size={14}/> Editar
+                                    </button>
+                                )}
+                                <button onClick={toggleTheme} className={`p-2 rounded-full transition-colors btn-juicy ${isDarkMode ? 'hover:bg-slate-700 text-yellow-400' : 'hover:bg-slate-100 text-slate-600'}`}>
                                     {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
                                 </button>
                             </div>
@@ -385,9 +520,9 @@
                         
                         <div className="flex-1 overflow-y-auto p-6 md:p-12 custom-scrollbar">
                             <div className="max-w-6xl mx-auto">
-                                <div className="text-center mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                <div className="text-center mb-12 animate-fadeUp">
                                     <h1 className="text-4xl md:text-6xl font-black mb-4 tracking-tight drop-shadow-sm">{activityData.title}</h1>
-                                    <p className="text-lg md:text-xl font-medium opacity-60 max-w-2xl mx-auto">Selecciona una de las lecturas interactivas de esta colección para practicar tu vocabulario y comprensión.</p>
+                                    <p className="text-lg md:text-xl font-medium opacity-60 max-w-2xl mx-auto">Selecciona una lectura interactiva para practicar tu vocabulario y comprensión.</p>
                                 </div>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -396,7 +531,7 @@
                                         const blanksCount = s.flatTokens ? s.flatTokens.filter(t => t.isHidden).length : (s.blanks ? s.blanks.length : 0);
                                         
                                         return (
-                                            <div key={i} onClick={() => startStory(i)} className={`group rounded-[2rem] overflow-hidden shadow-md hover:shadow-2xl hover:-translate-y-2 transition-all cursor-pointer border flex flex-col animate-in fade-in zoom-in duration-500 ${isDarkMode ? 'bg-slate-800 border-slate-700 hover:border-indigo-500' : 'bg-white border-slate-200 hover:border-indigo-400'}`} style={{animationDelay: `${i * 100}ms`}}>
+                                            <div key={i} onClick={() => startStory(i)} className={`group rounded-[2rem] overflow-hidden shadow-md hover-lift transition-all cursor-pointer border flex flex-col animate-fadeUp ${isDarkMode ? 'bg-slate-800 border-slate-700 hover:border-indigo-500' : 'bg-white border-slate-200 hover:border-indigo-400'}`} style={{animationDelay: `${i * 100}ms`}}>
                                                 
                                                 <div className={`h-48 relative overflow-hidden flex items-center justify-center ${isDarkMode ? 'bg-slate-900' : 'bg-slate-100'}`}>
                                                     {s.image_url ? (
@@ -420,8 +555,8 @@
                                                         <div className="flex items-center gap-1.5"><BookOpen size={14}/> {wordCount} Palabras</div>
                                                     </div>
                                                     
-                                                    <button className="w-full py-3.5 rounded-xl font-bold text-sm uppercase tracking-widest flex items-center justify-center gap-2 transition-all bg-indigo-50 text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white dark:bg-indigo-900/30 dark:text-indigo-400 dark:group-hover:bg-indigo-500 dark:group-hover:text-white">
-                                                        Comenzar Diapositivas <ArrowRight size={16}/>
+                                                    <button className="btn-juicy w-full py-3.5 rounded-xl font-bold text-sm uppercase tracking-widest flex items-center justify-center gap-2 transition-all bg-indigo-50 text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white dark:bg-indigo-900/30 dark:text-indigo-400 dark:group-hover:bg-indigo-500 dark:group-hover:text-white">
+                                                        Comenzar <ArrowRight size={16}/>
                                                     </button>
                                                 </div>
                                             </div>
@@ -434,14 +569,25 @@
                 );
             }
 
+            // ═══════════════ 8. JUEGO ACTIVO ═══════════════
             const availableWords = wordBank.filter(word => {
                 const totalInText = currentStory.flatTokens.filter(t => t.text === word && t.isHidden).length;
                 const totalPlaced = Object.values(dropped).filter(w => w === word).length;
                 return totalPlaced < totalInText;
             });
 
-            const isPresentationFinished = currentSlide > currentStory.paragraphs.length;
-            const currentTokens = (!isPresentationFinished && currentSlide > 0) ? currentStory.paragraphs[currentSlide - 1] : [];
+            // Total slides = title(0) + paragraphs(1..N) + funFact(N+1) + end(N+2)
+            const totalContentSlides = currentStory.paragraphs.length;
+            const hasFunFact = !!currentStory.fun_fact;
+            const SLIDE_TITLE = 0;
+            const SLIDE_PARAGRAPH_START = 1;
+            const SLIDE_PARAGRAPH_END = totalContentSlides;
+            const SLIDE_FUN_FACT = hasFunFact ? SLIDE_PARAGRAPH_END + 1 : null;
+            const SLIDE_END = hasFunFact ? SLIDE_PARAGRAPH_END + 2 : SLIDE_PARAGRAPH_END + 1;
+
+            const isOnParagraph = currentSlide >= SLIDE_PARAGRAPH_START && currentSlide <= SLIDE_PARAGRAPH_END;
+            const currentParagraphIdx = isOnParagraph ? currentSlide - 1 : -1;
+            const currentTokens = isOnParagraph ? currentStory.paragraphs[currentParagraphIdx] : [];
             const isLeftEmoji = currentSlide % 2 !== 0;
             const currentEmojis = EMOJI_SETS[currentSlide % EMOJI_SETS.length];
             
@@ -449,84 +595,129 @@
             const requiresCheck = hiddenInSlide.length > 0;
             const isSlideComplete = slideResult === 'correct' || !requiresCheck;
 
-            const backgroundStyle = {
-                backgroundImage: currentStory.image_url ? `url(${currentStory.image_url})` : 'none',
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-                backgroundAttachment: 'fixed'
-            };
+            const isFunFactSlide = SLIDE_FUN_FACT !== null && currentSlide === SLIDE_FUN_FACT;
+            const isEndSlide = currentSlide === SLIDE_END;
+
+            // Progress calculation
+            const progressTotal = SLIDE_END;
+            const progressCurrent = Math.min(currentSlide, progressTotal);
 
             return (
-                <div className="min-h-screen font-sans flex flex-col transition-all duration-700" style={backgroundStyle}>
-                    <div className={`flex-1 flex flex-col w-full h-full backdrop-blur-2xl transition-colors duration-500 ${isDarkMode ? 'bg-slate-900/85' : 'bg-slate-100/85'}`}>
+                <div className="min-h-screen font-sans flex flex-col transition-all duration-700">
+                    
+                    {/* ── HERO BACKGROUND IMAGE ── */}
+                    {currentStory.image_url && (
+                        <div className="fixed inset-0 z-0">
+                            <img src={currentStory.image_url} alt="" className="w-full h-full object-cover" style={{ objectPosition: 'center top' }}/>
+                            {/* Gradient: visible image at top, fades to solid as you scroll context */}
+                            <div className={`absolute inset-0 ${isDarkMode 
+                                ? 'bg-gradient-to-b from-slate-900/40 via-slate-900/80 to-slate-900' 
+                                : 'bg-gradient-to-b from-white/30 via-slate-100/80 to-slate-100'}`}></div>
+                        </div>
+                    )}
+                    {!currentStory.image_url && (
+                        <div className={`fixed inset-0 z-0 ${isDarkMode ? 'bg-slate-900' : 'bg-slate-100'}`}></div>
+                    )}
+
+                    <div className="relative z-10 flex-1 flex flex-col w-full h-full">
                         
-                        <div className={`px-4 md:px-6 py-4 flex items-center justify-between shrink-0 sticky top-0 z-50 shadow-sm border-b transition-colors ${isDarkMode ? 'bg-slate-900/50 border-white/5 text-white' : 'bg-white/50 border-slate-200 text-slate-800'}`}>
-                            <div className="flex items-center gap-3 md:gap-4">
-                                <button onClick={backToMenu} className={`p-2 rounded-full transition-colors ${isDarkMode ? 'hover:bg-slate-700 text-slate-300' : 'hover:bg-slate-200 text-slate-600'}`} title="Volver"><ArrowLeft size={20}/></button>
-                                <div>
-                                    <h1 className="text-lg md:text-xl font-black leading-tight line-clamp-1">{currentStory.title || activityData.title}</h1>
+                        {/* ── NAVBAR ── */}
+                        <div className={`px-4 md:px-6 py-3 flex items-center justify-between shrink-0 sticky top-0 z-50 backdrop-blur-xl border-b transition-colors ${isDarkMode ? 'bg-slate-900/70 border-white/5 text-white' : 'bg-white/70 border-slate-200 text-slate-800'}`}>
+                            <div className="flex items-center gap-3">
+                                <button onClick={backToMenu} className={`p-2 rounded-full transition-colors btn-juicy ${isDarkMode ? 'hover:bg-slate-700 text-slate-300' : 'hover:bg-slate-200 text-slate-600'}`} title="Volver"><ArrowLeft size={20}/></button>
+                                <div className="flex flex-col">
+                                    <h1 className="text-sm md:text-base font-black leading-tight line-clamp-1">{currentStory.title || activityData.title}</h1>
+                                    <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">
+                                        {currentSlide === 0 ? 'Portada' : isOnParagraph ? `Párrafo ${currentParagraphIdx + 1} / ${totalContentSlides}` : isFunFactSlide ? '¿Sabías que...?' : isEndSlide ? 'Resumen' : ''}
+                                    </span>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
-                                <div className={`flex items-center gap-1 md:gap-2 px-2 py-1.5 md:px-3 rounded-xl border shrink-0 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
-                                    <button onClick={() => setFontSize(s => Math.max(14, s - 2))} className="p-1 md:p-1.5 rounded hover:bg-opacity-20 opacity-70 hover:opacity-100"><ZoomOut size={18}/></button>
-                                    <span className="text-xs font-bold w-6 md:w-10 text-center opacity-50">{fontSize}</span>
-                                    <button onClick={() => setFontSize(s => Math.min(40, s + 2))} className="p-1 md:p-1.5 rounded hover:bg-opacity-20 opacity-70 hover:opacity-100"><ZoomIn size={18}/></button>
+                                {/* Progress bar mini */}
+                                <div className={`hidden md:flex items-center gap-1 px-3 py-2 rounded-xl ${isDarkMode ? 'bg-slate-800' : 'bg-white border border-slate-200'}`}>
+                                    {Array.from({ length: progressTotal + 1 }).map((_, i) => (
+                                        <div key={i} className={`progress-dot ${i === currentSlide ? 'active' : ''} ${i <= currentSlide ? (isDarkMode ? 'bg-indigo-500' : 'bg-indigo-500') : (isDarkMode ? 'bg-slate-700' : 'bg-slate-300')}`}/>
+                                    ))}
                                 </div>
-                                <button onClick={toggleTheme} className={`hidden md:block p-2 rounded-full transition-colors ${isDarkMode ? 'hover:bg-slate-700 text-yellow-400' : 'bg-white border border-slate-200 shadow-sm hover:bg-slate-100 text-slate-600'}`}>
+                                <div className={`flex items-center gap-1 md:gap-2 px-2 py-1.5 md:px-3 rounded-xl border shrink-0 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
+                                    <button onClick={() => setFontSize(s => Math.max(14, s - 2))} className="p-1 md:p-1.5 rounded hover:bg-opacity-20 opacity-70 hover:opacity-100 btn-juicy"><ZoomOut size={18}/></button>
+                                    <span className="text-xs font-bold w-6 md:w-10 text-center opacity-50">{fontSize}</span>
+                                    <button onClick={() => setFontSize(s => Math.min(40, s + 2))} className="p-1 md:p-1.5 rounded hover:bg-opacity-20 opacity-70 hover:opacity-100 btn-juicy"><ZoomIn size={18}/></button>
+                                </div>
+                                <button onClick={toggleTheme} className={`hidden md:block p-2 rounded-full transition-colors btn-juicy ${isDarkMode ? 'hover:bg-slate-700 text-yellow-400' : 'bg-white border border-slate-200 shadow-sm hover:bg-slate-100 text-slate-600'}`}>
                                     {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
                                 </button>
                             </div>
                         </div>
 
+                        {/* ── Q&A MODAL OVERLAY ── */}
                         {qaMode && (
-                            <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 md:p-6 animate-in zoom-in-95 duration-300">
+                            <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 md:p-6 animate-scaleIn">
                                 {qaFinished ? (
-                                    <div className="bg-white dark:bg-slate-800 rounded-[3rem] p-12 text-center max-w-lg w-full shadow-2xl">
-                                        <div className="w-24 h-24 bg-emerald-100 dark:bg-emerald-900/50 text-emerald-500 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircle2 size={48} strokeWidth={3}/></div>
-                                        <h2 className="text-4xl font-black text-slate-800 dark:text-white mb-2">¡Completado!</h2>
-                                        <p className="text-lg text-slate-500 dark:text-slate-400 font-bold mb-8">Puntuación: {score} / {currentStory.questions.length}</p>
-                                        <button onClick={backToMenu} className="w-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 py-4 rounded-2xl font-black text-lg hover:-translate-y-1 transition-transform">{stories.length > 1 ? 'Volver al Menú' : 'Salir'}</button>
+                                    <div className={`rounded-[3rem] p-10 md:p-12 text-center max-w-lg w-full shadow-2xl ${isDarkMode ? 'bg-slate-800' : 'bg-white'}`}>
+                                        <div className="w-24 h-24 bg-emerald-100 dark:bg-emerald-900/50 text-emerald-500 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-6">
+                                            <Trophy size={48} strokeWidth={2.5}/>
+                                        </div>
+                                        <h2 className={`text-4xl font-black mb-2 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>¡Completado!</h2>
+                                        <p className={`text-lg font-bold mb-2 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Puntuación</p>
+                                        <div className="flex items-center justify-center gap-1 mb-8">
+                                            {Array.from({ length: currentStory.questions.length }).map((_, i) => (
+                                                <Star key={i} size={32} className={i < score ? 'text-yellow-400 fill-yellow-400' : (isDarkMode ? 'text-slate-700' : 'text-slate-200')} />
+                                            ))}
+                                        </div>
+                                        <div className="flex flex-col gap-3 max-w-sm mx-auto">
+                                            <button onClick={() => { startStory(curIdx); }} className="btn-juicy w-full bg-indigo-600 text-white py-4 rounded-2xl font-black text-lg shadow-xl flex items-center justify-center gap-2">
+                                                <RotateCcw size={20}/> Reiniciar Lectura
+                                            </button>
+                                            <button onClick={() => setQaMode(false)} className={`btn-juicy w-full py-3 rounded-2xl font-bold border ${isDarkMode ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`}>
+                                                Ver Resumen
+                                            </button>
+                                        </div>
                                     </div>
                                 ) : (
-                                    <div id="qa-box" className="bg-white dark:bg-slate-800 w-full max-w-3xl rounded-[2rem] overflow-hidden shadow-2xl transition-colors duration-200">
-                                        <div className="bg-slate-900 text-white p-6 relative">
+                                    <div id="qa-box" className={`w-full max-w-3xl rounded-[2rem] overflow-hidden shadow-2xl transition-colors duration-200 ${isDarkMode ? 'bg-slate-800' : 'bg-white'}`}>
+                                        <div className="bg-slate-900 text-white p-5 md:p-6 relative">
                                             <div className="flex justify-between items-center relative z-10">
-                                                <span className="font-black tracking-widest text-slate-400 text-xs uppercase flex items-center gap-2"><Swords size={16}/> Pregunta {currentQIdx + 1} de {currentStory.questions.length}</span>
+                                                <div className="flex items-center gap-3">
+                                                    <span className="font-black tracking-widest text-slate-400 text-xs uppercase flex items-center gap-2"><Swords size={16}/> Pregunta {currentQIdx + 1}/{currentStory.questions.length}</span>
+                                                    <button onClick={() => setQaMode(false)} className="text-slate-500 hover:text-white transition-colors p-1"><X size={16}/></button>
+                                                </div>
                                                 <div className={`font-black text-2xl flex items-center gap-2 ${timeLeft <= 3 && timerStarted ? 'text-red-400 animate-pulse' : 'text-emerald-400'}`}><Timer size={24}/> {timeLeft}s</div>
                                             </div>
                                             {timerStarted && <div className="absolute bottom-0 left-0 h-1.5 bg-emerald-500 timer-bar" style={{ animationDuration: '12s', animationPlayState: timeLeft === 0 ? 'paused' : 'running' }}></div>}
                                         </div>
-                                        <div className="p-6 md:p-12 text-center">
-                                            <h3 className="text-xl md:text-3xl font-black mb-8 text-slate-800 dark:text-white">"{currentStory.questions[currentQIdx].q}"</h3>
+                                        <div className="p-6 md:p-10 text-center">
+                                            <h3 className={`text-xl md:text-2xl font-black mb-8 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>"{currentStory.questions[currentQIdx].q}"</h3>
                                             
                                             {!timerStarted ? (
-                                                <button onClick={startTimer} className="bg-indigo-600 text-white px-8 py-3 rounded-full font-bold text-lg hover:bg-indigo-500 transition-transform active:scale-95 shadow-lg flex items-center gap-2 mx-auto">
+                                                <button onClick={startTimer} className="btn-juicy bg-indigo-600 text-white px-8 py-3 rounded-full font-bold text-lg hover:bg-indigo-500 shadow-lg flex items-center gap-2 mx-auto animate-pulseGlow">
                                                     <PlayCircle size={24}/> Iniciar Reloj
                                                 </button>
                                             ) : timeLeft > 0 ? (
-                                                <div className="h-32 md:h-48 flex items-center justify-center flex-col text-slate-400 dark:text-slate-500">
-                                                    <Lightbulb size={40} className="mb-4 opacity-30"/>
-                                                    <p className="font-bold">Piensa rápido...</p>
+                                                <div className="h-32 md:h-40 flex items-center justify-center flex-col">
+                                                    <div className="relative">
+                                                        <Lightbulb size={48} className="text-yellow-500/30 animate-pulse"/>
+                                                    </div>
+                                                    <p className={`font-bold mt-4 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Piensa rápido...</p>
                                                 </div>
                                             ) : !showParagraphHelp ? (
-                                                <div className="h-32 md:h-48 flex items-center justify-center flex-col animate-in zoom-in duration-300">
+                                                <div className="h-32 md:h-40 flex items-center justify-center flex-col animate-scaleIn">
                                                     <p className="text-red-500 font-black text-2xl mb-6">¡Tiempo agotado!</p>
-                                                    <button onClick={() => setShowParagraphHelp(true)} className="bg-amber-500 text-white px-8 py-3 rounded-xl font-bold shadow-lg hover:bg-amber-400 transition-transform active:scale-95 flex items-center gap-2">
+                                                    <button onClick={() => setShowParagraphHelp(true)} className="btn-juicy bg-amber-500 text-white px-8 py-3 rounded-xl font-bold shadow-lg flex items-center gap-2">
                                                         <BookOpen size={20}/> Buscar en el Texto
                                                     </button>
                                                 </div>
                                             ) : (
-                                                <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 text-left">
-                                                    <div className="bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-400 text-xs font-black uppercase tracking-widest p-3 rounded-t-xl text-center border-b border-amber-200 dark:border-amber-900/50">Encuentra la respuesta aquí:</div>
-                                                    <div className="p-4 md:p-8 rounded-b-xl border border-t-0 leading-relaxed text-base md:text-lg font-medium shadow-inner bg-slate-50 border-amber-100 text-slate-700 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300">
+                                                <div className="animate-fadeUp text-left">
+                                                    <div className={`text-xs font-black uppercase tracking-widest p-3 rounded-t-xl text-center border-b ${isDarkMode ? 'bg-amber-900/30 text-amber-400 border-amber-900/50' : 'bg-amber-100 text-amber-800 border-amber-200'}`}>Toca la oración que contiene la respuesta:</div>
+                                                    <div className={`p-4 md:p-6 rounded-b-xl border border-t-0 leading-relaxed text-base md:text-lg font-medium shadow-inner ${isDarkMode ? 'bg-slate-900 border-slate-700 text-slate-300' : 'bg-slate-50 border-amber-100 text-slate-700'}`}>
                                                         {getTargetParagraphSentences().map((sentence, i) => (
-                                                            <span key={i} onClick={() => handleSentenceClick(sentence)} className="inline hover:bg-amber-200 dark:hover:bg-indigo-900 cursor-pointer transition-colors rounded px-1 py-0.5 mx-0.5 border border-transparent hover:border-amber-300 dark:hover:border-indigo-700">{sentence}. </span>
+                                                            <span key={i} onClick={() => handleSentenceClick(sentence)} className={`sentence-target inline cursor-pointer transition-all rounded px-1.5 py-1 mx-0.5 border border-transparent ${isDarkMode ? 'hover:bg-indigo-900 hover:border-indigo-700 active:bg-indigo-800' : 'hover:bg-amber-200 hover:border-amber-300 active:bg-amber-300'}`}>{sentence} </span>
                                                         ))}
                                                     </div>
-                                                    <div className="flex justify-between items-center mt-6">
-                                                        <p className="text-xs text-slate-400 uppercase font-bold tracking-widest">Haz clic en la oración correcta</p>
-                                                        <button onClick={nextQuestion} className="text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-white uppercase tracking-widest flex items-center gap-1 transition-colors">Saltar <ArrowRight size={14}/></button>
+                                                    <div className="flex justify-between items-center mt-4">
+                                                        <p className={`text-xs uppercase font-bold tracking-widest ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Toca la oración correcta</p>
+                                                        <button onClick={nextQuestion} className={`btn-juicy text-xs font-bold uppercase tracking-widest flex items-center gap-1 transition-colors ${isDarkMode ? 'text-slate-400 hover:text-white' : 'text-slate-400 hover:text-slate-600'}`}>Saltar <ArrowRight size={14}/></button>
                                                     </div>
                                                 </div>
                                             )}
@@ -536,52 +727,54 @@
                             </div>
                         )}
 
-                        <div className={`max-w-[1400px] mx-auto w-full p-4 md:p-8 flex-1 flex flex-col lg:grid lg:grid-cols-12 gap-8 items-start ${qaMode ? 'hidden' : ''}`}>
+                        {/* ── MAIN CONTENT ── */}
+                        <div className={`max-w-[1400px] mx-auto w-full p-4 md:p-8 flex-1 flex flex-col lg:grid lg:grid-cols-12 gap-6 md:gap-8 items-start ${qaMode ? 'hidden' : ''}`}>
                             
-                            <div className="order-2 lg:order-1 lg:col-span-8 w-full flex-1 flex flex-col justify-center animate-in fade-in slide-in-from-bottom-8 duration-700">
+                            {/* ── LEFT: Main Reading Area ── */}
+                            <div className={`w-full flex-1 flex flex-col justify-center animate-fadeUp ${isOnParagraph && !isEndSlide ? 'order-2 lg:order-1 lg:col-span-8' : 'order-1 lg:col-span-12'}`}>
                                 
-                                {currentSlide === 0 ? (
-                                    <div className={`rounded-[3rem] shadow-2xl border p-10 md:p-16 text-center ${isDarkMode ? 'bg-slate-800/90 border-slate-700 text-white' : 'bg-white/95 border-white text-slate-800'}`}>
-                                        <div className="w-20 h-20 mx-auto rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white mb-8 shadow-lg shadow-indigo-500/30">
-                                            <GraduationCap size={40} />
-                                        </div>
-                                        <h2 className="text-5xl md:text-7xl font-black tracking-tight mb-6">{currentStory.title}</h2>
-                                        <p className="text-xl md:text-2xl font-bold opacity-60 mb-12 uppercase tracking-widest flex items-center justify-center gap-2"><Award size={24}/> By {activityData.authorName || 'Teacher'}</p>
+                                {/* ═══ SLIDE 0: TITLE CARD ═══ */}
+                                {currentSlide === 0 && (
+                                    <div className={`rounded-[3rem] shadow-2xl border p-8 md:p-16 text-center animate-scaleIn ${isDarkMode ? 'bg-slate-800/80 border-slate-700/50 text-white backdrop-blur-lg' : 'bg-white/80 border-white/50 text-slate-800 backdrop-blur-lg'}`}>
+                                        {currentStory.image_url && (
+                                            <div className="w-28 h-28 md:w-36 md:h-36 mx-auto rounded-3xl overflow-hidden shadow-2xl mb-8 border-4 border-white/20">
+                                                <img src={currentStory.image_url} alt="" className="w-full h-full object-cover"/>
+                                            </div>
+                                        )}
+                                        {!currentStory.image_url && (
+                                            <div className="w-20 h-20 mx-auto rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white mb-8 shadow-lg shadow-indigo-500/30">
+                                                <GraduationCap size={40} />
+                                            </div>
+                                        )}
+                                        <h2 className="text-4xl md:text-6xl font-black tracking-tight mb-4 leading-tight">{currentStory.title}</h2>
+                                        <p className={`text-lg md:text-xl font-bold mb-10 uppercase tracking-widest flex items-center justify-center gap-2 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                                            <Award size={20}/> By {activityData.authorName || 'Teacher'}
+                                        </p>
                                         
-                                        <button onClick={nextSlide} className="px-10 py-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-black text-xl shadow-xl hover:-translate-y-1 transition-all flex items-center gap-3 mx-auto">
+                                        <div className={`flex items-center justify-center gap-6 mb-10 text-sm font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                                            <span className="flex items-center gap-1.5"><LayoutGrid size={16}/> {currentStory.flatTokens.filter(t => t.isHidden).length} huecos</span>
+                                            <span className="flex items-center gap-1.5"><BookOpen size={16}/> {totalContentSlides} párrafos</span>
+                                            {currentStory.questions?.length > 0 && <span className="flex items-center gap-1.5"><Swords size={16}/> {currentStory.questions.length} preguntas</span>}
+                                        </div>
+
+                                        <button onClick={nextSlide} className="btn-juicy px-10 py-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-black text-xl shadow-xl flex items-center gap-3 mx-auto animate-pulseGlow">
                                             Comenzar Lectura <ArrowRight size={24}/>
                                         </button>
                                     </div>
-                                ) : isPresentationFinished ? (
-                                    <div className={`rounded-[3rem] shadow-2xl border p-10 md:p-16 text-center ${isDarkMode ? 'bg-slate-800/90 border-slate-700 text-white' : 'bg-white/95 border-white text-slate-800'}`}>
-                                        <div className="w-24 h-24 mx-auto rounded-full bg-emerald-100 text-emerald-500 flex items-center justify-center mb-8">
-                                            <CheckCircle2 size={56} strokeWidth={3} />
-                                        </div>
-                                        <h2 className="text-4xl md:text-5xl font-black mb-6">¡Lectura Completada!</h2>
-                                        <p className="text-xl opacity-70 mb-12">Has rellenado correctamente todos los párrafos.</p>
-                                        
-                                        <div className="flex flex-col gap-4 max-w-sm mx-auto">
-                                            {currentStory.questions && currentStory.questions.length > 0 && (
-                                                <button onClick={startChallenge} className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-black shadow-xl hover:bg-indigo-500 hover:-translate-y-1 transition-all flex items-center justify-center gap-2 text-lg">
-                                                    <Swords size={24}/> CHALLENGE Q&A <ArrowRight size={20}/>
-                                                </button>
-                                            )}
-                                            <button onClick={() => startStory(curIdx)} className={`w-full py-4 rounded-2xl font-black border transition-colors flex items-center justify-center gap-2 ${isDarkMode ? 'border-slate-600 hover:bg-slate-700 text-slate-300' : 'border-slate-300 hover:bg-slate-100 text-slate-600'}`}>
-                                                <RotateCcw size={20}/> Volver a Leer
-                                            </button>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="space-y-6">
-                                        <div className={`relative rounded-[2rem] shadow-2xl border p-8 md:p-12 leading-loose transition-all duration-300 flex items-stretch ${isDarkMode ? 'bg-slate-800/95 border-slate-700 text-slate-200' : 'bg-white/95 border-white text-slate-700'}`} style={{ fontSize: `${fontSize}px` }}>
+                                )}
+
+                                {/* ═══ SLIDES 1..N: PARAGRAPHS ═══ */}
+                                {isOnParagraph && (
+                                    <div className="space-y-4 md:space-y-6 animate-fadeUp" key={`slide-${currentSlide}`}>
+                                        <div className={`relative rounded-[2rem] shadow-2xl border p-6 md:p-10 leading-loose transition-all duration-300 flex items-stretch ${isDarkMode ? 'bg-slate-800/90 border-slate-700 text-slate-200 backdrop-blur-lg' : 'bg-white/90 border-white text-slate-700 backdrop-blur-lg'}`} style={{ fontSize: `${fontSize}px` }}>
                                             
-                                            {isLeftEmoji && <div className="hidden md:flex flex-col justify-between text-3xl pr-8 border-r border-slate-200 dark:border-slate-700 mr-8 opacity-60">{currentEmojis.map((e,i)=><span key={i}>{e}</span>)}</div>}
+                                            {isLeftEmoji && <div className="hidden md:flex flex-col justify-between text-3xl pr-6 border-r border-slate-200 dark:border-slate-700 mr-6 opacity-40">{currentEmojis.map((e,i)=><span key={i}>{e}</span>)}</div>}
                                             
                                             <div className="flex-1 font-medium text-justify">
-                                                <div className="flex items-center justify-between mb-6 border-b pb-4 border-slate-200 dark:border-slate-700">
-                                                    <span className="text-xs font-black uppercase tracking-widest opacity-40">Slide {currentSlide} / {currentStory.paragraphs.length}</span>
-                                                    {requiresCheck && !isSlideComplete && <span className="text-xs font-black uppercase tracking-widest text-amber-500 bg-amber-500/10 px-3 py-1 rounded-full">{hiddenInSlide.length} blanks left</span>}
-                                                    {isSlideComplete && <span className="text-xs font-black uppercase tracking-widest text-emerald-500 bg-emerald-500/10 px-3 py-1 rounded-full flex items-center gap-1"><CheckCircle2 size={14}/> Correct</span>}
+                                                <div className="flex items-center justify-between mb-4 md:mb-6 border-b pb-3 border-slate-200 dark:border-slate-700">
+                                                    <span className="text-xs font-black uppercase tracking-widest opacity-40">Párrafo {currentParagraphIdx + 1} / {totalContentSlides}</span>
+                                                    {requiresCheck && !isSlideComplete && <span className="text-xs font-black uppercase tracking-widest text-amber-500 bg-amber-500/10 px-3 py-1 rounded-full">{hiddenInSlide.length - Object.keys(dropped).filter(k => hiddenInSlide.some(h => h.id === parseInt(k))).length} restantes</span>}
+                                                    {isSlideComplete && <span className="text-xs font-black uppercase tracking-widest text-emerald-500 bg-emerald-500/10 px-3 py-1 rounded-full flex items-center gap-1"><CheckCircle2 size={14}/> Correcto</span>}
                                                 </div>
 
                                                 {currentTokens.map((t, i) => {
@@ -600,62 +793,121 @@
                                                         else if (prevIsHidden && !nextIsHidden) shapeClass = "token-end";
                                                         else if (!prevIsHidden && nextIsHidden) shapeClass = "token-start";
 
-                                                        return <span key={i} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, t.id)} onClick={() => removeDrop(t.id)} className={`token-base cursor-pointer ${stateClass} ${shapeClass}`}>{val || ""}</span>;
+                                                        return <span key={i} 
+                                                            onDragOver={handleDragOver} 
+                                                            onDrop={(e) => handleDrop(e, t.id)} 
+                                                            onClick={() => handleBlankTap(t.id)} 
+                                                            className={`token-base cursor-pointer ${stateClass} ${shapeClass} ${!val && selectedWord ? 'animate-pulseGlow' : ''}`}
+                                                        >{val || ""}</span>;
                                                     }
                                                     if (t.text.match(/\n/)) return <br key={i}/>;
                                                     return <span key={i}>{t.text}</span>;
                                                 })}
                                             </div>
 
-                                            {!isLeftEmoji && <div className="hidden md:flex flex-col justify-between text-3xl pl-8 border-l border-slate-200 dark:border-slate-700 ml-8 opacity-60">{currentEmojis.map((e,i)=><span key={i}>{e}</span>)}</div>}
+                                            {!isLeftEmoji && <div className="hidden md:flex flex-col justify-between text-3xl pl-6 border-l border-slate-200 dark:border-slate-700 ml-6 opacity-40">{currentEmojis.map((e,i)=><span key={i}>{e}</span>)}</div>}
                                         </div>
 
-                                        <div className="flex justify-end pt-2">
+                                        {/* Mobile progress */}
+                                        <div className="flex md:hidden justify-center gap-1.5 py-2">
+                                            {Array.from({ length: progressTotal + 1 }).map((_, i) => (
+                                                <div key={i} className={`progress-dot ${i === currentSlide ? 'active' : ''} ${i <= currentSlide ? 'bg-indigo-500' : (isDarkMode ? 'bg-slate-700' : 'bg-slate-300')}`}/>
+                                            ))}
+                                        </div>
+
+                                        <div className="flex justify-end pt-1">
                                             {requiresCheck && !isSlideComplete ? (
-                                                <button onClick={checkSlideAnswers} className="bg-slate-900 dark:bg-slate-700 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-xl hover:-translate-y-1 transition-transform flex items-center gap-2">
-                                                    Verificar Párrafo
+                                                <button onClick={checkSlideAnswers} className={`btn-juicy px-8 py-4 rounded-2xl font-black text-lg shadow-xl flex items-center gap-2 ${isDarkMode ? 'bg-slate-700 text-white hover:bg-slate-600' : 'bg-slate-900 text-white hover:bg-slate-800'}`}>
+                                                    <CheckCircle2 size={20}/> Verificar
                                                 </button>
                                             ) : (
-                                                <button onClick={nextSlide} className="bg-emerald-500 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-xl hover:-translate-y-1 transition-transform flex items-center gap-3 animate-in fade-in zoom-in">
-                                                    Avanzar <ArrowRight size={24}/>
+                                                <button onClick={nextSlide} className="btn-juicy bg-emerald-500 text-white px-8 py-4 rounded-2xl font-black text-lg shadow-xl flex items-center gap-3 animate-fadeUp">
+                                                    {currentSlide === SLIDE_PARAGRAPH_END ? (hasFunFact ? '¿Sabías que...?' : 'Ver Resumen') : 'Siguiente Párrafo'} <ArrowRight size={24}/>
                                                 </button>
                                             )}
                                         </div>
                                     </div>
                                 )}
+
+                                {/* ═══ FUN FACT SLIDE ═══ */}
+                                {isFunFactSlide && (
+                                    <div className={`rounded-[3rem] shadow-2xl border p-8 md:p-14 text-center max-w-2xl mx-auto animate-scaleIn ${isDarkMode ? 'bg-amber-900/30 border-amber-500/20 backdrop-blur-lg' : 'bg-amber-50 border-amber-200'}`}>
+                                        <div className={`w-20 h-20 mx-auto rounded-2xl flex items-center justify-center mb-8 shadow-lg ${isDarkMode ? 'bg-amber-500/20 text-amber-400' : 'bg-white text-amber-500'}`}>
+                                            <Lightbulb size={40} strokeWidth={2.5}/>
+                                        </div>
+                                        <h3 className={`font-black text-sm uppercase tracking-[0.2em] mb-6 ${isDarkMode ? 'text-amber-400' : 'text-amber-800'}`}>Did You Know?</h3>
+                                        <p className={`text-xl md:text-2xl font-medium leading-relaxed mb-10 ${isDarkMode ? 'text-amber-100/90' : 'text-amber-900/80'}`}>{currentStory.fun_fact}</p>
+                                        
+                                        <button onClick={nextSlide} className="btn-juicy bg-amber-500 hover:bg-amber-400 text-white px-10 py-4 rounded-full font-black text-lg shadow-xl flex items-center gap-3 mx-auto">
+                                            Continuar <ArrowRight size={24}/>
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* ═══ END SLIDE ═══ */}
+                                {isEndSlide && (
+                                    <div className={`rounded-[3rem] shadow-2xl border p-8 md:p-14 text-center max-w-2xl mx-auto animate-scaleIn ${isDarkMode ? 'bg-slate-800/90 border-slate-700 backdrop-blur-lg text-white' : 'bg-white/90 border-white text-slate-800 backdrop-blur-lg'}`}>
+                                        <div className="w-24 h-24 mx-auto rounded-full bg-emerald-100 dark:bg-emerald-900/50 text-emerald-500 flex items-center justify-center mb-8">
+                                            <CheckCircle2 size={56} strokeWidth={3} />
+                                        </div>
+                                        <h2 className="text-3xl md:text-5xl font-black mb-4">¡Lectura Completada!</h2>
+                                        <p className={`text-lg mb-10 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Has rellenado correctamente todos los párrafos.</p>
+                                        
+                                        <div className="flex flex-col gap-3 max-w-sm mx-auto">
+                                            {currentStory.questions && currentStory.questions.length > 0 && (
+                                                <button onClick={startChallenge} className="btn-juicy w-full bg-indigo-600 text-white py-4 rounded-2xl font-black shadow-xl hover:bg-indigo-500 flex items-center justify-center gap-2 text-lg animate-pulseGlow">
+                                                    <Swords size={24}/> CHALLENGE Q&A <ArrowRight size={20}/>
+                                                </button>
+                                            )}
+                                            <button onClick={() => startStory(curIdx)} className={`btn-juicy w-full py-4 rounded-2xl font-black border flex items-center justify-center gap-2 ${isDarkMode ? 'border-slate-600 hover:bg-slate-700 text-slate-300' : 'border-slate-300 hover:bg-slate-100 text-slate-600'}`}>
+                                                <RotateCcw size={20}/> Volver a Leer
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
-                            {currentSlide > 0 && !isPresentationFinished && (
-                                <div className="order-1 lg:order-2 lg:col-span-4 w-full lg:sticky lg:top-24 lg:self-start flex flex-col gap-6 lg:h-[calc(100vh-8rem)]">
-                                    <div className={`rounded-[2rem] shadow-xl border overflow-hidden flex flex-col h-full max-h-[400px] lg:max-h-full ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/95 border-white'}`}>
-                                        <div className="bg-slate-900 p-4 md:p-5 flex items-center justify-between text-white shrink-0">
-                                            <div className="flex items-center gap-2 font-black uppercase text-xs tracking-widest"><Puzzle size={18} className="text-indigo-400"/> Global Word Bank</div>
-                                            <span className="bg-slate-800 px-3 py-1.5 rounded-lg text-[10px] font-bold text-slate-300 shadow-inner">{availableWords.length} Left</span>
+                            {/* ── RIGHT SIDEBAR: Word Bank (only on paragraph slides) ── */}
+                            {isOnParagraph && !isEndSlide && (
+                                <div className="order-1 lg:order-2 lg:col-span-4 w-full lg:sticky lg:top-20 lg:self-start flex flex-col gap-4 md:gap-6 lg:h-[calc(100vh-6rem)] animate-fadeUp" style={{ animationDelay: '0.15s' }}>
+                                    <div className={`rounded-[2rem] shadow-xl border overflow-hidden flex flex-col h-full max-h-[350px] lg:max-h-full ${isDarkMode ? 'bg-slate-800/90 border-slate-700 backdrop-blur-lg' : 'bg-white/90 border-white backdrop-blur-lg'}`}>
+                                        <div className="bg-slate-900 p-4 flex items-center justify-between text-white shrink-0">
+                                            <div className="flex items-center gap-2 font-black uppercase text-xs tracking-widest"><Puzzle size={18} className="text-indigo-400"/> Word Bank</div>
+                                            <span className="bg-slate-800 px-3 py-1.5 rounded-lg text-[10px] font-bold text-slate-300 shadow-inner">{availableWords.length} restantes</span>
                                         </div>
                                         
-                                        <div className={`p-5 md:p-6 overflow-y-auto custom-scrollbar flex-1 ${isDarkMode ? 'bg-slate-800/50' : 'bg-slate-50'}`} style={{ fontSize: `${Math.max(16, fontSize * 0.7)}px` }}>
+                                        <div className={`p-4 md:p-5 overflow-y-auto custom-scrollbar flex-1 ${isDarkMode ? 'bg-slate-800/50' : 'bg-slate-50'}`} style={{ fontSize: `${Math.max(16, fontSize * 0.7)}px` }}>
                                             {availableWords.length === 0 ? (
                                                 <div className="h-full flex flex-col items-center justify-center text-slate-400 py-8 text-center">
                                                     <CheckCircle2 size={48} className="mb-4 opacity-30 text-emerald-500"/>
-                                                    <p className="text-lg font-black uppercase tracking-widest text-emerald-500">Perfect!</p>
-                                                    <p className="text-sm font-bold mt-2">All words placed.</p>
+                                                    <p className="text-lg font-black uppercase tracking-widest text-emerald-500">¡Perfecto!</p>
+                                                    <p className="text-sm font-bold mt-2">Todas las palabras colocadas.</p>
                                                 </div>
                                             ) : (
-                                                <div className="flex flex-wrap gap-2 md:gap-3">
-                                                    {availableWords.map((w, i) => (
-                                                        <div key={i} draggable={!isSlideComplete} onDragStart={(e) => handleDragStart(e, w)} className={`border border-b-4 px-4 py-2 md:py-3 rounded-xl font-bold shadow-sm cursor-grab active:cursor-grabbing transition-all ${isDarkMode ? 'bg-slate-700 border-slate-600 border-b-slate-900 text-slate-200 hover:bg-indigo-900 hover:border-indigo-700' : 'bg-white border-slate-300 border-b-slate-300 text-slate-700 hover:bg-indigo-50 hover:border-indigo-300'}`}>{w}</div>
-                                                    ))}
-                                                </div>
+                                                <>
+                                                    {selectedWord && (
+                                                        <p className={`text-xs font-bold uppercase tracking-widest mb-3 text-center ${isDarkMode ? 'text-indigo-400' : 'text-indigo-600'}`}>Toca un hueco para colocar "{selectedWord}"</p>
+                                                    )}
+                                                    <div className="flex flex-wrap gap-2 md:gap-3">
+                                                        {availableWords.map((w, i) => (
+                                                            <div key={`${w}-${i}`} 
+                                                                draggable={!isSlideComplete} 
+                                                                onDragStart={(e) => handleDragStart(e, w)} 
+                                                                onClick={() => handleWordTap(w)}
+                                                                className={`word-chip border border-b-4 px-4 py-2 md:py-3 rounded-xl font-bold shadow-sm cursor-grab active:cursor-grabbing transition-all ${
+                                                                    selectedWord === w 
+                                                                        ? 'bg-indigo-600 border-indigo-700 border-b-indigo-900 text-white scale-105 shadow-lg shadow-indigo-500/30' 
+                                                                        : isDarkMode 
+                                                                            ? 'bg-slate-700 border-slate-600 border-b-slate-900 text-slate-200' 
+                                                                            : 'bg-white border-slate-300 border-b-slate-300 text-slate-700'
+                                                                }`}
+                                                            >{w}</div>
+                                                        ))}
+                                                    </div>
+                                                </>
                                             )}
                                         </div>
                                     </div>
-
-                                    {currentStory.fun_fact && (
-                                        <div className={`rounded-[2rem] p-5 shadow-lg border-2 flex gap-4 items-start shrink-0 ${isDarkMode ? 'bg-amber-900/40 border-amber-500/30' : 'bg-amber-50 border-amber-200'}`}>
-                                            <div className={`p-3 rounded-xl shadow-sm shrink-0 ${isDarkMode ? 'bg-amber-500/20 text-amber-400' : 'bg-white text-amber-500'}`}><Lightbulb size={24} strokeWidth={2.5}/></div>
-                                            <div><h3 className={`font-black text-xs uppercase tracking-widest mb-1 ${isDarkMode ? 'text-amber-400' : 'text-amber-800'}`}>Did You Know?</h3><p className={`font-medium text-sm leading-relaxed ${isDarkMode ? 'text-amber-100/80' : 'text-amber-900/80'}`}>{currentStory.fun_fact}</p></div>
-                                        </div>
-                                    )}
                                 </div>
                             )}
 
