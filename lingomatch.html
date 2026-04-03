@@ -30,7 +30,12 @@
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-        .btn-juicy { transition: all 0.1s ease; border-bottom-width: 4px; }
+        /* Prevención Hover-Trap iOS */
+        @media (hover: hover) {
+            .btn-juicy:hover:not(:disabled) { filter: brightness(1.1); }
+        }
+        
+        .btn-juicy { transition: all 0.1s ease; border-bottom-width: 4px; touch-action: manipulation; }
         .btn-juicy:active:not(:disabled) { transform: translateY(4px); border-bottom-width: 0px; margin-top: 4px; }
 
         @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(5px)} }
@@ -113,8 +118,8 @@
             const [diceValue, setDiceValue] = useState(null);
             const [diceRolling, setDiceRolling] = useState(false);
             const [showSubmit, setShowSubmit] = useState(false);
-            const [showCorrectCards, setShowCorrectCards] = useState(false); // After correct match, show green + next
-            const [correctTriple, setCorrectTriple] = useState(null); // { c1, c2, c3 } uids
+            const [showCorrectCards, setShowCorrectCards] = useState(false);
+            const [correctTriple, setCorrectTriple] = useState(null); 
 
             const [showLeaderboard, setShowLeaderboard] = useState(false);
             const [showLibrary, setShowLibrary] = useState(false);
@@ -139,10 +144,6 @@
                     if (snap.exists()) {
                         const data = snap.data();
                         setRoomData(data);
-                        // Sync remote selections for other players
-                        if (data.liveSelections && user) {
-                            // We don't overwrite our own local selection
-                        }
                     } else {
                         setRoomCode(''); setRoomData(null); alert("La sala ha sido cerrada.");
                     }
@@ -204,14 +205,17 @@
 
             const startSinglePlayer = () => {
                 if (!playerName.trim()) return alert("Escribe tu nombre o apodo.");
-                const settings = quizData.content.settings || { rounds: 4, rowsPerRound: 6 };
+                // GAME DESIGN: Forzamos 3 rondas y 8 filas. Total de pares necesarios = 24.
+                const settings = { rounds: 3, rowsPerRound: 8 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
-                let allPairs = shuffle([...quizData.content.pairs]);
-                if (allPairs.length < totalNeeded) {
-                    const diff = totalNeeded - allPairs.length;
-                    for (let i = 0; i < diff; i++) allPairs.push(allPairs[i % allPairs.length]);
+                
+                let allPairs = [];
+                // Rellenamos el tablero repitiendo si el creador puso pocas palabras
+                while(allPairs.length < totalNeeded) {
+                    allPairs = allPairs.concat(shuffle([...quizData.content.pairs]));
                 }
                 const gp = allPairs.slice(0, totalNeeded);
+                
                 setRoomData({
                     gameState: 'playing', mode: 'single', settings, gamePool: gp, currentRound: 1,
                     board: generateBoardColumns(gp.slice(0, settings.rowsPerRound)),
@@ -256,14 +260,16 @@
             };
 
             const startMultiplayer = async () => {
-                const settings = quizData.content.settings || { rounds: 4, rowsPerRound: 6 };
+                // GAME DESIGN: Forzamos 3 rondas y 8 filas. 
+                const settings = { rounds: 3, rowsPerRound: 8 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
-                let allPairs = shuffle([...quizData.content.pairs]);
-                if (allPairs.length < totalNeeded) {
-                    const diff = totalNeeded - allPairs.length;
-                    for (let i = 0; i < diff; i++) allPairs.push(allPairs[i % allPairs.length]);
+                
+                let allPairs = [];
+                while(allPairs.length < totalNeeded) {
+                    allPairs = allPairs.concat(shuffle([...quizData.content.pairs]));
                 }
                 const gp = allPairs.slice(0, totalNeeded);
+                
                 const activePlayers = roomData.players.filter(p => p.occupied);
 
                 await updateGame({
@@ -271,7 +277,7 @@
                     board: generateBoardColumns(gp.slice(0, settings.rowsPerRound)),
                     matchedIds: [], correctTriples: [],
                     currentTurn: activePlayers[0].id,
-                    currentDice: null, dicePhase: 'roll', // roll → select → submit → result → next
+                    currentDice: null, dicePhase: 'roll',
                     liveSelections: {},
                     players: roomData.players.map(p => ({ ...p, score: 0, roundScore: 0 }))
                 });
@@ -280,8 +286,19 @@
             // ====== DICE ROLL (Arena) ======
             const rollDice = async () => {
                 setDiceRolling(true);
-                const result = DICE_FACES[Math.floor(Math.random() * DICE_FACES.length)];
-                // Animate for 600ms then show result
+                
+                // CATCH-UP MECHANIC (Game Design Rule)
+                const activePlayers = roomData.players.filter(p => p.occupied);
+                const maxScore = Math.max(...activePlayers.map(p => p.score), 0);
+                const myScore = roomData.players.find(p => p.id === roomData.currentTurn)?.score || 0;
+                
+                let result = DICE_FACES[Math.floor(Math.random() * DICE_FACES.length)];
+                
+                // Si va perdiendo por más de 5 puntos, el dado le tira una "ayuda invisible" (mínimo 3)
+                if (!isSinglePlayer && (maxScore - myScore > 5)) {
+                    result = Math.max(3, result);
+                }
+
                 setTimeout(async () => {
                     setDiceRolling(false);
                     setDiceValue(result);
@@ -296,14 +313,12 @@
                 if (isSinglePlayer) {
                     setSelection(prev => ({ ...prev, [col]: prev[col]?.uid === item.uid ? null : item }));
                 } else {
-                    // Arena: only active player can select, but everyone sees
                     if (myRole !== roomData.currentTurn) return;
                     if (roomData.dicePhase !== 'select') return;
 
                     const newSel = { ...selection, [col]: selection[col]?.uid === item.uid ? null : item };
                     setSelection(newSel);
 
-                    // Push live selections to Firebase
                     const liveData = {};
                     if (newSel.c1) liveData.c1 = newSel.c1.uid;
                     if (newSel.c2) liveData.c2 = newSel.c2.uid;
@@ -312,7 +327,7 @@
                         await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), {
                             liveSelections: liveData
                         });
-                    } catch(e) { /* ignore race conditions */ }
+                    } catch(e) {}
                 }
             };
 
@@ -366,7 +381,6 @@
                 const isPartial = maxMatches === 2;
 
                 if (isPerfect) {
-                    // Full dice points
                     setFeedback('success');
                     confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 } });
                     setCorrectTriple({ c1: selection.c1.uid, c2: selection.c2.uid, c3: selection.c3.uid });
@@ -386,11 +400,11 @@
                         liveSelections: {}
                     });
                 } else if (isPartial) {
-                    // Half dice points (rounded up)
-                    const pts = Math.ceil(dice / 2);
+                    // GAME DESIGN: Fixed 1 point para los parciales (menos desbalance vs el dado perfecto)
+                    const pts = 1;
                     setFeedback('partial');
                     const id = Date.now();
-                    setPenaltyFlies(prev => [...prev, { id, text: `+${pts} (½)`, isErr: false }]);
+                    setPenaltyFlies(prev => [...prev, { id, text: `+${pts} pt`, isErr: false }]);
                     setTimeout(() => setPenaltyFlies(prev => prev.filter(f => f.id !== id)), 800);
 
                     const updatedPlayers = roomData.players.map(p =>
@@ -402,7 +416,6 @@
                         await advanceTurnArena(updatedPlayers, roomData.matchedIds);
                     }, 800);
                 } else {
-                    // Zero points
                     setFeedback('error');
                     const id = Date.now();
                     setPenaltyFlies(prev => [...prev, { id, text: '0 pts', isErr: true }]);
@@ -450,23 +463,8 @@
 
             // ====== ROUND END ======
             const handleRoundEnd = async (players) => {
-                let updatedPlayers = [...players];
-
-                if (!isSinglePlayer) {
-                    // Bonus for round winners — split if tie
-                    const maxRS = Math.max(...updatedPlayers.filter(p => p.occupied).map(p => p.roundScore || 0));
-                    if (maxRS > 0) {
-                        const winners = updatedPlayers.filter(p => p.occupied && (p.roundScore || 0) === maxRS);
-                        const bonusEach = Math.floor(5 / winners.length);
-                        updatedPlayers = updatedPlayers.map(p =>
-                            p.occupied && (p.roundScore || 0) === maxRS
-                                ? { ...p, score: p.score + bonusEach, roundScore: 0 }
-                                : { ...p, roundScore: 0 }
-                        );
-                    } else {
-                        updatedPlayers = updatedPlayers.map(p => ({ ...p, roundScore: 0 }));
-                    }
-                }
+                // GAME DESIGN: Se eliminó el Bonus por ganar la ronda. Simplemente limpiamos.
+                let updatedPlayers = players.map(p => ({ ...p, roundScore: 0 }));
 
                 const nextRound = roomData.currentRound + 1;
                 if (nextRound > roomData.settings.rounds) {
@@ -476,24 +474,24 @@
                     }
                     await updateGame({ gameState: 'end', players: updatedPlayers, finalTime: timer });
                 } else {
-                    const bonusWinnerNames = !isSinglePlayer
-                        ? updatedPlayers.filter(p => p.occupied && (players.find(op => op.id === p.id)?.score || 0) < p.score).map(p => p.name.split(' ')[1] || p.name)
-                        : [];
-                    const bonusMsg = bonusWinnerNames.length > 0 ? `Bonus: ${bonusWinnerNames.join(', ')}` : '';
+                    // GAME DESIGN: Rotación dinámica del jugador que inicia la ronda
+                    const active = updatedPlayers.filter(p => p.occupied);
+                    const nextStartIdx = (nextRound - 1) % active.length;
+                    const nextStartingPlayer = active[nextStartIdx].id;
 
                     triggerSequence(
-                        ['¡BIEN HECHO!', bonusMsg || `RONDA ${nextRound}`, `RONDA ${nextRound}`, '3', '2', '1', 'GO!'].filter(Boolean),
+                        ['¡BIEN HECHO!', `RONDA ${nextRound}`, '3', '2', '1', 'GO!'],
                         async () => {
                             const startIdx = (nextRound - 1) * roomData.settings.rowsPerRound;
                             const nextPairs = roomData.gamePool.slice(startIdx, startIdx + roomData.settings.rowsPerRound);
-                            const active = updatedPlayers.filter(p => p.occupied);
+                            
                             setDiceValue(null);
                             await updateGame({
                                 currentRound: nextRound,
                                 board: generateBoardColumns(nextPairs),
                                 matchedIds: [], correctTriples: [],
                                 players: updatedPlayers,
-                                currentTurn: active[0].id,
+                                currentTurn: nextStartingPlayer, // Inicia la ronda el jugador que le toca rotar
                                 currentDice: null, dicePhase: 'roll',
                                 liveSelections: {}
                             });
@@ -541,7 +539,6 @@
                     setSelection({ c1: null, c2: null, c3: null }); setFeedback('none'); setLocked(false);
                 }
                 if (!isSinglePlayer && roomData?.dicePhase === 'result') {
-                    // Show correct cards
                     const trips = roomData.correctTriples;
                     if (trips && trips.length > 0) {
                         const last = trips[trips.length - 1];
@@ -552,7 +549,6 @@
                 }
             }, [roomData?.currentDice, roomData?.dicePhase, isSinglePlayer]);
 
-            // ====== Get live selections from others ======
             const getLiveSelUid = (col) => {
                 if (!roomData?.liveSelections) return null;
                 return roomData.liveSelections[col] || null;
@@ -701,7 +697,6 @@
                                 else if (feedback === 'success') bg = "bg-emerald-500 border-emerald-700 text-white scale-105";
                                 else bg = "bg-indigo-600 border-indigo-800 text-white scale-105 pulse-glow";
                             } else if (isLiveSel) {
-                                // Other player's live selection — show with their color
                                 const turnColor = activePlayerObj?.color?.replace('bg-','border-') || 'border-indigo-500';
                                 bg = `bg-zinc-900 ${turnColor} border-2 text-zinc-100`;
                             }
