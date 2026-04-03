@@ -38,6 +38,19 @@
         .btn-juicy { transition: all 0.1s ease; border-bottom-width: 4px; touch-action: manipulation; }
         .btn-juicy:active:not(:disabled) { transform: translateY(4px); border-bottom-width: 0px; margin-top: 4px; }
 
+        /* Fixes Safari Old iOS Text Overflow */
+        .safari-text-fix {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            word-break: break-word;
+            overflow-wrap: break-word;
+            hyphens: auto;
+            width: 100%;
+            text-align: center;
+        }
+
         @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(5px)} }
         .animate-shake { animation: shake 0.4s ease-in-out; }
 
@@ -71,7 +84,7 @@
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useRef, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Users, Play, Plus, LogIn, CheckCircle2, XCircle, Trophy, User, Pause, Clock, Timer, BookOpen, X, Dice5, Send, ArrowRight, Dices, RotateCcw } from 'lucide-react';
+        import { Users, Play, Plus, LogIn, CheckCircle2, XCircle, Trophy, User, Pause, Clock, Timer, BookOpen, X, Dice5, Send, ArrowRight, Dices, RotateCcw, AlertTriangle } from 'lucide-react';
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
@@ -96,7 +109,10 @@
             const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
             const [quizData, setQuizData] = useState(null);
             
-            // SYSTEM: Inicializamos con Session Storage para reconexión instantánea tras refresh
+            // SYSTEM: Disclaimer Guard
+            const [acceptedDisclaimer, setAcceptedDisclaimer] = useState(() => localStorage.getItem('periplo_disclaimer_v1') === 'true');
+
+            // SYSTEM: Session Storage para reconexión instantánea tras refresh
             const [modeSelected, setModeSelected] = useState(() => sessionStorage.getItem('lingo_mode') || null);
             const [isSinglePlayer, setIsSinglePlayer] = useState(() => sessionStorage.getItem('lingo_sp') === 'true');
             const [roomCode, setRoomCode] = useState(() => sessionStorage.getItem('lingo_room') || '');
@@ -116,6 +132,7 @@
             const [timerAnim, setTimerAnim] = useState(false);
             const [timer, setTimer] = useState(0);
             const timerRef = useRef(null);
+            const lastActionUidRef = useRef(null); // Para sincronizar animaciones de error
 
             // Arena features
             const [diceValue, setDiceValue] = useState(null);
@@ -176,6 +193,27 @@
             const myPlayer = roomData?.players?.find(p => p.uid === user?.uid);
             const myRole = isSinglePlayer ? 'p1' : (myPlayer ? myPlayer.id : null);
 
+            // ====== SYNC REMOTE ANIMATIONS (Error/Parcial) ======
+            useEffect(() => {
+                if (!roomData?.lastAction || isSinglePlayer) return;
+                const action = roomData.lastAction;
+                if (action.uid === lastActionUidRef.current) return;
+                lastActionUidRef.current = action.uid;
+
+                // Solo triggerear si NO fue mi turno (el jugador activo ya corrió su lógica local)
+                if (myRole !== action.player) {
+                    if (action.type === 'error') {
+                        setFeedback('error');
+                        setPenaltyFlies(prev => [...prev, { id: Date.now(), text: '❌', isErr: true }]);
+                        setTimeout(() => setFeedback('none'), 800);
+                    } else if (action.type === 'partial') {
+                        setFeedback('partial');
+                        setPenaltyFlies(prev => [...prev, { id: Date.now(), text: `+1 pt`, isErr: false }]);
+                        setTimeout(() => setFeedback('none'), 800);
+                    }
+                }
+            }, [roomData?.lastAction, myRole, isSinglePlayer]);
+
             // ====== HELPERS ======
             const triggerSequence = (steps, cb) => {
                 let i = 0; setCountdown(steps[0]);
@@ -198,7 +236,7 @@
                 setDiceValue(null); setDiceRolling(false); setShowSubmit(false);
                 setShowCorrectCards(false); setCorrectTriple(null);
                 setSelection({ c1: null, c2: null, c3: null }); setFeedback('none');
-                sessionStorage.clear(); // Limpiamos la reconexión manual
+                sessionStorage.clear();
             };
 
             const loadLeaderboard = async () => {
@@ -220,7 +258,8 @@
 
             const startSinglePlayer = () => {
                 if (!playerName.trim()) return alert("Escribe tu nombre o apodo.");
-                const settings = { rounds: 3, rowsPerRound: 8 };
+                // GAME DESIGN: Regresamos libertad al Dashboard, leemos sus settings. Fallback a 3x6
+                const settings = quizData.content.settings || { rounds: 3, rowsPerRound: 6 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
                 
                 let allPairs = [];
@@ -273,7 +312,8 @@
             };
 
             const startMultiplayer = async () => {
-                const settings = { rounds: 3, rowsPerRound: 8 };
+                // GAME DESIGN: Respetamos los settings elegidos en el Dashboard
+                const settings = quizData.content.settings || { rounds: 3, rowsPerRound: 6 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
                 
                 let allPairs = [];
@@ -407,7 +447,8 @@
                         matchedIds: newMatched,
                         correctTriples: newTriples,
                         dicePhase: 'result',
-                        liveSelections: {}
+                        liveSelections: {},
+                        lastAction: { type: 'success', uid: Date.now(), player: roomData.currentTurn }
                     });
                 } else if (isPartial) {
                     const pts = 1;
@@ -420,6 +461,9 @@
                         p.id === roomData.currentTurn ? { ...p, score: p.score + pts, roundScore: (p.roundScore || 0) + pts } : p
                     );
 
+                    // Sync remote animation & end turn
+                    await updateGame({ lastAction: { type: 'partial', uid: Date.now(), player: roomData.currentTurn } });
+
                     setTimeout(async () => {
                         setFeedback('none'); setSelection({ c1: null, c2: null, c3: null }); setLocked(false);
                         await advanceTurnArena(updatedPlayers, roomData.matchedIds);
@@ -429,6 +473,9 @@
                     const id = Date.now();
                     setPenaltyFlies(prev => [...prev, { id, text: '0 pts', isErr: true }]);
                     setTimeout(() => setPenaltyFlies(prev => prev.filter(f => f.id !== id)), 800);
+
+                    // Sync remote animation & end turn
+                    await updateGame({ lastAction: { type: 'error', uid: Date.now(), player: roomData.currentTurn } });
 
                     setTimeout(async () => {
                         setFeedback('none'); setSelection({ c1: null, c2: null, c3: null }); setLocked(false);
@@ -446,7 +493,10 @@
                 setLocked(false);
 
                 const newMatched = roomData.matchedIds || [];
-                const isRoundOver = newMatched.length >= (roomData.settings.rowsPerRound * 3);
+                
+                // GAME DESIGN: N-1 Logic. Terminamos la ronda cuando queda 1 par vivo (regalito killer).
+                const maxMatchesThisRound = Math.max(1, roomData.board.c1.length - 1); 
+                const isRoundOver = (newMatched.length / 3) >= maxMatchesThisRound;
 
                 if (isRoundOver) {
                     await handleRoundEnd(roomData.players);
@@ -527,7 +577,10 @@
                 let newMatched = [...(roomData.matchedIds || [])];
                 if (clearBoard) newMatched.push(selection.c1.uid, selection.c2.uid, selection.c3.uid);
 
-                const isRoundOver = newMatched.length >= (roomData.settings.rowsPerRound * 3);
+                // GAME DESIGN: N-1 Logic (Regalito killer)
+                const maxMatchesThisRound = Math.max(1, roomData.board.c1.length - 1); 
+                const isRoundOver = (newMatched.length / 3) >= maxMatchesThisRound;
+                
                 if (isRoundOver) {
                     await updateGame({ matchedIds: newMatched });
                     await handleRoundEnd(roomData.players);
@@ -551,18 +604,41 @@
                         const last = trips[trips.length - 1];
                         setCorrectTriple(last);
                         setShowCorrectCards(true);
-                        setFeedback('success');
+                        // Prevent overriding the local success if I'm the active player
+                        if (!isSinglePlayer && myRole !== roomData.currentTurn) setFeedback('success');
                     }
                 }
-            }, [roomData?.currentDice, roomData?.dicePhase, isSinglePlayer]);
+            }, [roomData?.currentDice, roomData?.dicePhase, isSinglePlayer, myRole, roomData?.currentTurn]);
 
             const getLiveSelUid = (col) => {
                 if (!roomData?.liveSelections) return null;
                 return roomData.liveSelections[col] || null;
             };
 
-            // ====== RENDER ======
-            if (!quizData) return <div className="h-[100dvh] flex items-center justify-center font-black animate-pulse text-xl">Reconectando...</div>;
+            // ====== RENDER GUARD (Disclaimer) ======
+            if (!acceptedDisclaimer) return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950 text-center overflow-auto">
+                    <div className="max-w-sm bg-zinc-900 border border-zinc-800 p-8 rounded-[2rem] shadow-2xl my-auto">
+                        <div className="w-16 h-16 bg-amber-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                            <AlertTriangle size={32} className="text-amber-500"/>
+                        </div>
+                        <h2 className="text-xl font-black text-white mb-4 uppercase tracking-widest">Aviso de Compatibilidad</h2>
+                        <p className="text-zinc-400 text-sm font-bold mb-4 leading-relaxed">
+                            LingoMatch Arena está altamente optimizado. Sin embargo, si utilizas navegadores muy antiguos o <strong className="text-white">Safari en iOS</strong>, algunos textos largos podrían verse cortados.
+                        </p>
+                        <p className="text-zinc-400 text-sm font-bold mb-8 leading-relaxed">
+                            Si experimentas fallos visuales, te recomendamos usar <strong className="text-white">Chrome o jugar en PC/Laptop</strong> donde la experiencia es perfecta. 🚀
+                        </p>
+                        <button onClick={() => { localStorage.setItem('periplo_disclaimer_v1', 'true'); setAcceptedDisclaimer(true); }}
+                            className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 uppercase tracking-widest text-sm flex justify-center items-center gap-2">
+                            Entendido, ¡A jugar!
+                        </button>
+                    </div>
+                </div>
+            );
+
+            // ====== RENDER GUARD (Carga) ======
+            if (!quizData) return <div className="h-[100dvh] flex items-center justify-center font-black animate-pulse text-xl">Conectando...</div>;
 
             // ====== MODE SELECTION ======
             if (!modeSelected) return (
@@ -678,7 +754,7 @@
                 const isSelectPhase = isSinglePlayer || roomData.dicePhase === 'select';
 
                 const renderCol = (items, colKey) => (
-                    <div className="flex-1 flex flex-col gap-1.5 sm:gap-2">
+                    <div className="flex-1 flex flex-col gap-1.5 sm:gap-2 overflow-hidden">
                         {items.map(item => {
                             const isMatched = (roomData.matchedIds || []).includes(item.uid);
                             const isCorrectCard = correctTriple && (correctTriple.c1 === item.uid || correctTriple.c2 === item.uid || correctTriple.c3 === item.uid);
@@ -686,13 +762,13 @@
                             const isLiveSel = !isSinglePlayer && getLiveSelUid(colKey) === item.uid && !isMyTurn;
 
                             if (isMatched && !isCorrectCard) {
-                                return <div key={item.uid} className="h-16 sm:h-20 border-2 border-dashed border-zinc-800 rounded-2xl flex items-center justify-center opacity-25"><CheckCircle2 className="text-zinc-700" size={18}/></div>;
+                                return <div key={item.uid} className="h-16 sm:h-20 border-2 border-dashed border-zinc-800 rounded-2xl flex items-center justify-center opacity-25 shrink-0"><CheckCircle2 className="text-zinc-700" size={18}/></div>;
                             }
 
                             if (isCorrectCard && showCorrectCards) {
                                 return (
-                                    <div key={item.uid} className="h-16 sm:h-20 rounded-2xl border-2 border-emerald-500 bg-emerald-500/20 flex items-center justify-center font-black text-sm sm:text-base text-emerald-300 px-2 text-center leading-tight slide-up">
-                                        {item.text}
+                                    <div key={item.uid} className="h-16 sm:h-20 rounded-2xl border-2 border-emerald-500 bg-emerald-500/20 flex items-center justify-center font-black text-sm sm:text-base text-emerald-300 px-2 text-center leading-tight slide-up shrink-0">
+                                        <span className="safari-text-fix">{item.text}</span>
                                     </div>
                                 );
                             }
@@ -712,8 +788,11 @@
                                 <button key={item.uid}
                                     onClick={() => handleSelect(colKey, item)}
                                     disabled={!isSelectPhase || locked || (isMatched && !isCorrectCard)}
-                                    className={`btn-juicy h-16 sm:h-20 rounded-2xl border-2 font-black text-xs sm:text-sm leading-tight px-1.5 sm:px-2 transition-all ${bg} disabled:opacity-40`}>
-                                    {item.text}
+                                    // Safari Fix: p-1 sm:p-2, flex + overflow-hidden on button
+                                    className={`btn-juicy h-16 sm:h-20 rounded-2xl border-2 font-black leading-tight p-1 sm:p-2 transition-all flex items-center justify-center shrink-0 overflow-hidden ${bg} disabled:opacity-40`}>
+                                    <span className="safari-text-fix text-[10px] sm:text-xs text-center w-full">
+                                        {item.text}
+                                    </span>
                                 </button>
                             );
                         })}
