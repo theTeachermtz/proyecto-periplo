@@ -95,9 +95,12 @@
             const [quizId] = useState(new URLSearchParams(window.location.search).get('id'));
             const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
             const [quizData, setQuizData] = useState(null);
-            const [modeSelected, setModeSelected] = useState(null);
-            const [isSinglePlayer, setIsSinglePlayer] = useState(false);
-            const [roomCode, setRoomCode] = useState('');
+            
+            // SYSTEM: Inicializamos con Session Storage para reconexión instantánea tras refresh
+            const [modeSelected, setModeSelected] = useState(() => sessionStorage.getItem('lingo_mode') || null);
+            const [isSinglePlayer, setIsSinglePlayer] = useState(() => sessionStorage.getItem('lingo_sp') === 'true');
+            const [roomCode, setRoomCode] = useState(() => sessionStorage.getItem('lingo_room') || '');
+            
             const [inputCode, setInputCode] = useState('');
             const [roomData, setRoomData] = useState(null);
             const [playerName, setPlayerName] = useState('');
@@ -105,7 +108,7 @@
 
             // Game state
             const [selection, setSelection] = useState({ c1: null, c2: null, c3: null });
-            const [feedback, setFeedback] = useState('none'); // none, success, error, partial
+            const [feedback, setFeedback] = useState('none');
             const [locked, setLocked] = useState(false);
             const [isPaused, setIsPaused] = useState(false);
             const [countdown, setCountdown] = useState(null);
@@ -114,7 +117,7 @@
             const [timer, setTimer] = useState(0);
             const timerRef = useRef(null);
 
-            // Arena new features
+            // Arena features
             const [diceValue, setDiceValue] = useState(null);
             const [diceRolling, setDiceRolling] = useState(false);
             const [showSubmit, setShowSubmit] = useState(false);
@@ -123,6 +126,17 @@
 
             const [showLeaderboard, setShowLeaderboard] = useState(false);
             const [showLibrary, setShowLibrary] = useState(false);
+
+            // ====== PERSISTENCIA DE SESIÓN ======
+            useEffect(() => {
+                if (modeSelected) sessionStorage.setItem('lingo_mode', modeSelected);
+                else sessionStorage.removeItem('lingo_mode');
+                
+                sessionStorage.setItem('lingo_sp', isSinglePlayer);
+                
+                if (roomCode) sessionStorage.setItem('lingo_room', roomCode);
+                else sessionStorage.removeItem('lingo_room');
+            }, [modeSelected, isSinglePlayer, roomCode]);
 
             // ====== FIREBASE AUTH + QUIZ LOAD ======
             useEffect(() => {
@@ -184,6 +198,7 @@
                 setDiceValue(null); setDiceRolling(false); setShowSubmit(false);
                 setShowCorrectCards(false); setCorrectTriple(null);
                 setSelection({ c1: null, c2: null, c3: null }); setFeedback('none');
+                sessionStorage.clear(); // Limpiamos la reconexión manual
             };
 
             const loadLeaderboard = async () => {
@@ -205,12 +220,10 @@
 
             const startSinglePlayer = () => {
                 if (!playerName.trim()) return alert("Escribe tu nombre o apodo.");
-                // GAME DESIGN: Forzamos 3 rondas y 8 filas. Total de pares necesarios = 24.
                 const settings = { rounds: 3, rowsPerRound: 8 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
                 
                 let allPairs = [];
-                // Rellenamos el tablero repitiendo si el creador puso pocas palabras
                 while(allPairs.length < totalNeeded) {
                     allPairs = allPairs.concat(shuffle([...quizData.content.pairs]));
                 }
@@ -260,7 +273,6 @@
             };
 
             const startMultiplayer = async () => {
-                // GAME DESIGN: Forzamos 3 rondas y 8 filas. 
                 const settings = { rounds: 3, rowsPerRound: 8 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
                 
@@ -287,14 +299,12 @@
             const rollDice = async () => {
                 setDiceRolling(true);
                 
-                // CATCH-UP MECHANIC (Game Design Rule)
                 const activePlayers = roomData.players.filter(p => p.occupied);
                 const maxScore = Math.max(...activePlayers.map(p => p.score), 0);
                 const myScore = roomData.players.find(p => p.id === roomData.currentTurn)?.score || 0;
                 
                 let result = DICE_FACES[Math.floor(Math.random() * DICE_FACES.length)];
                 
-                // Si va perdiendo por más de 5 puntos, el dado le tira una "ayuda invisible" (mínimo 3)
                 if (!isSinglePlayer && (maxScore - myScore > 5)) {
                     result = Math.max(3, result);
                 }
@@ -400,7 +410,6 @@
                         liveSelections: {}
                     });
                 } else if (isPartial) {
-                    // GAME DESIGN: Fixed 1 point para los parciales (menos desbalance vs el dado perfecto)
                     const pts = 1;
                     setFeedback('partial');
                     const id = Date.now();
@@ -428,7 +437,7 @@
                 }
             };
 
-            // ====== "SIGUIENTE" button (Arena, after correct) ======
+            // ====== NEXT BUTTON (Arena) ======
             const handleNextArena = async () => {
                 setShowCorrectCards(false);
                 setCorrectTriple(null);
@@ -446,7 +455,7 @@
                 }
             };
 
-            // ====== ADVANCE TURN (Arena) ======
+            // ====== ADVANCE TURN ======
             const advanceTurnArena = async (players, matchedIds) => {
                 const active = players.filter(p => p.occupied);
                 const currIdx = active.findIndex(p => p.id === roomData.currentTurn);
@@ -463,7 +472,6 @@
 
             // ====== ROUND END ======
             const handleRoundEnd = async (players) => {
-                // GAME DESIGN: Se eliminó el Bonus por ganar la ronda. Simplemente limpiamos.
                 let updatedPlayers = players.map(p => ({ ...p, roundScore: 0 }));
 
                 const nextRound = roomData.currentRound + 1;
@@ -474,7 +482,6 @@
                     }
                     await updateGame({ gameState: 'end', players: updatedPlayers, finalTime: timer });
                 } else {
-                    // GAME DESIGN: Rotación dinámica del jugador que inicia la ronda
                     const active = updatedPlayers.filter(p => p.occupied);
                     const nextStartIdx = (nextRound - 1) % active.length;
                     const nextStartingPlayer = active[nextStartIdx].id;
@@ -491,7 +498,7 @@
                                 board: generateBoardColumns(nextPairs),
                                 matchedIds: [], correctTriples: [],
                                 players: updatedPlayers,
-                                currentTurn: nextStartingPlayer, // Inicia la ronda el jugador que le toca rotar
+                                currentTurn: nextStartingPlayer,
                                 currentDice: null, dicePhase: 'roll',
                                 liveSelections: {}
                             });
@@ -555,7 +562,7 @@
             };
 
             // ====== RENDER ======
-            if (!quizData) return <div className="h-[100dvh] flex items-center justify-center font-black animate-pulse text-xl">Cargando Motor...</div>;
+            if (!quizData) return <div className="h-[100dvh] flex items-center justify-center font-black animate-pulse text-xl">Reconectando...</div>;
 
             // ====== MODE SELECTION ======
             if (!modeSelected) return (
@@ -769,9 +776,17 @@
 
                             <div className="flex items-center gap-2">
                                 <div className="font-black text-indigo-400 bg-indigo-500/10 px-2.5 py-1.5 rounded-lg uppercase text-[10px] sm:text-xs">R{roomData.currentRound}/{roomData.settings.rounds}</div>
+                                
+                                {/* VISUALIZACIÓN DEL CÓDIGO DE SALA */}
+                                {!isSinglePlayer && (
+                                    <div className="font-black text-zinc-400 bg-zinc-800/80 px-2.5 py-1.5 rounded-lg uppercase text-[10px] sm:text-xs tracking-widest border border-zinc-700 flex items-center gap-1.5">
+                                        SALA <span className="text-white">{roomCode}</span>
+                                    </div>
+                                )}
+
                                 {!isSinglePlayer && diceValue && roomData.dicePhase !== 'roll' && (
                                     <div className="flex items-center gap-1 bg-amber-500/10 px-2.5 py-1.5 rounded-lg">
-                                        <span className="text-lg">{DICE_EMOJIS[diceValue - 1]}</span>
+                                        <span className="text-lg leading-none">{DICE_EMOJIS[diceValue - 1]}</span>
                                         <span className="text-amber-500 font-black text-xs">×{diceValue}</span>
                                     </div>
                                 )}
