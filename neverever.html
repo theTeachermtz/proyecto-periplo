@@ -69,7 +69,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc, setDoc, onSnapshot, updateDoc, arrayUnion } from 'firebase/firestore';
-        import { Users, Play, Crown, Eye, ArrowRight, ShieldCheck, HeartCrack, Info, Zap } from 'lucide-react';
+        import { Users, Play, Crown, Eye, ArrowRight, ShieldCheck, HeartCrack, Info, Zap, DoorOpen, Home, Check } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -84,13 +84,17 @@
 
         const NeverEverGame = () => {
             const [localPlayerId] = useState(() => localStorage.getItem('ne_playerId') || generateId());
-            const [gameState, setGameState] = useState('loading'); // loading, setup, lobby, playing
+            const [gameState, setGameState] = useState('loading'); // loading, menu, setup, lobby, playing, error
             const [sessionMode, setSessionMode] = useState(null); // 'host' or 'join'
             const [sessionCode, setSessionCode] = useState("");
             
             const [playerName, setPlayerName] = useState("");
             const [playerEmoji, setPlayerEmoji] = useState(AVATARS[0]);
             
+            // Estados para el Menú Principal
+            const [joinInputCode, setJoinInputCode] = useState("");
+            const [hostInputId, setHostInputId] = useState("");
+
             const [sessionData, setSessionData] = useState(null);
             const [errorMsg, setErrorMsg] = useState("");
 
@@ -108,22 +112,30 @@
                     setSessionMode('host');
                     initializeHostSession(quizId);
                 } else {
-                    setErrorMsg("Falta ID de juego o Código de Sala en la URL.");
-                    setGameState('error');
+                    // Si no hay parámetros, mostramos el Menú Principal
+                    setGameState('menu');
                 }
             }, []);
 
             const initializeHostSession = async (quizId) => {
                 try {
+                    setGameState('loading');
                     const quizRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId);
                     const quizSnap = await getDoc(quizRef);
-                    if (!quizSnap.exists()) throw new Error("Juego no encontrado.");
+                    
+                    if (!quizSnap.exists()) {
+                        throw new Error("El Quiz ID no existe o no se encontró.");
+                    }
                     
                     const data = quizSnap.data();
                     let allPhrases = [];
-                    data.content.categories.forEach(cat => {
-                        cat.phrases.forEach(p => allPhrases.push(p));
-                    });
+                    if(data.content && data.content.categories) {
+                        data.content.categories.forEach(cat => {
+                            cat.phrases.forEach(p => allPhrases.push(p));
+                        });
+                    } else {
+                        throw new Error("El Quiz no tiene un formato válido para este juego.");
+                    }
                     
                     // Shuffle
                     allPhrases = allPhrases.sort(() => Math.random() - 0.5);
@@ -142,6 +154,7 @@
                     });
 
                     setSessionCode(newCode);
+                    setSessionMode('host');
                     setGameState('setup');
                 } catch (e) {
                     setErrorMsg(e.message);
@@ -151,14 +164,14 @@
 
             // Escuchar cambios en la sesión de Firebase
             useEffect(() => {
-                if (!sessionCode || gameState === 'setup' || gameState === 'loading') return;
+                if (!sessionCode || gameState === 'setup' || gameState === 'loading' || gameState === 'menu') return;
                 
                 const sessionRef = doc(db, 'artifacts/periplo-app-v1/sessions', sessionCode);
                 const unsubscribe = onSnapshot(sessionRef, (docSnap) => {
                     if (docSnap.exists()) {
                         setSessionData(docSnap.data());
                     } else {
-                        setErrorMsg("La sala se ha cerrado.");
+                        setErrorMsg("La sala se ha cerrado por el host.");
                         setGameState('error');
                     }
                 });
@@ -183,7 +196,7 @@
                     }
                     setGameState('playing');
                 } else {
-                    setErrorMsg("Código de sala inválido.");
+                    setErrorMsg("Código de sala inválido o partida eliminada.");
                     setGameState('error');
                 }
             };
@@ -211,7 +224,8 @@
 
             const nextRound = async () => {
                 const nextIndex = sessionData.currentIndex + 1;
-                const isOver = nextIndex >= sessionData.phrases.length || sessionData.players.filter(p => p.lives > 0).length <= 1;
+                const alivePlayersCount = sessionData.players.filter(p => p.lives > 0).length;
+                const isOver = nextIndex >= sessionData.phrases.length || alivePlayersCount <= 1;
                 
                 const resetPlayers = sessionData.players.map(p => ({ ...p, vote: null }));
                 
@@ -220,6 +234,10 @@
                     currentIndex: nextIndex,
                     players: resetPlayers
                 });
+
+                if (isOver && typeof window.confetti === 'function') {
+                    window.confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+                }
             };
 
             // Controles del Jugador
@@ -231,11 +249,90 @@
 
             // --- RENDERIZADORES ---
             if (gameState === 'loading') return <div className="h-full flex items-center justify-center"><Zap className="animate-pulse text-fuchsia-500" size={48} /></div>;
-            if (gameState === 'error') return <div className="h-full flex flex-col items-center justify-center text-center p-6"><HeartCrack className="text-rose-500 mb-4" size={64}/> <h2 className="text-2xl font-bold mb-2">Error</h2><p className="text-slate-400">{errorMsg}</p></div>;
+            
+            if (gameState === 'error') return (
+                <div className="h-full flex flex-col items-center justify-center text-center p-6 bg-slate-950">
+                    <HeartCrack className="text-rose-500 mb-4 animate-shake" size={64}/> 
+                    <h2 className="text-2xl font-bold mb-2">Ups, hay un problema</h2>
+                    <p className="text-slate-400 mb-8 max-w-sm">{errorMsg}</p>
+                    <button onClick={() => setGameState('menu')} className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-3 rounded-full font-bold flex items-center gap-2 transition-colors active-scale">
+                        <Home size={18}/> Volver al Menú
+                    </button>
+                </div>
+            );
+
+            // PANTALLA 0: MENÚ PRINCIPAL
+            if (gameState === 'menu') return (
+                <div className="flex flex-col h-full bg-slate-950 items-center justify-center p-6 relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-b from-fuchsia-900/20 to-slate-950 z-0"></div>
+                    <div className="relative z-10 w-full max-w-md flex flex-col items-center">
+                        <div className="bg-slate-900 border border-white/10 p-8 rounded-[2.5rem] shadow-2xl w-full text-center">
+                            <h1 className="text-4xl font-black mb-2 text-transparent bg-clip-text bg-gradient-to-r from-fuchsia-400 to-indigo-400">Never Have I Ever</h1>
+                            <p className="text-slate-400 text-sm font-bold uppercase tracking-widest mb-8">Multijugador</p>
+                            
+                            <div className="mb-6">
+                                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2 text-left">Código de Sala (Alumnos)</label>
+                                <input 
+                                    type="text" 
+                                    value={joinInputCode} 
+                                    onChange={e => setJoinInputCode(e.target.value.toUpperCase())} 
+                                    maxLength="4" 
+                                    placeholder="ABCD" 
+                                    className="w-full bg-slate-950 border border-white/10 rounded-2xl p-4 text-center font-black text-3xl outline-none focus:border-fuchsia-500 text-fuchsia-400 tracking-[0.5em] uppercase placeholder-slate-800"
+                                />
+                            </div>
+
+                            <button 
+                                onClick={() => {
+                                    if(joinInputCode.length > 0) {
+                                        setSessionCode(joinInputCode);
+                                        setSessionMode('join');
+                                        setGameState('setup');
+                                    } else {
+                                        alert("Ingresa un código de sala.");
+                                    }
+                                }} 
+                                className="w-full bg-fuchsia-600 hover:bg-fuchsia-500 text-white py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-2 shadow-[0_10px_25px_rgba(192,38,211,0.3)] transition-all active-scale"
+                            >
+                                <DoorOpen size={20}/> Unirse a Partida
+                            </button>
+                            
+                            <div className="mt-8 pt-6 border-t border-white/10">
+                                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-3 text-left">Maestros: Crear Sala</label>
+                                <div className="flex gap-2">
+                                    <input 
+                                        type="text" 
+                                        value={hostInputId} 
+                                        onChange={e => setHostInputId(e.target.value)} 
+                                        placeholder="Pega el ID del Quiz" 
+                                        className="flex-1 bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:border-indigo-500 text-white placeholder-slate-700"
+                                    />
+                                    <button 
+                                        onClick={() => {
+                                            if(hostInputId) {
+                                                initializeHostSession(hostInputId);
+                                            } else {
+                                                alert("Ingresa el ID del Quiz.");
+                                            }
+                                        }}
+                                        className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-3 rounded-xl font-bold text-sm transition-all shadow-[0_5px_15px_rgba(79,70,229,0.3)] active-scale"
+                                    >
+                                        Crear
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
 
             // PANTALLA 1: SETUP LOBBY (Nombre y Avatar)
             if (gameState === 'setup') return (
                 <div className="flex flex-col h-full bg-slate-950 items-center justify-center p-6 relative overflow-hidden">
+                    <button onClick={() => setGameState('menu')} className="absolute top-6 left-6 text-slate-400 hover:text-white z-20 flex items-center gap-1 font-bold text-sm transition-colors active-scale">
+                        <ArrowRight size={16} className="rotate-180"/> Volver
+                    </button>
+
                     <div className="absolute inset-0 bg-gradient-to-b from-fuchsia-900/20 to-slate-950 z-0"></div>
                     <div className="relative z-10 w-full max-w-md flex flex-col items-center">
                         <div className="bg-slate-900 border border-white/10 p-8 rounded-[2.5rem] shadow-2xl w-full text-center">
@@ -294,13 +391,17 @@
                                     <div className="flex flex-col items-center">
                                         <Crown className="text-yellow-400 mb-2" size={48}/>
                                         <h2 className="text-2xl font-black text-white">¡Juego Terminado!</h2>
-                                        {winner && <p className="text-fuchsia-400 font-bold mt-2">{winner.name} Sobrevivió</p>}
+                                        {winner ? (
+                                            <p className="text-fuchsia-400 font-bold mt-2">{winner.name} Sobrevivió</p>
+                                        ) : (
+                                            <p className="text-slate-400 font-bold mt-2">Nadie Sobrevivió</p>
+                                        )}
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center w-full">
                                         <span className="text-xs font-black text-fuchsia-500 uppercase tracking-widest mb-2">Ronda {sessionData.currentIndex + 1}</span>
                                         <h3 className="text-white font-black text-lg md:text-2xl leading-tight">"Never have I ever... <br/><span className="text-fuchsia-300">{sessionData.phrases[sessionData.currentIndex]}</span>"</h3>
-                                        {sessionData.state === 'voting' && <div className="mt-4 px-4 py-1.5 bg-slate-800 rounded-full text-xs font-bold text-slate-400 animate-pulse">Votación Abierta</div>}
+                                        {sessionData.state === 'voting' && <div className="mt-4 px-4 py-1.5 bg-slate-800 rounded-full text-xs font-bold text-slate-400 animate-pulse-fast">Votación Abierta</div>}
                                         {sessionData.state === 'reveal' && <div className="mt-4 px-4 py-1.5 bg-fuchsia-600 rounded-full text-xs font-bold text-white shadow-lg shadow-fuchsia-500/30">Resultados</div>}
                                     </div>
                                 )}
@@ -369,7 +470,7 @@
                             </div>
                         </div>
 
-                        {/* MESA CIRCULAR (Scrollable if needed, but fixed usually) */}
+                        {/* MESA CIRCULAR */}
                         <div className="flex-1 flex flex-col justify-center items-center p-4 relative z-10 overflow-hidden">
                             {renderTable()}
                         </div>
@@ -383,19 +484,19 @@
                                     <span className="text-xs font-black text-fuchsia-400 uppercase tracking-widest flex items-center gap-1 hidden md:flex"><Crown size={14}/> Controles Host</span>
                                     
                                     {sessionData.state === 'lobby' && (
-                                        <button onClick={startGame} className="flex-1 bg-fuchsia-600 hover:bg-fuchsia-500 text-white py-3 rounded-xl font-black uppercase text-sm flex items-center justify-center gap-2 transition"><Play size={16}/> Iniciar Partida</button>
+                                        <button onClick={startGame} className="flex-1 bg-fuchsia-600 hover:bg-fuchsia-500 text-white py-3 rounded-xl font-black uppercase text-sm flex items-center justify-center gap-2 transition active-scale"><Play size={16}/> Iniciar Partida</button>
                                     )}
                                     
                                     {sessionData.state === 'voting' && (
-                                        <button onClick={revealVotes} className="flex-1 bg-amber-500 hover:bg-amber-400 text-slate-900 py-3 rounded-xl font-black uppercase text-sm flex items-center justify-center gap-2 transition"><Eye size={16}/> Revelar Votos</button>
+                                        <button onClick={revealVotes} className="flex-1 bg-amber-500 hover:bg-amber-400 text-slate-900 py-3 rounded-xl font-black uppercase text-sm flex items-center justify-center gap-2 transition active-scale"><Eye size={16}/> Revelar Votos</button>
                                     )}
 
                                     {sessionData.state === 'reveal' && (
-                                        <button onClick={nextRound} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-black uppercase text-sm flex items-center justify-center gap-2 transition"><ArrowRight size={16}/> Siguiente Ronda</button>
+                                        <button onClick={nextRound} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-black uppercase text-sm flex items-center justify-center gap-2 transition active-scale"><ArrowRight size={16}/> Siguiente Ronda</button>
                                     )}
                                     
                                     {sessionData.state === 'gameover' && (
-                                        <button onClick={() => window.location.href='index.html'} className="flex-1 bg-slate-800 text-white py-3 rounded-xl font-black uppercase text-sm">Salir al Hub</button>
+                                        <button onClick={() => window.location.href='index.html'} className="flex-1 bg-slate-800 hover:bg-slate-700 text-white py-3 rounded-xl font-black uppercase text-sm transition active-scale">Salir al Hub</button>
                                     )}
                                 </div>
                             )}
@@ -438,7 +539,7 @@
                 );
             }
             
-            return null; // Fallback
+            return null;
         };
 
         const root = createRoot(document.getElementById('root'));
