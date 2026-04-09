@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Periplo Party | Single Player (Firebase Test)</title>
+    <title>Periplo Party | Multiplayer Final v8.4 (Full Trivia Sync)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
     
@@ -35,6 +35,11 @@
         @keyframes pulse-glow { 0%, 100% { filter: drop-shadow(0 0 5px rgba(255,255,255,0.5)); } 50% { filter: drop-shadow(0 0 15px rgba(255,255,255,1)); transform: scale(1.05); } }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus {
+            -webkit-text-fill-color: #ffffff;
+            -webkit-box-shadow: 0 0 0px 1000px #27272a inset;
+            transition: background-color 5000s ease-in-out 0s;
+        }
         @keyframes pop-in { 0% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
         .animate-pop-in { animation: pop-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
     </style>
@@ -45,13 +50,13 @@
 <script type="text/babel" data-type="module">
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Dices, MapPin, ArrowRight, Skull, Ghost, Star, Zap, LogIn, AlertTriangle, Trophy, Coins, CheckCircle2, XCircle, HelpCircle, Timer, Eye, EyeOff, BrainCircuit, Crosshair, Users, ChevronLeft, Link as LinkIcon, Copy, Check, Pencil } from 'lucide-react';
+import { Dices, MapPin, ArrowRight, Skull, Ghost, Star, Zap, LogIn, AlertTriangle, Trophy, Coins, CheckCircle2, XCircle, HelpCircle, Timer, Eye, EyeOff, BrainCircuit, Crosshair, Users, Crown, Gamepad2, ChevronLeft, Link as LinkIcon, UserPlus, Copy, Check, Pencil, Link2, Mic, Headphones } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, getDoc } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, runTransaction } from 'firebase/firestore';
 
 // ==========================================
-// 🔴 FIREBASE CONFIG
+// 🔴 FIREBASE
 // ==========================================
 const firebaseConfig = { 
     apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", 
@@ -70,6 +75,13 @@ try {
     console.warn("Error conectando a Firestore.", e);
 }
 
+const withTimeout = (promise, ms = 8000, label = 'Firebase') => {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms))
+    ]);
+};
+
 const QUIZZES_PATH = 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes';
 
 const shuffleArray = (arr) => {
@@ -82,9 +94,9 @@ const shuffleArray = (arr) => {
 };
 
 // ==========================================
-// COMPONENTES DE RETOS (UI)
+// COMPONENTES MULTIPLAYER (RELOJ & RETOS)
 // ==========================================
-const CountdownBar = ({ startTime, endTime, status, onTimeUp, duration = 30 }) => {
+const CountdownBar = ({ startTime, endTime, status, onTimeUp, canInteract, duration = 30 }) => {
     const [timeLeft, setTimeLeft] = useState(duration);
 
     useEffect(() => {
@@ -102,12 +114,12 @@ const CountdownBar = ({ startTime, endTime, status, onTimeUp, duration = 30 }) =
             setTimeLeft(remaining);
             if (remaining <= 0) {
                 clearInterval(interval);
-                onTimeUp();
+                if (canInteract) onTimeUp();
             }
         }, 500);
 
         return () => clearInterval(interval);
-    }, [startTime, endTime, status, onTimeUp, duration]);
+    }, [startTime, endTime, status, canInteract, onTimeUp, duration]);
 
     const percentage = (timeLeft / duration) * 100;
     let color = 'bg-emerald-500';
@@ -121,23 +133,35 @@ const CountdownBar = ({ startTime, endTime, status, onTimeUp, duration = 30 }) =
     );
 };
 
-const MultipleChoiceChallenge = ({ modal, onAnswer }) => {
+const MultipleChoiceChallenge = ({ modal, updateChallenge, canInteract }) => {
     const { data, status, playerAnswer } = modal;
+    
+    const handleSelect = (idx) => { 
+        if (status !== 'playing' || !canInteract) return; 
+        const isCorrect = idx === data.correct;
+        updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: idx, endTime: Date.now() });
+    };
+    
     return (
         <div className="w-full text-center relative">
-            <div className="flex justify-center mb-4"><div className="bg-indigo-900/40 p-3 rounded-full"><HelpCircle className="w-8 h-8 text-indigo-400"/></div></div>
-            <h3 className="text-2xl font-black text-zinc-100 mb-6">Elige la correcta</h3>
-            <div className="bg-zinc-950 border-2 border-zinc-800 p-6 rounded-2xl mb-6 font-medium text-lg text-zinc-200 shadow-sm leading-relaxed">{data.question}</div>
+            <div className="flex justify-center mb-4"><div className="bg-indigo-100 dark:bg-indigo-900/30 p-3 rounded-full"><HelpCircle className="w-8 h-8 text-indigo-600 dark:text-indigo-400"/></div></div>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-6">Elige la correcta</h3>
+            <div className="bg-white dark:bg-zinc-900 border-2 border-slate-100 dark:border-zinc-800 p-6 rounded-2xl mb-6 font-medium text-lg text-slate-700 dark:text-zinc-200 shadow-sm leading-relaxed">{data.question}</div>
+            
             <div className="grid gap-3 mb-6">
                 {data.options.map((opt, idx) => {
-                    let btnClass = 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:border-indigo-400';
+                    let btnClass = 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300';
                     if (status !== 'playing') {
-                        if (idx === data.correct) btnClass = 'bg-emerald-900/40 border-emerald-500 text-emerald-300';
-                        else if (playerAnswer === idx) btnClass = 'bg-rose-900/40 border-rose-500 text-rose-300';
+                        if (idx === data.correct) btnClass = 'bg-green-100 border-green-500 text-green-800 dark:bg-green-900/40 dark:text-green-300';
+                        else if (playerAnswer === idx) btnClass = 'bg-red-100 border-red-500 text-red-800 dark:bg-red-900/40 dark:text-red-300';
                         else btnClass = 'opacity-30';
+                    } else if (!canInteract) {
+                        btnClass += ' opacity-60 cursor-not-allowed';
+                    } else {
+                        btnClass += ' hover:border-indigo-400';
                     }
                     return (
-                        <button key={idx} onClick={() => status === 'playing' && onAnswer(idx, idx === data.correct)} disabled={status !== 'playing'} className={`btn-juicy p-4 rounded-2xl border-2 font-bold text-left transition-all text-lg flex items-center justify-between ${btnClass}`}>
+                        <button key={idx} onClick={() => handleSelect(idx)} disabled={status !== 'playing' || !canInteract} className={`btn-juicy p-4 rounded-2xl border-2 font-bold text-left transition-all text-lg flex items-center justify-between ${btnClass}`}>
                             {opt}
                             {status !== 'playing' && idx === data.correct && <CheckCircle2/>}
                             {status === 'wrong' && playerAnswer === idx && <XCircle/>}
@@ -149,40 +173,50 @@ const MultipleChoiceChallenge = ({ modal, onAnswer }) => {
     );
 };
 
-const DragDropChallenge = ({ modal, onAnswer }) => {
+const DragDropChallenge = ({ modal, updateChallenge, canInteract }) => {
     const { data, status, playerAnswer } = modal;
+    
+    const handleSelect = (opt) => {
+        if (status !== 'playing' || !canInteract) return;
+        const isCorrect = opt === data.correct;
+        updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: opt, endTime: Date.now() });
+    };
+    
     return (
         <div className="w-full text-center relative">
-            <div className="flex justify-center mb-4"><div className="bg-rose-900/30 p-3 rounded-full"><Crosshair className="w-8 h-8 text-rose-400"/></div></div>
-            <h3 className="text-2xl font-black text-zinc-100 mb-6">Completa la Frase</h3>
-            <div className="bg-zinc-950 border-2 border-zinc-800 p-6 rounded-2xl mb-8 font-medium text-xl text-zinc-200 shadow-sm leading-relaxed">
+            <div className="flex justify-center mb-4"><div className="bg-rose-100 dark:bg-rose-900/30 p-3 rounded-full"><Target className="w-8 h-8 text-rose-600 dark:text-rose-400"/></div></div>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-6">Completa la Frase</h3>
+            
+            <div className="bg-white dark:bg-zinc-900 border-2 border-slate-100 dark:border-zinc-800 p-6 rounded-2xl mb-8 font-medium text-xl text-slate-700 dark:text-zinc-200 shadow-sm leading-relaxed">
                 {data.sentence.split('[BLANK]').map((part, i, arr) => (
                     <React.Fragment key={i}>
                         {part}
-                        {i < arr.length - 1 && <span className={`inline-block min-w-[100px] border-b-4 border-dashed pb-1 mx-2 text-center font-black ${status==='correct'?'text-emerald-400 border-emerald-400':status==='wrong'?'text-rose-400 border-rose-400':'text-indigo-400 border-indigo-700'}`}>{playerAnswer || '_____'}</span>}
+                        {i < arr.length - 1 && <span className={`inline-block min-w-[100px] border-b-4 border-dashed pb-1 mx-2 text-center font-black ${status==='correct'?'text-green-500 border-green-500':status==='wrong'?'text-red-500 border-red-500':'text-indigo-500 border-indigo-300 dark:border-indigo-700'}`}>{playerAnswer || '_____'}</span>}
                     </React.Fragment>
                 ))}
             </div>
+            
             {status === 'playing' ? (
                 <div className="flex flex-wrap justify-center gap-3 mb-6">
                     {data.options.map((opt, i) => (
-                        <button key={i} onClick={() => onAnswer(opt, opt === data.correct)} className={`btn-juicy bg-zinc-800 border-2 border-zinc-700 hover:border-indigo-400 px-6 py-3 rounded-xl font-bold text-lg`}>{opt}</button>
+                        <button key={i} onClick={() => handleSelect(opt)} disabled={!canInteract} className={`btn-juicy bg-slate-100 dark:bg-zinc-800 border-2 border-slate-200 dark:border-zinc-700 hover:border-indigo-400 px-6 py-3 rounded-xl font-bold text-lg transition-colors ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{opt}</button>
                     ))}
                 </div>
             ) : (
-                <div className="animate-pop-in mb-6">
-                    {status === 'wrong' && <p className="text-zinc-200 font-bold text-lg">Era: <span className="text-emerald-400">{data.correct}</span></p>}
+                <div className="animate-in mb-6">
+                    {status === 'wrong' && <p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">La respuesta era: <span className="text-green-500">{data.correct}</span></p>}
                 </div>
             )}
         </div>
     );
 };
 
-const UnscrambleChallenge = ({ modal, onAnswer }) => {
+const UnscrambleChallenge = ({ modal, updateChallenge, canInteract }) => {
     const { data, status, playerAnswer } = modal;
     const [shuffledWords, setShuffledWords] = useState([]);
     const [selectedWords, setSelectedWords] = useState([]);
 
+    // Local building of sentence
     useEffect(() => {
         if (status === 'playing' && data?.text && shuffledWords.length === 0 && selectedWords.length === 0) {
             const wordsWithIds = data.text.split(' ').map((w, i) => ({ id: i, text: w }));
@@ -194,61 +228,391 @@ const UnscrambleChallenge = ({ modal, onAnswer }) => {
         const built = selectedWords.map(w => w.text).join(" ");
         const normalize = (str) => str.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"").replace(/\s{2,}/g," ").trim().toLowerCase();
         const isCorrect = normalize(built) === normalize(data.text);
-        onAnswer(built, isCorrect);
+        updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: built, endTime: Date.now() });
     };
 
     return (
         <div className="w-full text-center relative">
-            <div className="flex justify-center mb-4"><div className="bg-amber-900/30 p-3 rounded-full"><BrainCircuit className="w-8 h-8 text-amber-400"/></div></div>
-            <h3 className="text-2xl font-black text-zinc-100 mb-2">Ordena la Frase</h3>
-            <div className="bg-zinc-900 p-3 rounded-xl border border-zinc-800 mb-6 inline-block"><p className="text-zinc-400 font-medium italic">"{data.translation}"</p></div>
+            <div className="flex justify-center mb-4"><div className="bg-amber-100 dark:bg-amber-900/30 p-3 rounded-full"><Brain className="w-8 h-8 text-amber-600 dark:text-amber-400"/></div></div>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-2">Ordena la Frase</h3>
+            <div className="bg-slate-50 dark:bg-zinc-900 p-3 rounded-xl border border-slate-100 dark:border-zinc-800 mb-6 inline-block"><p className="text-slate-500 dark:text-zinc-400 font-medium italic">"{data.translation}"</p></div>
             
             {status === 'playing' ? (
                 <>
-                    <div className="min-h-[80px] bg-zinc-950 rounded-2xl p-4 mb-4 flex flex-wrap gap-2 justify-center content-center border-2 border-zinc-800 shadow-inner">
+                    <div className={`min-h-[80px] h-auto bg-white dark:bg-zinc-950 rounded-2xl p-4 mb-4 flex flex-wrap gap-2 justify-center content-center border-2 border-slate-200 dark:border-zinc-800 shadow-inner`}>
                         {selectedWords.map(w => (
-                            <button key={w.id} onClick={() => { setShuffledWords([...shuffledWords, w]); setSelectedWords(selectedWords.filter(sw => sw.id !== w.id)); }} className="btn-juicy bg-zinc-800 border border-zinc-600 px-4 py-2 rounded-lg font-bold text-zinc-200">{w.text}</button>
+                            <button key={w.id} onClick={() => { if(!canInteract)return; setShuffledWords([...shuffledWords, w]); setSelectedWords(selectedWords.filter(sw => sw.id !== w.id)); }} disabled={!canInteract} className={`btn-juicy bg-white border border-slate-300 dark:border-zinc-600 dark:bg-zinc-800 px-4 py-2 rounded-lg font-bold text-slate-700 dark:text-zinc-200 shadow-sm animate-in ${!canInteract ? 'opacity-80 cursor-not-allowed' : ''}`}>{w.text}</button>
                         ))}
                     </div>
+                    
                     <div className="flex flex-wrap gap-2 justify-center mb-6 min-h-[60px]">
                         {shuffledWords.map(w => (
-                            <button key={w.id} onClick={() => { setSelectedWords([...selectedWords, w]); setShuffledWords(shuffledWords.filter(sw => sw.id !== w.id)); }} className="btn-juicy bg-zinc-800 border border-zinc-700 px-4 py-2 rounded-lg font-bold text-zinc-300">{w.text}</button>
+                            <button key={w.id} onClick={() => { if(!canInteract)return; setSelectedWords([...selectedWords, w]); setShuffledWords(shuffledWords.filter(sw => sw.id !== w.id)); }} disabled={!canInteract} className={`btn-juicy bg-slate-100 border border-slate-200 dark:bg-zinc-800 dark:border-zinc-700 px-4 py-2 rounded-lg font-bold text-slate-600 dark:text-zinc-300 animate-in ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{w.text}</button>
                         ))}
                     </div>
-                    <button onClick={checkAnswer} disabled={selectedWords.length === 0} className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-black text-lg disabled:opacity-50">COMPROBAR</button>
+
+                    {canInteract && <button onClick={checkAnswer} disabled={selectedWords.length === 0} className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl border-blue-800 font-black text-lg disabled:opacity-50">COMPROBAR</button>}
                 </>
             ) : (
                 <div className="animate-pop-in mb-6">
-                    <div className={`p-4 rounded-xl border-2 mb-4 font-black text-xl ${status === 'correct' ? 'bg-emerald-900/20 border-emerald-500 text-emerald-400' : 'bg-rose-900/20 border-rose-500 text-rose-400'}`}>
-                        Tu respuesta: {playerAnswer || '(sin respuesta)'}
+                    <div className={`p-4 rounded-xl border-2 mb-4 font-black text-xl ${status === 'correct' ? 'bg-green-50 border-green-500 text-green-700 dark:bg-green-900/20 dark:text-green-400' : 'bg-red-50 border-red-500 text-red-700 dark:bg-red-900/20 dark:text-red-400'}`}>
+                        Tu respuesta: {playerAnswer}
                     </div>
-                    {status !== 'correct' && <p className="text-zinc-200 font-bold text-lg">Era: <span className="text-emerald-400">{data.text}</span></p>}
+                    {status === 'wrong' && <p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">Era: <span className="text-green-500">{data.text}</span></p>}
                 </div>
             )}
         </div>
     );
 };
 
-const ChallengeRouter = ({ modal, onAnswer }) => {
+const FillBlankChallenge = ({ modal, updateChallenge, canInteract }) => {
+    const { data, status, playerAnswer } = modal;
+    const [input, setInput] = useState('');
+    
+    const checkAnswer = () => {
+        const normalize = (str) => str.trim().toLowerCase();
+        const isCorrect = normalize(input) === normalize(data.answer);
+        updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: input, endTime: Date.now() });
+    };
+
+    return (
+        <div className="w-full text-center relative">
+            <div className="flex justify-center mb-4"><div className="bg-emerald-100 dark:bg-emerald-900/30 p-3 rounded-full"><Pencil className="w-8 h-8 text-emerald-600 dark:text-emerald-400"/></div></div>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-6">Escribe la Palabra</h3>
+            
+            <div className="bg-white dark:bg-zinc-900 border-2 border-slate-100 dark:border-zinc-800 p-6 rounded-2xl mb-4 font-medium text-xl text-slate-700 dark:text-zinc-200 shadow-sm leading-relaxed">
+                {data.sentence.replace('[BLANK]', '_____')}
+            </div>
+            {data.hint && <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6 italic">Pista: {data.hint}</p>}
+            
+            {status === 'playing' ? (
+                <>
+                    <input autoFocus type="text" value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&canInteract&&checkAnswer()} disabled={!canInteract} className="w-full text-center text-2xl font-black p-4 rounded-xl border-2 border-indigo-300 focus:border-indigo-500 bg-indigo-50 dark:bg-zinc-800 dark:border-zinc-700 dark:focus:border-indigo-500 outline-none mb-6 disabled:opacity-60 disabled:cursor-not-allowed" placeholder={canInteract ? "Escribe aquí..." : "El oponente está escribiendo..."}/>
+                    {canInteract && <button onClick={checkAnswer} disabled={!input.trim()} className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl border-blue-800 font-black text-lg disabled:opacity-50">COMPROBAR</button>}
+                </>
+            ) : (
+                <div className="animate-in mb-6">
+                    <div className="text-2xl font-black p-4 mb-2">
+                        Tu respuesta: <span className={status === 'correct' ? 'text-green-500' : 'text-red-500'}>{playerAnswer}</span>
+                    </div>
+                    {status === 'wrong' && <p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">Era: <span className="text-green-500">{data.answer}</span></p>}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const MatchingChallenge = ({ modal, updateChallenge, canInteract }) => {
+    const { data, status, playerAnswer } = modal;
+    const [pairs, setPairs] = useState([]);
+    const [selectedLeft, setSelectedLeft] = useState(null);
+    const [matched, setMatched] = useState(new Set());
+
+    useEffect(() => {
+        if (data && data.pairs && status === 'playing' && pairs.length === 0) {
+            const l = shuffleArray(data.pairs.map((p,i) => ({id: i, text: p.left})));
+            const r = shuffleArray(data.pairs.map((p,i) => ({id: i, text: p.right})));
+            setPairs({ left: l, right: r });
+        }
+    }, [data, status]);
+
+    const handleRightClick = (rightId) => {
+        if(selectedLeft === null || status !== 'playing' || !canInteract) return;
+        if(selectedLeft === rightId) {
+            const newMatched = new Set(matched).add(selectedLeft);
+            setMatched(newMatched);
+            setSelectedLeft(null);
+            if(newMatched.size === data.pairs.length) {
+                updateChallenge({ status: 'correct', playerAnswer: 'All matched', endTime: Date.now() });
+            }
+        } else {
+            updateChallenge({ status: 'wrong', playerAnswer: 'Failed match', endTime: Date.now() });
+        }
+    };
+
+    if(!pairs.left && status === 'playing') return null;
+
+    return (
+        <div className="w-full text-center relative">
+            <div className="flex justify-center mb-4"><div className="bg-cyan-100 dark:bg-cyan-900/30 p-3 rounded-full"><Link2 className="w-8 h-8 text-cyan-600 dark:text-cyan-400"/></div></div>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-6">Une las parejas</h3>
+            
+            {status === 'playing' ? (
+                <div className="flex gap-4 mb-6">
+                    <div className="flex-1 space-y-2">
+                        {pairs.left.map(item => {
+                            const isMatched = matched.has(item.id);
+                            const isSel = selectedLeft === item.id;
+                            return <button key={`l-${item.id}`} onClick={() => !isMatched && canInteract && setSelectedLeft(item.id)} disabled={isMatched || !canInteract} className={`btn-juicy w-full p-3 rounded-xl border-2 font-bold text-sm transition-all ${isMatched ? 'bg-zinc-100 border-zinc-200 text-zinc-300 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-600' : isSel ? 'bg-indigo-100 border-indigo-500 text-indigo-700' : 'bg-white border-slate-200 hover:border-indigo-300 dark:bg-zinc-800 dark:border-zinc-700 dark:hover:border-indigo-500'} ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{item.text}</button>
+                        })}
+                    </div>
+                    <div className="flex-1 space-y-2">
+                        {pairs.right.map(item => {
+                            const isMatched = matched.has(item.id);
+                            return <button key={`r-${item.id}`} onClick={() => handleRightClick(item.id)} disabled={isMatched || !canInteract} className={`btn-juicy w-full p-3 rounded-xl border-2 font-bold text-sm transition-all ${isMatched ? 'bg-zinc-100 border-zinc-200 text-zinc-300 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-600' : 'bg-white border-slate-200 hover:border-indigo-300 dark:bg-zinc-800 dark:border-zinc-700 dark:hover:border-indigo-500'} ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{item.text}</button>
+                        })}
+                    </div>
+                </div>
+            ) : (
+                <div className="animate-in mb-6">
+                    <div className={`p-4 rounded-xl border-2 mb-4 font-black text-xl ${status === 'correct' ? 'bg-green-50 border-green-500 text-green-700 dark:bg-green-900/20 dark:text-green-400' : 'bg-red-50 border-red-500 text-red-700 dark:bg-red-900/20 dark:text-red-400'}`}>
+                        {status === 'correct' ? '¡Todas emparejadas!' : '¡Te equivocaste de pareja!'}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ErrorCorrectionChallenge = ({ modal, updateChallenge, canInteract }) => {
+    const { data, status, playerAnswer } = modal;
+    const [input, setInput] = useState('');
+    
+    const checkAnswer = () => {
+        const normalize = (str) => str.trim().toLowerCase();
+        const isCorrect = normalize(input) === normalize(data.correction);
+        updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: input, endTime: Date.now() });
+    };
+
+    return (
+        <div className="w-full text-center relative">
+            <div className="flex justify-center mb-4"><div className="bg-pink-100 dark:bg-pink-900/30 p-3 rounded-full"><AlertTriangle className="w-8 h-8 text-pink-600 dark:text-pink-400"/></div></div>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-2">Corrige el Error</h3>
+            <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6">Encuentra la palabra incorrecta y escribe la corrección. <br/><span className="text-xs italic">(Si la palabra sobra, escribe 'eliminate: palabra')</span></p>
+            
+            <div className="bg-rose-50 dark:bg-rose-900/10 border-2 border-rose-200 dark:border-rose-900/50 p-6 rounded-2xl mb-6 font-medium text-xl text-slate-700 dark:text-zinc-200 shadow-sm leading-relaxed">
+                {data.sentence}
+            </div>
+            
+            {status === 'playing' ? (
+                <>
+                    <input autoFocus type="text" value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&canInteract&&input.trim()&&checkAnswer()} disabled={!canInteract} autoComplete="off" data-lpignore="true" data-form-type="other" className="w-full text-center text-xl font-black p-4 rounded-xl border-2 border-indigo-300 focus:border-indigo-500 bg-white dark:bg-zinc-800 dark:border-zinc-700 dark:focus:border-indigo-500 outline-none mb-6 disabled:opacity-60 disabled:cursor-not-allowed text-slate-800 dark:text-white" placeholder={canInteract ? "Escribe la palabra correcta..." : "El oponente está escribiendo..."}/>
+                    {canInteract && <button onClick={checkAnswer} disabled={!input.trim()} className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl border-blue-800 font-black text-lg disabled:opacity-50 shadow-lg">COMPROBAR</button>}
+                </>
+            ) : (
+                <div className="animate-in mb-6">
+                    <div className="text-xl font-black p-4 mb-2 text-slate-800 dark:text-white">
+                        Tu respuesta: <span className={status === 'correct' ? 'text-green-500' : 'text-red-500'}>{playerAnswer}</span>
+                    </div>
+                    {status === 'wrong' && (
+                        <div className="text-slate-800 dark:text-zinc-200 font-bold text-lg text-left bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl border border-slate-200 dark:border-zinc-800 mx-auto max-w-sm">
+                            <p>El error era: <span className="text-red-500 line-through">{data.error}</span></p>
+                            <p>La corrección es: <span className="text-green-500">{data.correction}</span></p>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const OddOneOutChallenge = ({ modal, updateChallenge, canInteract }) => {
+    const { data, status, playerAnswer } = modal;
+    
+    const handleSelect = (word) => {
+        if (status !== 'playing' || !canInteract) return;
+        const isCorrect = word === data.odd;
+        updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: word, endTime: Date.now() });
+    };
+
+    return (
+        <div className="w-full text-center relative">
+            <div className="flex justify-center mb-4"><div className="bg-teal-100 dark:bg-teal-900/30 p-3 rounded-full"><BrainCircuit className="w-8 h-8 text-teal-600 dark:text-teal-400"/></div></div>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-2">Encuentra el Intruso</h3>
+            <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6">Selecciona la palabra que no pertenece al grupo.</p>
+            
+            <div className="grid grid-cols-2 gap-3 mb-6">
+                {data.words.map((w, i) => {
+                    const isSel = playerAnswer === w;
+                    const isOdd = data.odd === w;
+                    let btnClass = 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-700 text-slate-700 dark:text-zinc-300';
+                    
+                    if (status !== 'playing') {
+                        if (isOdd) btnClass = 'bg-green-100 border-green-500 text-green-800 dark:bg-green-900/40 dark:text-green-300';
+                        else if (isSel) btnClass = 'bg-red-100 border-red-500 text-red-800 dark:bg-red-900/40 dark:text-red-300';
+                        else btnClass = 'opacity-30';
+                    } else if (!canInteract) {
+                        btnClass += ' opacity-60 cursor-not-allowed';
+                    } else {
+                        btnClass += ' hover:border-indigo-400';
+                    }
+                    
+                    return (
+                        <button key={i} disabled={status !== 'playing' || !canInteract} onClick={() => handleSelect(w)} className={`btn-juicy p-4 rounded-2xl border-2 font-bold text-lg transition-all ${btnClass}`}>
+                            {w}
+                        </button>
+                    );
+                })}
+            </div>
+            {status !== 'playing' && data.reason && (
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4 rounded-xl text-left animate-in mb-6 shadow-sm">
+                    <p className="font-bold text-blue-800 dark:text-blue-300 flex items-start gap-2"><HelpCircle className="shrink-0 mt-0.5" size={18}/> {data.reason}</p>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const SpeakingChallenge = ({ modal, updateChallenge, isSupreme }) => {
+    const { data, status, revealed } = modal;
+    const isRevealed = revealed || isSupreme;
+
+    return (
+        <div className="w-full text-center">
+            <div className="flex justify-center mb-4"><div className="bg-blue-100 dark:bg-blue-900/30 p-3 rounded-full"><Mic className="w-8 h-8 text-blue-600 dark:text-blue-400"/></div></div>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-2">Traducción Oral</h3>
+            <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6">Traduce esta frase en voz alta. El Host evaluará tu respuesta.</p>
+            
+            <div className="bg-blue-50 dark:bg-blue-900/20 border-2 border-blue-100 dark:border-blue-900/50 p-8 rounded-[2rem] mb-8 shadow-sm"><p className="text-2xl font-black text-slate-800 dark:text-zinc-200 leading-tight">"{data.spanish}"</p></div>
+            
+            {isSupreme && (
+                <button onClick={() => updateChallenge({ revealed: !revealed })} className="btn-juicy mb-4 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-full text-xs font-bold transition-colors">
+                    {revealed ? <EyeOff size={14} className="inline mr-1"/> : <Eye size={14} className="inline mr-1"/>}
+                    {revealed ? 'Ocultar a alumnos' : 'Mostrar a todos'}
+                </button>
+            )}
+
+            <div className="bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl mb-8 border border-slate-200 dark:border-zinc-800 relative overflow-hidden transition-all">
+                <p className="text-[10px] text-slate-400 font-bold uppercase mb-2">Respuesta Esperada {isSupreme ? '(Host)' : '(Oculto)'}</p>
+                <p className={`font-bold text-lg transition-all duration-300 select-none ${isRevealed ? 'blur-none text-slate-800 dark:text-zinc-100' : 'text-transparent blur-[4px]'}`}>{data.english}</p>
+            </div>
+            
+            {status === 'playing' ? (
+                isSupreme ? (
+                    <div className="grid grid-cols-2 gap-4">
+                        <button onClick={() => updateChallenge({ status: 'wrong', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-white dark:bg-zinc-800 border-2 border-red-100 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">INCORRECTO</button>
+                        <button onClick={() => updateChallenge({ status: 'correct', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-green-500 border-green-700 text-white font-black shadow-lg hover:bg-green-600 transition-all">¡CORRECTO!</button>
+                    </div>
+                ) : (
+                    <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl text-center text-amber-600 dark:text-amber-400 font-bold animate-pulse border border-amber-200 dark:border-amber-800/50">Esperando a que el Host te evalúe...</div>
+                )
+            ) : (
+                <div className={`p-4 rounded-xl font-black text-xl animate-in border-2 ${status === 'correct' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-red-50 border-red-500 text-red-600'}`}>
+                    {status === 'correct' ? '¡Respuesta Validada!' : 'Respuesta Incorrecta'}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ListeningChallenge = ({ modal, updateChallenge, isSupreme }) => {
+    const { data, status, revealed } = modal;
+    const isRevealed = revealed || isSupreme;
+    
+    const playAudio = () => {
+        const utterance = new SpeechSynthesisUtterance(data.audioText);
+        utterance.lang = 'en-US';
+        window.speechSynthesis.speak(utterance);
+    };
+
+    return (
+        <div className="w-full text-center">
+            <div className="flex justify-center mb-4"><div className="bg-purple-100 dark:bg-purple-900/30 p-3 rounded-full"><Headphones className="w-8 h-8 text-purple-600 dark:text-purple-400"/></div></div>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-2">Listening</h3>
+            <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6">Escucha el audio y responde. El Host evaluará tu respuesta.</p>
+            
+            <button onClick={playAudio} className="btn-juicy mb-8 bg-purple-600 hover:bg-purple-500 text-white border-purple-800 font-black px-8 py-4 rounded-full shadow-md flex items-center gap-2 mx-auto transition-colors text-lg">
+                ▶️ Reproducir Audio
+            </button>
+            
+            {isSupreme && (
+                <button onClick={() => updateChallenge({ revealed: !revealed })} className="btn-juicy mb-4 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-full text-xs font-bold transition-colors">
+                    {revealed ? <EyeOff size={14} className="inline mr-1"/> : <Eye size={14} className="inline mr-1"/>}
+                    {revealed ? 'Ocultar a alumnos' : 'Mostrar a todos'}
+                </button>
+            )}
+
+            <div className="bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl mb-8 border border-slate-200 dark:border-zinc-800 relative overflow-hidden transition-all">
+                <p className="text-[10px] text-slate-400 font-bold uppercase mb-2">Transcripción / Respuesta {isSupreme ? '(Host)' : '(Oculto)'}</p>
+                <p className={`font-bold text-lg transition-all duration-300 select-none ${isRevealed ? 'blur-none text-slate-800 dark:text-zinc-100' : 'text-transparent blur-[4px]'}`}>
+                    {data.audioText} <br/><br/> <span className="text-sm text-purple-500 dark:text-purple-400">{data.answer}</span>
+                </p>
+            </div>
+            
+            {status === 'playing' ? (
+                isSupreme ? (
+                    <div className="grid grid-cols-2 gap-4">
+                        <button onClick={() => updateChallenge({ status: 'wrong', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-white dark:bg-zinc-800 border-2 border-red-100 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">INCORRECTO</button>
+                        <button onClick={() => updateChallenge({ status: 'correct', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-green-500 border-green-700 text-white font-black shadow-lg hover:bg-green-600 transition-all">¡CORRECTO!</button>
+                    </div>
+                ) : (
+                    <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl text-center text-amber-600 dark:text-amber-400 font-bold animate-pulse border border-amber-200 dark:border-amber-800/50">Esperando a que el Host te evalúe...</div>
+                )
+            ) : (
+                <div className={`p-4 rounded-xl font-black text-xl animate-in border-2 ${status === 'correct' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-red-50 border-red-500 text-red-600'}`}>
+                    {status === 'correct' ? '¡Respuesta Validada!' : 'Respuesta Incorrecta'}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const RoleplayChallenge = ({ modal, updateChallenge, isSupreme }) => {
+    const { data, status, revealed } = modal;
+    const isRevealed = revealed || isSupreme;
+
+    return (
+        <div className="w-full text-center">
+            <div className="flex justify-center mb-4"><div className="bg-orange-100 dark:bg-orange-900/30 p-3 rounded-full"><Users className="w-8 h-8 text-orange-600 dark:text-orange-400"/></div></div>
+            <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-2">Roleplay</h3>
+            <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6">Actúa esta situación. El Host evaluará si es correcto.</p>
+            
+            <div className="bg-orange-50 dark:bg-orange-900/20 border-2 border-orange-100 dark:border-orange-900/50 p-6 rounded-2xl mb-6 font-medium text-xl text-slate-700 dark:text-zinc-200 shadow-sm leading-relaxed">
+                {data.situation}
+            </div>
+            
+            {isSupreme && (
+                <button onClick={() => updateChallenge({ revealed: !revealed })} className="btn-juicy mb-4 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-full text-xs font-bold transition-colors">
+                    {revealed ? <EyeOff size={14} className="inline mr-1"/> : <Eye size={14} className="inline mr-1"/>}
+                    {revealed ? 'Ocultar a alumnos' : 'Mostrar a todos'}
+                </button>
+            )}
+
+            <div className="bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl mb-8 border border-slate-200 dark:border-zinc-800 relative overflow-hidden transition-all">
+                <p className="text-[10px] text-slate-400 font-bold uppercase mb-2">Sugerencia {isSupreme ? '(Host)' : '(Oculto)'}</p>
+                <p className={`font-bold text-lg transition-all duration-300 select-none ${isRevealed ? 'blur-none text-slate-800 dark:text-zinc-100' : 'text-transparent blur-[4px]'}`}>{data.expected}</p>
+            </div>
+            
+            {status === 'playing' ? (
+                isSupreme ? (
+                    <div className="grid grid-cols-2 gap-4">
+                        <button onClick={() => updateChallenge({ status: 'wrong', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-white dark:bg-zinc-800 border-2 border-red-100 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">INCORRECTO</button>
+                        <button onClick={() => updateChallenge({ status: 'correct', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-green-500 border-green-700 text-white font-black shadow-lg hover:bg-green-600 transition-all">¡CORRECTO!</button>
+                    </div>
+                ) : (
+                    <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl text-center text-amber-600 dark:text-amber-400 font-bold animate-pulse border border-amber-200 dark:border-amber-800/50">Esperando a que el Host te evalúe...</div>
+                )
+            ) : (
+                <div className={`p-4 rounded-xl font-black text-xl animate-in border-2 ${status === 'correct' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-red-50 border-red-500 text-red-600'}`}>
+                    {status === 'correct' ? '¡Respuesta Validada!' : 'Respuesta Incorrecta'}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ChallengeRouter = ({ modal, updateChallenge, canInteract, isHost }) => {
     if (!modal || !modal.type) return null;
+    const props = { modal, updateChallenge, canInteract, isSupreme: isHost };
     switch(modal.type) {
-        case 'multipleChoice': return <MultipleChoiceChallenge modal={modal} onAnswer={onAnswer}/>;
-        case 'dragDrop': return <DragDropChallenge modal={modal} onAnswer={onAnswer}/>;
-        case 'unscramble': return <UnscrambleChallenge modal={modal} onAnswer={onAnswer}/>;
-        default: return <div className="text-zinc-300 text-center p-8">Tipo de pregunta no soportado o en desarrollo: {modal.type}.<br/><br/> <button onClick={()=>onAnswer("Skip", true)} className="bg-emerald-600 p-2 rounded text-white font-bold mt-4">Forzar Correcta (Test)</button></div>;
+        case 'multipleChoice': return <MultipleChoiceChallenge {...props}/>;
+        case 'dragDrop': return <DragDropChallenge {...props}/>;
+        case 'unscramble': return <UnscrambleChallenge {...props}/>;
+        case 'fillBlank': return <FillBlankChallenge {...props}/>;
+        case 'matching': return <MatchingChallenge {...props}/>;
+        case 'errorCorrection': return <ErrorCorrectionChallenge {...props}/>;
+        case 'oddOneOut': return <OddOneOutChallenge {...props}/>;
+        case 'speaking': return <SpeakingChallenge {...props}/>;
+        case 'listening': return <ListeningChallenge {...props}/>;
+        case 'roleplay': return <RoleplayChallenge {...props}/>;
+        default: return <div className="text-zinc-300 text-center p-8">Tipo de pregunta no soportado: {modal.type}</div>;
     }
 };
 
-
 // ==========================================
-// MAPA 
+// EL MAPA Y DATA 
 // ==========================================
 const RAW_MAP_DATA = {"5,4":{"id":"5,4","q":5,"r":4,"x":363.73,"y":180,"type":"blue","dirs":[3]},"6,3":{"id":"6,3","q":6,"r":3,"x":389.71,"y":135,"type":"blue","dirs":[2]},"4,4":{"id":"4,4","q":4,"r":4,"x":311.76,"y":180,"type":"blue","dirs":[3]},"2,4":{"id":"2,4","q":2,"r":4,"x":207.84,"y":180,"type":"blue","dirs":[3]},"1,4":{"id":"1,4","q":1,"r":4,"x":155.88,"y":180,"type":"blue","dirs":[3,4],"dirLabels":{"3":"Ruta Izquierda","4":"Ruta Arriba Izq."}},"0,4":{"id":"0,4","q":0,"r":4,"x":103.92,"y":180,"type":"blue","dirs":[3]},"-1,4":{"id":"-1,4","q":-1,"r":4,"x":51.96,"y":180,"type":"red","dirs":[3]},"-2,4":{"id":"-2,4","q":-2,"r":4,"x":0,"y":180,"type":"event","dirs":[3]},"-3,4":{"id":"-3,4","q":-3,"r":4,"x":-51.96,"y":180,"type":"blue","dirs":[4]},"-4,4":{"id":"-4,4","q":-4,"r":4,"x":-103.92,"y":180,"type":"blue","dirs":[5]},"-5,4":{"id":"-5,4","q":-5,"r":4,"x":-155.88,"y":180,"type":"star_node","dirs":[0]},"3,4":{"id":"3,4","q":3,"r":4,"x":259.80,"y":180,"type":"red","dirs":[3]},"-6,4":{"id":"-6,4","q":-6,"r":4,"x":-207.84,"y":180,"type":"blue","dirs":[0]},"-7,4":{"id":"-7,4","q":-7,"r":4,"x":-259.80,"y":180,"type":"blue","dirs":[0]},"-8,4":{"id":"-8,4","q":-8,"r":4,"x":-311.76,"y":180,"type":"event","dirs":[0]},"-9,4":{"id":"-9,4","q":-9,"r":4,"x":-363.73,"y":180,"type":"stone","dirs":[0]},"-10,4":{"id":"-10,4","q":-10,"r":4,"x":-415.69,"y":180,"type":"blue","dirs":[0]},"5,5":{"id":"5,5","q":5,"r":5,"x":389.71,"y":225,"type":"start","dirs":[4]},"1,3":{"id":"1,3","q":1,"r":3,"x":129.90,"y":135,"type":"blue","dirs":[5]},"-10,3":{"id":"-10,3","q":-10,"r":3,"x":-441.67,"y":135,"type":"event","dirs":[1]},"-9,2":{"id":"-9,2","q":-9,"r":2,"x":-415.69,"y":90,"type":"blue","dirs":[2]},"-8,1":{"id":"-8,1","q":-8,"r":1,"x":-389.71,"y":45,"type":"blue","dirs":[2,4],"dirLabels":{"2":"Isla A","4":"Puente Norte"}},"-8,0":{"id":"-8,0","q":-8,"r":0,"x":-415.69,"y":0,"type":"blue","dirs":[5]},"-7,-1":{"id":"-7,-1","q":-7,"r":-1,"x":-389.71,"y":-45,"type":"red","dirs":[4]},"-7,-2":{"id":"-7,-2","q":-7,"r":-2,"x":-415.69,"y":-90,"type":"blue","dirs":[4]},"-7,-3":{"id":"-7,-3","q":-7,"r":-3,"x":-441.67,"y":-135,"type":"blue","dirs":[5,0],"dirLabels":{"0":"Hacia Boo","5":"Camino Largo"}},"-6,-3":{"id":"-6,-3","q":-6,"r":-3,"x":-389.71,"y":-135,"type":"event","dirs":[0]},"-6,-4":{"id":"-6,-4","q":-6,"r":-4,"x":-415.69,"y":-180,"type":"red","dirs":[4]},"-6,-5":{"id":"-6,-5","q":-6,"r":-5,"x":-441.67,"y":-225,"type":"blue","dirs":[4]},"-6,-6":{"id":"-6,-6","q":-6,"r":-6,"x":-467.65,"y":-270,"type":"blue","dirs":[5]},"-5,-7":{"id":"-5,-7","q":-5,"r":-7,"x":-441.67,"y":-315,"type":"event","dirs":[0]},"-4,-7":{"id":"-4,-7","q":-4,"r":-7,"x":-389.71,"y":-315,"type":"blue","dirs":[0]},"-3,-7":{"id":"-3,-7","q":-3,"r":-7,"x":-337.74,"y":-315,"type":"blue","dirs":[0]},"-2,-7":{"id":"-2,-7","q":-2,"r":-7,"x":-285.78,"y":-315,"type":"star_node","dirs":[0]},"-1,-7":{"id":"-1,-7","q":-1,"r":-7,"x":-233.82,"y":-315,"type":"red","dirs":[0]},"0,-7":{"id":"0,-7","q":0,"r":-7,"x":-181.86,"y":-315,"type":"blue","dirs":[0]},"1,-7":{"id":"1,-7","q":1,"r":-7,"x":-129.90,"y":-315,"type":"koopa","dirs":[0]},"2,-7":{"id":"2,-7","q":2,"r":-7,"x":-77.94,"y":-315,"type":"blue","dirs":[0]},"3,-7":{"id":"3,-7","q":3,"r":-7,"x":-25.98,"y":-315,"type":"boo","dirs":[0]},"4,-7":{"id":"4,-7","q":4,"r":-7,"x":25.98,"y":-315,"type":"red","dirs":[0]},"5,-7":{"id":"5,-7","q":5,"r":-7,"x":77.94,"y":-315,"type":"event","dirs":[0]},"6,-7":{"id":"6,-7","q":6,"r":-7,"x":129.90,"y":-315,"type":"bowser","dirs":[0]},"7,-7":{"id":"7,-7","q":7,"r":-7,"x":181.86,"y":-315,"type":"blue","dirs":[0]},"8,-7":{"id":"8,-7","q":8,"r":-7,"x":233.82,"y":-315,"type":"blue","dirs":[0]},"9,-7":{"id":"9,-7","q":9,"r":-7,"x":285.78,"y":-315,"type":"red","dirs":[0]},"10,-7":{"id":"10,-7","q":10,"r":-7,"x":337.74,"y":-315,"type":"event","dirs":[1]},"10,-6":{"id":"10,-6","q":10,"r":-6,"x":363.73,"y":-270,"type":"blue","dirs":[1]},"10,-5":{"id":"10,-5","q":10,"r":-5,"x":389.71,"y":-225,"type":"star_node","dirs":[1]},"10,-4":{"id":"10,-4","q":10,"r":-4,"x":415.69,"y":-180,"type":"red","dirs":[2]},"9,-3":{"id":"9,-3","q":9,"r":-3,"x":389.71,"y":-135,"type":"koopa","dirs":[1]},"8,-3":{"id":"8,-3","q":8,"r":-3,"x":337.74,"y":-135,"type":"event","dirs":[0]},"9,-2":{"id":"9,-2","q":9,"r":-2,"x":415.69,"y":-90,"type":"blue","dirs":[2]},"8,-1":{"id":"8,-1","q":8,"r":-1,"x":389.71,"y":-45,"type":"blue","dirs":[1]},"8,0":{"id":"8,0","q":8,"r":0,"x":415.69,"y":0,"type":"red","dirs":[1]},"8,1":{"id":"8,1","q":8,"r":1,"x":441.67,"y":45,"type":"bowser","dirs":[2]},"7,2":{"id":"7,2","q":7,"r":2,"x":415.69,"y":90,"type":"event","dirs":[2]},"6,2":{"id":"6,2","q":6,"r":2,"x":363.73,"y":90,"type":"event","dirs":[1]},"6,1":{"id":"6,1","q":6,"r":1,"x":337.74,"y":45,"type":"red","dirs":[1]},"5,1":{"id":"5,1","q":5,"r":1,"x":285.78,"y":45,"type":"blue","dirs":[0]},"4,1":{"id":"4,1","q":4,"r":1,"x":233.82,"y":45,"type":"blue","dirs":[0]},"3,1":{"id":"3,1","q":3,"r":1,"x":181.86,"y":45,"type":"red","dirs":[0,4],"dirLabels":{"0":"Isla B","4":"Puente Sur"}},"2,2":{"id":"2,2","q":2,"r":2,"x":155.88,"y":90,"type":"blue","dirs":[5]},"3,0":{"id":"3,0","q":3,"r":0,"x":155.88,"y":0,"type":"blue","dirs":[4]},"3,-1":{"id":"3,-1","q":3,"r":-1,"x":129.90,"y":-45,"type":"event","dirs":[5]},"2,-1":{"id":"2,-1","q":2,"r":-1,"x":77.94,"y":-45,"type":"red","dirs":[0]},"1,-1":{"id":"1,-1","q":1,"r":-1,"x":25.98,"y":-45,"type":"blue","dirs":[0]},"0,0":{"id":"0,0","q":0,"r":0,"x":0,"y":0,"type":"blue","dirs":[5]},"-1,1":{"id":"-1,1","q":-1,"r":1,"x":-25.98,"y":45,"type":"event","dirs":[5]},"-2,2":{"id":"-2,2","q":-2,"r":2,"x":-51.96,"y":90,"type":"red","dirs":[5,4],"dirLabels":{"4":"Isla A","5":"Hacia Arriba"}},"-3,3":{"id":"-3,3","q":-3,"r":3,"x":-77.94,"y":135,"type":"blue","dirs":[5]},"-2,1":{"id":"-2,1","q":-2,"r":1,"x":-77.94,"y":45,"type":"event","dirs":[3]},"-3,1":{"id":"-3,1","q":-3,"r":1,"x":-129.90,"y":45,"type":"blue","dirs":[3]},"-4,1":{"id":"-4,1","q":-4,"r":1,"x":-181.86,"y":45,"type":"blue","dirs":[3]},"-5,1":{"id":"-5,1","q":-5,"r":1,"x":-233.82,"y":45,"type":"blue","dirs":[3]},"-6,1":{"id":"-6,1","q":-6,"r":1,"x":-285.78,"y":45,"type":"event","dirs":[3]},"-7,1":{"id":"-7,1","q":-7,"r":1,"x":-337.74,"y":45,"type":"red","dirs":[3]},"-5,-3":{"id":"-5,-3","q":-5,"r":-3,"x":-337.74,"y":-135,"type":"event","dirs":[0]},"-4,-3":{"id":"-4,-3","q":-4,"r":-3,"x":-285.78,"y":-135,"type":"blue","dirs":[0]},"2,-3":{"id":"2,-3","q":2,"r":-3,"x":25.98,"y":-135,"type":"red","dirs":[5]},"1,-3":{"id":"1,-3","q":1,"r":-3,"x":-25.98,"y":-135,"type":"blue","dirs":[0]},"0,-3":{"id":"0,-3","q":0,"r":-3,"x":-77.94,"y":-135,"type":"blue","dirs":[0]},"-1,-3":{"id":"-1,-3","q":-1,"r":-3,"x":-129.90,"y":-135,"type":"koopa","dirs":[0]},"-2,-3":{"id":"-2,-3","q":-2,"r":-3,"x":-181.86,"y":-135,"type":"red","dirs":[0]},"-3,-3":{"id":"-3,-3","q":-3,"r":-3,"x":-233.82,"y":-135,"type":"blue","dirs":[0,5],"dirLabels":{"0":"Hacia Wealthy Turtle","5":"Camino Largo"}},"-2,-4":{"id":"-2,-4","q":-2,"r":-4,"x":-207.84,"y":-180,"type":"red","dirs":[5]},"-1,-5":{"id":"-1,-5","q":-1,"r":-5,"x":-181.86,"y":-225,"type":"event","dirs":[4]},"-1,-6":{"id":"-1,-6","q":-1,"r":-6,"x":-207.84,"y":-270,"type":"blue","dirs":[5]},"3,-4":{"id":"3,-4","q":3,"r":-4,"x":51.96,"y":-180,"type":"event","dirs":[0]},"4,-4":{"id":"4,-4","q":4,"r":-4,"x":103.92,"y":-180,"type":"blue","dirs":[5]},"4,-3":{"id":"4,-3","q":4,"r":-3,"x":129.90,"y":-135,"type":"blue","dirs":[4]},"4,-2":{"id":"4,-2","q":4,"r":-2,"x":155.88,"y":-90,"type":"blue","dirs":[5,4],"dirLabels":{"4":"Isla B","5":"Bucle Chico"}},"5,-3":{"id":"5,-3","q":5,"r":-3,"x":181.86,"y":-135,"type":"blue","dirs":[0]},"6,-3":{"id":"6,-3","q":6,"r":-3,"x":233.82,"y":-135,"type":"blue","dirs":[0]},"7,-3":{"id":"7,-3","q":7,"r":-3,"x":285.78,"y":-135,"type":"red","dirs":[0]},"5,-5":{"id":"5,-5","q":5,"r":-5,"x":129.90,"y":-225,"type":"red","dirs":[5]},"6,-6":{"id":"6,-6","q":6,"r":-6,"x":155.88,"y":-270,"type":"event","dirs":[5]}};
-
-const MOCK_DEMO_QUESTIONS = [
-    { type: 'multipleChoice', data: { question: "Modo Prueba: ¿Cuál es la capital de Francia?", options: ["París", "Roma", "Madrid"], correct: 0 } },
-    { type: 'multipleChoice', data: { question: "Modo Prueba: 2 + 2 = ?", options: ["3", "4", "5"], correct: 1 } },
-];
 
 const WT_DIALOGS = [
     "Hey traveler! You must be tired, get something pretty for yourself.",
@@ -271,6 +635,8 @@ const PLAYER_COLORS = [
     { color: '#eab308', activeColor: '#fef08a' }
 ];
 
+const AVATAR_EMOJIS = ['👽', '🦖', '🧢', '🍄', '👑', '🐶', '🐱', '🤑', '🤖', '👻', '💩', '🤡', '🐼', '🦊', '🦄', '🍎', '🍔', '⚽'];
+
 const S = 30; 
 const W = Math.sqrt(3) * S;
 const getXY = (q, r) => ({ x: W * (q + r / 2), y: 1.5 * S * r });
@@ -289,6 +655,24 @@ const SPACE_TYPES = {
     star_node: { fill: '#78350f', stroke: '#fbbf24', icon: <Star size={18} className="text-amber-300 fill-amber-300"/> }
 };
 
+const INITIAL_GAME_STATE = {
+    status: 'LOBBY', 
+    players: [], 
+    turn: 0,
+    round: 1,
+    phase: 'IDLE',
+    movesLeft: 0,
+    activePos: "5,5",
+    activeStarId: "-5,4",
+    pendingNode: null,
+    activeChallenge: null,
+    currentDialog: "",
+    booAction: null,
+    diceVal: 6,
+    quizId: null,
+    quizTitle: ""
+};
+
 const generateWideGrid = () => {
     const grid = [];
     for (let r = -12; r <= 12; r++) {
@@ -301,81 +685,83 @@ const generateWideGrid = () => {
 };
 
 // ==========================================
-// APLICACIÓN LOCAL (SINGLE PLAYER TEST)
+// APLICACIÓN PRINCIPAL
 // ==========================================
 const App = () => {
+    const [appState, setAppState] = useState('HOME');
+    
+    const [roomId, setRoomId] = useState("");
+    const [inputRoomId, setInputRoomId] = useState("");
+    const [localPlayerId, setLocalPlayerId] = useState(null); 
+    const [isHost, setIsHost] = useState(false);
+    
+    const [playerName, setPlayerName] = useState("");
+    const [selectedEmoji, setSelectedEmoji] = useState("👽");
+
+    const [game, setGame] = useState(INITIAL_GAME_STATE);
+    const [toastMsg, setToastMsg] = useState(null);
+    const [showAllPlayers, setShowAllPlayers] = useState(false);
+    const [linkCopied, setLinkCopied] = useState(false);
+    const [codeCopied, setCodeCopied] = useState(false);
+
     const [quizContent, setQuizContent] = useState(null); 
     const [quizTitle, setQuizTitle] = useState("");
     const [quizLoading, setQuizLoading] = useState(true);
+    const [quizError, setQuizError] = useState(null);
     const [activePools, setActivePools] = useState({});
 
-    // MODO LOCAL PASS & PLAY: 4 Jugadores hardcodeados en el estado local
-    const [game, setGame] = useState({
-        players: [
-            { id: 1, name: 'Mario', coins: 10, stars: 0, pos: "5,5", color: PLAYER_COLORS[0].color, activeColor: PLAYER_COLORS[0].activeColor, emoji: '🧢' }, 
-            { id: 2, name: 'Luigi', coins: 10, stars: 0, pos: "5,5", color: PLAYER_COLORS[1].color, activeColor: PLAYER_COLORS[1].activeColor, emoji: '🦖' },
-            { id: 3, name: 'Peach', coins: 10, stars: 0, pos: "5,5", color: PLAYER_COLORS[2].color, activeColor: PLAYER_COLORS[2].activeColor, emoji: '👑' },
-            { id: 4, name: 'Toad',  coins: 10, stars: 0, pos: "5,5", color: PLAYER_COLORS[3].color, activeColor: PLAYER_COLORS[3].activeColor, emoji: '🍄' }
-        ],
-        turn: 0,
-        round: 1,
-        phase: 'IDLE',
-        movesLeft: 0,
-        activePos: "5,5",
-        activeStarId: "-5,4",
-        pendingNode: null,
-        activeChallenge: null,
-        currentDialog: "",
-        booAction: null
-    });
-
-    const [toastMsg, setToastMsg] = useState(null);
-    const [showAllPlayers, setShowAllPlayers] = useState(false);
-
-    // UI Local
     const [isRolling, setIsRolling] = useState(false);
     const [localDiceFace, setLocalDiceFace] = useState(6);
     const [selectedForkDir, setSelectedForkDir] = useState(null);
     const [ghostPathCoords, setGhostPathCoords] = useState([]);
     const [ghostLandingNode, setGhostLandingNode] = useState(null);
-    const [isDemoMode, setIsDemoMode] = useState(false);
 
     const toastTimerRef = useRef(null);
+    const gameRef = useRef(game);
+    
+    useEffect(() => { gameRef.current = game; }, [game]);
 
-    const showToast = useCallback((msg) => {
-        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-        setToastMsg(msg);
-        toastTimerRef.current = setTimeout(() => setToastMsg(null), msg.includes('❌') ? 5000 : 2500);
+    const isMyTurn = useCallback(() => {
+        if (localPlayerId === null || !gameRef.current.players || gameRef.current.players.length === 0) return false;
+        return gameRef.current.turn === (localPlayerId - 1);
+    }, [localPlayerId]);
+
+    // ==========================================
+    // CARGAR MEMORIA Y FIRESTORE
+    // ==========================================
+    useEffect(() => {
+        try {
+            const savedName = localStorage.getItem('periplo_playerName');
+            const savedEmoji = localStorage.getItem('periplo_playerEmoji');
+            if (savedName) setPlayerName(savedName);
+            if (savedEmoji) setSelectedEmoji(savedEmoji);
+        } catch(e) {}
     }, []);
 
-    // CARGAR QUIZ DESDE FIREBASE O DEMO
     useEffect(() => {
         const loadQuiz = async () => {
             const params = new URLSearchParams(window.location.search);
             const id = params.get('id');
-            
-            if (!id || !db) {
-                // FALLBACK A MODO DEMO
-                setIsDemoMode(true);
-                setQuizTitle("Modo Pruebas (Sin Conexión)");
+            if (!id) {
+                setQuizError("Falta el ID del banco. Abre este juego desde index.");
                 setQuizLoading(false);
-                showToast("⚠️ ID no detectado. Corriendo en Modo Pruebas.");
                 return;
             }
-
+            if (!db) {
+                setQuizError("Sin conexión a Firebase.");
+                setQuizLoading(false);
+                return;
+            }
             try {
-                const snap = await getDoc(doc(db, QUIZZES_PATH, id));
+                const snap = await withTimeout(getDoc(doc(db, QUIZZES_PATH, id)), 8000, 'LOAD_QUIZ');
                 if (!snap.exists()) throw new Error("Banco no encontrado");
                 const data = snap.data();
                 setQuizContent(data.content || {});
                 setQuizTitle(data.title || "Periplo Party");
                 setQuizLoading(false);
-                showToast("✅ Banco de preguntas cargado con éxito.");
             } catch(e) {
-                setIsDemoMode(true);
-                setQuizTitle("Modo Pruebas (Error de red)");
+                setQuizError(e.message || "Error al cargar el banco");
                 setQuizLoading(false);
-                showToast("❌ Error al cargar. Activando modo pruebas.");
             }
         };
         loadQuiz();
@@ -393,11 +779,8 @@ const App = () => {
         return newPools;
     }, []);
 
+    // 🔴 El Host gestiona el Pool para que no se repitan
     const pickQuestion = useCallback(() => {
-        if (isDemoMode) {
-            return MOCK_DEMO_QUESTIONS[Math.floor(Math.random() * MOCK_DEMO_QUESTIONS.length)];
-        }
-
         if (!quizContent) return null;
         let pools = activePools;
         let availableTypes = Object.keys(pools).filter(k => pools[k] && pools[k].length > 0);
@@ -412,10 +795,178 @@ const App = () => {
         const question = pools[randomType][0];
         setActivePools(prev => ({ ...prev, [randomType]: prev[randomType].slice(1) }));
         return { type: randomType, data: question };
-    }, [activePools, quizContent, fillPools, isDemoMode]);
+    }, [activePools, quizContent, fillPools]);
+
+    useEffect(() => {
+        if (!db || !roomId || (appState !== 'LOBBY' && appState !== 'PLAYING')) return;
+        const roomDocRef = doc(db, 'periplo-party-rooms', roomId);
+        const unsubscribe = onSnapshot(roomDocRef, (snapshot) => {
+            if (snapshot.exists()) {
+                const data = snapshot.data();
+                setGame(data);
+                if (data.status === 'PLAYING' && appState !== 'PLAYING') {
+                    setAppState('PLAYING');
+                }
+            } else {
+                showToast("⚠️ La sala fue cerrada");
+                setRoomId("");
+                setLocalPlayerId(null);
+                setGame(INITIAL_GAME_STATE);
+                setAppState('HOME');
+            }
+        }, (error) => {
+            showToast(`❌ Conexión perdida`);
+        });
+        return () => unsubscribe();
+    }, [roomId, appState]);
+
+    const updateGame = useCallback((updates) => {
+        if (db && roomId) {
+            updateDoc(doc(db, 'periplo-party-rooms', roomId), updates).catch(e => {
+                console.error("[Periplo] updateDoc error:", e);
+            });
+        } else {
+            setGame(prev => ({ ...prev, ...updates }));
+            if (updates.status === 'PLAYING') setAppState('PLAYING');
+        }
+    }, [roomId]);
+
+    const showToast = useCallback((msg) => {
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        setToastMsg(msg);
+        toastTimerRef.current = setTimeout(() => setToastMsg(null), msg.includes('❌') ? 5000 : 2500);
+    }, []);
 
     // ==========================================
-    // UTILIDADES MAPA
+    // FLUJO LOBBY / PRE-GAME
+    // ==========================================
+    const copyGameLink = () => {
+        const url = window.location.href.split('?')[0];
+        navigator.clipboard.writeText(url).then(() => {
+            setLinkCopied(true);
+            setTimeout(() => setLinkCopied(false), 2000);
+        });
+    };
+
+    const copyRoomCode = () => {
+        navigator.clipboard.writeText(roomId).then(() => {
+            setCodeCopied(true);
+            setTimeout(() => setCodeCopied(false), 2000);
+        });
+    };
+
+    const handleCreateRoomClick = () => { setIsHost(true); setAppState('PROFILE'); };
+
+    const handleJoinRoomClick = async () => {
+        if (!inputRoomId.trim()) return showToast("⚠️ Ingresa un código");
+        const code = inputRoomId.trim().toUpperCase();
+        
+        if (db) {
+            try {
+                const snapshot = await withTimeout(getDoc(doc(db, 'periplo-party-rooms', code)), 8000, 'CHECK_ROOM');
+                if (snapshot.exists()) {
+                    const data = snapshot.data();
+                    if (data.status === 'LOBBY' && (data.players || []).length < 4) {
+                        setRoomId(code); setIsHost(false); setAppState('PROFILE');
+                    } else if (data.status !== 'LOBBY') {
+                        showToast("❌ El juego ya inició");
+                    } else {
+                        showToast("❌ Sala llena (4/4)");
+                    }
+                } else {
+                    showToast("❌ Sala no encontrada");
+                }
+            } catch(e) {
+                showToast(`❌ Error de conexión`);
+            }
+        } else {
+            setRoomId(code); setIsHost(false); setAppState('PROFILE');
+        }
+    };
+
+    const handleProfileSubmit = async () => {
+        const name = playerName.trim();
+        if (!name) return showToast("⚠️ Pon tu nombre para jugar");
+        
+        try { localStorage.setItem('periplo_playerName', name); localStorage.setItem('periplo_playerEmoji', selectedEmoji); } catch(e) {}
+
+        if (isHost) {
+            const newId = Math.random().toString(36).substring(2, 6).toUpperCase();
+            const c = PLAYER_COLORS[0];
+            const hostPlayer = { id: 1, name, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
+            
+            if (db) {
+                try {
+                    await withTimeout(setDoc(doc(db, 'periplo-party-rooms', newId), { 
+                        ...INITIAL_GAME_STATE, players: [hostPlayer], quizId: new URLSearchParams(window.location.search).get('id') || null, quizTitle: quizTitle || "Periplo Party", createdAt: Date.now() 
+                    }), 8000, 'CREATE_ROOM');
+                    setRoomId(newId); setLocalPlayerId(1); setAppState('LOBBY');
+                } catch(e) { showToast("❌ Firebase no responde"); }
+            } else {
+                setRoomId(newId); setLocalPlayerId(1);
+                setGame({ ...INITIAL_GAME_STATE, players: [hostPlayer] });
+                setAppState('LOBBY');
+            }
+        } else {
+            if (db) {
+                try {
+                    let assignedId = null;
+                    await withTimeout(runTransaction(db, async (txn) => {
+                        const roomDocRef = doc(db, 'periplo-party-rooms', roomId);
+                        const snap = await txn.get(roomDocRef);
+                        if (!snap.exists()) throw new Error('ROOM_NOT_FOUND');
+                        const current = snap.data();
+                        const players = current.players || [];
+                        if (current.status !== 'LOBBY') throw new Error('GAME_STARTED');
+                        if (players.length >= 4) throw new Error('ROOM_FULL');
+                        
+                        assignedId = players.length + 1;
+                        const c = PLAYER_COLORS[assignedId - 1];
+                        const newPlayer = { id: assignedId, name, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
+                        txn.update(roomDocRef, { players: [...players, newPlayer] });
+                    }), 8000, 'JOIN_ROOM');
+                    
+                    if (assignedId) { setLocalPlayerId(assignedId); setAppState('LOBBY'); }
+                } catch(e) {
+                    showToast(`❌ ${e.message === 'ROOM_NOT_FOUND' ? 'Sala no encontrada' : 'Error al unirse'}`);
+                    setRoomId(""); setAppState('HOME');
+                }
+            } else {
+                const newPlayerId = (game.players || []).length + 1;
+                setLocalPlayerId(newPlayerId);
+                const c = PLAYER_COLORS[newPlayerId - 1];
+                const newPlayer = { id: newPlayerId, name, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
+                setGame(prev => ({ ...prev, players: [...prev.players, newPlayer] }));
+                setAppState('LOBBY');
+            }
+        }
+    };
+
+    const leaveRoom = async () => {
+        if (db && roomId && localPlayerId) {
+            try {
+                const roomDocRef = doc(db, 'periplo-party-rooms', roomId);
+                if (isHost) await deleteDoc(roomDocRef);
+                else {
+                    await runTransaction(db, async (txn) => {
+                        const snap = await txn.get(roomDocRef);
+                        if (!snap.exists()) return;
+                        const current = snap.data();
+                        txn.update(roomDocRef, { players: (current.players || []).filter(p => p.id !== localPlayerId) });
+                    });
+                }
+            } catch(e) {}
+        }
+        setRoomId(""); setLocalPlayerId(null); setIsHost(false); setGame(INITIAL_GAME_STATE); setAppState('HOME');
+    };
+
+    const startGame = () => {
+        if (quizContent) fillPools(quizContent);
+        updateGame({ status: 'PLAYING' });
+    };
+
+    // ==========================================
+    // UTILIDADES DE MAPA Y BIOMAS
     // ==========================================
     const reverseMap = useMemo(() => {
         const map = {};
@@ -459,120 +1010,113 @@ const App = () => {
     };
 
     // ==========================================
-    // MOTOR LÓGICO DE MOVIMIENTO (LOCAL)
+    // MOTOR DE MOVIMIENTO BLINDADO
     // ==========================================
     
     const executeMoveStep = (nextNodeId) => {
-        setGame(prev => {
-            const nextNode = RAW_MAP_DATA[nextNodeId];
-            const isNextFork = getValidOuts(nextNode).length > 1;
-            
-            const isZeroCost = isNextFork || nextNode.type === 'stone' || (nextNode.type === 'star_node' && nextNodeId !== prev.activeStarId);
-            const newMoves = isZeroCost ? prev.movesLeft : prev.movesLeft - 1;
+        const currentGame = gameRef.current;
+        const nextNode = RAW_MAP_DATA[nextNodeId];
+        const isNextFork = getValidOuts(nextNode).length > 1;
+        
+        const isZeroCost = isNextFork || nextNode.type === 'stone' || (nextNode.type === 'star_node' && nextNodeId !== currentGame.activeStarId);
+        const newMoves = isZeroCost ? currentGame.movesLeft : currentGame.movesLeft - 1;
 
-            let newPlayers = [...prev.players];
-            newPlayers[prev.turn] = { ...newPlayers[prev.turn], pos: nextNodeId };
+        let newPlayers = [...currentGame.players];
+        newPlayers[currentGame.turn] = { ...newPlayers[currentGame.turn], pos: nextNodeId };
 
-            if (newMoves > 0) {
-                if (nextNode.type === 'bowser') { showToast(`💀 Chupacabras roba 10 Monedas`); newPlayers[prev.turn].coins -= 10; }
-                if (nextNode.type === 'koopa') { showToast(`🐢 Wealthy Turtle da +10 Monedas`); newPlayers[prev.turn].coins += 10; }
-            }
+        if (newMoves > 0) {
+            if (nextNode.type === 'bowser') { showToast(`💀 Chupacabras roba 10 Monedas`); newPlayers[currentGame.turn].coins -= 10; }
+            if (nextNode.type === 'koopa') { showToast(`🐢 Wealthy Turtle da +10 Monedas`); newPlayers[currentGame.turn].coins += 10; }
+        }
 
-            let nextPhase = 'MOVING';
-            let pendingNode = null;
-            let currentDialog = "";
+        let nextPhase = 'MOVING';
+        let pendingNode = null;
+        let currentDialog = "";
 
-            const needsPrompt = newMoves <= 0 && (nextNode.type === 'koopa' || nextNode.type === 'bowser' || nextNode.type === 'boo');
-            const stoneOrStar = nextNode.type === 'stone' || (nextNode.type === 'star_node' && nextNodeId === prev.activeStarId);
+        const needsPrompt = newMoves <= 0 && (nextNode.type === 'koopa' || nextNode.type === 'bowser' || nextNode.type === 'boo');
+        const stoneOrStar = nextNode.type === 'stone' || (nextNode.type === 'star_node' && nextNodeId === currentGame.activeStarId);
 
-            if (newMoves <= 0 && (nextNode.type === 'blue' || nextNode.type === 'red')) {
-                nextPhase = 'PENDING_END_TURN';
-            } else if (stoneOrStar) {
-                if (nextNode.type === 'stone') nextPhase = 'STONE_PROMPT';
-                else nextPhase = 'STAR_PROMPT';
-                pendingNode = nextNodeId;
-            } else if (needsPrompt) {
-                if (nextNode.type === 'koopa') { nextPhase = 'KOOPA_PROMPT'; currentDialog = WT_DIALOGS[Math.floor(Math.random() * WT_DIALOGS.length)]; }
-                else if (nextNode.type === 'bowser') { nextPhase = 'BOWSER_PROMPT'; currentDialog = CHUPACABRAS_DIALOGS[Math.floor(Math.random() * CHUPACABRAS_DIALOGS.length)]; }
-                else if (nextNode.type === 'boo') nextPhase = 'BOO_PROMPT';
-                pendingNode = nextNodeId;
-            } else if (newMoves <= 0) {
-                nextPhase = 'PENDING_END_TURN';
-            }
+        if (newMoves <= 0 && (nextNode.type === 'blue' || nextNode.type === 'red')) {
+            nextPhase = 'PENDING_END_TURN';
+        } else if (stoneOrStar) {
+            if (nextNode.type === 'stone') nextPhase = 'STONE_PROMPT';
+            else nextPhase = 'STAR_PROMPT';
+            pendingNode = nextNodeId;
+        } else if (needsPrompt) {
+            if (nextNode.type === 'koopa') { nextPhase = 'KOOPA_PROMPT'; currentDialog = WT_DIALOGS[Math.floor(Math.random() * WT_DIALOGS.length)]; }
+            else if (nextNode.type === 'bowser') { nextPhase = 'BOWSER_PROMPT'; currentDialog = CHUPACABRAS_DIALOGS[Math.floor(Math.random() * CHUPACABRAS_DIALOGS.length)]; }
+            else if (nextNode.type === 'boo') nextPhase = 'BOO_PROMPT';
+            pendingNode = nextNodeId;
+        } else if (newMoves <= 0) {
+            nextPhase = 'PENDING_END_TURN';
+        }
 
-            return {
-                ...prev,
-                activePos: nextNodeId,
-                movesLeft: newMoves,
-                players: newPlayers,
-                phase: nextPhase,
-                pendingNode,
-                currentDialog
-            };
-        });
+        updateGame({ activePos: nextNodeId, movesLeft: newMoves, players: newPlayers, phase: nextPhase, pendingNode, currentDialog });
     };
 
     const tryMoveTo = (nextNodeId) => {
-        setGame(prev => {
-            const nextNode = RAW_MAP_DATA[nextNodeId];
-            let tempPlayers = [...prev.players];
-            tempPlayers[prev.turn] = { ...tempPlayers[prev.turn], pos: nextNodeId };
-            
-            const needsPrompt = nextNode.type === 'stone' || 
-                                (nextNode.type === 'star_node' && nextNodeId === prev.activeStarId) ||
-                                nextNode.type === 'koopa' || 
-                                nextNode.type === 'bowser' || 
-                                nextNode.type === 'boo';
+        if (!isMyTurn()) return;
+        const currentGame = gameRef.current;
+        const nextNode = RAW_MAP_DATA[nextNodeId];
+        
+        let tempPlayers = [...currentGame.players];
+        tempPlayers[currentGame.turn] = { ...tempPlayers[currentGame.turn], pos: nextNodeId };
+        
+        const needsPrompt = nextNode.type === 'stone' || 
+                            (nextNode.type === 'star_node' && nextNodeId === currentGame.activeStarId) ||
+                            nextNode.type === 'koopa' || 
+                            nextNode.type === 'bowser' || 
+                            nextNode.type === 'boo';
 
-            if (needsPrompt) {
-                setTimeout(() => {
-                    setGame(curr => {
-                        let newPhase = '';
-                        let dialog = '';
-                        if (nextNode.type === 'stone') newPhase = 'STONE_PROMPT';
-                        else if (nextNode.type === 'star_node') newPhase = 'STAR_PROMPT';
-                        else if (nextNode.type === 'koopa') { newPhase = 'KOOPA_PROMPT'; dialog = WT_DIALOGS[Math.floor(Math.random() * WT_DIALOGS.length)]; }
-                        else if (nextNode.type === 'bowser') { newPhase = 'BOWSER_PROMPT'; dialog = CHUPACABRAS_DIALOGS[Math.floor(Math.random() * CHUPACABRAS_DIALOGS.length)]; }
-                        else if (nextNode.type === 'boo') newPhase = 'BOO_PROMPT';
-                        
-                        return { ...curr, phase: newPhase, pendingNode: nextNodeId, currentDialog: dialog };
-                    });
-                }, 350);
-                return { ...prev, activePos: nextNodeId, players: tempPlayers, phase: 'PAUSED_FOR_PROMPT' };
-            }
+        if (needsPrompt) {
+            updateGame({ activePos: nextNodeId, players: tempPlayers, phase: 'PAUSED_FOR_PROMPT' }); 
+            setTimeout(() => {
+                if (!isMyTurn()) return; 
+                let newPhase = '';
+                let dialog = '';
+                if (nextNode.type === 'stone') newPhase = 'STONE_PROMPT';
+                else if (nextNode.type === 'star_node') newPhase = 'STAR_PROMPT';
+                else if (nextNode.type === 'koopa') { newPhase = 'KOOPA_PROMPT'; dialog = WT_DIALOGS[Math.floor(Math.random() * WT_DIALOGS.length)]; }
+                else if (nextNode.type === 'bowser') { newPhase = 'BOWSER_PROMPT'; dialog = CHUPACABRAS_DIALOGS[Math.floor(Math.random() * CHUPACABRAS_DIALOGS.length)]; }
+                else if (nextNode.type === 'boo') newPhase = 'BOO_PROMPT';
+                
+                updateGame({ phase: newPhase, pendingNode: nextNodeId, currentDialog: dialog });
+            }, 350);
+            return;
+        }
 
-            // Si no hay prompt, lanzamos el executeStep después del delay visual
-            setTimeout(() => executeMoveStep(nextNodeId), 350);
-            return { ...prev, activePos: nextNodeId, players: tempPlayers, phase: 'PAUSED_FOR_PROMPT' };
-        });
+        setTimeout(() => executeMoveStep(nextNodeId), 350);
+        updateGame({ activePos: nextNodeId, players: tempPlayers, phase: 'PAUSED_FOR_PROMPT' });
     };
 
-    // Auto-corredor local
     useEffect(() => {
-        if (game.phase === 'MOVING' && game.movesLeft > 0 && !isRolling) {
+        if (isMyTurn() && game.phase === 'MOVING' && game.movesLeft > 0 && !isRolling) {
             const timer = setTimeout(() => {
-                const currentNode = RAW_MAP_DATA[game.activePos];
+                const currentGame = gameRef.current;
+                const currentNode = RAW_MAP_DATA[currentGame.activePos];
                 const validOuts = getValidOuts(currentNode);
 
-                if (validOuts.length === 0) { setGame(p => ({...p, phase: 'PENDING_END_TURN'})); return; }
-                if (validOuts.length > 1) { setGame(p => ({...p, phase: 'CHOICE'})); return; }
+                if (validOuts.length === 0) { updateGame({ phase: 'PENDING_END_TURN' }); return; }
+                if (validOuts.length > 1) { updateGame({ phase: 'CHOICE' }); return; }
 
                 tryMoveTo(validOuts[0].id);
-            }, 50); // Local Test: más rápido para probar
+            }, 350);
             return () => clearTimeout(timer);
         }
-    }, [game.phase, game.movesLeft, game.activePos, isRolling]);
+    }, [game.phase, game.movesLeft, game.activePos, isRolling, isMyTurn]);
 
     // End Turn Interceptor
     useEffect(() => {
-        if (game.phase === 'PENDING_END_TURN') {
+        if (isMyTurn() && game.phase === 'PENDING_END_TURN') {
             const timer = setTimeout(() => endTurnHandler(), 200);
             return () => clearTimeout(timer);
         }
-    }, [game.phase]);
+    }, [game.phase, isMyTurn]);
 
     const endTurnHandler = () => {
-        const finalNode = RAW_MAP_DATA[game.activePos];
+        if (!isMyTurn()) return;
+        const currentGame = gameRef.current;
+        const finalNode = RAW_MAP_DATA[currentGame.activePos];
         if (!finalNode) { advanceTurn(); return; }
 
         if (finalNode.type === 'blue' || finalNode.type === 'red') {
@@ -581,11 +1125,10 @@ const App = () => {
                 showToast("⚠️ Banco sin preguntas");
                 advanceTurn(); return; 
             }
-            setGame(prev => ({
-                ...prev,
+            updateGame({
                 activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: finalNode.type } },
                 phase: 'CHALLENGE'
-            }));
+            });
             return; 
         }
 
@@ -594,19 +1137,20 @@ const App = () => {
     };
 
     const advanceTurn = () => {
+        if (!isMyTurn()) return;
         setTimeout(() => {
-            setGame(prev => {
-                const nextTurn = (prev.turn + 1) % prev.players.length;
-                const nextActivePos = prev.players[nextTurn].pos; 
-                const updates = { phase: 'IDLE', turn: nextTurn, activePos: nextActivePos, pendingNode: null, currentDialog: "", activeChallenge: null };
-                if (nextTurn === 0) { updates.round = prev.round + 1; showToast(`🎉 ¡Ronda ${updates.round}!`); }
-                return { ...prev, ...updates };
-            });
+            const currentGame = gameRef.current;
+            const nextTurn = (currentGame.turn + 1) % currentGame.players.length;
+            const nextActivePos = currentGame.players[nextTurn].pos; 
+
+            const updates = { phase: 'IDLE', turn: nextTurn, activePos: nextActivePos, pendingNode: null, currentDialog: "", activeChallenge: null };
+            if (nextTurn === 0) { updates.round = (currentGame.round || 1) + 1; showToast(`🎉 ¡Ronda ${updates.round}!`); }
+            updateGame(updates);
         }, 1500);
     };
 
     const rollDice = () => {
-        if (game.phase !== 'IDLE') return;
+        if (!isMyTurn() || game.phase !== 'IDLE') return;
         setIsRolling(true);
         let count = 0;
         const interval = setInterval(() => {
@@ -618,7 +1162,7 @@ const App = () => {
                  setLocalDiceFace(finalRoll);
                  setTimeout(() => {
                      setIsRolling(false);
-                     setGame(p => ({...p, diceVal: finalRoll, movesLeft: finalRoll, phase: 'MOVING'}));
+                     updateGame({ diceVal: finalRoll, movesLeft: finalRoll, phase: 'MOVING' });
                  }, 800);
             }
         }, 50);
@@ -656,6 +1200,7 @@ const App = () => {
     };
 
     const previewChoice = (dirIdx) => {
+        if (!isMyTurn()) return;
         setSelectedForkDir(dirIdx);
         const ghostData = calculateGhostPath(game.activePos, dirIdx);
         setGhostPathCoords(ghostData.path);
@@ -663,162 +1208,273 @@ const App = () => {
     };
 
     const confirmChoice = () => {
-        if (selectedForkDir === null) return;
+        if (!isMyTurn() || selectedForkDir === null) return;
         const nextId = `${RAW_MAP_DATA[game.activePos].q + HEX_DIRS[selectedForkDir].q},${RAW_MAP_DATA[game.activePos].r + HEX_DIRS[selectedForkDir].r}`;
         setSelectedForkDir(null); setGhostPathCoords([]); setGhostLandingNode(null);
         tryMoveTo(nextId);
     };
 
     const handleStonePay = () => {
-        setGame(p => {
-            let newPlayers = [...p.players];
-            newPlayers[p.turn].coins -= 10;
-            return {...p, players: newPlayers};
-        });
+        if (!isMyTurn()) return;
+        const currentGame = gameRef.current;
+        let newPlayers = [...currentGame.players];
+        newPlayers[currentGame.turn].coins -= 10;
         showToast("🪨 ¡Pagaste el peaje!");
-        executeMoveStep(game.pendingNode); 
+        updateGame({ players: newPlayers });
+        executeMoveStep(currentGame.pendingNode); 
     };
 
     const handleStoneFail = () => {
-        let curr = game.activePos;
+        if (!isMyTurn()) return;
+        const currentGame = gameRef.current;
+        let curr = currentGame.activePos;
         for(let i=0; i<5; i++) {
             const parents = reverseMap[curr];
             if(parents && parents.length > 0) curr = parents[0]; else break;
         }
-        setGame(p => {
-            let newPlayers = [...p.players];
-            newPlayers[p.turn].pos = curr;
-            return {...p, activePos: curr, players: newPlayers, movesLeft: 0, phase: 'IDLE'};
-        });
+        let newPlayers = [...currentGame.players];
+        newPlayers[currentGame.turn].pos = curr;
         showToast("💥 ¡La Piedra te aplastó! Retrocedes 5 casillas.");
+        updateGame({ activePos: curr, players: newPlayers, movesLeft: 0, phase: 'IDLE' });
         setTimeout(() => endTurnHandler(), 400); 
     };
 
     const handleStarBuy = (buy) => {
+        if (!isMyTurn()) return;
+        const currentGame = gameRef.current;
+        let updates = {};
         if (buy) {
-            setGame(p => {
-                let newPlayers = [...p.players];
-                newPlayers[p.turn].coins -= 20;
-                newPlayers[p.turn].stars += 1;
-                const newStarId = STAR_LOCATIONS.filter(id => id !== p.activeStarId)[Math.floor(Math.random() * 2)];
-                return {...p, players: newPlayers, activeStarId: newStarId};
-            });
+            let newPlayers = [...currentGame.players];
+            newPlayers[currentGame.turn].coins -= 20;
+            newPlayers[currentGame.turn].stars += 1;
             showToast("⭐ ¡Compraste una Estrella!");
             confetti({particleCount: 150, spread: 70});
+            updates.players = newPlayers;
+            updates.activeStarId = STAR_LOCATIONS.filter(id => id !== currentGame.activeStarId)[Math.floor(Math.random() * 2)];
         }
-        executeMoveStep(game.pendingNode); 
+        updateGame(updates);
+        executeMoveStep(currentGame.pendingNode); 
     };
 
     const handleKoopaAccept = () => { 
-        setGame(p => {
-            let newPlayers = [...p.players];
-            newPlayers[p.turn].coins += 10;
-            return {...p, players: newPlayers};
-        });
+        if (!isMyTurn()) return;
+        const currentGame = gameRef.current;
+        let newPlayers = [...currentGame.players];
+        newPlayers[currentGame.turn].coins += 10;
         showToast("🐢 ¡Recibiste 10 Monedas!"); 
-        executeMoveStep(game.pendingNode); 
+        updateGame({ players: newPlayers });
+        executeMoveStep(currentGame.pendingNode); 
     };
     
     const handleBowserTrivia = () => {
+        if (!isMyTurn()) return;
         const q = pickQuestion();
-        if (!q) { showToast("⚠️ Chupacabras tiene piedad"); executeMoveStep(game.pendingNode); return; }
-        setGame(p => ({...p, activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'bowser' } }, phase: 'CHALLENGE'}));
+        if (!q) { showToast("⚠️ Chupacabras tiene piedad"); executeMoveStep(gameRef.current.pendingNode); return; }
+        updateGame({ activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'bowser' } }, phase: 'CHALLENGE' });
     };
 
-    const startBooSteal = (action) => { setGame(p => ({...p, booAction: action, phase: 'BOO_TARGET'})); };
+    const startBooSteal = (action) => { if (!isMyTurn()) return; updateGame({ booAction: action, phase: 'BOO_TARGET' }); };
 
     const executeBooSteal = (targetId) => {
-        if (game.booAction === 'coins') {
-            setGame(p => {
-                let newPlayers = [...p.players];
-                const targetIdx = newPlayers.findIndex(pl => pl.id === targetId);
-                const stolen = Math.min(10, newPlayers[targetIdx].coins); 
-                newPlayers[targetIdx].coins -= stolen;
-                newPlayers[p.turn].coins += stolen;
-                return {...p, players: newPlayers};
-            });
-            showToast(`👻 ¡Boo robó monedas!`);
-            executeMoveStep(game.pendingNode);
-        } else if (game.booAction === 'star') {
-            setGame(p => {
-                let newPlayers = [...p.players];
-                newPlayers[p.turn].coins -= 40;
-                return {...p, players: newPlayers};
-            });
+        if (!isMyTurn()) return;
+        const currentGame = gameRef.current;
+        if (currentGame.booAction === 'coins') {
+            let newPlayers = [...currentGame.players];
+            const targetIdx = newPlayers.findIndex(p => p.id === targetId);
+            const stolen = Math.min(10, newPlayers[targetIdx].coins); 
+            newPlayers[targetIdx].coins -= stolen;
+            newPlayers[currentGame.turn].coins += stolen;
+            showToast(`👻 ¡Boo robó ${stolen} monedas!`);
+            updateGame({ players: newPlayers });
+            executeMoveStep(currentGame.pendingNode);
+        } else if (currentGame.booAction === 'star') {
+            let newPlayers = [...currentGame.players];
+            newPlayers[currentGame.turn].coins -= 40;
+            updateGame({ players: newPlayers });
             const q = pickQuestion();
-            if (!q) { showToast("⚠️ Boo se rinde"); executeMoveStep(game.pendingNode); return; }
-            setGame(p => ({...p, activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'boo_star', targetId } }, phase: 'CHALLENGE'}));
+            if (!q) { showToast("⚠️ Boo se rinde"); executeMoveStep(currentGame.pendingNode); return; }
+            updateGame({ activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'boo_star', targetId } }, phase: 'CHALLENGE' });
         }
     };
 
+    // --- RESPUESTAS A RETOS ---
+    const updateChallenge = useCallback((updates) => {
+        if (db && roomId) {
+            const fbUpdates = {};
+            Object.keys(updates).forEach(k => { fbUpdates[`activeChallenge.${k}`] = updates[k]; });
+            updateDoc(doc(db, 'periplo-party-rooms', roomId), fbUpdates);
+        } else {
+            setGame(prev => ({ ...prev, activeChallenge: { ...prev.activeChallenge, ...updates } }));
+        }
+    }, [roomId]);
+
     const handleChallengeAnswer = (playerAnswer, isCorrect) => {
-        setGame(p => ({...p, activeChallenge: { ...p.activeChallenge, status: isCorrect ? 'correct' : 'wrong', playerAnswer, endTime: Date.now() }}));
+        if (!isMyTurn()) return;
+        updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer, endTime: Date.now() });
     };
 
     const handleChallengeTimeout = () => {
-        setGame(p => ({...p, activeChallenge: { ...p.activeChallenge, status: 'timeout', playerAnswer: null, endTime: Date.now() }}));
+        if (!isMyTurn()) return;
+        if (!gameRef.current.activeChallenge || gameRef.current.activeChallenge.status !== 'playing') return;
+        updateChallenge({ status: 'timeout', playerAnswer: null, endTime: Date.now() });
     };
 
     const resolveChallenge = useCallback(() => {
-        if (!game.activeChallenge) return;
-        const ch = game.activeChallenge;
+        if (!isMyTurn() || !gameRef.current.activeChallenge) return;
+        const currentGame = gameRef.current;
+        const ch = currentGame.activeChallenge;
         const ctx = ch.context || {};
         const isCorrect = ch.status === 'correct';
-        const pName = game.players[game.turn].name;
+        const pName = currentGame.players[currentGame.turn].name;
+        let newPlayers = [...currentGame.players];
 
-        setGame(prev => {
-            let newPlayers = [...prev.players];
-
-            if (ctx.trigger === 'blue') {
-                if (isCorrect) { showToast(`✅ ${pName} +3 Monedas`); newPlayers[prev.turn].coins += 3; }
-                else { showToast(`❌ Sin recompensa.`); }
-                setTimeout(() => advanceTurn(), 100);
-                return { ...prev, players: newPlayers, activeChallenge: null };
-            } 
-            else if (ctx.trigger === 'red') {
-                if (isCorrect) { showToast(`✅ ¡Salvado!`); }
-                else { showToast(`❌ ${pName} pierde -3 Monedas`); newPlayers[prev.turn].coins -= 3; }
-                setTimeout(() => advanceTurn(), 100);
-                return { ...prev, players: newPlayers, activeChallenge: null };
-            }
-            else if (ctx.trigger === 'bowser') {
-                if (isCorrect) { showToast(`✅ Chupacabras: "¡Grrr!" (-5 Monedas)`); newPlayers[prev.turn].coins -= 5; }
-                else { showToast(`❌ Chupacabras: "¡BWAHAHA!" (-15 Monedas)`); newPlayers[prev.turn].coins -= 15; }
-                setTimeout(() => executeMoveStep(prev.pendingNode), 100);
-                return { ...prev, players: newPlayers, activeChallenge: null };
-            }
-            else if (ctx.trigger === 'boo_star') {
-                if (isCorrect) {
-                    showToast(`👻 ¡Boo robó la estrella exitosamente!`);
-                    const targetIdx = newPlayers.findIndex(p => p.id === ctx.targetId);
-                    if (targetIdx >= 0 && newPlayers[targetIdx].stars > 0) {
-                        newPlayers[targetIdx].stars -= 1;
-                        newPlayers[prev.turn].stars += 1;
-                    }
-                } else {
-                    showToast(`❌ Boo: "Too bad..."`);
+        if (ctx.trigger === 'blue') {
+            if (isCorrect) { showToast(`✅ ${pName} +3 Monedas`); newPlayers[currentGame.turn].coins += 3; }
+            else { showToast(`❌ Sin recompensa.`); }
+            updateGame({ players: newPlayers, activeChallenge: null });
+            advanceTurn();
+        } 
+        else if (ctx.trigger === 'red') {
+            if (isCorrect) { showToast(`✅ ¡Salvado!`); }
+            else { showToast(`❌ ${pName} pierde -3 Monedas`); newPlayers[currentGame.turn].coins -= 3; }
+            updateGame({ players: newPlayers, activeChallenge: null });
+            advanceTurn();
+        }
+        else if (ctx.trigger === 'bowser') {
+            if (isCorrect) { showToast(`✅ Chupacabras: "¡Grrr!" (-5 Monedas)`); newPlayers[currentGame.turn].coins -= 5; }
+            else { showToast(`❌ Chupacabras: "¡BWAHAHA!" (-15 Monedas)`); newPlayers[currentGame.turn].coins -= 15; }
+            updateGame({ players: newPlayers, activeChallenge: null });
+            executeMoveStep(currentGame.pendingNode);
+        }
+        else if (ctx.trigger === 'boo_star') {
+            if (isCorrect) {
+                showToast(`👻 ¡Boo robó la estrella exitosamente!`);
+                const targetIdx = newPlayers.findIndex(p => p.id === ctx.targetId);
+                if (targetIdx >= 0 && newPlayers[targetIdx].stars > 0) {
+                    newPlayers[targetIdx].stars -= 1;
+                    newPlayers[currentGame.turn].stars += 1;
                 }
-                setTimeout(() => executeMoveStep(prev.pendingNode), 100);
-                return { ...prev, players: newPlayers, activeChallenge: null };
+            } else {
+                showToast(`❌ Boo: "Too bad..."`);
             }
-            return prev;
-        });
-    }, [game.activeChallenge]);
+            updateGame({ players: newPlayers, activeChallenge: null });
+            executeMoveStep(currentGame.pendingNode);
+        }
+    }, [isMyTurn]);
 
     useEffect(() => {
-        if (!game.activeChallenge) return;
+        if (!isMyTurn() || !game.activeChallenge) return;
         if (game.activeChallenge.status === 'playing') return;
+        
+        // Retos calificados por maestro NO avanzan solos. El maestro da click en boton.
+        if (['speaking', 'listening', 'roleplay'].includes(game.activeChallenge.type)) return;
+
         const timer = setTimeout(() => resolveChallenge(), 2800);
         return () => clearTimeout(timer);
-    }, [game.activeChallenge?.status, resolveChallenge]);
+    }, [game.activeChallenge?.status, isMyTurn, resolveChallenge]);
 
-    if (quizLoading) return <div className="h-full flex items-center justify-center bg-emerald-950 p-6 text-white font-bold text-xl">Iniciando Periplo Party...</div>;
+    // Función de boton manual para el maestro (Host)
+    const handleTeacherAdvance = (isCorrect) => {
+        if (!isHost) return;
+        updateChallenge({ status: isCorrect ? 'correct' : 'wrong', endTime: Date.now() });
+        // Se deja que el useEffect de arriba atrape el nuevo status y resuelva a los 2.8 segs, o resolvemos directo:
+        setTimeout(() => resolveChallenge(), 200); 
+    };
 
+
+    // ==========================================
+    // RENDER: PANTALLAS PRE-GAME (HOME, PROFILE, LOBBY)
+    // ==========================================
+    if (quizLoading || quizError) return <div className="h-full flex items-center justify-center bg-emerald-950 p-6 text-white font-bold">{quizError || "Cargando..."}</div>;
+
+    if (appState === 'HOME') {
+        return (
+            <div className="h-full flex flex-col items-center justify-center bg-emerald-950 p-6 relative">
+                {toastMsg && <div className="absolute top-10 z-50"><div className="bg-white text-black px-6 py-3 rounded-full font-black text-lg shadow-2xl animate-pop-in border-4 border-emerald-500">{toastMsg}</div></div>}
+                <button onClick={copyGameLink} className="absolute top-6 right-6 text-zinc-400 hover:text-white flex items-center gap-2 font-bold bg-zinc-900 px-4 py-2 rounded-xl z-20 transition-colors"><LinkIcon size={18}/> <span className="hidden md:inline">Copiar Link</span></button>
+                <div className="bg-zinc-900 border-4 border-emerald-500 rounded-3xl p-8 w-full max-w-md shadow-2xl z-10 text-center">
+                    <Gamepad2 size={60} className="text-emerald-400 mx-auto mb-4"/>
+                    <h1 className="text-4xl font-black text-white mb-2">Periplo Party</h1>
+                    <p className="text-emerald-400 font-bold tracking-widest uppercase mb-8">Multiplayer Edition</p>
+                    {quizTitle && <p className="text-zinc-400 text-sm font-bold mb-6 italic">📚 {quizTitle}</p>}
+                    <div className="flex flex-col gap-4">
+                        <button onClick={handleCreateRoomClick} className="btn-juicy w-full bg-emerald-500 hover:bg-emerald-400 text-emerald-950 py-4 rounded-2xl font-black text-xl shadow-[0_6px_0_theme(colors.emerald.700)] flex justify-center items-center gap-2"><Crown size={24}/> Crear Sala</button>
+                        <div className="flex items-center gap-4 my-2"><div className="h-px bg-zinc-700 flex-1"></div><span className="text-zinc-500 font-bold uppercase text-xs">o unirse</span><div className="h-px bg-zinc-700 flex-1"></div></div>
+                        <div className="flex gap-2">
+                            <input type="text" value={inputRoomId} onChange={e => setInputRoomId(e.target.value)} placeholder="CÓDIGO" maxLength="4" className="bg-zinc-800 text-white font-black text-center text-xl uppercase px-4 py-3 rounded-2xl w-full border-2 border-zinc-700 outline-none focus:border-indigo-500" />
+                            <button onClick={handleJoinRoomClick} className="btn-juicy bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-3 rounded-2xl font-black text-lg">Entrar</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (appState === 'PROFILE') {
+        return (
+            <div className="h-full flex flex-col items-center justify-center bg-emerald-950 p-6 relative">
+                {toastMsg && <div className="absolute top-10 z-50"><div className="bg-white text-black px-6 py-3 rounded-full font-black text-lg shadow-2xl animate-pop-in border-4 border-emerald-500">{toastMsg}</div></div>}
+                <button onClick={() => { setAppState('HOME'); setRoomId(""); }} className="absolute top-6 left-6 text-zinc-400 hover:text-white flex items-center gap-2 font-bold bg-zinc-900 px-4 py-2 rounded-xl z-20 transition-colors"><ChevronLeft size={20}/> Volver</button>
+                <div className="bg-zinc-900 border-4 border-indigo-500 rounded-3xl p-8 w-full max-w-md shadow-2xl z-10 text-center animate-pop-in">
+                    <UserPlus size={50} className="text-indigo-400 mx-auto mb-4"/>
+                    <h2 className="text-2xl font-black text-white mb-1">Crea tu Perfil</h2>
+                    <p className="text-zinc-500 text-xs mb-6">Tu nombre y avatar se recordarán para próximos juegos</p>
+                    <div className="text-left mb-6">
+                        <label className="text-zinc-400 font-bold text-xs uppercase tracking-widest ml-2 mb-2 block">1. Tu Nombre</label>
+                        <input type="text" value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="Ej: Juan" maxLength="12" className="bg-zinc-800 text-white font-black text-xl px-4 py-3 rounded-2xl w-full border-2 border-zinc-700 outline-none focus:border-indigo-500 transition-all" />
+                    </div>
+                    <div className="text-left mb-8">
+                        <label className="text-zinc-400 font-bold text-xs uppercase tracking-widest ml-2 mb-2 block">2. Elige tu Avatar</label>
+                        <div className="grid grid-cols-6 gap-2 p-3 border-2 border-zinc-800 rounded-2xl bg-zinc-950">
+                            {AVATAR_EMOJIS.map(emoji => (
+                                <button key={emoji} onClick={() => setSelectedEmoji(emoji)} className={`text-2xl md:text-3xl aspect-square rounded-xl transition-all flex items-center justify-center ${selectedEmoji === emoji ? 'bg-indigo-600 scale-110 shadow-lg ring-2 ring-indigo-300' : 'bg-zinc-800 hover:bg-zinc-700 opacity-70 hover:opacity-100'}`}>{emoji}</button>
+                            ))}
+                        </div>
+                    </div>
+                    <button onClick={handleProfileSubmit} className="btn-juicy w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-2xl font-black text-xl shadow-[0_6px_0_theme(colors.indigo.800)] flex justify-center items-center gap-2">Sentarse en la mesa <ArrowRight size={24}/></button>
+                </div>
+            </div>
+        );
+    }
+
+    if (appState === 'LOBBY' && roomId) {
+        return (
+            <div className="h-full flex flex-col items-center justify-center bg-emerald-950 p-6 relative">
+                {toastMsg && <div className="absolute top-10 z-50"><div className="bg-white text-black px-6 py-3 rounded-full font-black text-lg shadow-2xl animate-pop-in border-4 border-emerald-500">{toastMsg}</div></div>}
+                <button onClick={leaveRoom} className="absolute top-6 left-6 text-zinc-400 hover:text-white flex items-center gap-2 font-bold bg-zinc-900 px-4 py-2 rounded-xl z-20 transition-colors"><ChevronLeft size={20}/> {isHost ? 'Cerrar sala' : 'Abandonar'}</button>
+                <div className="bg-zinc-900 border-4 border-emerald-500 rounded-3xl p-8 w-full max-w-md shadow-2xl z-10 text-center animate-pop-in">
+                    <button onClick={copyRoomCode} className="btn-juicy w-full bg-zinc-950 border border-zinc-800 hover:border-emerald-500 rounded-2xl p-4 mb-4 transition-colors">
+                        <p className="text-zinc-500 text-xs font-bold uppercase tracking-widest mb-1 flex items-center justify-center gap-2">{codeCopied ? <><Check size={12} className="text-emerald-400"/> Código copiado</> : <><Copy size={12}/> Toca para copiar el código</>}</p>
+                        <p className="text-5xl font-black text-white tracking-widest">{roomId}</p>
+                    </button>
+                    <h3 className="text-left text-zinc-400 font-bold text-sm flex items-center gap-2 mb-3"><Users size={18}/> Jugadores ({(game.players || []).length}/4)</h3>
+                    <div className="grid grid-cols-2 gap-3 mb-8">
+                        {(game.players || []).map((p, i) => (
+                            <div key={p.id} className={`bg-zinc-800 border-2 rounded-xl p-3 flex items-center justify-center gap-3 relative overflow-hidden ${p.id === localPlayerId ? 'ring-4 ring-white/30' : ''}`} style={{ borderColor: p.activeColor }}>
+                                <div className="absolute inset-0 opacity-10" style={{ backgroundColor: p.color }}></div>
+                                <span className="text-3xl relative z-10">{p.emoji}</span><span className="font-black text-white text-base relative z-10 truncate">{p.name} {i===0 && '👑'}</span>
+                            </div>
+                        ))}
+                        {[...Array(Math.max(0, 4 - (game.players || []).length))].map((_, i) => (
+                            <div key={`empty-${i}`} className="bg-zinc-950 border-2 border-zinc-800 border-dashed rounded-xl p-3 flex flex-col items-center justify-center"><span className="text-zinc-600 font-bold text-sm">Silla vacía</span><span className="text-zinc-700 text-xs">Esperando...</span></div>
+                        ))}
+                    </div>
+                    {localPlayerId === 1 ? (
+                        <button onClick={startGame} disabled={(game.players || []).length < 2} className="btn-juicy w-full bg-emerald-500 disabled:bg-zinc-800 text-emerald-950 disabled:text-zinc-500 py-4 rounded-2xl font-black text-xl shadow-[0_6px_0_theme(colors.emerald.700)] disabled:shadow-none">{(game.players || []).length < 2 ? 'Esperando jugadores...' : '¡Iniciar Partida!'}</button>
+                    ) : (<div className="bg-indigo-900/30 border border-indigo-500/30 rounded-2xl p-4"><p className="text-indigo-300 font-bold animate-pulse">Esperando a que el Host inicie el juego...</p></div>)}
+                </div>
+            </div>
+        );
+    }
+
+    // ==========================================
+    // RENDER: PLAYING
+    // ==========================================
+    if (!game.players || game.players.length === 0) return null;
     const activePlayer = game.players[game.turn];
 
     return (
         <div className="h-full flex flex-col bg-emerald-950 relative">
-            
             {/* HUD SUPERIOR */}
             <div className="border-b shrink-0 flex flex-col z-10 shadow-xl transition-colors duration-500" style={{ backgroundColor: `${activePlayer.color}1A`, borderColor: activePlayer.color }}>
                 <div className="flex justify-between items-center p-2 bg-black/40 gap-2">
@@ -832,7 +1488,7 @@ const App = () => {
                             <div key={p.id} className={`p-3 flex justify-between items-center border-b-4 transition-all ${game.turn === idx ? '' : 'border-transparent bg-zinc-950 opacity-70 grayscale'}`} style={game.turn === idx ? { borderColor: p.color, backgroundColor: `${p.color}33` } : {}}>
                                 <div className="flex items-center gap-3 min-w-0">
                                     <div className="w-10 h-10 rounded-full border-2 shadow-lg flex items-center justify-center text-xl bg-white shrink-0" style={{ borderColor: p.activeColor }}>{p.emoji}</div>
-                                    <div className="flex flex-col min-w-0"><span className="font-black text-white text-sm leading-none truncate">{p.name}</span>{game.turn === idx && game.phase === 'IDLE' && <span className="text-[10px] font-bold uppercase tracking-widest mt-1" style={{ color: p.activeColor }}>Ready</span>}</div>
+                                    <div className="flex flex-col min-w-0"><span className="font-black text-white text-sm leading-none truncate">{p.name} {p.id === localPlayerId && '(Tú)'}</span>{game.turn === idx && game.phase === 'IDLE' && <span className="text-[10px] font-bold uppercase tracking-widest mt-1" style={{ color: p.activeColor }}>Ready</span>}</div>
                                 </div>
                                 <div className="flex gap-3 shrink-0">
                                     <div className="flex items-center gap-1"><Coins className="text-yellow-400" size={18}/><span className={`font-black ${p.coins < 0 ? 'text-rose-500' : 'text-white'}`}>{p.coins}</span></div>
@@ -847,10 +1503,10 @@ const App = () => {
             {/* DADO FLOTANTE */}
             {game.phase === 'IDLE' && (
                 <div className="absolute top-32 right-6 z-50 animate-pop-in">
-                    <button onClick={rollDice} disabled={isRolling} 
-                            className={`w-20 h-20 md:w-24 md:h-24 rounded-[2rem] flex flex-col items-center justify-center transition-all border-4 ${!isRolling ? 'shadow-[0_8px_0_rgba(0,0,0,0.5)] active:translate-y-2 active:shadow-none cursor-pointer' : 'shadow-none cursor-not-allowed opacity-80'}`}
+                    <button onClick={rollDice} disabled={isRolling || !isMyTurn()} 
+                            className={`w-20 h-20 md:w-24 md:h-24 rounded-[2rem] flex flex-col items-center justify-center transition-all border-4 ${(!isRolling && isMyTurn()) ? 'shadow-[0_8px_0_rgba(0,0,0,0.5)] active:translate-y-2 active:shadow-none cursor-pointer' : 'shadow-none cursor-not-allowed opacity-80'}`}
                             style={{ backgroundColor: activePlayer.color, borderColor: activePlayer.activeColor }}>
-                        {isRolling ? <span className="text-4xl md:text-5xl font-black text-white animate-pulse">{localDiceFace}</span> : <><Dices size={36} className="mb-1 text-white"/><span className="text-[10px] font-bold uppercase tracking-widest text-white">Tirar</span></>}
+                        {isRolling ? <span className="text-4xl md:text-5xl font-black text-white animate-pulse">{localDiceFace}</span> : <><Dices size={36} className="mb-1 text-white"/><span className="text-[10px] font-bold uppercase tracking-widest text-white">{isMyTurn() ? 'Tirar' : 'Espera'}</span></>}
                     </button>
                 </div>
             )}
@@ -860,10 +1516,8 @@ const App = () => {
                 {toastMsg && <div className="absolute top-10 z-50 pointer-events-none"><div className="bg-white text-black px-6 py-3 rounded-full font-black text-lg shadow-2xl animate-pop-in border-4 border-emerald-500">{toastMsg}</div></div>}
 
                 <svg viewBox="-500 -350 1000 700" className="w-full h-full">
-                    {/* BOSQUE */}
                     <g>{forestDecorations.map((t) => (<g key={`forest-${t.id}`}><polygon points={getHexPoints(t.x, t.y)} fill={t.fill} stroke="#022c22" strokeWidth="1" opacity="0.8" />{t.emoji && <text x={t.x} y={t.y} fontSize="20" textAnchor="middle" dominantBaseline="central" opacity="0.9">{t.emoji}</text>}</g>))}</g>
 
-                    {/* CASILLAS */}
                     <g>
                         {Object.values(RAW_MAP_DATA).map((tile) => {
                             const isFork = getValidOuts(tile).length > 1;
@@ -880,6 +1534,8 @@ const App = () => {
                             let stroke = isFork ? '#b45309' : baseStyle.stroke;
                             if (isInactiveStar) { fill = 'transparent'; stroke = '#ffffff'; }
 
+                            const shouldHaveArrows = tile.type === 'blue' || tile.type === 'red' || isFork;
+
                             return (
                                 <g key={`play-${tile.id}`}>
                                     {isInactiveStar ? (
@@ -890,14 +1546,13 @@ const App = () => {
                                             {isActiveStar ? <g transform={`translate(${tile.x - 9}, ${tile.y - 9})`}><Star size={18} className="text-amber-300 fill-amber-300"/></g> : (baseStyle.icon && <g transform={`translate(${tile.x - 9}, ${tile.y - 9})`}>{baseStyle.icon}</g>)}
                                         </g>
                                     )}
-                                    {(tile.type === 'blue' || tile.type === 'red' || isFork) && (tile.dirs || []).map(dir => (<g key={`arrow-${dir}`} transform={`translate(${tile.x}, ${tile.y}) rotate(${dir * 60})`}><path d="M 0,-1.5 L 5,-1.5 L 5,-3.5 L 10,0 L 5,3.5 L 5,1.5 L 0,1.5 Z" fill="rgba(255,255,255,0.6)" /></g>))}
+                                    {shouldHaveArrows && (tile.dirs || []).map(dir => (<g key={`arrow-${dir}`} transform={`translate(${tile.x}, ${tile.y}) rotate(${dir * 60})`}><path d="M 0,-1.5 L 5,-1.5 L 5,-3.5 L 10,0 L 5,3.5 L 5,1.5 L 0,1.5 Z" fill="rgba(255,255,255,0.6)" /></g>))}
                                 </g>
                             );
                         })}
                     </g>
 
-                    {/* GHOST PATH */}
-                    {game.phase === 'CHOICE' && ghostPathCoords.length > 1 && (
+                    {game.phase === 'CHOICE' && isMyTurn() && ghostPathCoords.length > 1 && (
                         <polyline points={ghostPathCoords.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#ffffff" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="8 12" className="ghost-path drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" />
                     )}
 
@@ -924,7 +1579,6 @@ const App = () => {
                         );
                     })}
 
-                    {/* PASOS RESTANTES */}
                     {(game.phase === 'MOVING' || game.phase === 'CHOICE' || (game.phase || '').includes('PROMPT')) && RAW_MAP_DATA[game.activePos] && (
                         <g style={{ transform: `translate(${RAW_MAP_DATA[game.activePos].x}px, ${RAW_MAP_DATA[game.activePos].y - 35}px)` }} className="transition-transform duration-300 ease-in-out z-50">
                             <rect x="-14" y="-14" width="28" height="28" rx="8" fill={activePlayer.color} stroke="#ffffff" strokeWidth="2" className="drop-shadow-lg"/>
@@ -939,7 +1593,7 @@ const App = () => {
                         <div className="max-w-3xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
                             <div className="text-center md:text-left shrink-0">
                                 <h2 className="text-2xl font-black text-white flex items-center justify-center md:justify-start gap-2"><MapPin style={{ color: activePlayer.activeColor }}/> ¡Intersección!</h2>
-                                <p className="text-zinc-400 text-sm mt-1">Elige una ruta con <span className="text-white font-bold">{game.movesLeft} pasos</span>.</p>
+                                <p className="text-zinc-400 text-sm mt-1">{isMyTurn() ? <>Elige una ruta con <span className="text-white font-bold">{game.movesLeft} pasos</span>.</> : <span className="animate-pulse">{activePlayer.name} está eligiendo...</span>}</p>
                             </div>
                             
                             <div className="flex-1 flex justify-center gap-3 w-full">
@@ -948,7 +1602,7 @@ const App = () => {
                                     const customName = RAW_MAP_DATA[game.activePos].dirLabels?.[out.dir] || `Ruta ${HEX_DIRS[out.dir].label}`;
                                     const nextType = SPACE_TYPES[RAW_MAP_DATA[out.id].type === 'star_node' ? 'start' : RAW_MAP_DATA[out.id].type] || SPACE_TYPES.blue;
                                     return (
-                                        <button key={out.id} onClick={() => previewChoice(out.dir)} 
+                                        <button key={out.id} onClick={() => previewChoice(out.dir)} disabled={!isMyTurn()}
                                             className={`btn-juicy flex-1 p-3 rounded-2xl font-bold flex flex-col items-center justify-center border-2 transition-all disabled:opacity-50 ${isSelected ? 'text-white shadow-[0_0_15px_rgba(255,255,255,0.5)] scale-105' : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'}`}
                                             style={isSelected ? { backgroundColor: activePlayer.color, borderColor: activePlayer.activeColor } : {}}>
                                             <span className="text-xs opacity-70 mb-1 uppercase tracking-widest">{customName}</span>
@@ -959,8 +1613,8 @@ const App = () => {
                             </div>
 
                             <div className="shrink-0 w-full md:w-auto">
-                                <button onClick={confirmChoice} disabled={selectedForkDir === null} className="btn-juicy w-full md:w-auto bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-emerald-950 px-8 py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-2 shadow-[0_6px_0_theme(colors.emerald.700)] disabled:shadow-none">
-                                    <CheckCircle2 size={24}/> Confirmar Ruta
+                                <button onClick={confirmChoice} disabled={selectedForkDir === null || !isMyTurn()} className="btn-juicy w-full md:w-auto bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-emerald-950 px-8 py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-2 shadow-[0_6px_0_theme(colors.emerald.700)] disabled:shadow-none">
+                                    {isMyTurn() ? <><CheckCircle2 size={24}/> Confirmar Ruta</> : 'Esperando...'}
                                 </button>
                             </div>
                         </div>
@@ -975,8 +1629,12 @@ const App = () => {
                             <h2 className="text-3xl font-black text-white mb-2">¡La Piedra!</h2>
                             <p className="text-zinc-400 mb-6">El peaje es de <span className="text-yellow-400 font-bold">10 Monedas</span> para cruzar.</p>
                             <div className="flex flex-col gap-3">
-                                <button onClick={handleStonePay} disabled={activePlayer.coins < 10} className="btn-juicy w-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-600 text-emerald-950 py-4 rounded-2xl font-black text-lg shadow-[0_6px_0_theme(colors.emerald.700)] disabled:shadow-none">Pagar 10 Monedas</button>
-                                <button onClick={handleStoneFail} className="btn-juicy w-full bg-rose-600 hover:bg-rose-500 text-white py-4 rounded-2xl font-bold text-lg shadow-[0_6px_0_theme(colors.rose.800)]">¡No puedo pagar! (Rebotar)</button>
+                                {isMyTurn() ? (
+                                    <>
+                                        <button onClick={handleStonePay} disabled={activePlayer.coins < 10} className="btn-juicy w-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-600 text-emerald-950 py-4 rounded-2xl font-black text-lg shadow-[0_6px_0_theme(colors.emerald.700)] disabled:shadow-none">Pagar 10 Monedas</button>
+                                        <button onClick={handleStoneFail} className="btn-juicy w-full bg-rose-600 hover:bg-rose-500 text-white py-4 rounded-2xl font-bold text-lg shadow-[0_6px_0_theme(colors.rose.800)]">¡No puedo pagar! (Rebotar)</button>
+                                    </>
+                                ) : (<p className="text-white font-bold animate-pulse">Esperando decisión de {activePlayer.name}...</p>)}
                             </div>
                         </div>
                     </div>
@@ -989,8 +1647,12 @@ const App = () => {
                             <h2 className="text-3xl font-black text-white mb-2">¡Estrella!</h2>
                             <p className="text-zinc-400 mb-6">¿Quieres comprarla por <span className="text-yellow-400 font-bold">20 Monedas</span>?</p>
                             <div className="flex flex-col gap-3">
-                                <button onClick={() => handleStarBuy(true)} disabled={activePlayer.coins < 20} className="btn-juicy w-full bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 text-amber-950 py-4 rounded-2xl font-black text-xl shadow-[0_6px_0_theme(colors.amber.700)] disabled:shadow-none flex items-center justify-center gap-2"><Star size={20} className="fill-amber-950"/> Comprar Estrella</button>
-                                <button onClick={() => handleStarBuy(false)} className="btn-juicy w-full bg-zinc-800 hover:bg-zinc-700 text-white py-4 rounded-2xl font-bold text-lg">Pasar de largo</button>
+                                {isMyTurn() ? (
+                                    <>
+                                        <button onClick={() => handleStarBuy(true)} disabled={activePlayer.coins < 20} className="btn-juicy w-full bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 text-amber-950 py-4 rounded-2xl font-black text-xl shadow-[0_6px_0_theme(colors.amber.700)] disabled:shadow-none flex items-center justify-center gap-2"><Star size={20} className="fill-amber-950"/> Comprar Estrella</button>
+                                        <button onClick={() => handleStarBuy(false)} className="btn-juicy w-full bg-zinc-800 hover:bg-zinc-700 text-white py-4 rounded-2xl font-bold text-lg">Pasar de largo</button>
+                                    </>
+                                ) : (<p className="text-white font-bold animate-pulse">Esperando decisión de {activePlayer.name}...</p>)}
                             </div>
                         </div>
                     </div>
@@ -1002,7 +1664,9 @@ const App = () => {
                             <div className="text-5xl mb-4">🐢</div>
                             <h2 className="text-3xl font-black text-white mb-2">Wealthy Turtle</h2>
                             <p className="text-zinc-300 italic mb-6">"{game.currentDialog}"</p>
-                            <button onClick={handleKoopaAccept} className="btn-juicy w-full bg-teal-500 hover:bg-teal-400 text-teal-950 py-4 rounded-2xl font-black text-lg shadow-[0_6px_0_theme(colors.teal.700)]">¡Gracias! (+10 Monedas)</button>
+                            {isMyTurn() ? (
+                                <button onClick={handleKoopaAccept} className="btn-juicy w-full bg-teal-500 hover:bg-teal-400 text-teal-950 py-4 rounded-2xl font-black text-lg shadow-[0_6px_0_theme(colors.teal.700)]">¡Gracias! (+10 Monedas)</button>
+                            ) : (<p className="text-white font-bold animate-pulse">Esperando a {activePlayer.name}...</p>)}
                         </div>
                     </div>
                 )}
@@ -1013,7 +1677,9 @@ const App = () => {
                             <div className="text-5xl mb-4">👹</div>
                             <h2 className="text-3xl font-black text-white mb-2">Chupacabras</h2>
                             <p className="text-zinc-300 italic mb-6">"{game.currentDialog}"</p>
-                            <button onClick={handleBowserTrivia} className="btn-juicy w-full bg-rose-600 hover:bg-rose-500 text-white py-4 rounded-2xl font-black text-lg shadow-[0_6px_0_theme(colors.rose.800)] flex items-center justify-center gap-2"><BrainCircuit size={20}/> ¡A la Trivia!</button>
+                            {isMyTurn() ? (
+                                <button onClick={handleBowserTrivia} className="btn-juicy w-full bg-rose-600 hover:bg-rose-500 text-white py-4 rounded-2xl font-black text-lg shadow-[0_6px_0_theme(colors.rose.800)] flex items-center justify-center gap-2"><BrainCircuit size={20}/> ¡A la Trivia!</button>
+                            ) : (<p className="text-white font-bold animate-pulse">El Chupacabras atrapó a {activePlayer.name}...</p>)}
                         </div>
                     </div>
                 )}
@@ -1025,9 +1691,13 @@ const App = () => {
                             <h2 className="text-3xl font-black text-white mb-2">Boo</h2>
                             <p className="text-zinc-300 italic mb-6">"I don't care who wins, I just want to have fun. I'll steal some loot for you... for a price."</p>
                             <div className="flex flex-col gap-3">
-                                <button onClick={() => startBooSteal('coins')} className="btn-juicy w-full bg-yellow-500 hover:bg-yellow-400 text-yellow-950 py-3 rounded-2xl font-black text-lg shadow-[0_4px_0_theme(colors.yellow.700)] flex justify-center items-center gap-2"><Coins size={20}/> Robar 10 Monedas (Gratis)</button>
-                                <button onClick={() => startBooSteal('star')} disabled={activePlayer.coins < 40} className="btn-juicy w-full bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 text-amber-950 py-3 rounded-2xl font-black text-lg shadow-[0_4px_0_theme(colors.amber.700)] disabled:shadow-none flex justify-center items-center gap-2"><Star size={20}/> Robar Estrella (40 Monedas)</button>
-                                <button onClick={() => executeMoveStep(game.pendingNode)} className="btn-juicy w-full bg-zinc-800 hover:bg-zinc-700 text-white py-3 rounded-2xl font-bold text-base mt-2">Pasar de largo</button>
+                                {isMyTurn() ? (
+                                    <>
+                                        <button onClick={() => startBooSteal('coins')} className="btn-juicy w-full bg-yellow-500 hover:bg-yellow-400 text-yellow-950 py-3 rounded-2xl font-black text-lg shadow-[0_4px_0_theme(colors.yellow.700)] flex justify-center items-center gap-2"><Coins size={20}/> Robar 10 Monedas (Gratis)</button>
+                                        <button onClick={() => startBooSteal('star')} disabled={activePlayer.coins < 40} className="btn-juicy w-full bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 text-amber-950 py-3 rounded-2xl font-black text-lg shadow-[0_4px_0_theme(colors.amber.700)] disabled:shadow-none flex justify-center items-center gap-2"><Star size={20}/> Robar Estrella (40 Monedas)</button>
+                                        <button onClick={() => executeMoveStep(game.pendingNode)} className="btn-juicy w-full bg-zinc-800 hover:bg-zinc-700 text-white py-3 rounded-2xl font-bold text-base mt-2">Pasar de largo</button>
+                                    </>
+                                ) : (<p className="text-white font-bold animate-pulse">{activePlayer.name} está negociando con Boo...</p>)}
                             </div>
                         </div>
                     </div>
@@ -1040,7 +1710,7 @@ const App = () => {
                             <h2 className="text-2xl font-black text-white mb-4">¿A quién le robarás?</h2>
                             <div className="flex flex-col gap-3">
                                 {game.players.filter(p => p.id !== activePlayer.id).map(target => (
-                                    <button key={target.id} onClick={() => executeBooSteal(target.id)} 
+                                    <button key={target.id} onClick={() => isMyTurn() && executeBooSteal(target.id)} 
                                         className="btn-juicy bg-zinc-800 hover:bg-purple-600 border-2 border-zinc-700 hover:border-purple-400 text-white p-3 rounded-2xl font-bold flex justify-between items-center transition-all">
                                         <span className="flex items-center gap-2"><span className="text-xl">{target.emoji}</span> {target.name}</span>
                                         <div className="flex gap-2 text-xs">
@@ -1054,36 +1724,48 @@ const App = () => {
                     </div>
                 )}
 
-                {/* MODAL TRIVIA */}
+                {/* MODAL TRIVIA GLOBAL (COMPLETO Y SINCRONIZADO) */}
                 {game.phase === 'CHALLENGE' && game.activeChallenge && (
                     <div className="absolute inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
-                        <div className="bg-zinc-900 border-4 rounded-3xl w-full max-w-lg shadow-2xl animate-pop-in my-auto" 
+                        <div className="bg-zinc-900 border-4 rounded-3xl w-full max-w-2xl shadow-2xl animate-pop-in my-auto overflow-hidden flex flex-col max-h-[90vh]" 
                              style={{ borderColor: game.activeChallenge.context?.trigger === 'bowser' ? '#ef4444' : (game.activeChallenge.context?.trigger === 'boo_star' ? '#a855f7' : (game.activeChallenge.context?.trigger === 'red' ? '#f87171' : activePlayer.color)) }}>
                             
-                            <CountdownBar 
-                                startTime={game.activeChallenge.startTime} 
-                                endTime={game.activeChallenge.endTime} 
-                                status={game.activeChallenge.status} 
-                                onTimeUp={handleChallengeTimeout} 
-                                duration={30}
-                            />
+                            {/* Reloj solo para el que interactúa */}
+                            {(!['speaking', 'listening', 'roleplay'].includes(game.activeChallenge.type)) && (
+                                <CountdownBar 
+                                    startTime={game.activeChallenge.startTime} 
+                                    endTime={game.activeChallenge.endTime} 
+                                    status={game.activeChallenge.status} 
+                                    onTimeUp={handleChallengeTimeout} 
+                                    canInteract={isMyTurn()}
+                                    duration={30}
+                                />
+                            )}
 
-                            <div className="p-6">
+                            <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
                                 <div className="text-center mb-4">
                                     {game.activeChallenge.context?.trigger === 'blue' && <span className="text-blue-400 font-bold uppercase tracking-widest text-xs">Casilla Azul · +3 monedas si aciertas</span>}
                                     {game.activeChallenge.context?.trigger === 'red' && <span className="text-rose-400 font-bold uppercase tracking-widest text-xs">Casilla Roja · -3 monedas si fallas</span>}
                                     {game.activeChallenge.context?.trigger === 'bowser' && <span className="text-rose-500 font-bold uppercase tracking-widest text-xs">Trivia Chupacabras · -15 si fallas</span>}
                                     {game.activeChallenge.context?.trigger === 'boo_star' && <span className="text-purple-400 font-bold uppercase tracking-widest text-xs">Boo · Acierta para robar la Estrella</span>}
-                                    <div className="mt-2 text-zinc-500 text-xs">Responde: <span className="font-black" style={{color: activePlayer.activeColor}}>{activePlayer.name}</span></div>
+                                    <div className="mt-2 text-zinc-500 text-xs">Responde: <span className="font-black" style={{color: activePlayer.activeColor}}>{activePlayer.name}</span> {!isMyTurn() && '(Tú observas)'}</div>
                                 </div>
                                 
+                                {/* El Router dibuja el reto exacto */}
                                 <ChallengeRouter 
                                     modal={game.activeChallenge} 
-                                    onAnswer={handleChallengeAnswer} 
+                                    updateChallenge={updateChallenge}
+                                    canInteract={isMyTurn() && game.activeChallenge.status === 'playing'}
+                                    isHost={isHost}
                                 />
 
-                                {game.activeChallenge.status === 'timeout' && (
-                                    <div className="text-center text-rose-400 font-black text-lg mt-2"><Timer className="inline mr-2" size={20}/>¡Tiempo agotado!</div>
+                                {/* BOTON DE AVANCE MANUAL SÓLO PARA EL HOST EN RETOS DE MAESTRO */}
+                                {isHost && ['speaking', 'listening', 'roleplay'].includes(game.activeChallenge.type) && game.activeChallenge.status !== 'playing' && (
+                                    <div className="mt-8 border-t border-zinc-800 pt-6 animate-in">
+                                        <button onClick={() => resolveChallenge()} className="btn-juicy w-full py-5 rounded-2xl font-black text-white text-xl flex justify-center items-center gap-2 shadow-xl bg-slate-800 border-slate-950 hover:bg-slate-700">
+                                            CERRAR PREGUNTA Y CONTINUAR <ArrowRight/>
+                                        </button>
+                                    </div>
                                 )}
                             </div>
                         </div>
