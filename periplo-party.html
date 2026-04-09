@@ -16,7 +16,7 @@
         "lucide-react": "https://esm.sh/lucide-react@0.344.0",
         "canvas-confetti": "https://esm.sh/canvas-confetti@1.6.0",
         "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
-        "firebase/database": "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js"
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
       }
     }
     </script>
@@ -54,15 +54,14 @@ import { createRoot } from 'react-dom/client';
 import { Dices, MapPin, ArrowRight, Skull, Ghost, Star, Zap, LogIn, AlertTriangle, Trophy, Coins, CheckCircle2, Eye, EyeOff, BrainCircuit, Crosshair, Users, Crown, Gamepad2, ChevronLeft, Link as LinkIcon, UserPlus, Copy, Check } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, onValue, get, update, runTransaction, onDisconnect } from 'firebase/database';
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, runTransaction } from 'firebase/firestore';
 
 // ==========================================
-// 🔴 FIREBASE
+// 🔴 FIREBASE (Firestore - misma config que uno.html / dashboard-uno.html)
 // ==========================================
 const firebaseConfig = { 
     apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", 
     authDomain: "proyecto-periplo.firebaseapp.com", 
-    databaseURL: "https://proyecto-periplo-default-rtdb.firebaseio.com",
     projectId: "proyecto-periplo", 
     storageBucket: "proyecto-periplo.firebasestorage.app", 
     messagingSenderId: "236795998392", 
@@ -72,10 +71,18 @@ const firebaseConfig = {
 let db = null;
 try {
     const app = initializeApp(firebaseConfig);
-    db = getDatabase(app);
+    db = getFirestore(app);
 } catch (e) {
-    console.warn("Error conectando a Firebase Realtime Database.", e);
+    console.warn("Error conectando a Firestore.", e);
 }
+
+// Helper: si Firebase no responde en N segundos, falla en lugar de colgarse
+const withTimeout = (promise, ms = 8000, label = 'Firebase') => {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms))
+    ]);
+};
 
 // ==========================================
 // MAPA (V7.4) - sin cambios
@@ -206,15 +213,15 @@ const App = () => {
     }, []);
 
     // ==========================================
-    // FIREBASE LISTENER
+    // FIRESTORE LISTENER
     // Solo se suscribe cuando ya estamos en LOBBY o PLAYING
     // ==========================================
     useEffect(() => {
         if (!db || !roomId || (appState !== 'LOBBY' && appState !== 'PLAYING')) return;
-        const roomRef = ref(db, `rooms/${roomId}`);
-        const unsubscribe = onValue(roomRef, (snapshot) => {
-            const data = snapshot.val();
-            if (data) {
+        const roomDocRef = doc(db, 'periplo-party-rooms', roomId);
+        const unsubscribe = onSnapshot(roomDocRef, (snapshot) => {
+            if (snapshot.exists()) {
+                const data = snapshot.data();
                 setGame(data);
                 if (data.status === 'PLAYING' && appState !== 'PLAYING') {
                     setAppState('PLAYING');
@@ -227,6 +234,9 @@ const App = () => {
                 setGame(INITIAL_GAME_STATE);
                 setAppState('HOME');
             }
+        }, (error) => {
+            console.error("[Periplo] Error en listener:", error);
+            showToast(`❌ Conexión perdida: ${error.code || error.message}`);
         });
         return () => unsubscribe();
     }, [roomId, appState]);
@@ -236,7 +246,10 @@ const App = () => {
     // ==========================================
     const updateGame = useCallback((updates) => {
         if (db && roomId) {
-            update(ref(db, `rooms/${roomId}`), updates);
+            const roomDocRef = doc(db, 'periplo-party-rooms', roomId);
+            updateDoc(roomDocRef, updates).catch(e => {
+                console.error("[Periplo] updateDoc error:", e);
+            });
         } else {
             setGame(prev => ({ ...prev, ...updates }));
             if (updates.status === 'PLAYING') setAppState('PLAYING');
@@ -285,9 +298,10 @@ const App = () => {
         
         if (db) {
             try {
-                const snapshot = await get(ref(db, `rooms/${code}`));
+                const roomDocRef = doc(db, 'periplo-party-rooms', code);
+                const snapshot = await withTimeout(getDoc(roomDocRef), 8000, 'CHECK_ROOM');
                 if (snapshot.exists()) {
-                    const data = snapshot.val();
+                    const data = snapshot.data();
                     if (data.status === 'LOBBY' && (data.players || []).length < 4) {
                         setRoomId(code);
                         setIsHost(false);
@@ -301,7 +315,12 @@ const App = () => {
                     showToast("❌ Sala no encontrada");
                 }
             } catch(e) {
-                showToast("❌ Error de conexión");
+                console.error("[Periplo] Error verificando sala:", e);
+                if (e.message === 'CHECK_ROOM_TIMEOUT') {
+                    showToast("❌ Firebase no responde");
+                } else {
+                    showToast(`❌ ${e.code || 'Error de conexión'}`);
+                }
             }
         } else {
             setRoomId(code);
@@ -327,14 +346,23 @@ const App = () => {
             if (db) {
                 try {
                     console.log("[Periplo] Creando sala", newId);
-                    await set(ref(db, `rooms/${newId}`), { ...INITIAL_GAME_STATE, players: [hostPlayer] });
+                    const roomDocRef = doc(db, 'periplo-party-rooms', newId);
+                    await withTimeout(
+                        setDoc(roomDocRef, { ...INITIAL_GAME_STATE, players: [hostPlayer], createdAt: Date.now() }),
+                        8000,
+                        'CREATE_ROOM'
+                    );
                     console.log("[Periplo] Sala creada OK");
                     setRoomId(newId);
                     setLocalPlayerId(1);
                     setAppState('LOBBY');
                 } catch(e) {
                     console.error("[Periplo] Error creando sala:", e);
-                    showToast(`❌ Firebase: ${e.code || e.message || 'error desconocido'}`);
+                    if (e.message === 'CREATE_ROOM_TIMEOUT') {
+                        showToast("❌ Firebase no responde");
+                    } else {
+                        showToast(`❌ Firebase: ${e.code || e.message || 'error'}`);
+                    }
                 }
             } else {
                 console.warn("[Periplo] db es null - modo offline");
@@ -348,31 +376,48 @@ const App = () => {
             if (db) {
                 try {
                     console.log("[Periplo] Uniéndose a sala", roomId);
+                    const roomDocRef = doc(db, 'periplo-party-rooms', roomId);
                     let assignedId = null;
-                    const result = await runTransaction(ref(db, `rooms/${roomId}`), (current) => {
-                        if (!current) return current;
-                        const players = current.players || [];
-                        if (players.length >= 4 || current.status !== 'LOBBY') return; 
-                        const newId = players.length + 1;
-                        assignedId = newId;
-                        const c = PLAYER_COLORS[newId - 1];
-                        const newPlayer = { id: newId, name, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
-                        current.players = [...players, newPlayer];
-                        return current;
-                    });
                     
-                    if (result.committed && assignedId) {
+                    await withTimeout(
+                        runTransaction(db, async (txn) => {
+                            const snap = await txn.get(roomDocRef);
+                            if (!snap.exists()) throw new Error('ROOM_NOT_FOUND');
+                            const current = snap.data();
+                            const players = current.players || [];
+                            if (current.status !== 'LOBBY') throw new Error('GAME_STARTED');
+                            if (players.length >= 4) throw new Error('ROOM_FULL');
+                            
+                            const newId = players.length + 1;
+                            assignedId = newId;
+                            const c = PLAYER_COLORS[newId - 1];
+                            const newPlayer = { id: newId, name, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
+                            txn.update(roomDocRef, { players: [...players, newPlayer] });
+                        }),
+                        8000,
+                        'JOIN_ROOM'
+                    );
+                    
+                    if (assignedId) {
                         console.log("[Periplo] Unido como jugador", assignedId);
                         setLocalPlayerId(assignedId);
                         setAppState('LOBBY');
-                    } else {
-                        showToast("❌ Sala llena o cerrada");
-                        setRoomId("");
-                        setAppState('HOME');
                     }
                 } catch(e) {
                     console.error("[Periplo] Error al unirse:", e);
-                    showToast(`❌ Firebase: ${e.code || e.message || 'error'}`);
+                    if (e.message === 'JOIN_ROOM_TIMEOUT') {
+                        showToast("❌ Firebase no responde");
+                    } else if (e.message === 'ROOM_NOT_FOUND') {
+                        showToast("❌ Sala no encontrada");
+                    } else if (e.message === 'GAME_STARTED') {
+                        showToast("❌ El juego ya inició");
+                    } else if (e.message === 'ROOM_FULL') {
+                        showToast("❌ Sala llena (4/4)");
+                    } else {
+                        showToast(`❌ ${e.code || e.message || 'error'}`);
+                    }
+                    setRoomId("");
+                    setAppState('HOME');
                 }
             } else {
                 const newPlayerId = (game.players || []).length + 1;
@@ -388,17 +433,22 @@ const App = () => {
     const leaveRoom = async () => {
         if (db && roomId && localPlayerId) {
             try {
+                const roomDocRef = doc(db, 'periplo-party-rooms', roomId);
                 if (isHost) {
                     // Host abandona = sala se cierra
-                    await set(ref(db, `rooms/${roomId}`), null);
+                    await deleteDoc(roomDocRef);
                 } else {
-                    await runTransaction(ref(db, `rooms/${roomId}`), (current) => {
-                        if (!current) return current;
-                        current.players = (current.players || []).filter(p => p.id !== localPlayerId);
-                        return current;
+                    await runTransaction(db, async (txn) => {
+                        const snap = await txn.get(roomDocRef);
+                        if (!snap.exists()) return;
+                        const current = snap.data();
+                        const filtered = (current.players || []).filter(p => p.id !== localPlayerId);
+                        txn.update(roomDocRef, { players: filtered });
                     });
                 }
-            } catch(e) {}
+            } catch(e) {
+                console.error("[Periplo] Error al abandonar:", e);
+            }
         }
         setRoomId("");
         setLocalPlayerId(null);
