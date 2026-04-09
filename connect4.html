@@ -33,7 +33,8 @@
         .animate-in { animation: fadeIn 0.3s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
         
-        .btn-juicy { transition: all 0.1s ease; border-bottom-width: 4px; }
+        .btn-juicy { transition: all 0.1s ease; border-bottom-width: 4px; touch-action: manipulation; }
+        @media (hover: hover) { .btn-juicy:hover:not(:disabled) { filter: brightness(1.05); } }
         .btn-juicy:active:not(:disabled) { transform: translateY(4px); border-bottom-width: 0px; margin-top: 4px; }
     </style>
 </head>
@@ -45,7 +46,7 @@
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
-        import { Trophy, HelpCircle, Brain, Target, CheckCircle2, XCircle, ArrowRight, LogOut, Loader2, Users, SkipForward, RotateCcw, Timer, Pencil, Link2, AlertTriangle, Mic, Headphones, Wifi } from 'lucide-react';
+        import { Trophy, HelpCircle, Brain, Target, CheckCircle2, XCircle, ArrowRight, LogOut, Loader2, Users, SkipForward, RotateCcw, Timer, Pencil, Link2, AlertTriangle, Mic, Headphones, Wifi, Eye, EyeOff } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
         const app = initializeApp(firebaseConfig);
@@ -64,24 +65,43 @@
 
         const fireConfetti = () => { confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 }, colors: ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444'] }); };
 
-        const CountdownBar = ({ duration, onTimeUp, isActive, canInteract }) => {
+        const CountdownBar = ({ startTime, endTime, status, onTimeUp, canInteract }) => {
+            const duration = 60;
             const [timeLeft, setTimeLeft] = useState(duration);
-            useEffect(() => { 
-                if (!isActive) return; 
-                if (timeLeft <= 0) { 
-                    if (canInteract) onTimeUp(); 
-                    return; 
-                } 
-                const timerId = setInterval(() => setTimeLeft(t => t - 1), 1000); 
-                return () => clearInterval(timerId); 
-            }, [timeLeft, isActive, onTimeUp, canInteract]);
-            
+
+            useEffect(() => {
+                const calcTime = () => {
+                    const end = endTime || Date.now();
+                    const elapsed = Math.floor((end - startTime) / 1000);
+                    return Math.max(0, duration - elapsed);
+                };
+
+                setTimeLeft(calcTime());
+                if (status !== 'playing') return; // Se congela si ya no estamos jugando
+
+                const interval = setInterval(() => {
+                    const remaining = calcTime();
+                    setTimeLeft(remaining);
+                    if (remaining <= 0) {
+                        clearInterval(interval);
+                        // Solo el jugador activo detona el timeout para no multiplicar las llamadas a Firebase
+                        if (canInteract) onTimeUp(); 
+                    }
+                }, 500); 
+
+                return () => clearInterval(interval);
+            }, [startTime, endTime, status, canInteract, onTimeUp]);
+
             const percentage = (timeLeft / duration) * 100;
             let color = 'bg-green-500';
-            let animation = '';
-            if (timeLeft <= 15) { color = 'bg-red-500'; animation = 'animate-pulse'; } 
+            if (timeLeft <= 15) color = 'bg-red-500 animate-pulse';
             else if (timeLeft <= 30) color = 'bg-yellow-400';
-            return <div className="w-full bg-slate-200 dark:bg-zinc-800 h-3 rounded-t-[2.5rem] overflow-hidden relative"><div className={`h-full ${color} ${animation} transition-all duration-1000 ease-linear`} style={{ width: `${percentage}%` }}></div></div>;
+
+            return (
+                <div className="w-full bg-slate-200 dark:bg-zinc-800 h-3 rounded-t-[2.5rem] overflow-hidden relative">
+                    <div className={`h-full ${color} transition-all duration-500 ease-linear`} style={{ width: `${percentage}%` }}></div>
+                </div>
+            );
         };
 
         // =========================================================================
@@ -181,81 +201,105 @@
         };
 
         // =========================================================================
-        // MINIJUEGOS AUTO-EVALUADOS
+        // MINIJUEGOS AUTO-EVALUADOS Y SINCRONIZADOS
         // =========================================================================
-        const MultipleChoiceChallenge = ({ data, onComplete, onFail, onSuccess, canInteract }) => {
-            const [selected, setSelected] = useState(null);
-            const [status, setStatus] = useState('playing');
+
+        const MultipleChoiceChallenge = ({ modal, updateChallenge, canInteract }) => {
+            const { data, status, playerAnswer } = modal;
+            
             const handleSelect = (idx) => { 
                 if (status !== 'playing' || !canInteract) return; 
-                setSelected(idx); 
-                if (idx === data.correct) { setStatus('correct'); onSuccess(); fireConfetti(); } 
-                else { setStatus('wrong'); onFail(); } 
+                const isCorrect = idx === data.correct;
+                updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: idx, endTime: Date.now() });
             };
+            
             return (
                 <div className="w-full text-center relative">
                     <div className="flex justify-center mb-4"><div className="bg-indigo-100 dark:bg-indigo-900/30 p-3 rounded-full"><HelpCircle className="w-8 h-8 text-indigo-600 dark:text-indigo-400"/></div></div>
                     <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-6">Elige la correcta</h3>
                     <div className="bg-white dark:bg-zinc-900 border-2 border-slate-100 dark:border-zinc-800 p-6 rounded-2xl mb-6 font-medium text-lg text-slate-700 dark:text-zinc-200 shadow-sm leading-relaxed">{data.question}</div>
-                    <div className="grid gap-3 mb-6">{data.options.map((opt, idx) => (<button key={idx} onClick={() => handleSelect(idx)} disabled={status !== 'playing' || !canInteract} className={`p-4 rounded-2xl border-2 font-bold text-left transition-all text-lg flex items-center justify-between ${status === 'playing' ? 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-700 hover:border-indigo-400 text-slate-600 dark:text-zinc-300' : idx === data.correct ? 'bg-green-100 border-green-500 text-green-800' : selected === idx ? 'bg-red-100 border-red-500 text-red-800' : 'opacity-30'} ${!canInteract && status === 'playing' ? 'opacity-60 cursor-not-allowed hover:border-slate-200 dark:hover:border-zinc-700' : ''}`}>{opt}{status !== 'playing' && idx === data.correct && <CheckCircle2/>}{status === 'wrong' && selected === idx && <XCircle/>}</button>))}</div>
-                    {canInteract && status === 'correct' && <button onClick={() => onComplete(true)} className="btn-juicy w-full bg-green-600 text-white py-4 rounded-xl border-green-800 font-black text-lg hover:bg-green-500 transition-all shadow-lg flex items-center justify-center gap-2 animate-in">CONTINUAR Y COLOCAR FICHA <ArrowRight/></button>}
-                    {canInteract && status === 'wrong' && <button onClick={() => onComplete(false)} className="btn-juicy w-full bg-slate-800 text-white py-4 rounded-xl border-slate-950 font-bold hover:bg-slate-700 transition-all animate-in">Perder Turno</button>}
+                    
+                    <div className="grid gap-3 mb-6">
+                        {data.options.map((opt, idx) => {
+                            let btnClass = 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-700 text-slate-600 dark:text-zinc-300';
+                            if (status !== 'playing') {
+                                if (idx === data.correct) btnClass = 'bg-green-100 border-green-500 text-green-800 dark:bg-green-900/40 dark:text-green-300';
+                                else if (playerAnswer === idx) btnClass = 'bg-red-100 border-red-500 text-red-800 dark:bg-red-900/40 dark:text-red-300';
+                                else btnClass = 'opacity-30';
+                            } else if (!canInteract) {
+                                btnClass += ' opacity-60 cursor-not-allowed';
+                            } else {
+                                btnClass += ' hover:border-indigo-400';
+                            }
+                            return (
+                                <button key={idx} onClick={() => handleSelect(idx)} disabled={status !== 'playing' || !canInteract} className={`btn-juicy p-4 rounded-2xl border-2 font-bold text-left transition-all text-lg flex items-center justify-between ${btnClass}`}>
+                                    {opt}
+                                    {status !== 'playing' && idx === data.correct && <CheckCircle2/>}
+                                    {status === 'wrong' && playerAnswer === idx && <XCircle/>}
+                                </button>
+                            );
+                        })}
+                    </div>
                 </div>
             );
         };
 
-        const DragDropChallenge = ({ data, onComplete, onFail, onSuccess, canInteract }) => {
-            const [selectedOpt, setSelectedOpt] = useState(null);
-            const [status, setStatus] = useState('playing');
+        const DragDropChallenge = ({ modal, updateChallenge, canInteract }) => {
+            const { data, status, playerAnswer } = modal;
+            
             const handleSelect = (opt) => {
                 if (status !== 'playing' || !canInteract) return;
-                setSelectedOpt(opt);
-                if (opt === data.correct) { setStatus('correct'); onSuccess(); fireConfetti(); }
-                else { setStatus('wrong'); onFail(); }
+                const isCorrect = opt === data.correct;
+                updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: opt, endTime: Date.now() });
             };
+            
             return (
                 <div className="w-full text-center relative">
                     <div className="flex justify-center mb-4"><div className="bg-rose-100 dark:bg-rose-900/30 p-3 rounded-full"><Target className="w-8 h-8 text-rose-600 dark:text-rose-400"/></div></div>
                     <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-6">Completa la Frase</h3>
+                    
                     <div className="bg-white dark:bg-zinc-900 border-2 border-slate-100 dark:border-zinc-800 p-6 rounded-2xl mb-8 font-medium text-xl text-slate-700 dark:text-zinc-200 shadow-sm leading-relaxed">
                         {data.sentence.split('[BLANK]').map((part, i, arr) => (
                             <React.Fragment key={i}>
                                 {part}
-                                {i < arr.length - 1 && <span className={`inline-block min-w-[100px] border-b-4 border-dashed pb-1 mx-2 text-center font-black ${status==='correct'?'text-green-500 border-green-500':status==='wrong'?'text-red-500 border-red-500':'text-indigo-500 border-indigo-300 dark:border-indigo-700'}`}>{selectedOpt || '_____'}</span>}
+                                {i < arr.length - 1 && <span className={`inline-block min-w-[100px] border-b-4 border-dashed pb-1 mx-2 text-center font-black ${status==='correct'?'text-green-500 border-green-500':status==='wrong'?'text-red-500 border-red-500':'text-indigo-500 border-indigo-300 dark:border-indigo-700'}`}>{playerAnswer || '_____'}</span>}
                             </React.Fragment>
                         ))}
                     </div>
-                    {status === 'playing' && (
+                    
+                    {status === 'playing' ? (
                         <div className="flex flex-wrap justify-center gap-3 mb-6">
-                            {shuffleArray([...data.options]).map((opt, i) => (
-                                <button key={i} onClick={() => handleSelect(opt)} disabled={!canInteract} className={`bg-slate-100 dark:bg-zinc-800 border-2 border-slate-200 dark:border-zinc-700 hover:border-indigo-400 px-6 py-3 rounded-xl font-bold text-lg transition-colors ${!canInteract ? 'opacity-60 cursor-not-allowed hover:border-slate-200 dark:hover:border-zinc-700' : ''}`}>{opt}</button>
+                            {data.options.map((opt, i) => (
+                                <button key={i} onClick={() => handleSelect(opt)} disabled={!canInteract} className={`btn-juicy bg-slate-100 dark:bg-zinc-800 border-2 border-slate-200 dark:border-zinc-700 hover:border-indigo-400 px-6 py-3 rounded-xl font-bold text-lg transition-colors ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{opt}</button>
                             ))}
                         </div>
+                    ) : (
+                        <div className="animate-in mb-6">
+                            {status === 'wrong' && <p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">La respuesta era: <span className="text-green-500">{data.correct}</span></p>}
+                        </div>
                     )}
-                    {canInteract && status === 'correct' && <button onClick={() => onComplete(true)} className="btn-juicy w-full bg-green-600 text-white py-4 rounded-xl border-green-800 font-black flex items-center justify-center gap-2 animate-in">CONTINUAR Y COLOCAR FICHA <ArrowRight/></button>}
-                    {canInteract && status === 'wrong' && <button onClick={() => onComplete(false)} className="btn-juicy w-full bg-slate-800 text-white py-4 rounded-xl border-slate-950 font-bold hover:bg-slate-700 animate-in">Perder Turno</button>}
                 </div>
             );
         };
 
-        const UnscrambleChallenge = ({ data, onComplete, onFail, onSuccess, canInteract }) => {
+        const UnscrambleChallenge = ({ modal, updateChallenge, canInteract }) => {
+            const { data, status, playerAnswer } = modal;
             const [shuffledWords, setShuffledWords] = useState([]);
             const [selectedWords, setSelectedWords] = useState([]);
-            const [status, setStatus] = useState('playing');
 
+            // Local building of sentence
             useEffect(() => {
-                if (data && data.text) {
+                if (status === 'playing' && data?.text && shuffledWords.length === 0 && selectedWords.length === 0) {
                     const wordsWithIds = data.text.split(' ').map((w, i) => ({ id: i, text: w }));
                     setShuffledWords(shuffleArray(wordsWithIds));
-                    setSelectedWords([]); setStatus('playing');
                 }
-            }, [data]);
+            }, [data, status]);
 
             const checkAnswer = () => {
                 const built = selectedWords.map(w => w.text).join(" ");
                 const normalize = (str) => str.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g,"").replace(/\s{2,}/g," ").trim().toLowerCase();
-                if (normalize(built) === normalize(data.text)) { setStatus('correct'); onSuccess(); fireConfetti(); } 
-                else { setStatus('wrong'); onFail(); }
+                const isCorrect = normalize(built) === normalize(data.text);
+                updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: built, endTime: Date.now() });
             };
 
             return (
@@ -264,68 +308,84 @@
                     <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-2">Ordena la Frase</h3>
                     <div className="bg-slate-50 dark:bg-zinc-900 p-3 rounded-xl border border-slate-100 dark:border-zinc-800 mb-6 inline-block"><p className="text-slate-500 dark:text-zinc-400 font-medium italic">"{data.translation}"</p></div>
                     
-                    <div className={`min-h-[80px] h-auto bg-white dark:bg-zinc-950 rounded-2xl p-4 mb-4 flex flex-wrap gap-2 justify-center content-center border-2 transition-colors ${status === 'correct' ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : status === 'wrong' ? 'border-red-500 bg-red-50 dark:bg-red-900/20' : 'border-slate-200 dark:border-zinc-800 shadow-inner'}`}>
-                        {selectedWords.map(w => (
-                            <button key={w.id} onClick={() => { if (status !== 'playing' || !canInteract) return; setShuffledWords([...shuffledWords, w]); setSelectedWords(selectedWords.filter(sw => sw.id !== w.id)); }} disabled={!canInteract} className={`bg-white border border-slate-300 dark:border-zinc-600 dark:bg-zinc-800 px-4 py-2 rounded-lg font-bold text-slate-700 dark:text-zinc-200 shadow-sm animate-in ${!canInteract ? 'opacity-80 cursor-not-allowed' : ''}`}>{w.text}</button>
-                        ))}
-                    </div>
-                    
-                    <div className="flex flex-wrap gap-2 justify-center mb-6 min-h-[60px]">
-                        {status === 'playing' && shuffledWords.map(w => (
-                            <button key={w.id} onClick={() => { if(!canInteract)return; setSelectedWords([...selectedWords, w]); setShuffledWords(shuffledWords.filter(sw => sw.id !== w.id)); }} disabled={!canInteract} className={`bg-slate-100 border border-slate-200 dark:bg-zinc-800 dark:border-zinc-700 px-4 py-2 rounded-lg font-bold text-slate-600 dark:text-zinc-300 animate-in ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{w.text}</button>
-                        ))}
-                    </div>
+                    {status === 'playing' ? (
+                        <>
+                            <div className={`min-h-[80px] h-auto bg-white dark:bg-zinc-950 rounded-2xl p-4 mb-4 flex flex-wrap gap-2 justify-center content-center border-2 border-slate-200 dark:border-zinc-800 shadow-inner`}>
+                                {selectedWords.map(w => (
+                                    <button key={w.id} onClick={() => { if(!canInteract)return; setShuffledWords([...shuffledWords, w]); setSelectedWords(selectedWords.filter(sw => sw.id !== w.id)); }} disabled={!canInteract} className={`btn-juicy bg-white border border-slate-300 dark:border-zinc-600 dark:bg-zinc-800 px-4 py-2 rounded-lg font-bold text-slate-700 dark:text-zinc-200 shadow-sm animate-in ${!canInteract ? 'opacity-80 cursor-not-allowed' : ''}`}>{w.text}</button>
+                                ))}
+                            </div>
+                            
+                            <div className="flex flex-wrap gap-2 justify-center mb-6 min-h-[60px]">
+                                {shuffledWords.map(w => (
+                                    <button key={w.id} onClick={() => { if(!canInteract)return; setSelectedWords([...selectedWords, w]); setShuffledWords(shuffledWords.filter(sw => sw.id !== w.id)); }} disabled={!canInteract} className={`btn-juicy bg-slate-100 border border-slate-200 dark:bg-zinc-800 dark:border-zinc-700 px-4 py-2 rounded-lg font-bold text-slate-600 dark:text-zinc-300 animate-in ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{w.text}</button>
+                                ))}
+                            </div>
 
-                    {canInteract && status === 'correct' && (<button onClick={() => onComplete(true)} className="btn-juicy w-full bg-green-600 text-white py-4 rounded-xl border-green-800 font-black flex justify-center items-center gap-2 animate-in">COLOCAR FICHA <ArrowRight/></button>)}
-                    {canInteract && status === 'wrong' && (<div className="animate-in"><div className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800/50 p-4 rounded-xl mb-4"><p className="text-red-600 dark:text-red-400 font-bold mb-1"><XCircle size={18} className="inline mr-1"/> Incorrecto</p><p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">{data.text}</p></div><button onClick={() => onComplete(false)} className="btn-juicy w-full bg-slate-800 text-white py-4 rounded-xl border-slate-950 font-bold hover:bg-slate-700">Perder Turno</button></div>)}
-                    {canInteract && status === 'playing' && (<button onClick={checkAnswer} disabled={selectedWords.length === 0} className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl border-blue-800 font-black text-lg disabled:opacity-50">COMPROBAR</button>)}
+                            {canInteract && <button onClick={checkAnswer} disabled={selectedWords.length === 0} className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl border-blue-800 font-black text-lg disabled:opacity-50">COMPROBAR</button>}
+                        </>
+                    ) : (
+                        <div className="animate-in mb-6">
+                            <div className={`p-4 rounded-xl border-2 mb-4 font-black text-xl ${status === 'correct' ? 'bg-green-50 border-green-500 text-green-700 dark:bg-green-900/20 dark:text-green-400' : 'bg-red-50 border-red-500 text-red-700 dark:bg-red-900/20 dark:text-red-400'}`}>
+                                Tu respuesta: {playerAnswer}
+                            </div>
+                            {status === 'wrong' && <p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">Era: <span className="text-green-500">{data.text}</span></p>}
+                        </div>
+                    )}
                 </div>
             );
         };
 
-        const FillBlankChallenge = ({ data, onComplete, onFail, onSuccess, canInteract }) => {
+        const FillBlankChallenge = ({ modal, updateChallenge, canInteract }) => {
+            const { data, status, playerAnswer } = modal;
             const [input, setInput] = useState('');
-            const [status, setStatus] = useState('playing');
             
             const checkAnswer = () => {
                 const normalize = (str) => str.trim().toLowerCase();
-                if (normalize(input) === normalize(data.answer)) { setStatus('correct'); onSuccess(); fireConfetti(); }
-                else { setStatus('wrong'); onFail(); }
+                const isCorrect = normalize(input) === normalize(data.answer);
+                updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: input, endTime: Date.now() });
             };
 
             return (
                 <div className="w-full text-center relative">
                     <div className="flex justify-center mb-4"><div className="bg-emerald-100 dark:bg-emerald-900/30 p-3 rounded-full"><Pencil className="w-8 h-8 text-emerald-600 dark:text-emerald-400"/></div></div>
                     <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-6">Escribe la Palabra</h3>
+                    
                     <div className="bg-white dark:bg-zinc-900 border-2 border-slate-100 dark:border-zinc-800 p-6 rounded-2xl mb-4 font-medium text-xl text-slate-700 dark:text-zinc-200 shadow-sm leading-relaxed">
                         {data.sentence.replace('[BLANK]', '_____')}
                     </div>
                     {data.hint && <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6 italic">Pista: {data.hint}</p>}
                     
-                    {status === 'playing' && (
-                        <input autoFocus type="text" value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&canInteract&&checkAnswer()} disabled={!canInteract} className="w-full text-center text-2xl font-black p-4 rounded-xl border-2 border-indigo-300 focus:border-indigo-500 bg-indigo-50 dark:bg-zinc-800 dark:border-zinc-700 dark:focus:border-indigo-500 outline-none mb-6 disabled:opacity-60 disabled:cursor-not-allowed" placeholder={canInteract ? "Escribe aquí..." : "El oponente está escribiendo..."}/>
+                    {status === 'playing' ? (
+                        <>
+                            <input autoFocus type="text" value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&canInteract&&checkAnswer()} disabled={!canInteract} className="w-full text-center text-2xl font-black p-4 rounded-xl border-2 border-indigo-300 focus:border-indigo-500 bg-indigo-50 dark:bg-zinc-800 dark:border-zinc-700 dark:focus:border-indigo-500 outline-none mb-6 disabled:opacity-60 disabled:cursor-not-allowed" placeholder={canInteract ? "Escribe aquí..." : "El oponente está escribiendo..."}/>
+                            {canInteract && <button onClick={checkAnswer} disabled={!input.trim()} className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl border-blue-800 font-black text-lg disabled:opacity-50">COMPROBAR</button>}
+                        </>
+                    ) : (
+                        <div className="animate-in mb-6">
+                            <div className="text-2xl font-black p-4 mb-2">
+                                Tu respuesta: <span className={status === 'correct' ? 'text-green-500' : 'text-red-500'}>{playerAnswer}</span>
+                            </div>
+                            {status === 'wrong' && <p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">Era: <span className="text-green-500">{data.answer}</span></p>}
+                        </div>
                     )}
-
-                    {canInteract && status === 'correct' && <button onClick={() => onComplete(true)} className="btn-juicy w-full bg-green-600 text-white py-4 rounded-xl border-green-800 font-black flex justify-center items-center gap-2 animate-in">CONTINUAR Y COLOCAR FICHA <ArrowRight/></button>}
-                    {canInteract && status === 'wrong' && (<div className="animate-in"><div className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800/50 p-4 rounded-xl mb-4"><p className="text-red-600 dark:text-red-400 font-bold mb-1"><XCircle size={18} className="inline mr-1"/> Incorrecto</p><p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">{data.answer}</p></div><button onClick={() => onComplete(false)} className="btn-juicy w-full bg-slate-800 text-white py-4 rounded-xl border-slate-950 font-bold hover:bg-slate-700 animate-in">Perder Turno</button></div>)}
-                    {canInteract && status === 'playing' && (<button onClick={checkAnswer} disabled={!input.trim()} className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl border-blue-800 font-black text-lg disabled:opacity-50">COMPROBAR</button>)}
                 </div>
             );
         };
 
-        const MatchingChallenge = ({ data, onComplete, onFail, onSuccess, canInteract }) => {
+        const MatchingChallenge = ({ modal, updateChallenge, canInteract }) => {
+            const { data, status, playerAnswer } = modal;
             const [pairs, setPairs] = useState([]);
             const [selectedLeft, setSelectedLeft] = useState(null);
             const [matched, setMatched] = useState(new Set());
-            const [status, setStatus] = useState('playing');
 
             useEffect(() => {
-                if (data && data.pairs) {
+                if (data && data.pairs && status === 'playing' && pairs.length === 0) {
                     const l = shuffleArray(data.pairs.map((p,i) => ({id: i, text: p.left})));
                     const r = shuffleArray(data.pairs.map((p,i) => ({id: i, text: p.right})));
                     setPairs({ left: l, right: r });
                 }
-            }, [data]);
+            }, [data, status]);
 
             const handleRightClick = (rightId) => {
                 if(selectedLeft === null || status !== 'playing' || !canInteract) return;
@@ -333,113 +393,182 @@
                     const newMatched = new Set(matched).add(selectedLeft);
                     setMatched(newMatched);
                     setSelectedLeft(null);
-                    if(newMatched.size === data.pairs.length) { setStatus('correct'); onSuccess(); fireConfetti(); }
+                    if(newMatched.size === data.pairs.length) {
+                        updateChallenge({ status: 'correct', playerAnswer: 'All matched', endTime: Date.now() });
+                    }
                 } else {
-                    setStatus('wrong'); onFail();
+                    updateChallenge({ status: 'wrong', playerAnswer: 'Failed match', endTime: Date.now() });
                 }
             };
 
-            if(!pairs.left) return null;
+            if(!pairs.left && status === 'playing') return null;
 
             return (
                 <div className="w-full text-center relative">
                     <div className="flex justify-center mb-4"><div className="bg-cyan-100 dark:bg-cyan-900/30 p-3 rounded-full"><Link2 className="w-8 h-8 text-cyan-600 dark:text-cyan-400"/></div></div>
                     <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-6">Une las parejas</h3>
                     
-                    <div className="flex gap-4 mb-6">
-                        <div className="flex-1 space-y-2">
-                            {pairs.left.map(item => {
-                                const isMatched = matched.has(item.id);
-                                const isSel = selectedLeft === item.id;
-                                return <button key={`l-${item.id}`} onClick={() => !isMatched && status==='playing' && canInteract && setSelectedLeft(item.id)} disabled={isMatched || status!=='playing' || !canInteract} className={`btn-juicy w-full p-3 rounded-xl border-2 font-bold text-sm transition-all ${isMatched ? 'bg-zinc-100 border-zinc-200 text-zinc-300 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-600' : isSel ? 'bg-indigo-100 border-indigo-500 text-indigo-700' : 'bg-white border-slate-200 hover:border-indigo-300 dark:bg-zinc-800 dark:border-zinc-700 dark:hover:border-indigo-500'} ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{item.text}</button>
-                            })}
+                    {status === 'playing' ? (
+                        <div className="flex gap-4 mb-6">
+                            <div className="flex-1 space-y-2">
+                                {pairs.left.map(item => {
+                                    const isMatched = matched.has(item.id);
+                                    const isSel = selectedLeft === item.id;
+                                    return <button key={`l-${item.id}`} onClick={() => !isMatched && canInteract && setSelectedLeft(item.id)} disabled={isMatched || !canInteract} className={`btn-juicy w-full p-3 rounded-xl border-2 font-bold text-sm transition-all ${isMatched ? 'bg-zinc-100 border-zinc-200 text-zinc-300 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-600' : isSel ? 'bg-indigo-100 border-indigo-500 text-indigo-700' : 'bg-white border-slate-200 hover:border-indigo-300 dark:bg-zinc-800 dark:border-zinc-700 dark:hover:border-indigo-500'} ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{item.text}</button>
+                                })}
+                            </div>
+                            <div className="flex-1 space-y-2">
+                                {pairs.right.map(item => {
+                                    const isMatched = matched.has(item.id);
+                                    return <button key={`r-${item.id}`} onClick={() => handleRightClick(item.id)} disabled={isMatched || !canInteract} className={`btn-juicy w-full p-3 rounded-xl border-2 font-bold text-sm transition-all ${isMatched ? 'bg-zinc-100 border-zinc-200 text-zinc-300 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-600' : 'bg-white border-slate-200 hover:border-indigo-300 dark:bg-zinc-800 dark:border-zinc-700 dark:hover:border-indigo-500'} ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{item.text}</button>
+                                })}
+                            </div>
                         </div>
-                        <div className="flex-1 space-y-2">
-                            {pairs.right.map(item => {
-                                const isMatched = matched.has(item.id);
-                                return <button key={`r-${item.id}`} onClick={() => handleRightClick(item.id)} disabled={isMatched || status!=='playing' || !canInteract} className={`btn-juicy w-full p-3 rounded-xl border-2 font-bold text-sm transition-all ${isMatched ? 'bg-zinc-100 border-zinc-200 text-zinc-300 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-600' : 'bg-white border-slate-200 hover:border-indigo-300 dark:bg-zinc-800 dark:border-zinc-700 dark:hover:border-indigo-500'} ${!canInteract ? 'opacity-60 cursor-not-allowed' : ''}`}>{item.text}</button>
-                            })}
+                    ) : (
+                        <div className="animate-in mb-6">
+                            <div className={`p-4 rounded-xl border-2 mb-4 font-black text-xl ${status === 'correct' ? 'bg-green-50 border-green-500 text-green-700 dark:bg-green-900/20 dark:text-green-400' : 'bg-red-50 border-red-500 text-red-700 dark:bg-red-900/20 dark:text-red-400'}`}>
+                                {status === 'correct' ? '¡Todas emparejadas!' : '¡Te has equivocado de pareja!'}
+                            </div>
                         </div>
-                    </div>
-
-                    {canInteract && status === 'correct' && <button onClick={() => onComplete(true)} className="btn-juicy w-full bg-green-600 text-white py-4 rounded-xl border-green-800 font-black flex justify-center items-center gap-2 animate-in">CONTINUAR Y COLOCAR FICHA <ArrowRight/></button>}
-                    {canInteract && status === 'wrong' && <button onClick={() => onComplete(false)} className="btn-juicy w-full bg-slate-800 text-white py-4 rounded-xl border-slate-950 font-bold hover:bg-slate-700 animate-in">¡Error! Perder Turno</button>}
+                    )}
                 </div>
             );
         };
 
-        const ErrorCorrectionChallenge = ({ data, onComplete, onFail, onSuccess, canInteract }) => {
+        const ErrorCorrectionChallenge = ({ modal, updateChallenge, canInteract }) => {
+            const { data, status, playerAnswer } = modal;
             const [input, setInput] = useState('');
-            const [status, setStatus] = useState('playing');
             
             const checkAnswer = () => {
                 const normalize = (str) => str.trim().toLowerCase();
-                if (normalize(input) === normalize(data.correction)) { setStatus('correct'); onSuccess(); fireConfetti(); }
-                else { setStatus('wrong'); onFail(); }
+                const isCorrect = normalize(input) === normalize(data.correction);
+                updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: input, endTime: Date.now() });
             };
 
             return (
                 <div className="w-full text-center relative">
                     <div className="flex justify-center mb-4"><div className="bg-pink-100 dark:bg-pink-900/30 p-3 rounded-full"><AlertTriangle className="w-8 h-8 text-pink-600 dark:text-pink-400"/></div></div>
                     <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-2">Corrige el Error</h3>
-                    <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6">Encuentra la palabra incorrecta y escribe la corrección.</p>
+                    <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6">Encuentra la palabra incorrecta y escribe la corrección. <br/><span className="text-xs italic">(Si la palabra sobra, escribe 'eliminate: palabra')</span></p>
                     
                     <div className="bg-rose-50 dark:bg-rose-900/10 border-2 border-rose-200 dark:border-rose-900/50 p-6 rounded-2xl mb-6 font-medium text-xl text-slate-700 dark:text-zinc-200 shadow-sm leading-relaxed">
                         {data.sentence}
                     </div>
                     
-                    {status === 'playing' && (
-                        <input autoFocus type="text" value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&canInteract&&checkAnswer()} disabled={!canInteract} className="w-full text-center text-xl font-black p-4 rounded-xl border-2 border-indigo-300 focus:border-indigo-500 bg-white dark:bg-zinc-800 dark:border-zinc-700 dark:focus:border-indigo-500 outline-none mb-6 disabled:opacity-60 disabled:cursor-not-allowed" placeholder={canInteract ? "Escribe la palabra correcta..." : "El oponente está escribiendo..."}/>
+                    {status === 'playing' ? (
+                        <>
+                            <input autoFocus type="text" value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&canInteract&&checkAnswer()} disabled={!canInteract} className="w-full text-center text-xl font-black p-4 rounded-xl border-2 border-indigo-300 focus:border-indigo-500 bg-white dark:bg-zinc-800 dark:border-zinc-700 dark:focus:border-indigo-500 outline-none mb-6 disabled:opacity-60 disabled:cursor-not-allowed" placeholder={canInteract ? "Escribe la palabra correcta..." : "El oponente está escribiendo..."}/>
+                            {canInteract && <button onClick={checkAnswer} disabled={!input.trim()} className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl border-blue-800 font-black text-lg disabled:opacity-50 shadow-lg">COMPROBAR</button>}
+                        </>
+                    ) : (
+                        <div className="animate-in mb-6">
+                            <div className="text-xl font-black p-4 mb-2">
+                                Tu respuesta: <span className={status === 'correct' ? 'text-green-500' : 'text-red-500'}>{playerAnswer}</span>
+                            </div>
+                            {status === 'wrong' && (
+                                <div className="text-slate-800 dark:text-zinc-200 font-bold text-lg text-left bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl border border-slate-200 dark:border-zinc-800 mx-auto max-w-sm">
+                                    <p>El error era: <span className="text-red-500 line-through">{data.error}</span></p>
+                                    <p>La corrección es: <span className="text-green-500">{data.correction}</span></p>
+                                </div>
+                            )}
+                        </div>
                     )}
-
-                    {canInteract && status === 'correct' && <button onClick={() => onComplete(true)} className="btn-juicy w-full bg-green-600 text-white py-4 rounded-xl border-green-800 font-black flex justify-center items-center gap-2 animate-in">CONTINUAR Y COLOCAR FICHA <ArrowRight/></button>}
-                    {canInteract && status === 'wrong' && (<div className="animate-in"><div className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800/50 p-4 rounded-xl mb-4"><p className="text-red-600 dark:text-red-400 font-bold mb-1"><XCircle size={18} className="inline mr-1"/> Incorrecto</p><p className="text-slate-800 dark:text-zinc-200 font-bold text-sm">El error era: <span className="text-red-500 line-through">{data.error}</span></p><p className="text-slate-800 dark:text-zinc-200 font-bold text-lg mt-1">La corrección es: <span className="text-green-500">{data.correction}</span></p></div><button onClick={() => onComplete(false)} className="btn-juicy w-full bg-slate-800 text-white py-4 rounded-xl border-slate-950 font-bold hover:bg-slate-700 animate-in">Perder Turno</button></div>)}
-                    {canInteract && status === 'playing' && (<button onClick={checkAnswer} disabled={!input.trim()} className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl border-blue-800 font-black text-lg disabled:opacity-50 shadow-lg">COMPROBAR</button>)}
                 </div>
             );
         };
 
-        // =========================================================================
-        // MINIJUEGOS MANUALES (EL MAESTRO EVALÚA)
-        // =========================================================================
+        const OddOneOutChallenge = ({ modal, updateChallenge, canInteract }) => {
+            const { data, status, playerAnswer } = modal;
+            
+            const handleSelect = (word) => {
+                if (status !== 'playing' || !canInteract) return;
+                const isCorrect = word === data.odd;
+                updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer: word, endTime: Date.now() });
+            };
 
-        const SpeakingChallenge = ({ data, onComplete, onFail, onSuccess, canGrade }) => {
-            const [status, setStatus] = useState('playing');
+            return (
+                <div className="w-full text-center relative">
+                    <div className="flex justify-center mb-4"><div className="bg-teal-100 dark:bg-teal-900/30 p-3 rounded-full"><Brain className="w-8 h-8 text-teal-600 dark:text-teal-400"/></div></div>
+                    <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-2">Encuentra el Intruso</h3>
+                    <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6">Selecciona la palabra que no pertenece al grupo.</p>
+                    
+                    <div className="grid grid-cols-2 gap-3 mb-6">
+                        {data.words.map((w, i) => {
+                            const isSel = playerAnswer === w;
+                            const isOdd = data.odd === w;
+                            let btnClass = 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-700 text-slate-700 dark:text-zinc-300';
+                            
+                            if (status !== 'playing') {
+                                if (isOdd) btnClass = 'bg-green-100 border-green-500 text-green-800 dark:bg-green-900/40 dark:text-green-300';
+                                else if (isSel) btnClass = 'bg-red-100 border-red-500 text-red-800 dark:bg-red-900/40 dark:text-red-300';
+                                else btnClass = 'opacity-30';
+                            } else if (!canInteract) {
+                                btnClass += ' opacity-60 cursor-not-allowed';
+                            } else {
+                                btnClass += ' hover:border-indigo-400';
+                            }
+                            
+                            return (
+                                <button key={i} disabled={status !== 'playing' || !canInteract} onClick={() => handleSelect(w)} className={`btn-juicy p-4 rounded-2xl border-2 font-bold text-lg transition-all ${btnClass}`}>
+                                    {w}
+                                </button>
+                            );
+                        })}
+                    </div>
+                    {status !== 'playing' && (
+                        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4 rounded-xl text-left animate-in mb-6 shadow-sm">
+                            <p className="font-bold text-blue-800 dark:text-blue-300 flex items-start gap-2"><HelpCircle className="shrink-0 mt-0.5" size={18}/> {data.reason}</p>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const SpeakingChallenge = ({ modal, updateChallenge, isSupreme }) => {
+            const { data, status, revealed } = modal;
+            const isRevealed = revealed || isSupreme;
+
             return (
                 <div className="w-full text-center">
                     <div className="flex justify-center mb-4"><div className="bg-blue-100 dark:bg-blue-900/30 p-3 rounded-full"><Mic className="w-8 h-8 text-blue-600 dark:text-blue-400"/></div></div>
                     <h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 mb-2">Traducción Oral</h3>
                     <p className="text-sm font-bold text-slate-400 dark:text-zinc-500 mb-6">Traduce esta frase en voz alta. Tu maestro evaluará tu respuesta.</p>
+                    
                     <div className="bg-blue-50 dark:bg-blue-900/20 border-2 border-blue-100 dark:border-blue-900/50 p-8 rounded-[2rem] mb-8 shadow-sm"><p className="text-2xl font-black text-slate-800 dark:text-zinc-200 leading-tight">"{data.spanish}"</p></div>
                     
-                    {canGrade && (
-                        <div className="bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl mb-8 border border-slate-200 dark:border-zinc-800 group cursor-help relative overflow-hidden">
-                            <p className="text-[10px] text-slate-400 font-bold uppercase mb-2">Respuesta Esperada (Solo Maestro)</p>
-                            <p className="font-bold text-slate-800 dark:text-zinc-100 text-lg text-transparent blur-[4px] group-hover:blur-none group-hover:text-slate-800 dark:group-hover:text-zinc-100 transition-all duration-300 select-none">{data.english}</p>
-                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none group-hover:opacity-0 transition-opacity"><span className="bg-white/80 dark:bg-black/80 px-2 py-1 rounded text-xs font-bold text-slate-500 dark:text-zinc-300">Hover para ver</span></div>
-                        </div>
+                    {isSupreme && (
+                        <button onClick={() => updateChallenge({ revealed: !revealed })} className="btn-juicy mb-4 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-full text-xs font-bold transition-colors">
+                            {revealed ? <EyeOff size={14} className="inline mr-1"/> : <Eye size={14} className="inline mr-1"/>}
+                            {revealed ? 'Ocultar a alumnos' : 'Mostrar a todos'}
+                        </button>
                     )}
+
+                    <div className="bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl mb-8 border border-slate-200 dark:border-zinc-800 relative overflow-hidden transition-all">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase mb-2">Respuesta Esperada {isSupreme ? '(Tú)' : '(Solo Maestro)'}</p>
+                        <p className={`font-bold text-lg transition-all duration-300 select-none ${isRevealed ? 'blur-none text-slate-800 dark:text-zinc-100' : 'text-transparent blur-[4px]'}`}>{data.english}</p>
+                    </div>
                     
                     {status === 'playing' ? (
-                        canGrade ? (
+                        isSupreme ? (
                             <div className="grid grid-cols-2 gap-4">
-                                <button onClick={() => { setStatus('wrong'); onFail(); }} className="btn-juicy py-4 rounded-2xl bg-white dark:bg-zinc-800 border-2 border-red-100 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">INCORRECTO</button>
-                                <button onClick={() => { setStatus('correct'); onSuccess(); fireConfetti(); }} className="btn-juicy py-4 rounded-2xl bg-green-500 border-green-700 text-white font-black shadow-lg hover:bg-green-600 transition-all">¡CORRECTO!</button>
+                                <button onClick={() => updateChallenge({ status: 'wrong', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-white dark:bg-zinc-800 border-2 border-red-100 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">INCORRECTO</button>
+                                <button onClick={() => updateChallenge({ status: 'correct', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-green-500 border-green-700 text-white font-black shadow-lg hover:bg-green-600 transition-all">¡CORRECTO!</button>
                             </div>
                         ) : (
                             <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl text-center text-amber-600 dark:text-amber-400 font-bold animate-pulse border border-amber-200 dark:border-amber-800/50">Esperando a que el maestro te evalúe...</div>
                         )
-                    ) : status === 'correct' && canGrade ? (
-                        <button onClick={() => onComplete(true)} className="btn-juicy w-full bg-green-600 text-white py-4 rounded-xl border-green-800 font-black flex justify-center items-center gap-2 animate-in">CONTINUAR Y COLOCAR FICHA <ArrowRight/></button>
-                    ) : status === 'wrong' && canGrade ? (
-                        <button onClick={() => onComplete(false)} className="btn-juicy w-full bg-slate-800 text-white py-4 rounded-xl border-slate-950 font-bold hover:bg-slate-700 animate-in">Perder Turno</button>
-                    ) : null}
+                    ) : (
+                        <div className={`p-4 rounded-xl font-black text-xl animate-in border-2 ${status === 'correct' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-red-50 border-red-500 text-red-600'}`}>
+                            {status === 'correct' ? '¡Respuesta Validada!' : 'Respuesta Incorrecta'}
+                        </div>
+                    )}
                 </div>
             );
         };
 
-        const ListeningChallenge = ({ data, onComplete, onFail, onSuccess, canGrade }) => {
-            const [status, setStatus] = useState('playing');
+        const ListeningChallenge = ({ modal, updateChallenge, isSupreme }) => {
+            const { data, status, revealed } = modal;
+            const isRevealed = revealed || isSupreme;
             
             const playAudio = () => {
                 const utterance = new SpeechSynthesisUtterance(data.audioText);
@@ -457,34 +586,42 @@
                         ▶️ Reproducir Audio
                     </button>
                     
-                    {canGrade && (
-                        <div className="bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl mb-8 border border-slate-200 dark:border-zinc-800 group cursor-help relative overflow-hidden">
-                            <p className="text-[10px] text-slate-400 font-bold uppercase mb-2">Transcripción / Respuesta (Solo Maestro)</p>
-                            <p className="font-bold text-slate-800 dark:text-zinc-100 text-lg text-transparent blur-[4px] group-hover:blur-none group-hover:text-slate-800 dark:group-hover:text-zinc-100 transition-all duration-300 select-none">{data.audioText} <br/><br/> <span className="text-sm text-purple-500 dark:text-purple-400">{data.answer}</span></p>
-                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none group-hover:opacity-0 transition-opacity"><span className="bg-white/80 dark:bg-black/80 px-2 py-1 rounded text-xs font-bold text-slate-500 dark:text-zinc-300">Hover para ver</span></div>
-                        </div>
+                    {isSupreme && (
+                        <button onClick={() => updateChallenge({ revealed: !revealed })} className="btn-juicy mb-4 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-full text-xs font-bold transition-colors">
+                            {revealed ? <EyeOff size={14} className="inline mr-1"/> : <Eye size={14} className="inline mr-1"/>}
+                            {revealed ? 'Ocultar a alumnos' : 'Mostrar a todos'}
+                        </button>
                     )}
+
+                    <div className="bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl mb-8 border border-slate-200 dark:border-zinc-800 relative overflow-hidden transition-all">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase mb-2">Transcripción / Respuesta {isSupreme ? '(Tú)' : '(Solo Maestro)'}</p>
+                        <p className={`font-bold text-lg transition-all duration-300 select-none ${isRevealed ? 'blur-none text-slate-800 dark:text-zinc-100' : 'text-transparent blur-[4px]'}`}>
+                            {data.audioText} <br/><br/> <span className="text-sm text-purple-500 dark:text-purple-400">{data.answer}</span>
+                        </p>
+                    </div>
                     
                     {status === 'playing' ? (
-                        canGrade ? (
+                        isSupreme ? (
                             <div className="grid grid-cols-2 gap-4">
-                                <button onClick={() => { setStatus('wrong'); onFail(); }} className="btn-juicy py-4 rounded-2xl bg-white dark:bg-zinc-800 border-2 border-red-100 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">INCORRECTO</button>
-                                <button onClick={() => { setStatus('correct'); onSuccess(); fireConfetti(); }} className="btn-juicy py-4 rounded-2xl bg-green-500 border-green-700 text-white font-black shadow-lg hover:bg-green-600 transition-all">¡CORRECTO!</button>
+                                <button onClick={() => updateChallenge({ status: 'wrong', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-white dark:bg-zinc-800 border-2 border-red-100 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">INCORRECTO</button>
+                                <button onClick={() => updateChallenge({ status: 'correct', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-green-500 border-green-700 text-white font-black shadow-lg hover:bg-green-600 transition-all">¡CORRECTO!</button>
                             </div>
                         ) : (
                             <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl text-center text-amber-600 dark:text-amber-400 font-bold animate-pulse border border-amber-200 dark:border-amber-800/50">Esperando a que el maestro te evalúe...</div>
                         )
-                    ) : status === 'correct' && canGrade ? (
-                        <button onClick={() => onComplete(true)} className="btn-juicy w-full bg-green-600 text-white py-4 rounded-xl border-green-800 font-black flex justify-center items-center gap-2 animate-in">CONTINUAR Y COLOCAR FICHA <ArrowRight/></button>
-                    ) : status === 'wrong' && canGrade ? (
-                        <button onClick={() => onComplete(false)} className="btn-juicy w-full bg-slate-800 text-white py-4 rounded-xl border-slate-950 font-bold hover:bg-slate-700 animate-in">Perder Turno</button>
-                    ) : null}
+                    ) : (
+                        <div className={`p-4 rounded-xl font-black text-xl animate-in border-2 ${status === 'correct' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-red-50 border-red-500 text-red-600'}`}>
+                            {status === 'correct' ? '¡Respuesta Validada!' : 'Respuesta Incorrecta'}
+                        </div>
+                    )}
                 </div>
             );
         };
 
-        const RoleplayChallenge = ({ data, onComplete, onFail, onSuccess, canGrade }) => {
-            const [status, setStatus] = useState('playing');
+        const RoleplayChallenge = ({ modal, updateChallenge, isSupreme }) => {
+            const { data, status, revealed } = modal;
+            const isRevealed = revealed || isSupreme;
+
             return (
                 <div className="w-full text-center">
                     <div className="flex justify-center mb-4"><div className="bg-orange-100 dark:bg-orange-900/30 p-3 rounded-full"><Users className="w-8 h-8 text-orange-600 dark:text-orange-400"/></div></div>
@@ -495,78 +632,96 @@
                         {data.situation}
                     </div>
                     
-                    {canGrade && (
-                        <div className="bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl mb-8 border border-slate-200 dark:border-zinc-800 group cursor-help relative overflow-hidden">
-                            <p className="text-[10px] text-slate-400 font-bold uppercase mb-2">Sugerencia (Solo Maestro)</p>
-                            <p className="font-bold text-slate-800 dark:text-zinc-100 text-lg text-transparent blur-[4px] group-hover:blur-none group-hover:text-slate-800 dark:group-hover:text-zinc-100 transition-all duration-300 select-none">{data.expected}</p>
-                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none group-hover:opacity-0 transition-opacity"><span className="bg-white/80 dark:bg-black/80 px-2 py-1 rounded text-xs font-bold text-slate-500 dark:text-zinc-300">Hover para ver</span></div>
-                        </div>
+                    {isSupreme && (
+                        <button onClick={() => updateChallenge({ revealed: !revealed })} className="btn-juicy mb-4 bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-full text-xs font-bold transition-colors">
+                            {revealed ? <EyeOff size={14} className="inline mr-1"/> : <Eye size={14} className="inline mr-1"/>}
+                            {revealed ? 'Ocultar a alumnos' : 'Mostrar a todos'}
+                        </button>
                     )}
+
+                    <div className="bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl mb-8 border border-slate-200 dark:border-zinc-800 relative overflow-hidden transition-all">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase mb-2">Sugerencia {isSupreme ? '(Tú)' : '(Solo Maestro)'}</p>
+                        <p className={`font-bold text-lg transition-all duration-300 select-none ${isRevealed ? 'blur-none text-slate-800 dark:text-zinc-100' : 'text-transparent blur-[4px]'}`}>{data.expected}</p>
+                    </div>
                     
                     {status === 'playing' ? (
-                        canGrade ? (
+                        isSupreme ? (
                             <div className="grid grid-cols-2 gap-4">
-                                <button onClick={() => { setStatus('wrong'); onFail(); }} className="btn-juicy py-4 rounded-2xl bg-white dark:bg-zinc-800 border-2 border-red-100 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">INCORRECTO</button>
-                                <button onClick={() => { setStatus('correct'); onSuccess(); fireConfetti(); }} className="btn-juicy py-4 rounded-2xl bg-green-500 border-green-700 text-white font-black shadow-lg hover:bg-green-600 transition-all">¡CORRECTO!</button>
+                                <button onClick={() => updateChallenge({ status: 'wrong', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-white dark:bg-zinc-800 border-2 border-red-100 dark:border-red-900/50 text-red-500 dark:text-red-400 font-black hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">INCORRECTO</button>
+                                <button onClick={() => updateChallenge({ status: 'correct', endTime: Date.now() })} className="btn-juicy py-4 rounded-2xl bg-green-500 border-green-700 text-white font-black shadow-lg hover:bg-green-600 transition-all">¡CORRECTO!</button>
                             </div>
                         ) : (
                             <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl text-center text-amber-600 dark:text-amber-400 font-bold animate-pulse border border-amber-200 dark:border-amber-800/50">Esperando a que el maestro te evalúe...</div>
                         )
-                    ) : status === 'correct' && canGrade ? (
-                        <button onClick={() => onComplete(true)} className="btn-juicy w-full bg-green-600 text-white py-4 rounded-xl border-green-800 font-black flex justify-center items-center gap-2 animate-in">CONTINUAR Y COLOCAR FICHA <ArrowRight/></button>
-                    ) : status === 'wrong' && canGrade ? (
-                        <button onClick={() => onComplete(false)} className="btn-juicy w-full bg-slate-800 text-white py-4 rounded-xl border-slate-950 font-bold hover:bg-slate-700 animate-in">Perder Turno</button>
-                    ) : null}
+                    ) : (
+                        <div className={`p-4 rounded-xl font-black text-xl animate-in border-2 ${status === 'correct' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-red-50 border-red-500 text-red-600'}`}>
+                            {status === 'correct' ? '¡Respuesta Validada!' : 'Respuesta Incorrecta'}
+                        </div>
+                    )}
                 </div>
             );
         };
 
         // =========================================================================
-        // CONTROLADOR DEL MODAL Y PERMISOS
+        // CONTROLADOR DEL MODAL, PERMISOS Y AVANCE
         // =========================================================================
-        const ChallengeModal = ({ type, data, onComplete, isHost, myRole, currentPlayer }) => {
-            const [timeIsUp, setTimeIsUp] = useState(false);
-            const [challengeStatus, setChallengeStatus] = useState('playing');
-            
+        const ChallengeModal = ({ modal, updateChallenge, onComplete, isHost, myRole, currentPlayer }) => {
             const isLocal = myRole === 'local';
-            const isTeacherTab = !!new URLSearchParams(window.location.search).get('id');
-            const isTeacherGraded = ['speaking', 'listening', 'roleplay'].includes(type);
-            const canGrade = isLocal || myRole === 'observer' || isHost || isTeacherTab;
-            const canInteract = isLocal || (isTeacherGraded ? canGrade : myRole === currentPlayer);
+            const isSupreme = isHost || isLocal; 
+            const isTeacherGraded = ['speaking', 'listening', 'roleplay'].includes(modal.type);
+            const canInteract = isLocal || (isTeacherGraded ? isSupreme : myRole === currentPlayer);
 
-            const handleTimeUp = () => { setTimeIsUp(true); setChallengeStatus('failed'); };
-            const handleFail = () => { setChallengeStatus('failed'); };
-            const handleSuccess = () => { setChallengeStatus('success'); };
-            const handleComplete = (success) => { onComplete(success); };
-            const handleSkip = () => { if(canGrade) onComplete(true); }; 
+            // Confetti una sola vez cuando pasa a correct
+            const prevStatus = useRef(modal.status);
+            useEffect(() => {
+                if (prevStatus.current === 'playing' && modal.status === 'correct') { fireConfetti(); }
+                prevStatus.current = modal.status;
+            }, [modal.status]);
+
+            const handleTimeUp = () => { updateChallenge({ status: 'failed', endTime: Date.now() }); };
+
+            const renderChallenge = () => {
+                const props = { modal, updateChallenge, isSupreme, canInteract };
+                switch (modal.type) {
+                    case 'multipleChoice': return <MultipleChoiceChallenge {...props} />;
+                    case 'dragDrop': return <DragDropChallenge {...props} />;
+                    case 'unscramble': return <UnscrambleChallenge {...props} />;
+                    case 'fillBlank': return <FillBlankChallenge {...props} />;
+                    case 'matching': return <MatchingChallenge {...props} />;
+                    case 'errorCorrection': return <ErrorCorrectionChallenge {...props} />;
+                    case 'oddOneOut': return <OddOneOutChallenge {...props} />;
+                    case 'speaking': return <SpeakingChallenge {...props} />;
+                    case 'listening': return <ListeningChallenge {...props} />;
+                    case 'roleplay': return <RoleplayChallenge {...props} />;
+                    default: return null;
+                }
+            };
 
             return (
                 <div className="fixed inset-0 bg-slate-900/90 dark:bg-black/95 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in">
                     <div className="bg-white dark:bg-zinc-950 w-full max-w-2xl rounded-[2.5rem] overflow-hidden shadow-2xl border border-zinc-800 flex flex-col max-h-[90vh]">
-                        {!isTeacherGraded && <CountdownBar duration={60} onTimeUp={handleTimeUp} isActive={challengeStatus === 'playing'} canInteract={canInteract} />}
+                        {!isTeacherGraded && <CountdownBar startTime={modal.startTime} endTime={modal.endTime} status={modal.status} onTimeUp={handleTimeUp} canInteract={canInteract} />}
                         
                         <div className="p-6 flex justify-between items-start bg-slate-50 dark:bg-zinc-900 border-b border-slate-100 dark:border-zinc-800 shrink-0">
-                            <div><span className="text-[10px] font-black text-indigo-400 uppercase tracking-[0.2em] mb-1 block">Desafío</span><h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 capitalize">{type.replace(/([A-Z])/g, ' $1').trim()}</h3></div>
+                            <div><span className="text-[10px] font-black text-indigo-400 uppercase tracking-[0.2em] mb-1 block">Desafío</span><h3 className="text-2xl font-black text-slate-800 dark:text-zinc-100 capitalize">{modal.type.replace(/([A-Z])/g, ' $1').trim()}</h3></div>
                             <div className="flex flex-col items-end gap-2">
                                 {!isTeacherGraded && <div className="flex items-center gap-1 text-slate-400 font-bold text-xs"><Timer size={14}/> 60s</div>}
-                                {challengeStatus === 'playing' && canGrade && <button onClick={handleSkip} className="text-slate-400 hover:text-green-500 font-bold text-xs uppercase flex items-center gap-1 bg-white dark:bg-zinc-800 border dark:border-zinc-700 px-3 py-1.5 rounded-full transition-colors">Saltar (Aceptar) <SkipForward size={14}/></button>}
-                                {!canInteract && challengeStatus === 'playing' && <div className="text-amber-500 font-black text-[10px] bg-amber-500/10 px-2 py-1 rounded border border-amber-500/30 uppercase tracking-widest animate-pulse">Modo Espectador</div>}
+                                {!canInteract && modal.status === 'playing' && !isSupreme && <div className="text-amber-500 font-black text-[10px] bg-amber-500/10 px-2 py-1 rounded border border-amber-500/30 uppercase tracking-widest animate-pulse">Espectador</div>}
                             </div>
                         </div>
-                        <div className="p-8 overflow-y-auto relative">
-                            {timeIsUp ? (
-                                <div className="text-center animate-in"><div className="text-red-500 mb-4"><Timer size={64} className="mx-auto"/></div><h2 className="text-3xl font-black text-slate-800 dark:text-white mb-2">¡Tiempo Agotado!</h2><p className="text-slate-500 mb-8">Se acabó el tiempo.</p>{canInteract && <button onClick={() => onComplete(false)} className="btn-juicy bg-slate-800 text-white px-8 py-4 rounded-xl border-slate-950 font-bold">Perder Turno</button>}</div>
+                        <div className="p-8 overflow-y-auto relative custom-scrollbar flex-1">
+                            {modal.status === 'failed' ? (
+                                <div className="text-center animate-in"><div className="text-red-500 mb-4"><Timer size={64} className="mx-auto"/></div><h2 className="text-3xl font-black text-slate-800 dark:text-white mb-2">¡Tiempo Agotado!</h2><p className="text-slate-500 mb-8">Se acabó el tiempo para responder.</p></div>
                             ) : (
-                                <div className="w-full flex flex-col">
-                                    {type === 'multipleChoice' && <MultipleChoiceChallenge data={data} onComplete={onComplete} onFail={handleFail} onSuccess={handleSuccess} canInteract={canInteract} />}
-                                    {type === 'dragDrop' && <DragDropChallenge data={data} onComplete={onComplete} onFail={handleFail} onSuccess={handleSuccess} canInteract={canInteract} />}
-                                    {type === 'unscramble' && <UnscrambleChallenge data={data} onComplete={onComplete} onFail={handleFail} onSuccess={handleSuccess} canInteract={canInteract} />}
-                                    {type === 'fillBlank' && <FillBlankChallenge data={data} onComplete={onComplete} onFail={handleFail} onSuccess={handleSuccess} canInteract={canInteract} />}
-                                    {type === 'matching' && <MatchingChallenge data={data} onComplete={onComplete} onFail={handleFail} onSuccess={handleSuccess} canInteract={canInteract} />}
-                                    {type === 'errorCorrection' && <ErrorCorrectionChallenge data={data} onComplete={onComplete} onFail={handleFail} onSuccess={handleSuccess} canInteract={canInteract} />}
-                                    {type === 'speaking' && <SpeakingChallenge data={data} onComplete={onComplete} onFail={handleFail} onSuccess={handleSuccess} canGrade={canGrade} />}
-                                    {type === 'listening' && <ListeningChallenge data={data} onComplete={onComplete} onFail={handleFail} onSuccess={handleSuccess} canGrade={canGrade} />}
-                                    {type === 'roleplay' && <RoleplayChallenge data={data} onComplete={onComplete} onFail={handleFail} onSuccess={handleSuccess} canGrade={canGrade} />}
+                                renderChallenge()
+                            )}
+
+                            {/* BOTÓN DE AVANCE (SÓLO EL MAESTRO/HOST LO VE AL RESOLVER LA PREGUNTA) */}
+                            {isSupreme && modal.status !== 'playing' && (
+                                <div className="mt-8 border-t border-slate-100 dark:border-zinc-800 pt-6 animate-in">
+                                    <button onClick={() => onComplete(modal.status === 'correct')} className={`btn-juicy w-full py-5 rounded-2xl font-black text-white text-xl flex justify-center items-center gap-2 shadow-xl ${modal.status === 'correct' ? 'bg-green-600 border-green-800 hover:bg-green-500' : 'bg-slate-800 border-slate-950 hover:bg-slate-700'}`}>
+                                        {modal.status === 'correct' ? <>CONTINUAR Y COLOCAR FICHA <ArrowRight/></> : 'AVANZAR Y PERDER TURNO'}
+                                    </button>
                                 </div>
                             )}
                         </div>
@@ -628,6 +783,7 @@
                         setModal(data.activeChallenge);
                         setRoomRoles(data.roles);
                         setPlayerNames(data.playerNames || {});
+                        setIsHost(data.hostUid === myUid);
                         
                         if (data.roles.red === myUid) setMyRole('red');
                         else if (data.roles.yellow === myUid) setMyRole('yellow');
@@ -662,6 +818,16 @@
                     if (updates.turn !== undefined) setCurrentPlayer(updates.turn);
                     if (updates.activeChallenge !== undefined) setModal(updates.activeChallenge);
                     if (updates.winner !== undefined) setWinner(updates.winner);
+                }
+            };
+
+            const updateChallenge = async (updates) => {
+                if (roomId) {
+                    const fbUpdates = {};
+                    Object.keys(updates).forEach(k => { fbUpdates[`activeChallenge.${k}`] = updates[k]; });
+                    await updateDoc(doc(db, ROOMS_PATH, roomId), fbUpdates);
+                } else {
+                    setModal(prev => ({ ...prev, ...updates }));
                 }
             };
 
@@ -716,7 +882,7 @@
                         await updateDoc(roomRef, { playerNames: pNames });
 
                         setRoomId(code);
-                        setIsHost(false);
+                        setIsHost(data.hostUid === myUid);
                         setStage(data.gameState);
                     } else {
                         alert("Sala no encontrada o código incorrecto.");
@@ -773,7 +939,6 @@
 
             const handleColumnClick = (col) => {
                 if (winner || modal || stage !== 'playing') return;
-                
                 if (roomId && (currentPlayer !== myRole && myRole !== 'local')) return;
                 if (myRole === 'observer') return;
 
@@ -788,7 +953,12 @@
                 
                 if (connectionLen >= 2 && connectionLen < 4) {
                     const q = getQuestion();
-                    syncState({ activeChallenge: { type: q.type, data: q.data, pendingMove } });
+                    syncState({ 
+                        activeChallenge: { 
+                            type: q.type, data: q.data, pendingMove,
+                            status: 'playing', playerAnswer: null, revealed: false, startTime: Date.now() 
+                        } 
+                    });
                 } else {
                     commitMove(row, col, tempBoard);
                 }
@@ -874,7 +1044,7 @@
                         </div>
                     </div>
 
-                    {modal && <ChallengeModal type={modal.type} data={modal.data} onComplete={handleChallengeComplete} isHost={isHost} myRole={myRole} currentPlayer={currentPlayer} />}
+                    {modal && <ChallengeModal modal={modal} updateChallenge={updateChallenge} onComplete={handleChallengeComplete} isHost={isHost} myRole={myRole} currentPlayer={currentPlayer} />}
                     
                     {winner && (
                         <div className="fixed inset-0 bg-slate-900/95 dark:bg-black/95 flex items-center justify-center z-50 animate-in">
