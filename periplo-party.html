@@ -719,6 +719,7 @@ const App = () => {
     const [quizTitle, setQuizTitle] = useState("");
     const [quizLoading, setQuizLoading] = useState(true);
     const [quizError, setQuizError] = useState(null);
+    const [recoverableSession, setRecoverableSession] = useState(null);
     const [activePools, setActivePools] = useState({});
 
     const [isRolling, setIsRolling] = useState(false);
@@ -761,75 +762,7 @@ const App = () => {
         }, 1500);
     }, [isMyTurnAction, roomId]);
 
-    const resolveChallenge = useCallback(() => {
-        const currentGame = gameRef.current;
-        if (!currentGame.activeChallenge) return;
-        
-        const ch = currentGame.activeChallenge;
-        const ctx = ch.context || {};
-        const isTeacherGraded = ['speaking', 'listening', 'roleplay'].includes(ch.type);
-        const amIHost = localPlayerIdRef.current === 1;
-
-        // Permisos de evaluación
-        if (isTeacherGraded) {
-            if (!amIHost) return; 
-        } else {
-            if (!isMyTurnAction()) return;
-        }
-
-        const isCorrect = ch.status === 'correct';
-        const pName = currentGame.players[currentGame.turn].name;
-        let newPlayers = [...currentGame.players];
-
-        // Función auxiliar para actualizar
-        const pushUpdate = (playerUpdates) => {
-            if (db && roomId) {
-                updateDoc(doc(db, 'periplo-party-rooms', roomId), { players: playerUpdates, activeChallenge: null });
-            } else {
-                setGame(prev => ({ ...prev, players: playerUpdates, activeChallenge: null }));
-            }
-        };
-
-        if (ctx.trigger === 'blue') {
-            if (isCorrect) { showToast(`✅ ${pName} +3 Monedas`); newPlayers[currentGame.turn].coins += 3; }
-            else { showToast(`❌ Sin recompensa.`); }
-            pushUpdate(newPlayers);
-            advanceTurn(isTeacherGraded);
-        } 
-        else if (ctx.trigger === 'red') {
-            if (isCorrect) { showToast(`✅ ¡Salvado!`); }
-            else { showToast(`❌ ${pName} pierde -3 Monedas`); newPlayers[currentGame.turn].coins -= 3; }
-            pushUpdate(newPlayers);
-            advanceTurn(isTeacherGraded);
-        }
-        else if (ctx.trigger === 'bowser') {
-            if (isCorrect) { showToast(`✅ Chupacabras: "¡Grrr!" (-5 Monedas)`); newPlayers[currentGame.turn].coins -= 5; }
-            else { showToast(`❌ Chupacabras: "¡BWAHAHA!" (-15 Monedas)`); newPlayers[currentGame.turn].coins -= 15; }
-            pushUpdate(newPlayers);
-            
-            // Reanudar Movimiento
-            const pending = currentGame.pendingNode;
-            if (db && roomId) updateDoc(doc(db, 'periplo-party-rooms', roomId), { phase: currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN', pendingNode: null });
-            else setGame(p => ({ ...p, phase: p.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN', pendingNode: null }));
-        }
-        else if (ctx.trigger === 'boo_star') {
-            if (isCorrect) {
-                showToast(`👻 ¡Boo robó la estrella exitosamente!`);
-                const targetIdx = newPlayers.findIndex(p => p.id === ctx.targetId);
-                if (targetIdx >= 0 && newPlayers[targetIdx].stars > 0) {
-                    newPlayers[targetIdx].stars -= 1;
-                    newPlayers[currentGame.turn].stars += 1;
-                }
-            } else {
-                showToast(`❌ Boo: "Too bad..."`);
-            }
-            pushUpdate(newPlayers);
-            
-            // Reanudar Movimiento
-            if (db && roomId) updateDoc(doc(db, 'periplo-party-rooms', roomId), { phase: currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN', pendingNode: null });
-            else setGame(p => ({ ...p, phase: p.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN', pendingNode: null }));
-        }
-    }, [isMyTurnAction, roomId, advanceTurn, showToast]);
+    // (resolveChallenge se define más abajo, después de los handlers)
 
     // ==========================================
     // INICIALIZACIÓN
@@ -842,28 +775,47 @@ const App = () => {
             if (savedEmoji) setSelectedEmoji(savedEmoji);
         } catch(e) {}
 
-        const checkRecovery = async () => {
+        // Sondeo NO intrusivo: solo detecta si hay sesión recuperable y la ofrece como banner.
+        // NUNCA entra automáticamente.
+        const probeRecoverable = async (currentQuizId) => {
             const savedRoomId = localStorage.getItem('periplo_roomId');
             const savedPlayerId = localStorage.getItem('periplo_localPlayerId');
             const savedIsHost = localStorage.getItem('periplo_isHost');
+            const savedQuizId = localStorage.getItem('periplo_quizId');
 
-            if (savedRoomId && savedPlayerId && db) {
-                try {
-                    const snap = await getDoc(doc(db, 'periplo-party-rooms', savedRoomId));
-                    if (snap.exists()) {
-                        const data = snap.data();
-                        setRoomId(savedRoomId);
-                        setLocalPlayerId(Number(savedPlayerId));
-                        setIsHost(savedIsHost === 'true');
-                        setGame(data);
-                        setAppState(data.status === 'PLAYING' ? 'PLAYING' : 'LOBBY');
-                    } else {
-                        localStorage.removeItem('periplo_roomId');
-                        localStorage.removeItem('periplo_localPlayerId');
-                        localStorage.removeItem('periplo_isHost');
-                    }
-                } catch(e) { console.error("Error reconectando a la sala:", e); }
+            if (!savedRoomId || !savedPlayerId || !db) return;
+
+            // Si el banco que estás abriendo ahora es DISTINTO al de la sala guardada,
+            // es obvio que quieres jugar otra cosa. Limpia silenciosamente.
+            if (savedQuizId && currentQuizId && savedQuizId !== currentQuizId) {
+                localStorage.removeItem('periplo_roomId');
+                localStorage.removeItem('periplo_localPlayerId');
+                localStorage.removeItem('periplo_isHost');
+                localStorage.removeItem('periplo_quizId');
+                return;
             }
+
+            try {
+                const snap = await getDoc(doc(db, 'periplo-party-rooms', savedRoomId));
+                if (snap.exists()) {
+                    const data = snap.data();
+                    setRecoverableSession({
+                        roomId: savedRoomId,
+                        playerId: Number(savedPlayerId),
+                        isHost: savedIsHost === 'true',
+                        round: data.round || 1,
+                        playersCount: (data.players || []).length,
+                        status: data.status,
+                        data
+                    });
+                } else {
+                    // Sala muerta, limpia
+                    localStorage.removeItem('periplo_roomId');
+                    localStorage.removeItem('periplo_localPlayerId');
+                    localStorage.removeItem('periplo_isHost');
+                    localStorage.removeItem('periplo_quizId');
+                }
+            } catch(e) { console.error("Error sondeando sesión:", e); }
         };
 
         const loadQuiz = async () => {
@@ -886,7 +838,7 @@ const App = () => {
                 setQuizContent(data.content || {});
                 setQuizTitle(data.title || "Periplo Party");
                 setQuizLoading(false);
-                checkRecovery();
+                probeRecoverable(id);
             } catch(e) {
                 setQuizError(e.message || "Error al cargar el banco");
                 setQuizLoading(false);
@@ -1013,6 +965,30 @@ const App = () => {
         localStorage.setItem('periplo_roomId', id);
         localStorage.setItem('periplo_localPlayerId', pId);
         localStorage.setItem('periplo_isHost', isH ? 'true' : 'false');
+        // Guardar también qué banco corresponde a esta sala
+        const currentQuizId = new URLSearchParams(window.location.search).get('id');
+        if (currentQuizId) localStorage.setItem('periplo_quizId', currentQuizId);
+    };
+
+    // Acciones del banner de recuperación
+    const handleReconnect = () => {
+        if (!recoverableSession) return;
+        const s = recoverableSession;
+        setRoomId(s.roomId);
+        setLocalPlayerId(s.playerId);
+        setIsHost(s.isHost);
+        setGame(s.data);
+        setAppState(s.status === 'PLAYING' ? 'PLAYING' : 'LOBBY');
+        setRecoverableSession(null);
+    };
+
+    const handleForgetSession = () => {
+        localStorage.removeItem('periplo_roomId');
+        localStorage.removeItem('periplo_localPlayerId');
+        localStorage.removeItem('periplo_isHost');
+        localStorage.removeItem('periplo_quizId');
+        setRecoverableSession(null);
+        showToast("✅ Sesión olvidada");
     };
 
     const handleProfileSubmit = async () => {
@@ -1099,6 +1075,7 @@ const App = () => {
         localStorage.removeItem('periplo_roomId');
         localStorage.removeItem('periplo_localPlayerId');
         localStorage.removeItem('periplo_isHost');
+        localStorage.removeItem('periplo_quizId');
         
         setRoomId(""); setLocalPlayerId(null); setIsHost(false); setGame(INITIAL_GAME_STATE); setAppState('HOME');
     };
@@ -1536,6 +1513,25 @@ const App = () => {
                 {toastMsg && <div className="absolute top-10 z-50"><div className="bg-white text-black px-6 py-3 rounded-full font-black text-lg shadow-2xl animate-pop-in border-4 border-emerald-500">{toastMsg}</div></div>}
                 <button onClick={copyGameLink} className="absolute top-6 right-6 text-zinc-400 hover:text-white flex items-center gap-2 font-bold bg-zinc-900 px-4 py-2 rounded-xl z-20 transition-colors"><LinkIcon size={18}/> <span className="hidden md:inline">Copiar Link</span></button>
                 <div className="bg-zinc-900 border-4 border-emerald-500 rounded-3xl p-8 w-full max-w-md shadow-2xl z-10 text-center">
+                    {recoverableSession && (
+                        <div className="bg-amber-500/10 border-2 border-amber-500/50 rounded-2xl p-4 mb-6 animate-pop-in">
+                            <div className="flex items-center gap-2 mb-2 justify-center">
+                                <AlertTriangle size={18} className="text-amber-400 shrink-0"/>
+                                <p className="text-amber-300 font-black text-sm uppercase tracking-widest">Partida en curso</p>
+                            </div>
+                            <p className="text-zinc-300 text-xs mb-3 text-center">
+                                Sala <span className="font-black text-white">{recoverableSession.roomId}</span> · Ronda {recoverableSession.round} · {recoverableSession.playersCount} jugador{recoverableSession.playersCount !== 1 ? 'es' : ''}
+                            </p>
+                            <div className="flex gap-2">
+                                <button onClick={handleReconnect} className="btn-juicy flex-1 bg-amber-500 hover:bg-amber-400 text-amber-950 py-2 rounded-xl font-black text-sm">
+                                    Reconectar
+                                </button>
+                                <button onClick={handleForgetSession} className="btn-juicy flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 py-2 rounded-xl font-bold text-sm border border-zinc-700">
+                                    Olvidar
+                                </button>
+                            </div>
+                        </div>
+                    )}
                     <Gamepad2 size={60} className="text-emerald-400 mx-auto mb-4"/>
                     <h1 className="text-4xl font-black text-white mb-2">Periplo Party</h1>
                     <p className="text-emerald-400 font-bold tracking-widest uppercase mb-8">Multiplayer Edition</p>
