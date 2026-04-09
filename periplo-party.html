@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Periplo Party | Multiplayer Final v9.0 (Titanium Core)</title>
+    <title>Periplo Party | Multiplayer Final v9.1 (Clean Core)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
     
@@ -773,42 +773,28 @@ const App = () => {
             if (savedEmoji) setSelectedEmoji(savedEmoji);
         } catch(e) {}
 
-        const probeRecoverable = async (currentQuizId) => {
+        const checkRecovery = async () => {
             const savedRoomId = localStorage.getItem('periplo_roomId');
             const savedPlayerId = localStorage.getItem('periplo_localPlayerId');
             const savedIsHost = localStorage.getItem('periplo_isHost');
-            const savedQuizId = localStorage.getItem('periplo_quizId');
 
-            if (!savedRoomId || !savedPlayerId || !db) return;
-
-            if (savedQuizId && currentQuizId && savedQuizId !== currentQuizId) {
-                localStorage.removeItem('periplo_roomId');
-                localStorage.removeItem('periplo_localPlayerId');
-                localStorage.removeItem('periplo_isHost');
-                localStorage.removeItem('periplo_quizId');
-                return;
+            if (savedRoomId && savedPlayerId && db) {
+                try {
+                    const snap = await getDoc(doc(db, 'periplo-party-rooms', savedRoomId));
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        setRoomId(savedRoomId);
+                        setLocalPlayerId(Number(savedPlayerId));
+                        setIsHost(savedIsHost === 'true');
+                        setGame(data);
+                        setAppState(data.status === 'PLAYING' ? 'PLAYING' : 'LOBBY');
+                    } else {
+                        localStorage.removeItem('periplo_roomId');
+                        localStorage.removeItem('periplo_localPlayerId');
+                        localStorage.removeItem('periplo_isHost');
+                    }
+                } catch(e) { console.error("Error reconectando a la sala:", e); }
             }
-
-            try {
-                const snap = await getDoc(doc(db, 'periplo-party-rooms', savedRoomId));
-                if (snap.exists()) {
-                    const data = snap.data();
-                    setRecoverableSession({
-                        roomId: savedRoomId,
-                        playerId: Number(savedPlayerId),
-                        isHost: savedIsHost === 'true',
-                        round: data.round || 1,
-                        playersCount: (data.players || []).length,
-                        status: data.status,
-                        data
-                    });
-                } else {
-                    localStorage.removeItem('periplo_roomId');
-                    localStorage.removeItem('periplo_localPlayerId');
-                    localStorage.removeItem('periplo_isHost');
-                    localStorage.removeItem('periplo_quizId');
-                }
-            } catch(e) { console.error("Error sondeando sesión:", e); }
         };
 
         const loadQuiz = async () => {
@@ -831,7 +817,7 @@ const App = () => {
                 setQuizContent(data.content || {});
                 setQuizTitle(data.title || "Periplo Party");
                 setQuizLoading(false);
-                probeRecoverable(id);
+                checkRecovery();
             } catch(e) {
                 setQuizError(e.message || "Error al cargar el banco");
                 setQuizLoading(false);
@@ -906,6 +892,12 @@ const App = () => {
             if (updates.status === 'PLAYING') setAppState('PLAYING');
         }
     }, [roomId]);
+
+    const showToast = useCallback((msg) => {
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        setToastMsg(msg);
+        toastTimerRef.current = setTimeout(() => setToastMsg(null), msg.includes('❌') ? 5000 : 2500);
+    }, []);
 
     // ==========================================
     // FLUJO LOBBY / PRE-GAME
@@ -1074,6 +1066,56 @@ const App = () => {
     const startGame = () => {
         if (quizContent) fillPools(quizContent);
         updateGame({ status: 'PLAYING', activePos: game.players[0].pos });
+    };
+
+    // ==========================================
+    // UTILIDADES DE MAPA Y BIOMAS
+    // ==========================================
+    const reverseMap = useMemo(() => {
+        const map = {};
+        Object.values(RAW_MAP_DATA).forEach(node => {
+            (node.dirs || []).forEach(dir => {
+                const targetId = `${node.q + HEX_DIRS[dir].q},${node.r + HEX_DIRS[dir].r}`;
+                if (RAW_MAP_DATA[targetId]) {
+                    if (!map[targetId]) map[targetId] = [];
+                    map[targetId].push(node.id);
+                }
+            });
+        });
+        return map;
+    }, []);
+
+    const forestDecorations = useMemo(() => {
+        const grid = generateWideGrid();
+        const emptyHexes = grid.filter(h => !RAW_MAP_DATA[h.id]);
+        return emptyHexes.map(h => {
+            const hash = Math.abs(Math.sin(h.q * 12.9898 + h.r * 78.233)) * 10000;
+            const rand = hash - Math.floor(hash);
+            let emoji = null;
+            let bgTones = ['#064e3b', '#022c22', '#065f46'];
+
+            if (h.q > 2 && h.r < -2) { if (rand < 0.4) emoji = rand < 0.2 ? '🍄' : '🐛'; } 
+            else if (h.q < -4 && h.r > 2) { bgTones = ['#0369a1', '#0c4a6e', '#075985']; if (rand < 0.3) emoji = rand < 0.15 ? '🌊' : (rand < 0.25 ? '🦆' : '🐸'); } 
+            else if (h.q < -4 && h.r < -2) { if (rand < 0.5) emoji = rand < 0.4 ? '🌲' : '🦉'; } 
+            else if (Math.abs(h.q) <= 3 && Math.abs(h.r) <= 2) { bgTones = ['#166534', '#14532d', '#15803d']; if (rand < 0.5) emoji = rand < 0.3 ? '🌼' : (rand < 0.4 ? '🐝' : '🦋'); } 
+            else if (h.q > 3 && h.r > 2) { bgTones = ['#3f3f46', '#27272a', '#52525b']; if (rand < 0.3) emoji = rand < 0.2 ? '🪨' : '⛏️'; } 
+            else if (h.q > 4 && h.r > -4 && h.r < 4) { bgTones = ['#312e81', '#1e1b4b', '#3730a3']; if (rand < 0.4) emoji = rand < 0.15 ? '🦇' : (rand < 0.25 ? '🕸️' : '🪦'); } 
+            else if (h.q < -7 && Math.abs(h.r) <= 2) { if (rand < 0.3) emoji = rand < 0.1 ? '⛺' : (rand < 0.2 ? '🔥' : '🪵'); } 
+            else { if (rand < 0.15) emoji = '🌳'; else if (rand < 0.25) emoji = '🌿'; }
+
+            return { ...h, emoji, fill: bgTones[Math.floor(rand * bgTones.length)] };
+        });
+    }, []);
+
+    const getValidOuts = (node) => {
+        if (!node || !node.dirs) return [];
+        return node.dirs.map(dir => ({ dir: dir, id: `${node.q + HEX_DIRS[dir].q},${node.r + HEX_DIRS[dir].r}` })).filter(out => RAW_MAP_DATA[out.id]);
+    };
+
+    const updateActivePlayer = (updater) => {
+        const newPlayers = [...gameRef.current.players];
+        newPlayers[gameRef.current.turn] = updater(newPlayers[gameRef.current.turn]);
+        return newPlayers;
     };
 
     // ==========================================
@@ -1453,8 +1495,6 @@ const App = () => {
 
     if (quizLoading || quizError) return <div className="h-full flex items-center justify-center bg-emerald-950 p-6 text-white font-bold">{quizError || "Cargando..."}</div>;
 
-    const showTeacherOverlay = isHost && game.activeChallenge && ['speaking', 'listening', 'roleplay'].includes(game.activeChallenge.type);
-
     if (appState === 'HOME') {
         return (
             <div className="h-full flex flex-col items-center justify-center bg-emerald-950 p-6 relative">
@@ -1650,7 +1690,7 @@ const App = () => {
                         <polyline points={ghostPathCoords.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#ffffff" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="8 12" className="ghost-path drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" />
                     )}
 
-                    {/* FICHAS MULTIJUGADOR CON OFFSET CORREGIDO */}
+                    {/* FICHAS MULTIJUGADOR CON OFFSET CORREGIDO (8.6 FIX) */}
                     {game.players.map((p, idx) => {
                         const isTurn = idx === game.turn;
                         const posIdToRender = (isTurn && game.phase !== 'IDLE') ? game.activePos : p.pos;
@@ -1844,21 +1884,12 @@ const App = () => {
                             )}
 
                             <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
-                                {showTeacherOverlay && (
-                                    <div className="bg-indigo-500/20 border-2 border-indigo-500/50 rounded-xl p-3 mb-4 text-center animate-pulse">
-                                        <p className="text-indigo-300 font-bold text-xs uppercase tracking-widest flex justify-center items-center gap-2"><Crown size={14}/> Eres el Host <Crown size={14}/></p>
-                                        <p className="text-indigo-100 text-sm">Evalúa la respuesta de <b>{activePlayer.name}</b></p>
-                                    </div>
-                                )}
-
                                 <div className="text-center mb-4">
                                     {game.activeChallenge.context?.trigger === 'blue' && <span className="text-blue-400 font-bold uppercase tracking-widest text-xs">Casilla Azul · +3 monedas si aciertas</span>}
                                     {game.activeChallenge.context?.trigger === 'red' && <span className="text-rose-400 font-bold uppercase tracking-widest text-xs">Casilla Roja · -3 monedas si fallas</span>}
                                     {game.activeChallenge.context?.trigger === 'bowser' && <span className="text-rose-500 font-bold uppercase tracking-widest text-xs">Trivia Chupacabras · -15 si fallas</span>}
                                     {game.activeChallenge.context?.trigger === 'boo_star' && <span className="text-purple-400 font-bold uppercase tracking-widest text-xs">Boo · Acierta para robar la Estrella</span>}
-                                    {!showTeacherOverlay && (
-                                        <div className="mt-2 text-zinc-500 text-xs">Responde: <span className="font-black" style={{color: activePlayer.activeColor}}>{activePlayer.name}</span> {!isMyTurnRender && '(Tú observas)'}</div>
-                                    )}
+                                    <div className="mt-2 text-zinc-500 text-xs">Responde: <span className="font-black" style={{color: activePlayer.activeColor}}>{activePlayer.name}</span> {!isMyTurnRender && '(Tú observas)'}</div>
                                 </div>
                                 
                                 <ChallengeRouter 
