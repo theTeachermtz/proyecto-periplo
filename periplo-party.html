@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Periplo Party | Multiplayer Final v9.3 (Rules+RaceFix)</title>
+    <title>Periplo Party | Multiplayer Final v9.4 (HostObserver+GlobalToasts)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
     
@@ -683,7 +683,8 @@ const INITIAL_GAME_STATE = {
     diceVal: 6,
     quizId: null,
     quizTitle: "",
-    pools: {}
+    pools: {},
+    lastEvent: null // Fix 2: Sincronización global de notificaciones
 };
 
 const generateWideGrid = () => {
@@ -730,6 +731,7 @@ const App = () => {
     const [ghostLandingNode, setGhostLandingNode] = useState(null);
 
     const toastTimerRef = useRef(null);
+    const lastEventTsRef = useRef(0);
     const gameRef = useRef(game);
     const localPlayerIdRef = useRef(localPlayerId);
     const quizContentRef = useRef(null);
@@ -738,12 +740,21 @@ const App = () => {
     useEffect(() => { localPlayerIdRef.current = localPlayerId; }, [localPlayerId]);
     useEffect(() => { quizContentRef.current = quizContent; }, [quizContent]);
 
-    const isMyTurnRender = localPlayerId !== null && game.players && game.players.length > 0 && game.turn === (localPlayerId - 1);
+    // Listener para los eventos sincronizados globales
+    useEffect(() => {
+        if (game.lastEvent && game.lastEvent.ts && game.lastEvent.ts !== lastEventTsRef.current) {
+            showToast(game.lastEvent.msg);
+            if (game.lastEvent.msg.includes("⭐")) confetti({particleCount: 150, spread: 70});
+            lastEventTsRef.current = game.lastEvent.ts;
+        }
+    }, [game.lastEvent]);
+
+    const isMyTurnRender = localPlayerId !== null && localPlayerId !== 'HOST' && game.players && game.players.length > 0 && game.turn === (localPlayerId - 1);
 
     const isMyTurnAction = useCallback(() => {
         const id = localPlayerIdRef.current;
         const g = gameRef.current;
-        if (id === null || !g.players || g.players.length === 0) return false;
+        if (id === null || id === 'HOST' || !g.players || g.players.length === 0) return false;
         return g.turn === (id - 1);
     }, []);
 
@@ -761,7 +772,10 @@ const App = () => {
             const nextActivePos = currentGame.players[nextTurn].pos; 
 
             const updates = { phase: 'IDLE', turn: nextTurn, activePos: nextActivePos, pendingNode: null, currentDialog: "", activeChallenge: null };
-            if (nextTurn === 0) { updates.round = (currentGame.round || 1) + 1; showToast(`🎉 ¡Ronda ${updates.round}!`); }
+            if (nextTurn === 0) { 
+                updates.round = (currentGame.round || 1) + 1; 
+                updates.lastEvent = { msg: `🎉 ¡Ronda ${updates.round}!`, ts: Date.now() }; 
+            }
             
             if (db && roomId) {
                 updateDoc(doc(db, 'periplo-party-rooms', roomId), updates);
@@ -769,14 +783,11 @@ const App = () => {
                 setGame(prev => ({ ...prev, ...updates }));
             }
         }, 1500);
-    }, [isMyTurnAction, roomId, showToast]);
+    }, [isMyTurnAction, roomId]);
 
     // ==========================================
-    // POOLS EN FIREBASE (FIX 1)
+    // POOLS EN FIREBASE
     // ==========================================
-    // Separamos por tipo de evaluación:
-    // - auto: las que el juego corrige solo (MC, DragDrop, etc.)
-    // - human: speaking, listening, roleplay (las evalúa el maestro)
     const HUMAN_TYPES = ['speaking', 'listening', 'roleplay'];
     const buildFreshPools = useCallback((content) => {
         if (!content) return { auto: {}, human: {} };
@@ -791,12 +802,10 @@ const App = () => {
         return { auto, human };
     }, []);
 
-    // pickQuestion(kind): 'auto' o 'human'. Si human está vacío, fallback a auto.
     const pickQuestion = useCallback(async (kind = 'auto') => {
         const content = quizContentRef.current;
         if (!content) return null;
 
-        // Helper: intenta sacar una pregunta del bucket indicado. Muta `pools` y devuelve {type,data} o null.
         const drawFrom = (pools, bucketKey) => {
             const bucket = pools[bucketKey] || {};
             const availableTypes = Object.keys(bucket).filter(k => Array.isArray(bucket[k]) && bucket[k].length > 0);
@@ -818,20 +827,14 @@ const App = () => {
                     if (!snap.exists()) return;
                     const data = snap.data();
                     let pools = data.pools || {};
-                    // Migración defensiva si aún hay formato viejo
                     if (!pools.auto && !pools.human) pools = buildFreshPools(content);
 
-                    // Intento 1: bucket solicitado
                     picked = drawFrom(pools, kind);
-
-                    // Si no hay, refresco el bucket desde content y reintento
                     if (!picked) {
                         const fresh = buildFreshPools(content);
                         pools[kind] = fresh[kind];
                         picked = drawFrom(pools, kind);
                     }
-
-                    // Fallback: human → auto
                     if (!picked && kind === 'human') {
                         picked = drawFrom(pools, 'auto');
                         if (!picked) {
@@ -849,7 +852,6 @@ const App = () => {
                 return null;
             }
         } else {
-            // Modo local sin Firebase
             let pools = gameRef.current.pools || {};
             if (!pools.auto && !pools.human) pools = buildFreshPools(content);
 
@@ -873,7 +875,7 @@ const App = () => {
     }, [roomId, buildFreshPools]);
 
     // ==========================================
-    // INICIALIZACIÓN + RECUPERACIÓN (FIX 3)
+    // INICIALIZACIÓN + RECUPERACIÓN
     // ==========================================
     useEffect(() => {
         try {
@@ -889,14 +891,10 @@ const App = () => {
             const savedIsHost = localStorage.getItem('periplo_isHost');
             const savedQuizId = localStorage.getItem('periplo_quizId');
 
-            // Validar que el quiz del URL coincide con el guardado
             if (!savedRoomId || !savedPlayerId || !db) return;
             if (savedQuizId && currentQuizId && savedQuizId !== currentQuizId) {
-                // Quiz distinto, sesión ya no aplica
-                localStorage.removeItem('periplo_roomId');
-                localStorage.removeItem('periplo_localPlayerId');
-                localStorage.removeItem('periplo_isHost');
-                localStorage.removeItem('periplo_quizId');
+                localStorage.removeItem('periplo_roomId'); localStorage.removeItem('periplo_localPlayerId');
+                localStorage.removeItem('periplo_isHost'); localStorage.removeItem('periplo_quizId');
                 return;
             }
 
@@ -904,30 +902,22 @@ const App = () => {
                 const snap = await withTimeout(getDoc(doc(db, 'periplo-party-rooms', savedRoomId)), 6000, 'RECOVER');
                 if (snap.exists()) {
                     const data = snap.data();
-                    // Verificar que mi playerId aún existe en la sala
-                    const stillThere = (data.players || []).some(p => p.id === Number(savedPlayerId));
+                    // Si eras Host Observer o estás en la lista de jugadores, puedes entrar.
+                    const stillThere = savedIsHost === 'true' || (data.players || []).some(p => p.id === Number(savedPlayerId));
                     if (!stillThere) {
-                        localStorage.removeItem('periplo_roomId');
-                        localStorage.removeItem('periplo_localPlayerId');
-                        localStorage.removeItem('periplo_isHost');
-                        localStorage.removeItem('periplo_quizId');
+                        localStorage.removeItem('periplo_roomId'); localStorage.removeItem('periplo_localPlayerId');
+                        localStorage.removeItem('periplo_isHost'); localStorage.removeItem('periplo_quizId');
                         return;
                     }
-                    // Ofrecer reconexión
                     setRecoverableSession({
                         roomId: savedRoomId,
-                        playerId: Number(savedPlayerId),
+                        playerId: savedPlayerId,
                         isHost: savedIsHost === 'true',
-                        data,
-                        status: data.status,
-                        round: data.round || 1,
-                        playersCount: (data.players || []).length
+                        data, status: data.status, round: data.round || 1, playersCount: (data.players || []).length
                     });
                 } else {
-                    localStorage.removeItem('periplo_roomId');
-                    localStorage.removeItem('periplo_localPlayerId');
-                    localStorage.removeItem('periplo_isHost');
-                    localStorage.removeItem('periplo_quizId');
+                    localStorage.removeItem('periplo_roomId'); localStorage.removeItem('periplo_localPlayerId');
+                    localStorage.removeItem('periplo_isHost'); localStorage.removeItem('periplo_quizId');
                 }
             } catch(e) { console.warn("Error reconectando a la sala:", e); }
         };
@@ -937,25 +927,17 @@ const App = () => {
             const id = params.get('id');
             if (!id) {
                 setQuizError("Falta el ID del banco. Abre este juego desde el Teacher Hub.");
-                setQuizLoading(false);
-                return;
+                setQuizLoading(false); return;
             }
-            if (!db) {
-                setQuizError("Sin conexión a Firebase.");
-                setQuizLoading(false);
-                return;
-            }
+            if (!db) { setQuizError("Sin conexión a Firebase."); setQuizLoading(false); return; }
             try {
                 const snap = await withTimeout(getDoc(doc(db, QUIZZES_PATH, id)), 8000, 'LOAD_QUIZ');
                 if (!snap.exists()) throw new Error("Banco no encontrado");
                 const data = snap.data();
-                setQuizContent(data.content || {});
-                setQuizTitle(data.title || "Periplo Party");
-                setQuizLoading(false);
-                checkRecovery(id);
+                setQuizContent(data.content || {}); setQuizTitle(data.title || "Periplo Party");
+                setQuizLoading(false); checkRecovery(id);
             } catch(e) {
-                setQuizError(e.message || "Error al cargar el banco");
-                setQuizLoading(false);
+                setQuizError(e.message || "Error al cargar el banco"); setQuizLoading(false);
             }
         };
         loadQuiz();
@@ -968,24 +950,17 @@ const App = () => {
             if (snapshot.exists()) {
                 const data = snapshot.data();
                 setGame(data);
-                if (data.status === 'PLAYING' && appState !== 'PLAYING') {
-                    setAppState('PLAYING');
-                }
+                if (data.status === 'PLAYING' && appState !== 'PLAYING') setAppState('PLAYING');
             } else {
-                showToast("⚠️ La sala fue cerrada");
-                leaveRoom();
+                showToast("⚠️ La sala fue cerrada"); leaveRoom();
             }
-        }, (error) => {
-            showToast(`❌ Conexión perdida`);
-        });
+        }, (error) => { showToast(`❌ Conexión perdida`); });
         return () => unsubscribe();
     }, [roomId, appState]);
 
     const updateGame = useCallback((updates) => {
         if (db && roomId) {
-            updateDoc(doc(db, 'periplo-party-rooms', roomId), updates).catch(e => {
-                console.error("[Periplo] updateDoc error:", e);
-            });
+            updateDoc(doc(db, 'periplo-party-rooms', roomId), updates).catch(e => { console.error("[Periplo] updateDoc error:", e); });
         } else {
             setGame(prev => ({ ...prev, ...updates }));
             if (updates.status === 'PLAYING') setAppState('PLAYING');
@@ -998,15 +973,13 @@ const App = () => {
     const copyGameLink = () => {
         const url = window.location.href.split('?')[0];
         navigator.clipboard.writeText(url).then(() => {
-            setLinkCopied(true);
-            setTimeout(() => setLinkCopied(false), 2000);
+            setLinkCopied(true); setTimeout(() => setLinkCopied(false), 2000);
         });
     };
 
     const copyRoomCode = () => {
         navigator.clipboard.writeText(roomId).then(() => {
-            setCodeCopied(true);
-            setTimeout(() => setCodeCopied(false), 2000);
+            setCodeCopied(true); setTimeout(() => setCodeCopied(false), 2000);
         });
     };
 
@@ -1028,12 +1001,8 @@ const App = () => {
                     } else {
                         showToast("❌ Sala llena (4/4)");
                     }
-                } else {
-                    showToast("❌ Sala no encontrada");
-                }
-            } catch(e) {
-                showToast(`❌ Error de conexión`);
-            }
+                } else { showToast("❌ Sala no encontrada"); }
+            } catch(e) { showToast(`❌ Error de conexión`); }
         } else {
             setRoomId(code); setIsHost(false); setAppState('PROFILE');
         }
@@ -1051,7 +1020,7 @@ const App = () => {
         if (!recoverableSession) return;
         const s = recoverableSession;
         setRoomId(s.roomId);
-        setLocalPlayerId(s.playerId);
+        setLocalPlayerId(s.playerId === 'HOST' ? 'HOST' : Number(s.playerId));
         setIsHost(s.isHost);
         setGame(s.data);
         setAppState(s.status === 'PLAYING' ? 'PLAYING' : 'LOBBY');
@@ -1059,39 +1028,44 @@ const App = () => {
     };
 
     const handleForgetSession = () => {
-        localStorage.removeItem('periplo_roomId');
-        localStorage.removeItem('periplo_localPlayerId');
-        localStorage.removeItem('periplo_isHost');
-        localStorage.removeItem('periplo_quizId');
-        setRecoverableSession(null);
-        showToast("✅ Sesión olvidada");
+        localStorage.removeItem('periplo_roomId'); localStorage.removeItem('periplo_localPlayerId');
+        localStorage.removeItem('periplo_isHost'); localStorage.removeItem('periplo_quizId');
+        setRecoverableSession(null); showToast("✅ Sesión olvidada");
     };
 
-    const handleProfileSubmit = async () => {
+    // FIX 1: Host puede elegir su rol (Observer o Player)
+    const handleProfileSubmit = async (role = 'PLAYER') => {
         const name = playerName.trim();
-        if (!name) return showToast("⚠️ Pon tu nombre para jugar");
+        if (!name && role !== 'OBSERVER') return showToast("⚠️ Pon tu nombre para jugar");
+        const finalName = name || 'Moderador';
         
-        try { localStorage.setItem('periplo_playerName', name); localStorage.setItem('periplo_playerEmoji', selectedEmoji); } catch(e) {}
+        try { localStorage.setItem('periplo_playerName', finalName); localStorage.setItem('periplo_playerEmoji', selectedEmoji); } catch(e) {}
 
         if (isHost) {
             const newId = Math.random().toString(36).substring(2, 6).toUpperCase();
-            const c = PLAYER_COLORS[0];
-            const hostPlayer = { id: 1, name, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
             const initialPools = buildFreshPools(quizContent);
+            let initialPlayers = [];
+            let myId = 'HOST';
+
+            if (role === 'PLAYER') {
+                const c = PLAYER_COLORS[0];
+                initialPlayers = [{ id: 1, name: finalName, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor }];
+                myId = 1;
+            }
             
             if (db) {
                 try {
                     await withTimeout(setDoc(doc(db, 'periplo-party-rooms', newId), { 
-                        ...INITIAL_GAME_STATE, players: [hostPlayer], pools: initialPools, quizId: new URLSearchParams(window.location.search).get('id') || null, quizTitle: quizTitle || "Periplo Party", createdAt: Date.now() 
+                        ...INITIAL_GAME_STATE, players: initialPlayers, pools: initialPools, quizId: new URLSearchParams(window.location.search).get('id') || null, quizTitle: quizTitle || "Periplo Party", createdAt: Date.now() 
                     }), 8000, 'CREATE_ROOM');
-                    setRoomId(newId); setLocalPlayerId(1); 
-                    saveSessionToLocal(newId, 1, true);
+                    setRoomId(newId); setLocalPlayerId(myId); 
+                    saveSessionToLocal(newId, myId, true);
                     setAppState('LOBBY');
                 } catch(e) { showToast("❌ Firebase no responde"); }
             } else {
-                setRoomId(newId); setLocalPlayerId(1);
-                saveSessionToLocal(newId, 1, true);
-                setGame({ ...INITIAL_GAME_STATE, players: [hostPlayer], pools: initialPools });
+                setRoomId(newId); setLocalPlayerId(myId);
+                saveSessionToLocal(newId, myId, true);
+                setGame({ ...INITIAL_GAME_STATE, players: initialPlayers, pools: initialPools });
                 setAppState('LOBBY');
             }
         } else {
@@ -1109,7 +1083,7 @@ const App = () => {
                         
                         assignedId = players.length + 1;
                         const c = PLAYER_COLORS[assignedId - 1];
-                        const newPlayer = { id: assignedId, name, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
+                        const newPlayer = { id: assignedId, name: finalName, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
                         txn.update(roomDocRef, { players: [...players, newPlayer] });
                     }), 8000, 'JOIN_ROOM');
                     
@@ -1127,7 +1101,7 @@ const App = () => {
                 setLocalPlayerId(newPlayerId);
                 saveSessionToLocal(roomId, newPlayerId, false);
                 const c = PLAYER_COLORS[newPlayerId - 1];
-                const newPlayer = { id: newPlayerId, name, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
+                const newPlayer = { id: newPlayerId, name: finalName, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
                 setGame(prev => ({ ...prev, players: [...prev.players, newPlayer] }));
                 setAppState('LOBBY');
             }
@@ -1149,22 +1123,19 @@ const App = () => {
                 }
             } catch(e) {}
         }
-        localStorage.removeItem('periplo_roomId');
-        localStorage.removeItem('periplo_localPlayerId');
-        localStorage.removeItem('periplo_isHost');
-        localStorage.removeItem('periplo_quizId');
+        localStorage.removeItem('periplo_roomId'); localStorage.removeItem('periplo_localPlayerId');
+        localStorage.removeItem('periplo_isHost'); localStorage.removeItem('periplo_quizId');
         
         setRoomId(""); setLocalPlayerId(null); setIsHost(false); setGame(INITIAL_GAME_STATE); setAppState('HOME');
     };
 
     const startGame = () => {
-        // Rellenar pools al iniciar por si estaban vacíos
         const freshPools = buildFreshPools(quizContent);
         updateGame({ status: 'PLAYING', activePos: game.players[0].pos, pools: freshPools });
     };
 
     // ==========================================
-    // UTILIDADES DE MAPA Y BIOMAS
+    // MOTOR DE MOVIMIENTO Y MAPA
     // ==========================================
     const reverseMap = useMemo(() => {
         const map = {};
@@ -1206,10 +1177,6 @@ const App = () => {
         if (!node || !node.dirs) return [];
         return node.dirs.map(dir => ({ dir: dir, id: `${node.q + HEX_DIRS[dir].q},${node.r + HEX_DIRS[dir].r}` })).filter(out => RAW_MAP_DATA[out.id]);
     };
-
-    // ==========================================
-    // MOTOR DE MOVIMIENTO (INTACTO)
-    // ==========================================
     
     const executeMoveStep = (nextNodeId) => {
         const currentGame = gameRef.current;
@@ -1222,16 +1189,15 @@ const App = () => {
         let newPlayers = [...currentGame.players];
         newPlayers[currentGame.turn] = { ...newPlayers[currentGame.turn], pos: nextNodeId };
 
-        // Wealthy Turtle al pasar: regalo automático (sin pregunta).
+        let updates = { activePos: nextNodeId, movesLeft: newMoves, players: newPlayers, pendingNode: null, currentDialog: "" };
+
         if (newMoves > 0 && nextNode.type === 'koopa') {
-            showToast(`🐢 Wealthy Turtle da +10 Monedas`);
+            const pName = newPlayers[currentGame.turn].name;
             newPlayers[currentGame.turn].coins += 10;
+            updates.lastEvent = { msg: `🐢 Wealthy Turtle da +10 Monedas a ${pName}`, ts: Date.now() };
         }
 
         let nextPhase = 'MOVING';
-        let pendingNode = null;
-        let currentDialog = "";
-
         const needsPrompt = newMoves <= 0 && (nextNode.type === 'koopa' || nextNode.type === 'bowser' || nextNode.type === 'boo');
         const stoneOrStar = nextNode.type === 'stone' || (nextNode.type === 'star_node' && nextNodeId === currentGame.activeStarId);
 
@@ -1240,24 +1206,18 @@ const App = () => {
         } else if (stoneOrStar) {
             if (nextNode.type === 'stone') nextPhase = 'STONE_PROMPT';
             else nextPhase = 'STAR_PROMPT';
-            pendingNode = nextNodeId;
+            updates.pendingNode = nextNodeId;
         } else if (needsPrompt) {
-            if (nextNode.type === 'koopa') { nextPhase = 'KOOPA_PROMPT'; currentDialog = WT_DIALOGS[Math.floor(Math.random() * WT_DIALOGS.length)]; }
-            else if (nextNode.type === 'bowser') { nextPhase = 'BOWSER_PROMPT'; currentDialog = CHUPACABRAS_DIALOGS[Math.floor(Math.random() * CHUPACABRAS_DIALOGS.length)]; }
+            if (nextNode.type === 'koopa') { nextPhase = 'KOOPA_PROMPT'; updates.currentDialog = WT_DIALOGS[Math.floor(Math.random() * WT_DIALOGS.length)]; }
+            else if (nextNode.type === 'bowser') { nextPhase = 'BOWSER_PROMPT'; updates.currentDialog = CHUPACABRAS_DIALOGS[Math.floor(Math.random() * CHUPACABRAS_DIALOGS.length)]; }
             else if (nextNode.type === 'boo') nextPhase = 'BOO_PROMPT';
-            pendingNode = nextNodeId;
+            updates.pendingNode = nextNodeId;
         } else if (newMoves <= 0) {
             nextPhase = 'PENDING_END_TURN';
         }
 
-        updateGame({
-            activePos: nextNodeId,
-            movesLeft: newMoves,
-            players: newPlayers,
-            phase: nextPhase,
-            pendingNode,
-            currentDialog
-        });
+        updates.phase = nextPhase;
+        updateGame(updates);
     };
 
     const tryMoveTo = (nextNodeId) => {
@@ -1268,11 +1228,7 @@ const App = () => {
         let tempPlayers = [...currentGame.players];
         tempPlayers[currentGame.turn] = { ...tempPlayers[currentGame.turn], pos: nextNodeId };
         
-        const needsPrompt = nextNode.type === 'stone' || 
-                            (nextNode.type === 'star_node' && nextNodeId === currentGame.activeStarId) ||
-                            nextNode.type === 'koopa' || 
-                            nextNode.type === 'bowser' || 
-                            nextNode.type === 'boo';
+        const needsPrompt = nextNode.type === 'stone' || (nextNode.type === 'star_node' && nextNodeId === currentGame.activeStarId) || nextNode.type === 'koopa' || nextNode.type === 'bowser' || nextNode.type === 'boo';
 
         if (needsPrompt) {
             updateGame({ activePos: nextNodeId, players: tempPlayers, phase: 'PAUSED_FOR_PROMPT' }); 
@@ -1326,27 +1282,19 @@ const App = () => {
 
         if (finalNode.type === 'blue' || finalNode.type === 'red') {
             const q = await pickQuestion('auto');
-            if (!q) {
-                showToast("⚠️ Banco sin preguntas");
-                advanceTurn(); return; 
-            }
+            if (!q) { showToast("⚠️ Banco sin preguntas"); advanceTurn(); return; }
             updateGame({
-                activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: finalNode.type } },
-                phase: 'CHALLENGE'
+                activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: finalNode.type } }, phase: 'CHALLENGE'
             });
             return; 
         }
 
         if (finalNode.type === 'event') {
             const q = await pickQuestion('human');
-            if (!q) {
-                showToast("⚡ ¡Evento Sorpresa! (sin pregunta)");
-                advanceTurn(); return;
-            }
+            if (!q) { showToast("⚡ ¡Evento Sorpresa! (sin pregunta)"); advanceTurn(); return; }
             showToast("⚡ ¡Evento Sorpresa!");
             updateGame({
-                activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'event_land' } },
-                phase: 'CHALLENGE'
+                activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'event_land' } }, phase: 'CHALLENGE'
             });
             return;
         }
@@ -1422,12 +1370,10 @@ const App = () => {
         if (!isMyTurnAction()) return;
         const currentGame = gameRef.current;
         let newPlayers = [...currentGame.players];
+        const pName = newPlayers[currentGame.turn].name;
         newPlayers[currentGame.turn].coins -= 10;
-        showToast("🪨 ¡Pagaste el peaje!");
-        // Fix: un solo updateGame atómico. Stone es zero-cost, así que movesLeft no cambia.
-        // Si aún hay pasos, vuelve a MOVING y el motor continúa; si no, termina turno.
         const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
-        updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null });
+        updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null, lastEvent: { msg: `🪨 ¡${pName} pagó el peaje! (-10)`, ts: Date.now() } });
     };
 
     const handleStoneFail = () => {
@@ -1440,8 +1386,8 @@ const App = () => {
         }
         let newPlayers = [...currentGame.players];
         newPlayers[currentGame.turn].pos = curr;
-        showToast("💥 ¡La Piedra te aplastó! Retrocedes 5 casillas.");
-        updateGame({ activePos: curr, players: newPlayers, movesLeft: 0, phase: 'IDLE' });
+        const pName = newPlayers[currentGame.turn].name;
+        updateGame({ activePos: curr, players: newPlayers, movesLeft: 0, phase: 'IDLE', lastEvent: { msg: `💥 ¡La Piedra aplastó a ${pName}! Retrocede.`, ts: Date.now() } });
         setTimeout(() => endTurnHandler(), 400); 
     };
 
@@ -1451,14 +1397,13 @@ const App = () => {
         let updates = { pendingNode: null };
         if (buy) {
             let newPlayers = [...currentGame.players];
+            const pName = newPlayers[currentGame.turn].name;
             newPlayers[currentGame.turn].coins -= 20;
             newPlayers[currentGame.turn].stars += 1;
-            showToast("⭐ ¡Compraste una Estrella!");
-            confetti({particleCount: 150, spread: 70});
             updates.players = newPlayers;
             updates.activeStarId = STAR_LOCATIONS.filter(id => id !== currentGame.activeStarId)[Math.floor(Math.random() * 2)];
+            updates.lastEvent = { msg: `⭐ ¡${pName} compró una Estrella!`, ts: Date.now() };
         }
-        // Star es zero-cost. Si quedan pasos, seguir moviendo; si no, terminar turno.
         updates.phase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
         updateGame(updates);
     };
@@ -1467,33 +1412,29 @@ const App = () => {
         if (!isMyTurnAction()) return;
         const currentGame = gameRef.current;
         let newPlayers = [...currentGame.players];
+        const pName = newPlayers[currentGame.turn].name;
         newPlayers[currentGame.turn].coins += 10;
-        showToast("🐢 ¡Recibiste 10 Monedas!"); 
-        // Fix: koopa solo entra al prompt cuando caes exacto (movesLeft === 0 en executeMoveStep).
-        // Así que siempre termina turno.
         const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
-        updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null });
+        updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null, lastEvent: { msg: `🐢 ¡${pName} recibió 10 Monedas!`, ts: Date.now() } });
     };
 
     const handleBooPass = () => {
         if (!isMyTurnAction()) return;
         const currentGame = gameRef.current;
-        showToast("👻 Boo se aleja flotando...");
         const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
-        updateGame({ phase: nextPhase, pendingNode: null, booAction: null });
+        updateGame({ phase: nextPhase, pendingNode: null, booAction: null, lastEvent: { msg: "👻 Boo se aleja flotando...", ts: Date.now() } });
     };
     
     const handleBowserTrivia = async () => {
         if (!isMyTurnAction()) return;
         const q = await pickQuestion('human');
         if (!q) { 
-            // Sin pregunta disponible: castigo mínimo y continuar
             const currentGame = gameRef.current;
             let newPlayers = [...currentGame.players];
+            const pName = newPlayers[currentGame.turn].name;
             newPlayers[currentGame.turn].coins -= 15;
-            showToast("💀 Chupacabras muerde (-15)");
             const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
-            updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null });
+            updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null, lastEvent: { msg: `💀 Chupacabras muerde a ${pName} (-15)`, ts: Date.now() } });
             return; 
         }
         updateGame({ activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'bowser_pass' } }, phase: 'CHALLENGE' });
@@ -1504,25 +1445,23 @@ const App = () => {
     const executeBooSteal = async (targetId) => {
         if (!isMyTurnAction()) return;
         const currentGame = gameRef.current;
+        const pName = currentGame.players[currentGame.turn].name;
+        
         if (currentGame.booAction === 'coins') {
             let newPlayers = [...currentGame.players];
             const targetIdx = newPlayers.findIndex(p => p.id === targetId);
             const stolen = Math.min(10, newPlayers[targetIdx].coins); 
             newPlayers[targetIdx].coins -= stolen;
             newPlayers[currentGame.turn].coins += stolen;
-            showToast(`👻 ¡Boo robó ${stolen} monedas!`);
-            // Boo es prompt de caer exacto, movesLeft === 0 cuando se entra al prompt
             const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
-            updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null, booAction: null });
+            updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null, booAction: null, lastEvent: { msg: `👻 ¡Boo robó ${stolen} monedas para ${pName}!`, ts: Date.now() } });
         } else if (currentGame.booAction === 'star') {
-            // 40 monedas upfront irrecuperables
             let newPlayers = [...currentGame.players];
             newPlayers[currentGame.turn].coins -= 40;
             const q = await pickQuestion('human');
             if (!q) { 
-                showToast("⚠️ Boo se rinde (sin pregunta)"); 
                 const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
-                updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null, booAction: null });
+                updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null, booAction: null, lastEvent: { msg: `⚠️ Boo se rinde (sin pregunta). ${pName} pierde dinero.`, ts: Date.now() } });
                 return; 
             }
             updateGame({ 
@@ -1550,10 +1489,8 @@ const App = () => {
     };
 
     // ==========================================
-    // RESOLVE CHALLENGE — AHORA MANUAL (FIX 2)
+    // RESOLVE CHALLENGE — EVENTOS SINCRONIZADOS
     // ==========================================
-    // Se llama desde un botón "CONTINUAR" visible para el jugador activo (o el host en retos de maestro)
-    // una vez que el reto tiene status != 'playing'. Ya no hay useEffect automático de 2.8s.
     const resolveChallenge = useCallback(() => {
         const currentGame = gameRef.current;
         if (!currentGame.activeChallenge) return;
@@ -1561,82 +1498,56 @@ const App = () => {
         const ch = currentGame.activeChallenge;
         const ctx = ch.context || {};
         const isTeacherGraded = ['speaking', 'listening', 'roleplay'].includes(ch.type);
-        const amIHost = localPlayerIdRef.current === 1;
 
-        // Gate de quién puede cerrar el reto
-        if (isTeacherGraded) {
-            if (!amIHost) return; 
-        } else {
-            if (!isMyTurnAction()) return;
-        }
+        if (isTeacherGraded) { if (!isHost) return; } else { if (!isMyTurnAction()) return; }
 
         const isCorrect = ch.status === 'correct';
         const pName = currentGame.players[currentGame.turn].name;
         let newPlayers = [...currentGame.players];
+        let eventMsg = "";
 
-        const pushUpdate = (playerUpdates) => {
-            if (db && roomId) {
-                updateDoc(doc(db, 'periplo-party-rooms', roomId), { players: playerUpdates, activeChallenge: null });
-            } else {
-                setGame(prev => ({ ...prev, players: playerUpdates, activeChallenge: null }));
-            }
+        const pushUpdate = (playerUpdates, extraProps = {}) => {
+            const up = { players: playerUpdates, activeChallenge: null, ...extraProps };
+            if (eventMsg) up.lastEvent = { msg: eventMsg, ts: Date.now() };
+            if (db && roomId) { updateDoc(doc(db, 'periplo-party-rooms', roomId), up); } else { setGame(prev => ({ ...prev, ...up })); }
         };
 
         if (ctx.trigger === 'blue') {
-            if (isCorrect) { showToast(`✅ ${pName} +3 Monedas`); newPlayers[currentGame.turn].coins += 3; }
-            else { showToast(`❌ Sin recompensa.`); }
-            pushUpdate(newPlayers);
-            advanceTurn(isTeacherGraded); 
+            if (isCorrect) { eventMsg = `✅ ${pName} +3 Monedas`; newPlayers[currentGame.turn].coins += 3; }
+            else { eventMsg = `❌ Sin recompensa para ${pName}.`; }
+            pushUpdate(newPlayers); advanceTurn(isTeacherGraded); 
         } 
         else if (ctx.trigger === 'red') {
-            if (isCorrect) { showToast(`✅ ¡Salvado!`); }
-            else { showToast(`❌ ${pName} pierde -3 Monedas`); newPlayers[currentGame.turn].coins -= 3; }
-            pushUpdate(newPlayers);
-            advanceTurn(isTeacherGraded);
+            if (isCorrect) { eventMsg = `✅ ¡${pName} a salvo!`; }
+            else { eventMsg = `❌ ${pName} pierde -3 Monedas`; newPlayers[currentGame.turn].coins -= 3; }
+            pushUpdate(newPlayers); advanceTurn(isTeacherGraded);
         }
         else if (ctx.trigger === 'event_land') {
-            // Casilla verde de evento especial: +6 monedas si correcto, 0 si incorrecto
-            if (isCorrect) { showToast(`⚡ ${pName} +6 Monedas`); newPlayers[currentGame.turn].coins += 6; }
-            else { showToast(`❌ ${pName} se queda con las ganas.`); }
-            pushUpdate(newPlayers);
-            advanceTurn(isTeacherGraded);
+            if (isCorrect) { eventMsg = `⚡ ${pName} +6 Monedas`; newPlayers[currentGame.turn].coins += 6; }
+            else { eventMsg = `❌ ${pName} se queda con las ganas.`; }
+            pushUpdate(newPlayers); advanceTurn(isTeacherGraded);
         }
         else if (ctx.trigger === 'bowser_pass') {
-            // Chupacabras: pregunta → -5 correcto / -15 incorrecto, MÁS -15 fijo por pisar su hex
-            if (isCorrect) { 
-                showToast(`🩸 Chupacabras muerde suave (-5 -15)`); 
-                newPlayers[currentGame.turn].coins -= 20; 
-            } else { 
-                showToast(`💀 Chupacabras destroza (-15 -15)`); 
-                newPlayers[currentGame.turn].coins -= 30; 
-            }
-            // Continuar movimiento o terminar turno según movesLeft restantes
+            if (isCorrect) { eventMsg = `🩸 Chupacabras muerde suave a ${pName} (-20)`; newPlayers[currentGame.turn].coins -= 20; } 
+            else { eventMsg = `💀 Chupacabras destroza a ${pName} (-30)`; newPlayers[currentGame.turn].coins -= 30; }
             const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
-            if (db && roomId) {
-                updateDoc(doc(db, 'periplo-party-rooms', roomId), { players: newPlayers, activeChallenge: null, phase: nextPhase, pendingNode: null });
-            } else {
-                setGame(p => ({ ...p, players: newPlayers, activeChallenge: null, phase: nextPhase, pendingNode: null }));
-            }
+            pushUpdate(newPlayers, { phase: nextPhase, pendingNode: null });
         }
         else if (ctx.trigger === 'boo_star') {
             if (isCorrect) {
-                showToast(`👻 ¡Boo robó la estrella exitosamente!`);
+                eventMsg = `👻 ¡Boo robó la estrella para ${pName}! ⭐`;
                 const targetIdx = newPlayers.findIndex(p => p.id === ctx.targetId);
                 if (targetIdx >= 0 && newPlayers[targetIdx].stars > 0) {
                     newPlayers[targetIdx].stars -= 1;
                     newPlayers[currentGame.turn].stars += 1;
                 }
             } else {
-                showToast(`❌ Boo: "Too bad..." (perdiste 40)`);
+                eventMsg = `❌ Boo: "Too bad..." (${pName} perdió 40)`;
             }
             const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
-            if (db && roomId) {
-                updateDoc(doc(db, 'periplo-party-rooms', roomId), { players: newPlayers, activeChallenge: null, phase: nextPhase, pendingNode: null, booAction: null });
-            } else {
-                setGame(p => ({ ...p, players: newPlayers, activeChallenge: null, phase: nextPhase, pendingNode: null, booAction: null }));
-            }
+            pushUpdate(newPlayers, { phase: nextPhase, pendingNode: null, booAction: null });
         }
-    }, [isMyTurnAction, roomId, advanceTurn, showToast]);
+    }, [isMyTurnAction, isHost, roomId, advanceTurn]);
 
     if (quizLoading || quizError) return <div className="h-full flex items-center justify-center bg-emerald-950 p-6 text-white font-bold">{quizError || "Cargando..."}</div>;
 
@@ -1707,7 +1618,15 @@ const App = () => {
                             ))}
                         </div>
                     </div>
-                    <button onClick={handleProfileSubmit} className="btn-juicy w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-2xl font-black text-xl shadow-[0_6px_0_theme(colors.indigo.800)] flex justify-center items-center gap-2">Sentarse en la mesa <ArrowRight size={24}/></button>
+                    
+                    {isHost ? (
+                        <div className="flex flex-col gap-3 mt-4">
+                            <button onClick={() => handleProfileSubmit('PLAYER')} className="btn-juicy w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-2xl font-black text-xl shadow-[0_6px_0_theme(colors.indigo.800)] flex justify-center items-center gap-2">Jugar y Moderar <ArrowRight size={24}/></button>
+                            <button onClick={() => handleProfileSubmit('OBSERVER')} className="btn-juicy w-full bg-zinc-800 hover:bg-zinc-700 border-2 border-zinc-700 text-zinc-300 py-3 rounded-2xl font-bold text-lg flex justify-center items-center gap-2"><Eye size={20}/> Entrar como Espectador/Host</button>
+                        </div>
+                    ) : (
+                        <button onClick={() => handleProfileSubmit('PLAYER')} className="btn-juicy w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-2xl font-black text-xl shadow-[0_6px_0_theme(colors.indigo.800)] flex justify-center items-center gap-2">Sentarse en la mesa <ArrowRight size={24}/></button>
+                    )}
                 </div>
             </div>
         );
@@ -1728,14 +1647,14 @@ const App = () => {
                         {(game.players || []).map((p, i) => (
                             <div key={p.id} className={`bg-zinc-800 border-2 rounded-xl p-3 flex items-center justify-center gap-3 relative overflow-hidden ${p.id === localPlayerId ? 'ring-4 ring-white/30' : ''}`} style={{ borderColor: p.activeColor }}>
                                 <div className="absolute inset-0 opacity-10" style={{ backgroundColor: p.color }}></div>
-                                <span className="text-3xl relative z-10">{p.emoji}</span><span className="font-black text-white text-base relative z-10 truncate">{p.name} {i===0 && '👑'}</span>
+                                <span className="text-3xl relative z-10">{p.emoji}</span><span className="font-black text-white text-base relative z-10 truncate">{p.name}</span>
                             </div>
                         ))}
                         {[...Array(Math.max(0, 4 - (game.players || []).length))].map((_, i) => (
                             <div key={`empty-${i}`} className="bg-zinc-950 border-2 border-zinc-800 border-dashed rounded-xl p-3 flex flex-col items-center justify-center"><span className="text-zinc-600 font-bold text-sm">Silla vacía</span><span className="text-zinc-700 text-xs">Esperando...</span></div>
                         ))}
                     </div>
-                    {localPlayerId === 1 ? (
+                    {isHost ? (
                         <button onClick={startGame} disabled={(game.players || []).length < 2} className="btn-juicy w-full bg-emerald-500 disabled:bg-zinc-800 text-emerald-950 disabled:text-zinc-500 py-4 rounded-2xl font-black text-xl shadow-[0_6px_0_theme(colors.emerald.700)] disabled:shadow-none">{(game.players || []).length < 2 ? 'Esperando jugadores...' : '¡Iniciar Partida!'}</button>
                     ) : (<div className="bg-indigo-900/30 border border-indigo-500/30 rounded-2xl p-4"><p className="text-indigo-300 font-bold animate-pulse">Esperando a que el Host inicie el juego...</p></div>)}
                 </div>
@@ -1746,7 +1665,6 @@ const App = () => {
     if (!game.players || game.players.length === 0) return null;
     const activePlayer = game.players[game.turn];
 
-    // Flags para el botón de avance manual en el modal de trivia
     const ch = game.activeChallenge;
     const chIsTeacherGraded = ch && ['speaking', 'listening', 'roleplay'].includes(ch.type);
     const chCanResolve = ch && ch.status && ch.status !== 'playing' && (chIsTeacherGraded ? isHost : isMyTurnRender);
@@ -1840,7 +1758,7 @@ const App = () => {
                         <polyline points={ghostPathCoords.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#ffffff" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="8 12" className="ghost-path drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" />
                     )}
 
-                    {/* FICHAS MULTIJUGADOR CON OFFSET CORREGIDO (8.6 FIX) */}
+                    {/* FICHAS MULTIJUGADOR */}
                     {game.players.map((p, idx) => {
                         const isTurn = idx === game.turn;
                         const posIdToRender = (isTurn && game.phase !== 'IDLE') ? game.activePos : p.pos;
@@ -1855,7 +1773,6 @@ const App = () => {
                             if(shareIndex === 0) { offsetX = -8; offsetY = -8; } else if(shareIndex === 1) { offsetX = 8; offsetY = -8; } else if(shareIndex === 2) { offsetX = -8; offsetY = 8; } else if(shareIndex === 3) { offsetX = 8; offsetY = 8; }
                         }
 
-                        // ANTI-MAREO: Ficha centrada si está en movimiento
                         if (isTurn && game.phase === 'MOVING') {
                             offsetX = 0; offsetY = 0;
                         }
@@ -2016,7 +1933,7 @@ const App = () => {
                     </div>
                 )}
 
-                {/* MODAL TRIVIA GLOBAL (SINCRONIZADO + BOTÓN MANUAL) */}
+                {/* MODAL TRIVIA GLOBAL */}
                 {game.phase === 'CHALLENGE' && game.activeChallenge && (
                     <div className="absolute inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
                         <div className="bg-zinc-900 border-4 rounded-3xl w-full max-w-2xl shadow-2xl animate-pop-in my-auto overflow-hidden flex flex-col max-h-[90vh]" 
@@ -2049,8 +1966,7 @@ const App = () => {
                                     isHost={isHost}
                                 />
 
-                                {/* BOTÓN DE AVANCE MANUAL — FIX 2 */}
-                                {/* Visible para quien corresponda cuando el reto ya terminó (correcto/incorrecto/timeout) */}
+                                {/* BOTÓN DE AVANCE MANUAL */}
                                 {chCanResolve && (
                                     <div className="mt-8 border-t border-zinc-800 pt-6 animate-in">
                                         <button 
