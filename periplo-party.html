@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Periplo Party | Multiplayer Final v9.4 (HostObserver+GlobalToasts)</title>
+    <title>Periplo Party | Multiplayer Final v9.5 (Chupacabras Fix)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
     
@@ -684,7 +684,7 @@ const INITIAL_GAME_STATE = {
     quizId: null,
     quizTitle: "",
     pools: {},
-    lastEvent: null // Fix 2: Sincronización global de notificaciones
+    lastEvent: null // Sincronización global de notificaciones
 };
 
 const generateWideGrid = () => {
@@ -902,7 +902,6 @@ const App = () => {
                 const snap = await withTimeout(getDoc(doc(db, 'periplo-party-rooms', savedRoomId)), 6000, 'RECOVER');
                 if (snap.exists()) {
                     const data = snap.data();
-                    // Si eras Host Observer o estás en la lista de jugadores, puedes entrar.
                     const stillThere = savedIsHost === 'true' || (data.players || []).some(p => p.id === Number(savedPlayerId));
                     if (!stillThere) {
                         localStorage.removeItem('periplo_roomId'); localStorage.removeItem('periplo_localPlayerId');
@@ -1033,7 +1032,6 @@ const App = () => {
         setRecoverableSession(null); showToast("✅ Sesión olvidada");
     };
 
-    // FIX 1: Host puede elegir su rol (Observer o Player)
     const handleProfileSubmit = async (role = 'PLAYER') => {
         const name = playerName.trim();
         if (!name && role !== 'OBSERVER') return showToast("⚠️ Pon tu nombre para jugar");
@@ -1183,7 +1181,8 @@ const App = () => {
         const nextNode = RAW_MAP_DATA[nextNodeId];
         const isNextFork = getValidOuts(nextNode).length > 1;
         
-        const isZeroCost = isNextFork || nextNode.type === 'stone' || (nextNode.type === 'star_node' && nextNodeId !== currentGame.activeStarId);
+        // FIX: Bowser (Chupacabras) ahora es "isZeroCost", actúa como una casilla de paso transparente.
+        const isZeroCost = isNextFork || nextNode.type === 'stone' || nextNode.type === 'bowser' || (nextNode.type === 'star_node' && nextNodeId !== currentGame.activeStarId);
         const newMoves = isZeroCost ? currentGame.movesLeft : currentGame.movesLeft - 1;
 
         let newPlayers = [...currentGame.players];
@@ -1198,18 +1197,19 @@ const App = () => {
         }
 
         let nextPhase = 'MOVING';
-        const needsPrompt = newMoves <= 0 && (nextNode.type === 'koopa' || nextNode.type === 'bowser' || nextNode.type === 'boo');
-        const stoneOrStar = nextNode.type === 'stone' || (nextNode.type === 'star_node' && nextNodeId === currentGame.activeStarId);
+        const needsPrompt = newMoves <= 0 && (nextNode.type === 'koopa' || nextNode.type === 'boo');
+        // FIX: Bowser (Chupacabras) agregado a los interceptores activos sin importar cuántos pasos queden.
+        const interceptor = nextNode.type === 'stone' || nextNode.type === 'bowser' || (nextNode.type === 'star_node' && nextNodeId === currentGame.activeStarId);
 
         if (newMoves <= 0 && (nextNode.type === 'blue' || nextNode.type === 'red')) {
             nextPhase = 'PENDING_END_TURN';
-        } else if (stoneOrStar) {
+        } else if (interceptor) {
             if (nextNode.type === 'stone') nextPhase = 'STONE_PROMPT';
+            else if (nextNode.type === 'bowser') { nextPhase = 'BOWSER_PROMPT'; updates.currentDialog = CHUPACABRAS_DIALOGS[Math.floor(Math.random() * CHUPACABRAS_DIALOGS.length)]; }
             else nextPhase = 'STAR_PROMPT';
             updates.pendingNode = nextNodeId;
         } else if (needsPrompt) {
             if (nextNode.type === 'koopa') { nextPhase = 'KOOPA_PROMPT'; updates.currentDialog = WT_DIALOGS[Math.floor(Math.random() * WT_DIALOGS.length)]; }
-            else if (nextNode.type === 'bowser') { nextPhase = 'BOWSER_PROMPT'; updates.currentDialog = CHUPACABRAS_DIALOGS[Math.floor(Math.random() * CHUPACABRAS_DIALOGS.length)]; }
             else if (nextNode.type === 'boo') nextPhase = 'BOO_PROMPT';
             updates.pendingNode = nextNodeId;
         } else if (newMoves <= 0) {
@@ -1335,18 +1335,20 @@ const App = () => {
         
         const nextNode = RAW_MAP_DATA[currentId];
         const nextOuts = getValidOuts(nextNode);
-        if (nextOuts.length <= 1 && nextNode.type !== 'stone' && !(nextNode.type === 'star_node' && nextNode.id === game.activeStarId)) steps--; 
+        // FIX: Bowser (Chupacabras) excluido de decrementar `steps`.
+        if (nextOuts.length <= 1 && nextNode.type !== 'stone' && nextNode.type !== 'bowser' && !(nextNode.type === 'star_node' && nextNode.id === game.activeStarId)) steps--; 
 
         while (steps > 0) {
             let node = RAW_MAP_DATA[currentId];
             let outs = getValidOuts(node);
-            if (outs.length === 0 || outs.length > 1 || node.type === 'stone' || (node.type === 'star_node' && node.id === game.activeStarId) || node.type === 'koopa' || node.type === 'bowser' || node.type === 'boo') break; 
+            if (outs.length === 0 || outs.length > 1 || node.type === 'stone' || node.type === 'bowser' || (node.type === 'star_node' && node.id === game.activeStarId) || node.type === 'koopa' || node.type === 'boo') break; 
             currentId = outs[0].id;
             path.push({x: RAW_MAP_DATA[currentId].x, y: RAW_MAP_DATA[currentId].y});
             
             let nnNode = RAW_MAP_DATA[currentId];
             let nnOuts = getValidOuts(nnNode);
-            if (nnOuts.length <= 1 && nnNode.type !== 'stone' && !(nnNode.type === 'star_node' && nnNode.id === game.activeStarId)) steps--;
+            // FIX: Bowser (Chupacabras) excluido de decrementar `steps`.
+            if (nnOuts.length <= 1 && nnNode.type !== 'stone' && nnNode.type !== 'bowser' && !(nnNode.type === 'star_node' && nnNode.id === game.activeStarId)) steps--;
         }
         return { path, landingNode: RAW_MAP_DATA[currentId] };
     };
@@ -1432,6 +1434,7 @@ const App = () => {
             const currentGame = gameRef.current;
             let newPlayers = [...currentGame.players];
             const pName = newPlayers[currentGame.turn].name;
+            // FIX: Fallback damage si se queda sin preguntas (-15)
             newPlayers[currentGame.turn].coins -= 15;
             const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
             updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null, lastEvent: { msg: `💀 Chupacabras muerde a ${pName} (-15)`, ts: Date.now() } });
@@ -1528,8 +1531,9 @@ const App = () => {
             pushUpdate(newPlayers); advanceTurn(isTeacherGraded);
         }
         else if (ctx.trigger === 'bowser_pass') {
-            if (isCorrect) { eventMsg = `🩸 Chupacabras muerde suave a ${pName} (-20)`; newPlayers[currentGame.turn].coins -= 20; } 
-            else { eventMsg = `💀 Chupacabras destroza a ${pName} (-30)`; newPlayers[currentGame.turn].coins -= 30; }
+            // FIX: Lógica original restaurada (-5 correcto / -15 incorrecto).
+            if (isCorrect) { eventMsg = `🩸 Chupacabras muerde suave a ${pName} (-5)`; newPlayers[currentGame.turn].coins -= 5; } 
+            else { eventMsg = `💀 Chupacabras destroza a ${pName} (-15)`; newPlayers[currentGame.turn].coins -= 15; }
             const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
             pushUpdate(newPlayers, { phase: nextPhase, pendingNode: null });
         }
@@ -1954,7 +1958,7 @@ const App = () => {
                                 <div className="text-center mb-4">
                                     {game.activeChallenge.context?.trigger === 'blue' && <span className="text-blue-400 font-bold uppercase tracking-widest text-xs">Casilla Azul · +3 monedas si aciertas</span>}
                                     {game.activeChallenge.context?.trigger === 'red' && <span className="text-rose-400 font-bold uppercase tracking-widest text-xs">Casilla Roja · -3 monedas si fallas</span>}
-                                    {game.activeChallenge.context?.trigger === 'bowser' && <span className="text-rose-500 font-bold uppercase tracking-widest text-xs">Trivia Chupacabras · -15 si fallas</span>}
+                                    {game.activeChallenge.context?.trigger === 'bowser' && <span className="text-rose-500 font-bold uppercase tracking-widest text-xs">Trivia Chupacabras · -15 si fallas, -5 si aciertas</span>}
                                     {game.activeChallenge.context?.trigger === 'boo_star' && <span className="text-purple-400 font-bold uppercase tracking-widest text-xs">Boo · Acierta para robar la Estrella</span>}
                                     <div className="mt-2 text-zinc-500 text-xs">Responde: <span className="font-black" style={{color: activePlayer.activeColor}}>{activePlayer.name}</span> {!isMyTurnRender && '(Tú observas)'}</div>
                                 </div>
