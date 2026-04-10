@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Periplo Party | Multiplayer Final v9.1 (Clean Core)</title>
+    <title>Periplo Party | Multiplayer Final v9.2 (Pools+Manual+Recovery)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
     
@@ -42,6 +42,7 @@
         }
         @keyframes pop-in { 0% { transform: scale(0.5); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
         .animate-pop-in { animation: pop-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        .animate-in { animation: pop-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
     </style>
 </head>
 <body class="bg-emerald-950 text-emerald-50 select-none">
@@ -681,7 +682,8 @@ const INITIAL_GAME_STATE = {
     booAction: null,
     diceVal: 6,
     quizId: null,
-    quizTitle: ""
+    quizTitle: "",
+    pools: {}
 };
 
 const generateWideGrid = () => {
@@ -720,7 +722,6 @@ const App = () => {
     const [quizLoading, setQuizLoading] = useState(true);
     const [quizError, setQuizError] = useState(null);
     const [recoverableSession, setRecoverableSession] = useState(null);
-    const [activePools, setActivePools] = useState({});
 
     const [isRolling, setIsRolling] = useState(false);
     const [localDiceFace, setLocalDiceFace] = useState(6);
@@ -731,9 +732,11 @@ const App = () => {
     const toastTimerRef = useRef(null);
     const gameRef = useRef(game);
     const localPlayerIdRef = useRef(localPlayerId);
+    const quizContentRef = useRef(null);
     
     useEffect(() => { gameRef.current = game; }, [game]);
     useEffect(() => { localPlayerIdRef.current = localPlayerId; }, [localPlayerId]);
+    useEffect(() => { quizContentRef.current = quizContent; }, [quizContent]);
 
     const isMyTurnRender = localPlayerId !== null && game.players && game.players.length > 0 && game.turn === (localPlayerId - 1);
 
@@ -742,6 +745,12 @@ const App = () => {
         const g = gameRef.current;
         if (id === null || !g.players || g.players.length === 0) return false;
         return g.turn === (id - 1);
+    }, []);
+
+    const showToast = useCallback((msg) => {
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        setToastMsg(msg);
+        toastTimerRef.current = setTimeout(() => setToastMsg(null), msg.includes('❌') ? 5000 : 2500);
     }, []);
 
     const advanceTurn = useCallback((forceHostOverride = false) => {
@@ -760,10 +769,81 @@ const App = () => {
                 setGame(prev => ({ ...prev, ...updates }));
             }
         }, 1500);
-    }, [isMyTurnAction, roomId]);
+    }, [isMyTurnAction, roomId, showToast]);
 
     // ==========================================
-    // INICIALIZACIÓN
+    // POOLS EN FIREBASE (FIX 1)
+    // ==========================================
+    const buildFreshPools = useCallback((content) => {
+        if (!content) return {};
+        const newPools = {};
+        Object.keys(content).forEach(key => {
+            if (Array.isArray(content[key]) && content[key].length > 0) {
+                newPools[key] = shuffleArray(content[key]);
+            }
+        });
+        return newPools;
+    }, []);
+
+    // pickQuestion: saca una pregunta de los pools del documento compartido, rellenando si se agotan.
+    // Usa runTransaction cuando hay roomId para evitar colisiones entre clientes.
+    const pickQuestion = useCallback(async () => {
+        const content = quizContentRef.current;
+        if (!content) return null;
+
+        if (db && roomId) {
+            try {
+                let picked = null;
+                await runTransaction(db, async (txn) => {
+                    const roomRef = doc(db, 'periplo-party-rooms', roomId);
+                    const snap = await txn.get(roomRef);
+                    if (!snap.exists()) return;
+                    const data = snap.data();
+                    let pools = data.pools || {};
+
+                    let availableTypes = Object.keys(pools).filter(k => Array.isArray(pools[k]) && pools[k].length > 0);
+                    if (availableTypes.length === 0) {
+                        pools = buildFreshPools(content);
+                        availableTypes = Object.keys(pools).filter(k => Array.isArray(pools[k]) && pools[k].length > 0);
+                        if (availableTypes.length === 0) return;
+                    }
+
+                    const randomType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
+                    const updatedPool = [...pools[randomType]];
+                    const question = updatedPool.shift();
+                    updatedPool.push(question);
+                    pools[randomType] = updatedPool;
+
+                    txn.update(roomRef, { pools });
+                    picked = { type: randomType, data: question };
+                });
+                return picked;
+            } catch (e) {
+                console.warn("pickQuestion txn failed", e);
+                return null;
+            }
+        } else {
+            // Modo local sin Firebase
+            let pools = gameRef.current.pools || {};
+            let availableTypes = Object.keys(pools).filter(k => Array.isArray(pools[k]) && pools[k].length > 0);
+            if (availableTypes.length === 0) {
+                pools = buildFreshPools(content);
+            }
+            availableTypes = Object.keys(pools).filter(k => Array.isArray(pools[k]) && pools[k].length > 0);
+            if (availableTypes.length === 0) return null;
+
+            const randomType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
+            const updatedPool = [...pools[randomType]];
+            const question = updatedPool.shift();
+            updatedPool.push(question);
+            const newPools = { ...pools, [randomType]: updatedPool };
+            setGame(prev => ({ ...prev, pools: newPools }));
+            return { type: randomType, data: question };
+        }
+    }, [roomId, buildFreshPools]);
+
+    // ==========================================
+    // INICIALIZACIÓN + RECUPERACIÓN (FIX 3)
     // ==========================================
     useEffect(() => {
         try {
@@ -773,28 +853,53 @@ const App = () => {
             if (savedEmoji) setSelectedEmoji(savedEmoji);
         } catch(e) {}
 
-        const checkRecovery = async () => {
+        const checkRecovery = async (currentQuizId) => {
             const savedRoomId = localStorage.getItem('periplo_roomId');
             const savedPlayerId = localStorage.getItem('periplo_localPlayerId');
             const savedIsHost = localStorage.getItem('periplo_isHost');
+            const savedQuizId = localStorage.getItem('periplo_quizId');
 
-            if (savedRoomId && savedPlayerId && db) {
-                try {
-                    const snap = await getDoc(doc(db, 'periplo-party-rooms', savedRoomId));
-                    if (snap.exists()) {
-                        const data = snap.data();
-                        setRoomId(savedRoomId);
-                        setLocalPlayerId(Number(savedPlayerId));
-                        setIsHost(savedIsHost === 'true');
-                        setGame(data);
-                        setAppState(data.status === 'PLAYING' ? 'PLAYING' : 'LOBBY');
-                    } else {
+            // Validar que el quiz del URL coincide con el guardado
+            if (!savedRoomId || !savedPlayerId || !db) return;
+            if (savedQuizId && currentQuizId && savedQuizId !== currentQuizId) {
+                // Quiz distinto, sesión ya no aplica
+                localStorage.removeItem('periplo_roomId');
+                localStorage.removeItem('periplo_localPlayerId');
+                localStorage.removeItem('periplo_isHost');
+                localStorage.removeItem('periplo_quizId');
+                return;
+            }
+
+            try {
+                const snap = await withTimeout(getDoc(doc(db, 'periplo-party-rooms', savedRoomId)), 6000, 'RECOVER');
+                if (snap.exists()) {
+                    const data = snap.data();
+                    // Verificar que mi playerId aún existe en la sala
+                    const stillThere = (data.players || []).some(p => p.id === Number(savedPlayerId));
+                    if (!stillThere) {
                         localStorage.removeItem('periplo_roomId');
                         localStorage.removeItem('periplo_localPlayerId');
                         localStorage.removeItem('periplo_isHost');
+                        localStorage.removeItem('periplo_quizId');
+                        return;
                     }
-                } catch(e) { console.error("Error reconectando a la sala:", e); }
-            }
+                    // Ofrecer reconexión
+                    setRecoverableSession({
+                        roomId: savedRoomId,
+                        playerId: Number(savedPlayerId),
+                        isHost: savedIsHost === 'true',
+                        data,
+                        status: data.status,
+                        round: data.round || 1,
+                        playersCount: (data.players || []).length
+                    });
+                } else {
+                    localStorage.removeItem('periplo_roomId');
+                    localStorage.removeItem('periplo_localPlayerId');
+                    localStorage.removeItem('periplo_isHost');
+                    localStorage.removeItem('periplo_quizId');
+                }
+            } catch(e) { console.warn("Error reconectando a la sala:", e); }
         };
 
         const loadQuiz = async () => {
@@ -817,7 +922,7 @@ const App = () => {
                 setQuizContent(data.content || {});
                 setQuizTitle(data.title || "Periplo Party");
                 setQuizLoading(false);
-                checkRecovery();
+                checkRecovery(id);
             } catch(e) {
                 setQuizError(e.message || "Error al cargar el banco");
                 setQuizLoading(false);
@@ -825,42 +930,6 @@ const App = () => {
         };
         loadQuiz();
     }, []);
-
-    const fillPools = useCallback((content) => {
-        if (!content) return {};
-        const newPools = {};
-        Object.keys(content).forEach(key => {
-            if (Array.isArray(content[key]) && content[key].length > 0) {
-                newPools[key] = shuffleArray(content[key]);
-            }
-        });
-        setActivePools(newPools);
-        return newPools;
-    }, []);
-
-    const pickQuestion = useCallback(() => {
-        if (!quizContent) return null;
-        let pools = activePools;
-        let availableTypes = Object.keys(pools).filter(k => pools[k] && pools[k].length > 0);
-        
-        if (availableTypes.length === 0) {
-            pools = fillPools(quizContent);
-            availableTypes = Object.keys(pools).filter(k => pools[k] && pools[k].length > 0);
-            if (availableTypes.length === 0) return null;
-        }
-        
-        const randomType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
-        const question = pools[randomType][0];
-        
-        setActivePools(prev => {
-            const updatedPool = [...prev[randomType]];
-            const usedQuestion = updatedPool.shift();
-            updatedPool.push(usedQuestion);
-            return { ...prev, [randomType]: updatedPool };
-        });
-        
-        return { type: randomType, data: question };
-    }, [activePools, quizContent, fillPools]);
 
     useEffect(() => {
         if (!db || !roomId || (appState !== 'LOBBY' && appState !== 'PLAYING')) return;
@@ -892,12 +961,6 @@ const App = () => {
             if (updates.status === 'PLAYING') setAppState('PLAYING');
         }
     }, [roomId]);
-
-    const showToast = useCallback((msg) => {
-        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-        setToastMsg(msg);
-        toastTimerRef.current = setTimeout(() => setToastMsg(null), msg.includes('❌') ? 5000 : 2500);
-    }, []);
 
     // ==========================================
     // FLUJO LOBBY / PRE-GAME
@@ -984,11 +1047,12 @@ const App = () => {
             const newId = Math.random().toString(36).substring(2, 6).toUpperCase();
             const c = PLAYER_COLORS[0];
             const hostPlayer = { id: 1, name, emoji: selectedEmoji, coins: 10, stars: 0, pos: "5,5", color: c.color, activeColor: c.activeColor };
+            const initialPools = buildFreshPools(quizContent);
             
             if (db) {
                 try {
                     await withTimeout(setDoc(doc(db, 'periplo-party-rooms', newId), { 
-                        ...INITIAL_GAME_STATE, players: [hostPlayer], quizId: new URLSearchParams(window.location.search).get('id') || null, quizTitle: quizTitle || "Periplo Party", createdAt: Date.now() 
+                        ...INITIAL_GAME_STATE, players: [hostPlayer], pools: initialPools, quizId: new URLSearchParams(window.location.search).get('id') || null, quizTitle: quizTitle || "Periplo Party", createdAt: Date.now() 
                     }), 8000, 'CREATE_ROOM');
                     setRoomId(newId); setLocalPlayerId(1); 
                     saveSessionToLocal(newId, 1, true);
@@ -997,7 +1061,7 @@ const App = () => {
             } else {
                 setRoomId(newId); setLocalPlayerId(1);
                 saveSessionToLocal(newId, 1, true);
-                setGame({ ...INITIAL_GAME_STATE, players: [hostPlayer] });
+                setGame({ ...INITIAL_GAME_STATE, players: [hostPlayer], pools: initialPools });
                 setAppState('LOBBY');
             }
         } else {
@@ -1064,8 +1128,9 @@ const App = () => {
     };
 
     const startGame = () => {
-        if (quizContent) fillPools(quizContent);
-        updateGame({ status: 'PLAYING', activePos: game.players[0].pos });
+        // Rellenar pools al iniciar por si estaban vacíos
+        const freshPools = buildFreshPools(quizContent);
+        updateGame({ status: 'PLAYING', activePos: game.players[0].pos, pools: freshPools });
     };
 
     // ==========================================
@@ -1112,14 +1177,8 @@ const App = () => {
         return node.dirs.map(dir => ({ dir: dir, id: `${node.q + HEX_DIRS[dir].q},${node.r + HEX_DIRS[dir].r}` })).filter(out => RAW_MAP_DATA[out.id]);
     };
 
-    const updateActivePlayer = (updater) => {
-        const newPlayers = [...gameRef.current.players];
-        newPlayers[gameRef.current.turn] = updater(newPlayers[gameRef.current.turn]);
-        return newPlayers;
-    };
-
     // ==========================================
-    // MOTOR DE MOVIMIENTO BLINDADO
+    // MOTOR DE MOVIMIENTO (INTACTO)
     // ==========================================
     
     const executeMoveStep = (nextNodeId) => {
@@ -1228,14 +1287,14 @@ const App = () => {
         }
     }, [game.phase, isMyTurnRender]);
 
-    const endTurnHandler = () => {
+    const endTurnHandler = async () => {
         if (!isMyTurnAction()) return;
         const currentGame = gameRef.current;
         const finalNode = RAW_MAP_DATA[currentGame.activePos];
         if (!finalNode) { advanceTurn(); return; }
 
         if (finalNode.type === 'blue' || finalNode.type === 'red') {
-            const q = pickQuestion();
+            const q = await pickQuestion();
             if (!q) {
                 showToast("⚠️ Banco sin preguntas");
                 advanceTurn(); return; 
@@ -1367,16 +1426,16 @@ const App = () => {
         executeMoveStep(currentGame.pendingNode); 
     };
     
-    const handleBowserTrivia = () => {
+    const handleBowserTrivia = async () => {
         if (!isMyTurnAction()) return;
-        const q = pickQuestion();
+        const q = await pickQuestion();
         if (!q) { showToast("⚠️ Chupacabras tiene piedad"); executeMoveStep(gameRef.current.pendingNode); return; }
         updateGame({ activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'bowser' } }, phase: 'CHALLENGE' });
     };
 
     const startBooSteal = (action) => { if (!isMyTurnAction()) return; updateGame({ booAction: action, phase: 'BOO_TARGET' }); };
 
-    const executeBooSteal = (targetId) => {
+    const executeBooSteal = async (targetId) => {
         if (!isMyTurnAction()) return;
         const currentGame = gameRef.current;
         if (currentGame.booAction === 'coins') {
@@ -1392,7 +1451,7 @@ const App = () => {
             let newPlayers = [...currentGame.players];
             newPlayers[currentGame.turn].coins -= 40;
             updateGame({ players: newPlayers });
-            const q = pickQuestion();
+            const q = await pickQuestion();
             if (!q) { showToast("⚠️ Boo se rinde"); executeMoveStep(currentGame.pendingNode); return; }
             updateGame({ activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'boo_star', targetId } }, phase: 'CHALLENGE' });
         }
@@ -1408,17 +1467,17 @@ const App = () => {
         }
     }, [roomId]);
 
-    const handleChallengeAnswer = (playerAnswer, isCorrect) => {
-        if (!isMyTurnAction()) return;
-        updateChallenge({ status: isCorrect ? 'correct' : 'wrong', playerAnswer, endTime: Date.now() });
-    };
-
     const handleChallengeTimeout = () => {
         if (!isMyTurnAction()) return;
         if (!gameRef.current.activeChallenge || gameRef.current.activeChallenge.status !== 'playing') return;
         updateChallenge({ status: 'timeout', playerAnswer: null, endTime: Date.now() });
     };
 
+    // ==========================================
+    // RESOLVE CHALLENGE — AHORA MANUAL (FIX 2)
+    // ==========================================
+    // Se llama desde un botón "CONTINUAR" visible para el jugador activo (o el host en retos de maestro)
+    // una vez que el reto tiene status != 'playing'. Ya no hay useEffect automático de 2.8s.
     const resolveChallenge = useCallback(() => {
         const currentGame = gameRef.current;
         if (!currentGame.activeChallenge) return;
@@ -1428,6 +1487,7 @@ const App = () => {
         const isTeacherGraded = ['speaking', 'listening', 'roleplay'].includes(ch.type);
         const amIHost = localPlayerIdRef.current === 1;
 
+        // Gate de quién puede cerrar el reto
         if (isTeacherGraded) {
             if (!amIHost) return; 
         } else {
@@ -1483,15 +1543,6 @@ const App = () => {
             else setGame(p => ({ ...p, phase: p.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN', pendingNode: null }));
         }
     }, [isMyTurnAction, roomId, advanceTurn, showToast]);
-
-    useEffect(() => {
-        if (!game.activeChallenge) return;
-        if (game.activeChallenge.status === 'playing') return;
-        if (['speaking', 'listening', 'roleplay'].includes(game.activeChallenge.type)) return;
-        const timer = setTimeout(() => resolveChallenge(), 2800);
-        return () => clearTimeout(timer);
-    }, [game.activeChallenge?.status, resolveChallenge]);
-
 
     if (quizLoading || quizError) return <div className="h-full flex items-center justify-center bg-emerald-950 p-6 text-white font-bold">{quizError || "Cargando..."}</div>;
 
@@ -1600,6 +1651,11 @@ const App = () => {
 
     if (!game.players || game.players.length === 0) return null;
     const activePlayer = game.players[game.turn];
+
+    // Flags para el botón de avance manual en el modal de trivia
+    const ch = game.activeChallenge;
+    const chIsTeacherGraded = ch && ['speaking', 'listening', 'roleplay'].includes(ch.type);
+    const chCanResolve = ch && ch.status && ch.status !== 'playing' && (chIsTeacherGraded ? isHost : isMyTurnRender);
 
     return (
         <div className="h-full flex flex-col bg-emerald-950 relative">
@@ -1866,7 +1922,7 @@ const App = () => {
                     </div>
                 )}
 
-                {/* MODAL TRIVIA GLOBAL (SINCRONIZADO) */}
+                {/* MODAL TRIVIA GLOBAL (SINCRONIZADO + BOTÓN MANUAL) */}
                 {game.phase === 'CHALLENGE' && game.activeChallenge && (
                     <div className="absolute inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
                         <div className="bg-zinc-900 border-4 rounded-3xl w-full max-w-2xl shadow-2xl animate-pop-in my-auto overflow-hidden flex flex-col max-h-[90vh]" 
@@ -1899,12 +1955,25 @@ const App = () => {
                                     isHost={isHost}
                                 />
 
-                                {/* BOTON DE AVANCE MANUAL SÓLO PARA EL HOST EN RETOS DE MAESTRO */}
-                                {isHost && ['speaking', 'listening', 'roleplay'].includes(game.activeChallenge.type) && game.activeChallenge.status !== 'playing' && (
+                                {/* BOTÓN DE AVANCE MANUAL — FIX 2 */}
+                                {/* Visible para quien corresponda cuando el reto ya terminó (correcto/incorrecto/timeout) */}
+                                {chCanResolve && (
                                     <div className="mt-8 border-t border-zinc-800 pt-6 animate-in">
-                                        <button onClick={() => resolveChallenge()} className="btn-juicy w-full py-5 rounded-2xl font-black text-white text-xl flex justify-center items-center gap-2 shadow-xl bg-slate-800 border-slate-950 hover:bg-slate-700">
-                                            CERRAR PREGUNTA Y CONTINUAR <ArrowRight/>
+                                        <button 
+                                            onClick={() => resolveChallenge()} 
+                                            className={`btn-juicy w-full py-5 rounded-2xl font-black text-white text-xl flex justify-center items-center gap-2 shadow-xl ${game.activeChallenge.status === 'correct' ? 'bg-emerald-600 border-emerald-800 hover:bg-emerald-500' : 'bg-slate-800 border-slate-950 hover:bg-slate-700'}`}
+                                        >
+                                            CONTINUAR <ArrowRight/>
                                         </button>
+                                    </div>
+                                )}
+                                
+                                {/* Mensaje para espectadores */}
+                                {!chCanResolve && game.activeChallenge.status && game.activeChallenge.status !== 'playing' && (
+                                    <div className="mt-8 border-t border-zinc-800 pt-6 animate-in">
+                                        <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl text-center text-amber-400 font-bold animate-pulse">
+                                            Esperando a que {chIsTeacherGraded ? 'el Host' : activePlayer.name} continúe...
+                                        </div>
                                     </div>
                                 )}
                             </div>
