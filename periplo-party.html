@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Periplo Party | Multiplayer Final v9.2 (Pools+Manual+Recovery)</title>
+    <title>Periplo Party | Multiplayer Final v9.3 (Rules+RaceFix)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
     
@@ -774,22 +774,40 @@ const App = () => {
     // ==========================================
     // POOLS EN FIREBASE (FIX 1)
     // ==========================================
+    // Separamos por tipo de evaluación:
+    // - auto: las que el juego corrige solo (MC, DragDrop, etc.)
+    // - human: speaking, listening, roleplay (las evalúa el maestro)
+    const HUMAN_TYPES = ['speaking', 'listening', 'roleplay'];
     const buildFreshPools = useCallback((content) => {
-        if (!content) return {};
-        const newPools = {};
+        if (!content) return { auto: {}, human: {} };
+        const auto = {};
+        const human = {};
         Object.keys(content).forEach(key => {
             if (Array.isArray(content[key]) && content[key].length > 0) {
-                newPools[key] = shuffleArray(content[key]);
+                const bucket = HUMAN_TYPES.includes(key) ? human : auto;
+                bucket[key] = shuffleArray(content[key]);
             }
         });
-        return newPools;
+        return { auto, human };
     }, []);
 
-    // pickQuestion: saca una pregunta de los pools del documento compartido, rellenando si se agotan.
-    // Usa runTransaction cuando hay roomId para evitar colisiones entre clientes.
-    const pickQuestion = useCallback(async () => {
+    // pickQuestion(kind): 'auto' o 'human'. Si human está vacío, fallback a auto.
+    const pickQuestion = useCallback(async (kind = 'auto') => {
         const content = quizContentRef.current;
         if (!content) return null;
+
+        // Helper: intenta sacar una pregunta del bucket indicado. Muta `pools` y devuelve {type,data} o null.
+        const drawFrom = (pools, bucketKey) => {
+            const bucket = pools[bucketKey] || {};
+            const availableTypes = Object.keys(bucket).filter(k => Array.isArray(bucket[k]) && bucket[k].length > 0);
+            if (availableTypes.length === 0) return null;
+            const randomType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
+            const updatedPool = [...bucket[randomType]];
+            const question = updatedPool.shift();
+            updatedPool.push(question);
+            pools[bucketKey] = { ...bucket, [randomType]: updatedPool };
+            return { type: randomType, data: question };
+        };
 
         if (db && roomId) {
             try {
@@ -800,22 +818,30 @@ const App = () => {
                     if (!snap.exists()) return;
                     const data = snap.data();
                     let pools = data.pools || {};
+                    // Migración defensiva si aún hay formato viejo
+                    if (!pools.auto && !pools.human) pools = buildFreshPools(content);
 
-                    let availableTypes = Object.keys(pools).filter(k => Array.isArray(pools[k]) && pools[k].length > 0);
-                    if (availableTypes.length === 0) {
-                        pools = buildFreshPools(content);
-                        availableTypes = Object.keys(pools).filter(k => Array.isArray(pools[k]) && pools[k].length > 0);
-                        if (availableTypes.length === 0) return;
+                    // Intento 1: bucket solicitado
+                    picked = drawFrom(pools, kind);
+
+                    // Si no hay, refresco el bucket desde content y reintento
+                    if (!picked) {
+                        const fresh = buildFreshPools(content);
+                        pools[kind] = fresh[kind];
+                        picked = drawFrom(pools, kind);
                     }
 
-                    const randomType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
-                    const updatedPool = [...pools[randomType]];
-                    const question = updatedPool.shift();
-                    updatedPool.push(question);
-                    pools[randomType] = updatedPool;
+                    // Fallback: human → auto
+                    if (!picked && kind === 'human') {
+                        picked = drawFrom(pools, 'auto');
+                        if (!picked) {
+                            const fresh = buildFreshPools(content);
+                            pools.auto = fresh.auto;
+                            picked = drawFrom(pools, 'auto');
+                        }
+                    }
 
                     txn.update(roomRef, { pools });
-                    picked = { type: randomType, data: question };
                 });
                 return picked;
             } catch (e) {
@@ -825,20 +851,24 @@ const App = () => {
         } else {
             // Modo local sin Firebase
             let pools = gameRef.current.pools || {};
-            let availableTypes = Object.keys(pools).filter(k => Array.isArray(pools[k]) && pools[k].length > 0);
-            if (availableTypes.length === 0) {
-                pools = buildFreshPools(content);
-            }
-            availableTypes = Object.keys(pools).filter(k => Array.isArray(pools[k]) && pools[k].length > 0);
-            if (availableTypes.length === 0) return null;
+            if (!pools.auto && !pools.human) pools = buildFreshPools(content);
 
-            const randomType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
-            const updatedPool = [...pools[randomType]];
-            const question = updatedPool.shift();
-            updatedPool.push(question);
-            const newPools = { ...pools, [randomType]: updatedPool };
-            setGame(prev => ({ ...prev, pools: newPools }));
-            return { type: randomType, data: question };
+            let picked = drawFrom(pools, kind);
+            if (!picked) {
+                const fresh = buildFreshPools(content);
+                pools[kind] = fresh[kind];
+                picked = drawFrom(pools, kind);
+            }
+            if (!picked && kind === 'human') {
+                picked = drawFrom(pools, 'auto');
+                if (!picked) {
+                    const fresh = buildFreshPools(content);
+                    pools.auto = fresh.auto;
+                    picked = drawFrom(pools, 'auto');
+                }
+            }
+            setGame(prev => ({ ...prev, pools }));
+            return picked;
         }
     }, [roomId, buildFreshPools]);
 
@@ -1192,9 +1222,10 @@ const App = () => {
         let newPlayers = [...currentGame.players];
         newPlayers[currentGame.turn] = { ...newPlayers[currentGame.turn], pos: nextNodeId };
 
-        if (newMoves > 0) {
-            if (nextNode.type === 'bowser') { showToast(`💀 Chupacabras roba 10 Monedas`); newPlayers[currentGame.turn].coins -= 10; }
-            if (nextNode.type === 'koopa') { showToast(`🐢 Wealthy Turtle da +10 Monedas`); newPlayers[currentGame.turn].coins += 10; }
+        // Wealthy Turtle al pasar: regalo automático (sin pregunta).
+        if (newMoves > 0 && nextNode.type === 'koopa') {
+            showToast(`🐢 Wealthy Turtle da +10 Monedas`);
+            newPlayers[currentGame.turn].coins += 10;
         }
 
         let nextPhase = 'MOVING';
@@ -1294,7 +1325,7 @@ const App = () => {
         if (!finalNode) { advanceTurn(); return; }
 
         if (finalNode.type === 'blue' || finalNode.type === 'red') {
-            const q = await pickQuestion();
+            const q = await pickQuestion('auto');
             if (!q) {
                 showToast("⚠️ Banco sin preguntas");
                 advanceTurn(); return; 
@@ -1306,7 +1337,20 @@ const App = () => {
             return; 
         }
 
-        if (finalNode.type === 'event') showToast("⚡ ¡Evento Sorpresa!");
+        if (finalNode.type === 'event') {
+            const q = await pickQuestion('human');
+            if (!q) {
+                showToast("⚡ ¡Evento Sorpresa! (sin pregunta)");
+                advanceTurn(); return;
+            }
+            showToast("⚡ ¡Evento Sorpresa!");
+            updateGame({
+                activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'event_land' } },
+                phase: 'CHALLENGE'
+            });
+            return;
+        }
+
         advanceTurn();
     };
 
@@ -1380,8 +1424,10 @@ const App = () => {
         let newPlayers = [...currentGame.players];
         newPlayers[currentGame.turn].coins -= 10;
         showToast("🪨 ¡Pagaste el peaje!");
-        updateGame({ players: newPlayers });
-        executeMoveStep(currentGame.pendingNode); 
+        // Fix: un solo updateGame atómico. Stone es zero-cost, así que movesLeft no cambia.
+        // Si aún hay pasos, vuelve a MOVING y el motor continúa; si no, termina turno.
+        const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
+        updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null });
     };
 
     const handleStoneFail = () => {
@@ -1402,7 +1448,7 @@ const App = () => {
     const handleStarBuy = (buy) => {
         if (!isMyTurnAction()) return;
         const currentGame = gameRef.current;
-        let updates = {};
+        let updates = { pendingNode: null };
         if (buy) {
             let newPlayers = [...currentGame.players];
             newPlayers[currentGame.turn].coins -= 20;
@@ -1412,8 +1458,9 @@ const App = () => {
             updates.players = newPlayers;
             updates.activeStarId = STAR_LOCATIONS.filter(id => id !== currentGame.activeStarId)[Math.floor(Math.random() * 2)];
         }
+        // Star es zero-cost. Si quedan pasos, seguir moviendo; si no, terminar turno.
+        updates.phase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
         updateGame(updates);
-        executeMoveStep(currentGame.pendingNode); 
     };
 
     const handleKoopaAccept = () => { 
@@ -1422,15 +1469,34 @@ const App = () => {
         let newPlayers = [...currentGame.players];
         newPlayers[currentGame.turn].coins += 10;
         showToast("🐢 ¡Recibiste 10 Monedas!"); 
-        updateGame({ players: newPlayers });
-        executeMoveStep(currentGame.pendingNode); 
+        // Fix: koopa solo entra al prompt cuando caes exacto (movesLeft === 0 en executeMoveStep).
+        // Así que siempre termina turno.
+        const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
+        updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null });
+    };
+
+    const handleBooPass = () => {
+        if (!isMyTurnAction()) return;
+        const currentGame = gameRef.current;
+        showToast("👻 Boo se aleja flotando...");
+        const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
+        updateGame({ phase: nextPhase, pendingNode: null, booAction: null });
     };
     
     const handleBowserTrivia = async () => {
         if (!isMyTurnAction()) return;
-        const q = await pickQuestion();
-        if (!q) { showToast("⚠️ Chupacabras tiene piedad"); executeMoveStep(gameRef.current.pendingNode); return; }
-        updateGame({ activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'bowser' } }, phase: 'CHALLENGE' });
+        const q = await pickQuestion('human');
+        if (!q) { 
+            // Sin pregunta disponible: castigo mínimo y continuar
+            const currentGame = gameRef.current;
+            let newPlayers = [...currentGame.players];
+            newPlayers[currentGame.turn].coins -= 15;
+            showToast("💀 Chupacabras muerde (-15)");
+            const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
+            updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null });
+            return; 
+        }
+        updateGame({ activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'bowser_pass' } }, phase: 'CHALLENGE' });
     };
 
     const startBooSteal = (action) => { if (!isMyTurnAction()) return; updateGame({ booAction: action, phase: 'BOO_TARGET' }); };
@@ -1445,15 +1511,25 @@ const App = () => {
             newPlayers[targetIdx].coins -= stolen;
             newPlayers[currentGame.turn].coins += stolen;
             showToast(`👻 ¡Boo robó ${stolen} monedas!`);
-            updateGame({ players: newPlayers });
-            executeMoveStep(currentGame.pendingNode);
+            // Boo es prompt de caer exacto, movesLeft === 0 cuando se entra al prompt
+            const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
+            updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null, booAction: null });
         } else if (currentGame.booAction === 'star') {
+            // 40 monedas upfront irrecuperables
             let newPlayers = [...currentGame.players];
             newPlayers[currentGame.turn].coins -= 40;
-            updateGame({ players: newPlayers });
-            const q = await pickQuestion();
-            if (!q) { showToast("⚠️ Boo se rinde"); executeMoveStep(currentGame.pendingNode); return; }
-            updateGame({ activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'boo_star', targetId } }, phase: 'CHALLENGE' });
+            const q = await pickQuestion('human');
+            if (!q) { 
+                showToast("⚠️ Boo se rinde (sin pregunta)"); 
+                const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
+                updateGame({ players: newPlayers, phase: nextPhase, pendingNode: null, booAction: null });
+                return; 
+            }
+            updateGame({ 
+                players: newPlayers,
+                activeChallenge: { type: q.type, data: q.data, status: 'playing', playerAnswer: null, startTime: Date.now(), endTime: null, context: { trigger: 'boo_star', targetId } }, 
+                phase: 'CHALLENGE' 
+            });
         }
     };
 
@@ -1518,13 +1594,29 @@ const App = () => {
             pushUpdate(newPlayers);
             advanceTurn(isTeacherGraded);
         }
-        else if (ctx.trigger === 'bowser') {
-            if (isCorrect) { showToast(`✅ Chupacabras: "¡Grrr!" (-5 Monedas)`); newPlayers[currentGame.turn].coins -= 5; }
-            else { showToast(`❌ Chupacabras: "¡BWAHAHA!" (-15 Monedas)`); newPlayers[currentGame.turn].coins -= 15; }
+        else if (ctx.trigger === 'event_land') {
+            // Casilla verde de evento especial: +6 monedas si correcto, 0 si incorrecto
+            if (isCorrect) { showToast(`⚡ ${pName} +6 Monedas`); newPlayers[currentGame.turn].coins += 6; }
+            else { showToast(`❌ ${pName} se queda con las ganas.`); }
             pushUpdate(newPlayers);
-            
-            if (db && roomId) updateDoc(doc(db, 'periplo-party-rooms', roomId), { phase: currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN', pendingNode: null });
-            else setGame(p => ({ ...p, phase: p.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN', pendingNode: null }));
+            advanceTurn(isTeacherGraded);
+        }
+        else if (ctx.trigger === 'bowser_pass') {
+            // Chupacabras: pregunta → -5 correcto / -15 incorrecto, MÁS -15 fijo por pisar su hex
+            if (isCorrect) { 
+                showToast(`🩸 Chupacabras muerde suave (-5 -15)`); 
+                newPlayers[currentGame.turn].coins -= 20; 
+            } else { 
+                showToast(`💀 Chupacabras destroza (-15 -15)`); 
+                newPlayers[currentGame.turn].coins -= 30; 
+            }
+            // Continuar movimiento o terminar turno según movesLeft restantes
+            const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
+            if (db && roomId) {
+                updateDoc(doc(db, 'periplo-party-rooms', roomId), { players: newPlayers, activeChallenge: null, phase: nextPhase, pendingNode: null });
+            } else {
+                setGame(p => ({ ...p, players: newPlayers, activeChallenge: null, phase: nextPhase, pendingNode: null }));
+            }
         }
         else if (ctx.trigger === 'boo_star') {
             if (isCorrect) {
@@ -1535,12 +1627,14 @@ const App = () => {
                     newPlayers[currentGame.turn].stars += 1;
                 }
             } else {
-                showToast(`❌ Boo: "Too bad..."`);
+                showToast(`❌ Boo: "Too bad..." (perdiste 40)`);
             }
-            pushUpdate(newPlayers);
-            
-            if (db && roomId) updateDoc(doc(db, 'periplo-party-rooms', roomId), { phase: currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN', pendingNode: null });
-            else setGame(p => ({ ...p, phase: p.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN', pendingNode: null }));
+            const nextPhase = currentGame.movesLeft > 0 ? 'MOVING' : 'PENDING_END_TURN';
+            if (db && roomId) {
+                updateDoc(doc(db, 'periplo-party-rooms', roomId), { players: newPlayers, activeChallenge: null, phase: nextPhase, pendingNode: null, booAction: null });
+            } else {
+                setGame(p => ({ ...p, players: newPlayers, activeChallenge: null, phase: nextPhase, pendingNode: null, booAction: null }));
+            }
         }
     }, [isMyTurnAction, roomId, advanceTurn, showToast]);
 
@@ -1893,7 +1987,7 @@ const App = () => {
                                     <>
                                         <button onClick={() => startBooSteal('coins')} className="btn-juicy w-full bg-yellow-500 hover:bg-yellow-400 text-yellow-950 py-3 rounded-2xl font-black text-lg shadow-[0_4px_0_theme(colors.yellow.700)] flex justify-center items-center gap-2"><Coins size={20}/> Robar 10 Monedas (Gratis)</button>
                                         <button onClick={() => startBooSteal('star')} disabled={activePlayer.coins < 40} className="btn-juicy w-full bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 text-amber-950 py-3 rounded-2xl font-black text-lg shadow-[0_4px_0_theme(colors.amber.700)] disabled:shadow-none flex justify-center items-center gap-2"><Star size={20}/> Robar Estrella (40 Monedas)</button>
-                                        <button onClick={() => executeMoveStep(game.pendingNode)} className="btn-juicy w-full bg-zinc-800 hover:bg-zinc-700 text-white py-3 rounded-2xl font-bold text-base mt-2">Pasar de largo</button>
+                                        <button onClick={handleBooPass} className="btn-juicy w-full bg-zinc-800 hover:bg-zinc-700 text-white py-3 rounded-2xl font-bold text-base mt-2">Pasar de largo</button>
                                     </>
                                 ) : (<p className="text-white font-bold animate-pulse">{activePlayer.name} está negociando con Boo...</p>)}
                             </div>
