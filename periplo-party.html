@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Periplo Party | Multiplayer Final v8.8 (Host Permissions Fix)</title>
+    <title>Periplo Party | Multiplayer Final v9.1 (Clean Core)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
     
@@ -762,8 +762,6 @@ const App = () => {
         }, 1500);
     }, [isMyTurnAction, roomId]);
 
-    // (resolveChallenge se define más abajo, después de los handlers)
-
     // ==========================================
     // INICIALIZACIÓN
     // ==========================================
@@ -775,47 +773,28 @@ const App = () => {
             if (savedEmoji) setSelectedEmoji(savedEmoji);
         } catch(e) {}
 
-        // Sondeo NO intrusivo: solo detecta si hay sesión recuperable y la ofrece como banner.
-        // NUNCA entra automáticamente.
-        const probeRecoverable = async (currentQuizId) => {
+        const checkRecovery = async () => {
             const savedRoomId = localStorage.getItem('periplo_roomId');
             const savedPlayerId = localStorage.getItem('periplo_localPlayerId');
             const savedIsHost = localStorage.getItem('periplo_isHost');
-            const savedQuizId = localStorage.getItem('periplo_quizId');
 
-            if (!savedRoomId || !savedPlayerId || !db) return;
-
-            // Si el banco que estás abriendo ahora es DISTINTO al de la sala guardada,
-            // es obvio que quieres jugar otra cosa. Limpia silenciosamente.
-            if (savedQuizId && currentQuizId && savedQuizId !== currentQuizId) {
-                localStorage.removeItem('periplo_roomId');
-                localStorage.removeItem('periplo_localPlayerId');
-                localStorage.removeItem('periplo_isHost');
-                localStorage.removeItem('periplo_quizId');
-                return;
+            if (savedRoomId && savedPlayerId && db) {
+                try {
+                    const snap = await getDoc(doc(db, 'periplo-party-rooms', savedRoomId));
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        setRoomId(savedRoomId);
+                        setLocalPlayerId(Number(savedPlayerId));
+                        setIsHost(savedIsHost === 'true');
+                        setGame(data);
+                        setAppState(data.status === 'PLAYING' ? 'PLAYING' : 'LOBBY');
+                    } else {
+                        localStorage.removeItem('periplo_roomId');
+                        localStorage.removeItem('periplo_localPlayerId');
+                        localStorage.removeItem('periplo_isHost');
+                    }
+                } catch(e) { console.error("Error reconectando a la sala:", e); }
             }
-
-            try {
-                const snap = await getDoc(doc(db, 'periplo-party-rooms', savedRoomId));
-                if (snap.exists()) {
-                    const data = snap.data();
-                    setRecoverableSession({
-                        roomId: savedRoomId,
-                        playerId: Number(savedPlayerId),
-                        isHost: savedIsHost === 'true',
-                        round: data.round || 1,
-                        playersCount: (data.players || []).length,
-                        status: data.status,
-                        data
-                    });
-                } else {
-                    // Sala muerta, limpia
-                    localStorage.removeItem('periplo_roomId');
-                    localStorage.removeItem('periplo_localPlayerId');
-                    localStorage.removeItem('periplo_isHost');
-                    localStorage.removeItem('periplo_quizId');
-                }
-            } catch(e) { console.error("Error sondeando sesión:", e); }
         };
 
         const loadQuiz = async () => {
@@ -838,7 +817,7 @@ const App = () => {
                 setQuizContent(data.content || {});
                 setQuizTitle(data.title || "Periplo Party");
                 setQuizLoading(false);
-                probeRecoverable(id);
+                checkRecovery();
             } catch(e) {
                 setQuizError(e.message || "Error al cargar el banco");
                 setQuizLoading(false);
@@ -914,6 +893,12 @@ const App = () => {
         }
     }, [roomId]);
 
+    const showToast = useCallback((msg) => {
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        setToastMsg(msg);
+        toastTimerRef.current = setTimeout(() => setToastMsg(null), msg.includes('❌') ? 5000 : 2500);
+    }, []);
+
     // ==========================================
     // FLUJO LOBBY / PRE-GAME
     // ==========================================
@@ -965,12 +950,10 @@ const App = () => {
         localStorage.setItem('periplo_roomId', id);
         localStorage.setItem('periplo_localPlayerId', pId);
         localStorage.setItem('periplo_isHost', isH ? 'true' : 'false');
-        // Guardar también qué banco corresponde a esta sala
         const currentQuizId = new URLSearchParams(window.location.search).get('id');
         if (currentQuizId) localStorage.setItem('periplo_quizId', currentQuizId);
     };
 
-    // Acciones del banner de recuperación
     const handleReconnect = () => {
         if (!recoverableSession) return;
         const s = recoverableSession;
@@ -1127,6 +1110,12 @@ const App = () => {
     const getValidOuts = (node) => {
         if (!node || !node.dirs) return [];
         return node.dirs.map(dir => ({ dir: dir, id: `${node.q + HEX_DIRS[dir].q},${node.r + HEX_DIRS[dir].r}` })).filter(out => RAW_MAP_DATA[out.id]);
+    };
+
+    const updateActivePlayer = (updater) => {
+        const newPlayers = [...gameRef.current.players];
+        newPlayers[gameRef.current.turn] = updater(newPlayers[gameRef.current.turn]);
+        return newPlayers;
     };
 
     // ==========================================
@@ -1430,7 +1419,6 @@ const App = () => {
         updateChallenge({ status: 'timeout', playerAnswer: null, endTime: Date.now() });
     };
 
-    // 🔴 SOLUCIÓN AL BUG DE PERMISOS DE HOST EN PREGUNTAS SUBJETIVAS
     const resolveChallenge = useCallback(() => {
         const currentGame = gameRef.current;
         if (!currentGame.activeChallenge) return;
@@ -1440,7 +1428,6 @@ const App = () => {
         const isTeacherGraded = ['speaking', 'listening', 'roleplay'].includes(ch.type);
         const amIHost = localPlayerIdRef.current === 1;
 
-        // Validar permisos de avance: el Host aprueba las subjetivas, el jugador activo las demás
         if (isTeacherGraded) {
             if (!amIHost) return; 
         } else {
@@ -1463,7 +1450,7 @@ const App = () => {
             if (isCorrect) { showToast(`✅ ${pName} +3 Monedas`); newPlayers[currentGame.turn].coins += 3; }
             else { showToast(`❌ Sin recompensa.`); }
             pushUpdate(newPlayers);
-            advanceTurn(isTeacherGraded); // Pasamos true para sobrepasar el candado si fuimos nosotros
+            advanceTurn(isTeacherGraded); 
         } 
         else if (ctx.trigger === 'red') {
             if (isCorrect) { showToast(`✅ ¡Salvado!`); }
@@ -1504,6 +1491,7 @@ const App = () => {
         const timer = setTimeout(() => resolveChallenge(), 2800);
         return () => clearTimeout(timer);
     }, [game.activeChallenge?.status, resolveChallenge]);
+
 
     if (quizLoading || quizError) return <div className="h-full flex items-center justify-center bg-emerald-950 p-6 text-white font-bold">{quizError || "Cargando..."}</div>;
 
@@ -1702,7 +1690,7 @@ const App = () => {
                         <polyline points={ghostPathCoords.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#ffffff" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="8 12" className="ghost-path drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" />
                     )}
 
-                    {/* FICHAS MULTIJUGADOR CON OFFSET CORREGIDO */}
+                    {/* FICHAS MULTIJUGADOR CON OFFSET CORREGIDO (8.6 FIX) */}
                     {game.players.map((p, idx) => {
                         const isTurn = idx === game.turn;
                         const posIdToRender = (isTurn && game.phase !== 'IDLE') ? game.activePos : p.pos;
@@ -1717,6 +1705,7 @@ const App = () => {
                             if(shareIndex === 0) { offsetX = -8; offsetY = -8; } else if(shareIndex === 1) { offsetX = 8; offsetY = -8; } else if(shareIndex === 2) { offsetX = -8; offsetY = 8; } else if(shareIndex === 3) { offsetX = 8; offsetY = 8; }
                         }
 
+                        // ANTI-MAREO: Ficha centrada si está en movimiento
                         if (isTurn && game.phase === 'MOVING') {
                             offsetX = 0; offsetY = 0;
                         }
@@ -1910,7 +1899,7 @@ const App = () => {
                                     isHost={isHost}
                                 />
 
-                                {/* FIX 8.8: El Host avanza sin importar de quién es el turno */}
+                                {/* BOTON DE AVANCE MANUAL SÓLO PARA EL HOST EN RETOS DE MAESTRO */}
                                 {isHost && ['speaking', 'listening', 'roleplay'].includes(game.activeChallenge.type) && game.activeChallenge.status !== 'playing' && (
                                     <div className="mt-8 border-t border-zinc-800 pt-6 animate-in">
                                         <button onClick={() => resolveChallenge()} className="btn-juicy w-full py-5 rounded-2xl font-black text-white text-xl flex justify-center items-center gap-2 shadow-xl bg-slate-800 border-slate-950 hover:bg-slate-700">
