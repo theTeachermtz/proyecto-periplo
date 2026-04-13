@@ -30,7 +30,6 @@
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-        /* Prevención Hover-Trap iOS */
         @media (hover: hover) {
             .btn-juicy:hover:not(:disabled) { filter: brightness(1.1); }
         }
@@ -38,7 +37,6 @@
         .btn-juicy { transition: all 0.1s ease; border-bottom-width: 4px; touch-action: manipulation; }
         .btn-juicy:active:not(:disabled) { transform: translateY(4px); border-bottom-width: 0px; margin-top: 4px; }
 
-        /* Fixes Safari Old iOS Text Overflow */
         .safari-text-fix {
             display: -webkit-box;
             -webkit-line-clamp: 3;
@@ -99,20 +97,17 @@
         const genCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
         const formatTime = (s) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
 
-        // Dice faces: 1-6 points
         const DICE_FACES = [1, 2, 3, 4, 5, 6];
         const DICE_EMOJIS = ['⚀','⚁','⚂','⚃','⚄','⚅'];
 
         const LingoMatch = () => {
             const [user, setUser] = useState(null);
-            const [quizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [quizId, setQuizId] = useState(new URLSearchParams(window.location.search).get('id'));
             const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
             const [quizData, setQuizData] = useState(null);
             
-            // SYSTEM: Disclaimer Guard
             const [acceptedDisclaimer, setAcceptedDisclaimer] = useState(() => localStorage.getItem('periplo_disclaimer_v1') === 'true');
 
-            // SYSTEM: Session Storage para reconexión instantánea tras refresh
             const [modeSelected, setModeSelected] = useState(() => sessionStorage.getItem('lingo_mode') || null);
             const [isSinglePlayer, setIsSinglePlayer] = useState(() => sessionStorage.getItem('lingo_sp') === 'true');
             const [roomCode, setRoomCode] = useState(() => sessionStorage.getItem('lingo_room') || '');
@@ -122,7 +117,6 @@
             const [playerName, setPlayerName] = useState('');
             const [leaderboard, setLeaderboard] = useState([]);
 
-            // Game state
             const [selection, setSelection] = useState({ c1: null, c2: null, c3: null });
             const [feedback, setFeedback] = useState('none');
             const [locked, setLocked] = useState(false);
@@ -132,9 +126,8 @@
             const [timerAnim, setTimerAnim] = useState(false);
             const [timer, setTimer] = useState(0);
             const timerRef = useRef(null);
-            const lastActionUidRef = useRef(null); // Para sincronizar animaciones de error
+            const lastActionUidRef = useRef(null);
 
-            // Arena features
             const [diceValue, setDiceValue] = useState(null);
             const [diceRolling, setDiceRolling] = useState(false);
             const [showSubmit, setShowSubmit] = useState(false);
@@ -155,26 +148,39 @@
                 else sessionStorage.removeItem('lingo_room');
             }, [modeSelected, isSinglePlayer, roomCode]);
 
-            // ====== FIREBASE AUTH + QUIZ LOAD ======
+            // ====== FIREBASE AUTH + INITIAL ROUTING ======
+            const loadLeaderboardData = async (targetId) => {
+                const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${targetId}/leaderboard`), orderBy('time', 'asc'), limit(5));
+                const snap = await getDocs(q);
+                setLeaderboard(snap.docs.map(d => d.data()));
+            };
+
             useEffect(() => {
                 signInAnonymously(auth);
                 const unsub = onAuthStateChanged(auth, setUser);
+                
                 if (quizId) {
-                    getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId)).then(snap => {
-                        if (snap.exists()) setQuizData(snap.data());
-                        else alert("Juego no encontrado");
+                    getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId)).then(async snap => {
+                        if (snap.exists()) {
+                            setQuizData(snap.data());
+                            // Si es alumno y viene con ID, forzar Speedrun automáticamente
+                            if (isStudent && !modeSelected) {
+                                setIsSinglePlayer(true);
+                                setModeSelected('single');
+                                await loadLeaderboardData(quizId);
+                            }
+                        } else alert("Juego no encontrado");
                     });
                 }
                 return () => unsub();
             }, [quizId]);
 
-            // ====== ROOM LISTENER (multiplayer) ======
+            // ====== ROOM LISTENER ======
             useEffect(() => {
                 if (!user || !roomCode || isSinglePlayer) return;
                 const unsub = onSnapshot(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), (snap) => {
                     if (snap.exists()) {
-                        const data = snap.data();
-                        setRoomData(data);
+                        setRoomData(snap.data());
                     } else {
                         setRoomCode(''); setRoomData(null); alert("La sala ha sido cerrada.");
                     }
@@ -193,14 +199,13 @@
             const myPlayer = roomData?.players?.find(p => p.uid === user?.uid);
             const myRole = isSinglePlayer ? 'p1' : (myPlayer ? myPlayer.id : null);
 
-            // ====== SYNC REMOTE ANIMATIONS (Error/Parcial) ======
+            // ====== SYNC REMOTE ANIMATIONS ======
             useEffect(() => {
                 if (!roomData?.lastAction || isSinglePlayer) return;
                 const action = roomData.lastAction;
                 if (action.uid === lastActionUidRef.current) return;
                 lastActionUidRef.current = action.uid;
 
-                // Solo triggerear si NO fue mi turno (el jugador activo ya corrió su lógica local)
                 if (myRole !== action.player) {
                     if (action.type === 'error') {
                         setFeedback('error');
@@ -229,20 +234,24 @@
                 else await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), newData);
             };
 
-            const resetToMenu = () => {
-                setRoomData(null); setModeSelected(null); setIsSinglePlayer(false);
+            const resetToMenu = async () => {
+                setRoomData(null); 
                 setTimer(0); setCountdown(null); setRoomCode('');
                 setShowLeaderboard(false); setShowLibrary(false);
                 setDiceValue(null); setDiceRolling(false); setShowSubmit(false);
                 setShowCorrectCards(false); setCorrectTriple(null);
                 setSelection({ c1: null, c2: null, c3: null }); setFeedback('none');
+                
+                if (isStudent && quizId) {
+                    // Volver a configurar Speedrun si es alumno jugando solo
+                    setIsSinglePlayer(true);
+                    setModeSelected('single');
+                    await loadLeaderboardData(quizId);
+                } else {
+                    setModeSelected(null);
+                    setIsSinglePlayer(false);
+                }
                 sessionStorage.clear();
-            };
-
-            const loadLeaderboard = async () => {
-                const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/leaderboard`), orderBy('time', 'asc'), limit(5));
-                const snap = await getDocs(q);
-                setLeaderboard(snap.docs.map(d => d.data()));
             };
 
             const generateBoardColumns = (pairs) => ({
@@ -251,14 +260,13 @@
                 c3: shuffle(pairs.map(p => ({ uid: Math.random().toString(), pairId: p.id, text: p.c3 }))),
             });
 
-            // ====== SINGLE PLAYER SETUP ======
+            // ====== SINGLE PLAYER ======
             const setupSinglePlayer = async () => {
-                setIsSinglePlayer(true); setModeSelected('single'); await loadLeaderboard();
+                setIsSinglePlayer(true); setModeSelected('single'); await loadLeaderboardData(quizId);
             };
 
             const startSinglePlayer = () => {
                 if (!playerName.trim()) return alert("Escribe tu nombre o apodo.");
-                // GAME DESIGN: Regresamos libertad al Dashboard, leemos sus settings. Fallback a 3x6
                 const settings = quizData.content.settings || { rounds: 3, rowsPerRound: 6 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
                 
@@ -277,42 +285,55 @@
                 triggerSequence(['READY...', 'SET...', 'GO!'], () => setTimer(0));
             };
 
-            // ====== MULTIPLAYER SETUP ======
-            const setupMultiplayer = () => { setIsSinglePlayer(false); setModeSelected('multi'); };
-
+            // ====== MULTIPLAYER ======
             const createRoom = async () => {
                 const code = genCode();
                 await setDoc(doc(db, 'artifacts/periplo-app-v1/rooms', code), {
-                    quizId, gameState: 'roles',
+                    quizId,
+                    hostUid: user.uid,
+                    gameState: 'roles',
                     players: [
-                        { id: 'p1', name: 'Jugador 1', score: 0, color: 'bg-indigo-500', occupied: false, uid: null },
-                        { id: 'p2', name: 'Jugador 2', score: 0, color: 'bg-rose-500', occupied: false, uid: null },
-                        { id: 'p3', name: 'Jugador 3', score: 0, color: 'bg-emerald-500', occupied: false, uid: null },
-                        { id: 'p4', name: 'Jugador 4', score: 0, color: 'bg-amber-500', occupied: false, uid: null },
+                        { id: 'p1', name: 'Silla 1', score: 0, color: 'bg-indigo-500', occupied: false, uid: null },
+                        { id: 'p2', name: 'Silla 2', score: 0, color: 'bg-rose-500', occupied: false, uid: null },
+                        { id: 'p3', name: 'Silla 3', score: 0, color: 'bg-emerald-500', occupied: false, uid: null },
+                        { id: 'p4', name: 'Silla 4', score: 0, color: 'bg-amber-500', occupied: false, uid: null },
                     ],
                     liveSelections: {},
                 });
                 setRoomCode(code);
+                setModeSelected('multi_host');
             };
 
             const joinRoom = async () => {
+                if (!playerName.trim()) return alert("Escribe tu nombre primero.");
                 const code = inputCode.toUpperCase().trim();
                 if (code.length < 4) return alert('Código muy corto');
+                
                 const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/rooms', code));
-                if (snap.exists()) setRoomCode(code);
-                else alert('Código inválido.');
+                if (snap.exists()) {
+                    const data = snap.data();
+                    const qSnap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', data.quizId));
+                    if (qSnap.exists()) {
+                        setQuizData(qSnap.data());
+                        setQuizId(data.quizId);
+                        setRoomCode(code);
+                        setModeSelected('multi_join');
+                    } else {
+                        alert('El juego asociado a esta sala no fue encontrado.');
+                    }
+                } else alert('Código de sala inválido.');
             };
 
             const selectRole = async (roleId) => {
+                const activeName = playerName.trim() || 'Jugador';
                 const updated = roomData.players.map(p =>
-                    p.id === roleId ? { ...p, occupied: true, uid: user.uid } :
-                    (p.uid === user.uid ? { ...p, occupied: false, uid: null } : p)
+                    p.id === roleId ? { ...p, occupied: true, uid: user.uid, name: activeName } :
+                    (p.uid === user.uid ? { ...p, occupied: false, uid: null, name: `Silla ${p.id.replace('p','')}` } : p)
                 );
                 await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), { players: updated });
             };
 
             const startMultiplayer = async () => {
-                // GAME DESIGN: Respetamos los settings elegidos en el Dashboard
                 const settings = quizData.content.settings || { rounds: 3, rowsPerRound: 6 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
                 
@@ -335,19 +356,15 @@
                 });
             };
 
-            // ====== DICE ROLL (Arena) ======
+            // ====== DICE ROLL ======
             const rollDice = async () => {
                 setDiceRolling(true);
-                
                 const activePlayers = roomData.players.filter(p => p.occupied);
                 const maxScore = Math.max(...activePlayers.map(p => p.score), 0);
                 const myScore = roomData.players.find(p => p.id === roomData.currentTurn)?.score || 0;
                 
                 let result = DICE_FACES[Math.floor(Math.random() * DICE_FACES.length)];
-                
-                if (!isSinglePlayer && (maxScore - myScore > 5)) {
-                    result = Math.max(3, result);
-                }
+                if (!isSinglePlayer && (maxScore - myScore > 5)) result = Math.max(3, result);
 
                 setTimeout(async () => {
                     setDiceRolling(false);
@@ -374,9 +391,7 @@
                     if (newSel.c2) liveData.c2 = newSel.c2.uid;
                     if (newSel.c3) liveData.c3 = newSel.c3.uid;
                     try {
-                        await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), {
-                            liveSelections: liveData
-                        });
+                        await updateDoc(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), { liveSelections: liveData });
                     } catch(e) {}
                 }
             };
@@ -406,7 +421,6 @@
                 }
             }, [selection, isSinglePlayer]);
 
-            // ====== SHOW SUBMIT (Arena) ======
             useEffect(() => {
                 if (isSinglePlayer) return;
                 setShowSubmit(selection.c1 && selection.c2 && selection.c3 && roomData?.dicePhase === 'select');
@@ -461,7 +475,6 @@
                         p.id === roomData.currentTurn ? { ...p, score: p.score + pts, roundScore: (p.roundScore || 0) + pts } : p
                     );
 
-                    // Sync remote animation & end turn
                     await updateGame({ lastAction: { type: 'partial', uid: Date.now(), player: roomData.currentTurn } });
 
                     setTimeout(async () => {
@@ -474,7 +487,6 @@
                     setPenaltyFlies(prev => [...prev, { id, text: '0 pts', isErr: true }]);
                     setTimeout(() => setPenaltyFlies(prev => prev.filter(f => f.id !== id)), 800);
 
-                    // Sync remote animation & end turn
                     await updateGame({ lastAction: { type: 'error', uid: Date.now(), player: roomData.currentTurn } });
 
                     setTimeout(async () => {
@@ -484,7 +496,6 @@
                 }
             };
 
-            // ====== NEXT BUTTON (Arena) ======
             const handleNextArena = async () => {
                 setShowCorrectCards(false);
                 setCorrectTriple(null);
@@ -493,8 +504,6 @@
                 setLocked(false);
 
                 const newMatched = roomData.matchedIds || [];
-                
-                // GAME DESIGN: N-1 Logic. Terminamos la ronda cuando queda 1 par vivo (regalito killer).
                 const maxMatchesThisRound = Math.max(1, roomData.board.c1.length - 1); 
                 const isRoundOver = (newMatched.length / 3) >= maxMatchesThisRound;
 
@@ -505,7 +514,6 @@
                 }
             };
 
-            // ====== ADVANCE TURN ======
             const advanceTurnArena = async (players, matchedIds) => {
                 const active = players.filter(p => p.occupied);
                 const currIdx = active.findIndex(p => p.id === roomData.currentTurn);
@@ -520,7 +528,6 @@
                 });
             };
 
-            // ====== ROUND END ======
             const handleRoundEnd = async (players) => {
                 let updatedPlayers = players.map(p => ({ ...p, roundScore: 0 }));
 
@@ -557,7 +564,6 @@
                 }
             };
 
-            // ====== SINGLE PLAYER PENALTY ======
             const triggerPenalty = (text, secs) => {
                 setLocked(true);
                 const isErr = secs > 2;
@@ -577,7 +583,6 @@
                 let newMatched = [...(roomData.matchedIds || [])];
                 if (clearBoard) newMatched.push(selection.c1.uid, selection.c2.uid, selection.c3.uid);
 
-                // GAME DESIGN: N-1 Logic (Regalito killer)
                 const maxMatchesThisRound = Math.max(1, roomData.board.c1.length - 1); 
                 const isRoundOver = (newMatched.length / 3) >= maxMatchesThisRound;
                 
@@ -589,7 +594,6 @@
                 }
             };
 
-            // ====== Sync dice from firebase for non-active players ======
             useEffect(() => {
                 if (!isSinglePlayer && roomData?.currentDice && !diceRolling) {
                     setDiceValue(roomData.currentDice);
@@ -604,7 +608,6 @@
                         const last = trips[trips.length - 1];
                         setCorrectTriple(last);
                         setShowCorrectCards(true);
-                        // Prevent overriding the local success if I'm the active player
                         if (!isSinglePlayer && myRole !== roomData.currentTurn) setFeedback('success');
                     }
                 }
@@ -637,31 +640,51 @@
                 </div>
             );
 
-            // ====== RENDER GUARD (Carga) ======
-            if (!quizData) return <div className="h-[100dvh] flex items-center justify-center font-black animate-pulse text-xl">Conectando...</div>;
+            // ====== PANTALLA 1: JOIN LOBBY (ALUMNOS SIN ID) ======
+            if (!quizId && !roomData) return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-zinc-950 overflow-auto">
+                    <div className="bg-zinc-900 border border-zinc-800 p-6 sm:p-8 rounded-3xl w-full max-w-sm shadow-2xl my-auto">
+                        <h2 className="text-center text-indigo-400 font-black italic text-xl sm:text-2xl mb-6 uppercase tracking-widest">Unirse a Arena</h2>
+                        
+                        <input value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="TU NOMBRE / APODO"
+                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-3 text-center text-lg font-black uppercase outline-none focus:border-indigo-500 text-white mb-4" style={{ fontSize: '16px' }}/>
+                        
+                        <input value={inputCode} onChange={e => setInputCode(e.target.value.toUpperCase())} maxLength={6} placeholder="CÓDIGO DE SALA"
+                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-3 text-center text-lg font-black uppercase outline-none focus:border-indigo-500 text-white mb-6" style={{ fontSize: '16px' }}/>
+                        
+                        <button onClick={joinRoom} disabled={!playerName.trim() || inputCode.length < 4}
+                            className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                            <LogIn size={20}/> ENTRAR A LA SALA
+                        </button>
+                    </div>
+                </div>
+            );
 
-            // ====== MODE SELECTION ======
-            if (!modeSelected) return (
+            // ====== RENDER GUARD (Carga de QuizData si ya tenemos ID) ======
+            if (quizId && !quizData) return <div className="h-[100dvh] flex items-center justify-center font-black animate-pulse text-xl">Conectando...</div>;
+
+            // ====== PANTALLA 2: TEACHER CHOICE (CON ID, NO ESTUDIANTE) ======
+            if (quizId && !modeSelected) return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950 overflow-auto">
                     <div className="text-center mb-10">
                         <h1 className="text-3xl sm:text-4xl font-black italic text-indigo-500 mb-2 tracking-tighter">LINGOMATCH <span className="text-amber-400">TRIPLE</span></h1>
-                        <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">{quizData.title}</p>
+                        <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">{quizData?.title}</p>
                     </div>
                     <div className="w-full max-w-sm space-y-4">
                         <button onClick={setupSinglePlayer} className="btn-juicy w-full bg-amber-500 text-zinc-950 font-black py-5 rounded-2xl border-amber-700 flex flex-col items-center gap-1 shadow-xl">
-                            <Timer size={32}/><span className="text-xl tracking-widest uppercase">SPEEDRUN (1P)</span>
-                            <span className="text-xs font-bold opacity-80">Juega local. Guarda tu récord.</span>
+                            <Timer size={32}/><span className="text-xl tracking-widest uppercase">TEST SPEEDRUN (1P)</span>
+                            <span className="text-xs font-bold opacity-80">Juega y prueba el set localmente.</span>
                         </button>
-                        <button onClick={setupMultiplayer} className="btn-juicy w-full bg-indigo-600 text-white font-black py-5 rounded-2xl border-indigo-800 flex flex-col items-center gap-1 shadow-xl">
-                            <Users size={32}/><span className="text-xl tracking-widest uppercase">ARENA (VS)</span>
-                            <span className="text-xs font-bold opacity-80">Crea sala. Compite por turnos.</span>
+                        <button onClick={createRoom} className="btn-juicy w-full bg-indigo-600 text-white font-black py-5 rounded-2xl border-indigo-800 flex flex-col items-center gap-1 shadow-xl">
+                            <Users size={32}/><span className="text-xl tracking-widest uppercase">HOST ARENA (VS)</span>
+                            <span className="text-xs font-bold opacity-80">Crear sala para los alumnos.</span>
                         </button>
                     </div>
                     {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-8 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">Volver al Hub</button>}
                 </div>
             );
 
-            // ====== SINGLE PLAYER SETUP ======
+            // ====== PANTALLA 3: SINGLE PLAYER SETUP ======
             if (modeSelected === 'single' && !roomData) return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-zinc-950 overflow-auto">
                     <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-5 sm:p-6 rounded-3xl shadow-2xl my-auto">
@@ -687,70 +710,68 @@
                         <button onClick={startSinglePlayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2">
                             <Play fill="currentColor"/> EMPEZAR
                         </button>
-                        <button onClick={() => setModeSelected(null)} className="w-full text-zinc-500 font-bold text-xs mt-4 hover:text-white">Volver</button>
+                        {!isStudent && <button onClick={() => setModeSelected(null)} className="w-full text-zinc-500 font-bold text-xs mt-4 hover:text-white">Volver</button>}
                     </div>
                 </div>
             );
 
-            // ====== MULTIPLAYER LOBBY ======
-            if (modeSelected === 'multi' && !roomData) return (
-                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-zinc-950 overflow-auto">
-                    <div className="bg-zinc-900 border border-zinc-800 p-6 sm:p-8 rounded-3xl w-full max-w-sm shadow-2xl my-auto">
-                        <h2 className="text-center text-indigo-400 font-black italic text-xl sm:text-2xl mb-6 uppercase tracking-widest">Lobby Arena</h2>
-                        <button onClick={createRoom} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 flex items-center justify-center gap-2 mb-6"><Plus size={20}/> CREAR SALA</button>
-                        <p className="text-center text-zinc-500 font-bold text-xs uppercase tracking-widest mb-3">ó únete con código</p>
-                        <div className="flex gap-2">
-                            <input value={inputCode} onChange={e => setInputCode(e.target.value.toUpperCase())} maxLength={6} placeholder="CÓDIGO"
-                                className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-center text-lg font-black uppercase outline-none focus:border-indigo-500 text-white" style={{ fontSize: '16px' }}/>
-                            <button onClick={joinRoom} disabled={inputCode.length < 4}
-                                className="btn-juicy bg-indigo-600 text-white font-black px-5 rounded-xl border-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center">
-                                <LogIn size={20}/>
-                            </button>
-                        </div>
-                        <button onClick={() => setModeSelected(null)} className="w-full text-center text-zinc-500 font-bold text-xs mt-6 hover:text-white">Volver</button>
-                    </div>
-                </div>
-            );
+            // ====== PANTALLA 4: ROLE SELECTION (LOBBY) ======
+            if (roomData?.gameState === 'roles') {
+                const isHost = roomData.hostUid === user?.uid;
+                
+                return (
+                    <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950 overflow-auto">
+                        <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[2rem] overflow-hidden shadow-2xl my-auto">
+                            <div className="p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950">
+                                <div>
+                                    <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">SALA ACTIVA</p>
+                                    <p className="text-2xl sm:text-3xl font-black text-indigo-400 tracking-widest">{roomCode}</p>
+                                </div>
+                                {isHost && <button onClick={() => setRoomData(null)} className="p-2.5 bg-rose-500/10 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white"><XCircle size={20}/></button>}
+                            </div>
+                            <div className="p-5">
+                                <p className="text-xs text-zinc-400 font-bold uppercase tracking-widest mb-3 text-center">
+                                    {isHost ? 'Los alumnos están tomando sus lugares...' : 'Haz clic en una silla para jugar'}
+                                </p>
+                                
+                                <div className="grid grid-cols-2 gap-3 mb-5">
+                                    {roomData.players.map(p => {
+                                        const isMe = p.uid === user?.uid;
+                                        const isOccupiedByOther = p.occupied && !isMe;
+                                        
+                                        return (
+                                            <button key={p.id} onClick={() => selectRole(p.id)} disabled={isOccupiedByOther || isHost}
+                                                className={`btn-juicy p-3 sm:p-4 rounded-xl border-b-4 font-black flex items-center gap-2 text-sm sm:text-base transition-all ${
+                                                    isOccupiedByOther ? 'bg-zinc-950 border-zinc-900 text-zinc-600 opacity-50' :
+                                                    isMe ? `${p.color} border-black text-white ring-2 ring-white scale-105` :
+                                                    'bg-zinc-800 border-zinc-950 text-zinc-300'}`}>
+                                                <User size={18}/> {p.name}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
 
-            // ====== ROLE SELECTION ======
-            if (roomData?.gameState === 'roles') return (
-                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950 overflow-auto">
-                    <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[2rem] overflow-hidden shadow-2xl my-auto">
-                        <div className="p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950">
-                            <div>
-                                <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">SALA ACTIVA</p>
-                                <p className="text-2xl sm:text-3xl font-black text-indigo-400 tracking-widest">{roomCode}</p>
+                                {isHost ? (
+                                    roomData.players.some(p => p.occupied) ? (
+                                        <button onClick={startMultiplayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 flex items-center justify-center gap-2 text-lg uppercase tracking-widest">
+                                            <Play fill="currentColor"/> INICIAR PARTIDA
+                                        </button>
+                                    ) : (
+                                        <p className="text-zinc-500 font-bold text-center text-sm uppercase tracking-widest py-3">Esperando jugadores...</p>
+                                    )
+                                ) : (
+                                    <p className="text-indigo-400 font-bold text-center text-sm uppercase tracking-widest py-3 animate-pulse">Esperando a que el maestro inicie...</p>
+                                )}
                             </div>
-                            <button onClick={() => setRoomData(null)} className="p-2.5 bg-rose-500/10 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white"><XCircle size={20}/></button>
-                        </div>
-                        <div className="p-5">
-                            <p className="text-xs text-zinc-400 font-bold uppercase tracking-widest mb-3 text-center">Selecciona tu jugador</p>
-                            <div className="grid grid-cols-2 gap-3 mb-5">
-                                {roomData.players.map(p => (
-                                    <button key={p.id} onClick={() => selectRole(p.id)} disabled={p.occupied && p.uid !== user?.uid}
-                                        className={`btn-juicy p-3 sm:p-4 rounded-xl border-b-4 font-black flex items-center gap-2 text-sm sm:text-base transition-all ${
-                                            p.occupied && p.uid !== user?.uid ? 'bg-zinc-950 border-zinc-900 text-zinc-600 opacity-50' :
-                                            p.uid === user?.uid ? `${p.color} border-black text-white ring-2 ring-white scale-105` :
-                                            'bg-zinc-800 border-zinc-950 text-zinc-300'}`}>
-                                        <User size={18}/> {p.name}
-                                    </button>
-                                ))}
-                            </div>
-                            {roomData.players.some(p => p.occupied) && (
-                                <button onClick={startMultiplayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 flex items-center justify-center gap-2 text-lg">
-                                    <Play fill="currentColor"/> EMPEZAR
-                                </button>
-                            )}
                         </div>
                     </div>
-                </div>
-            );
+                );
+            }
 
             // ====== PLAYING ======
             if (roomData?.gameState === 'playing') {
                 const isMyTurn = isSinglePlayer || myRole === roomData.currentTurn;
                 const activePlayerObj = !isSinglePlayer ? roomData.players.find(p => p.id === roomData.currentTurn) : null;
-                const needsRoll = !isSinglePlayer && roomData.dicePhase === 'roll' && isMyTurn;
                 const isSelectPhase = isSinglePlayer || roomData.dicePhase === 'select';
 
                 const renderCol = (items, colKey) => (
@@ -788,7 +809,6 @@
                                 <button key={item.uid}
                                     onClick={() => handleSelect(colKey, item)}
                                     disabled={!isSelectPhase || locked || (isMatched && !isCorrectCard)}
-                                    // Safari Fix: p-1 sm:p-2, flex + overflow-hidden on button
                                     className={`btn-juicy h-16 sm:h-20 rounded-2xl border-2 font-black leading-tight p-1 sm:p-2 transition-all flex items-center justify-center shrink-0 overflow-hidden ${bg} disabled:opacity-40`}>
                                     <span className="safari-text-fix text-[10px] sm:text-xs text-center w-full">
                                         {item.text}
@@ -856,7 +876,6 @@
                             <div className="flex items-center gap-2">
                                 <div className="font-black text-indigo-400 bg-indigo-500/10 px-2.5 py-1.5 rounded-lg uppercase text-[10px] sm:text-xs">R{roomData.currentRound}/{roomData.settings.rounds}</div>
                                 
-                                {/* VISUALIZACIÓN DEL CÓDIGO DE SALA */}
                                 {!isSinglePlayer && (
                                     <div className="font-black text-zinc-400 bg-zinc-800/80 px-2.5 py-1.5 rounded-lg uppercase text-[10px] sm:text-xs tracking-widest border border-zinc-700 flex items-center gap-1.5">
                                         SALA <span className="text-white">{roomCode}</span>
@@ -891,7 +910,7 @@
                         </header>
 
                         {/* BOARD */}
-                        <main className={`flex-1 flex gap-1.5 sm:gap-3 p-2 sm:p-4 max-w-5xl mx-auto w-full transition-opacity duration-300 overflow-y-auto ${(!isMyTurn && !showCorrectCards) ? 'opacity-50' : ''}`}>
+                        <main className={`flex-1 flex gap-1.5 sm:gap-3 p-2 sm:p-4 max-w-5xl mx-auto w-full transition-opacity duration-300 overflow-y-auto ${(!isMyTurn && !showCorrectCards && roomData.hostUid !== user?.uid) ? 'opacity-50' : ''}`}>
                             {renderCol(roomData.board.c1, 'c1')}
                             {renderCol(roomData.board.c2, 'c2')}
                             {renderCol(roomData.board.c3, 'c3')}
@@ -964,7 +983,7 @@
 
                                 <div className="space-y-3">
                                     {isSinglePlayer && (
-                                        <button onClick={() => { loadLeaderboard(); setShowLeaderboard(true); }} className="btn-juicy w-full bg-amber-600 text-white font-black py-3.5 rounded-xl border-amber-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                        <button onClick={() => { loadLeaderboardData(quizId); setShowLeaderboard(true); }} className="btn-juicy w-full bg-amber-600 text-white font-black py-3.5 rounded-xl border-amber-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
                                             <Trophy size={16}/> Leaderboard
                                         </button>
                                     )}
@@ -975,7 +994,7 @@
                                         <RotateCcw size={16}/> Volver al Inicio
                                     </button>
                                 </div>
-                                {!isStudent && <button onClick={() => window.location.href='index.html'} className="text-zinc-500 font-bold text-xs uppercase tracking-widest mt-6 hover:text-white block mx-auto">Salir al Hub</button>}
+                                {(!isStudent && quizId) && <button onClick={() => window.location.href='index.html'} className="text-zinc-500 font-bold text-xs uppercase tracking-widest mt-6 hover:text-white block mx-auto">Salir al Hub</button>}
                             </div>
                         </div>
 
