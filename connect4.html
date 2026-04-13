@@ -277,7 +277,8 @@
                         </div>
                     ) : (
                         <div className="animate-in mb-6">
-                            {status === 'wrong' && <p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">La respuesta era: <span className="text-green-500">{data.correct}</span></p>}
+                            {status === 'failed' && <p className="text-red-500 font-black mb-2">⏱ Tiempo agotado</p>}
+                            {(status === 'wrong' || status === 'failed') && <p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">La respuesta era: <span className="text-green-500">{data.correct}</span></p>}
                         </div>
                     )}
                 </div>
@@ -370,10 +371,11 @@
                         </>
                     ) : (
                         <div className="animate-in mb-6">
-                            <div className="text-2xl font-black p-4 mb-2">
-                                Tu respuesta: <span className={status === 'correct' ? 'text-green-500' : 'text-red-500'}>{playerAnswer}</span>
-                            </div>
-                            {status === 'wrong' && <p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">Era: <span className="text-green-500">{data.answer}</span></p>}
+                            {status === 'failed' 
+                                ? <p className="text-red-500 font-black text-xl mb-2">⏱ Tiempo agotado</p>
+                                : <div className="text-2xl font-black p-4 mb-2">Tu respuesta: <span className={status === 'correct' ? 'text-green-500' : 'text-red-500'}>{playerAnswer}</span></div>
+                            }
+                            {(status === 'wrong' || status === 'failed') && <p className="text-slate-800 dark:text-zinc-200 font-bold text-lg">Era: <span className="text-green-500">{data.answer}</span></p>}
                         </div>
                     )}
                 </div>
@@ -490,10 +492,11 @@
                         </>
                     ) : (
                         <div className="animate-in mb-6">
-                            <div className="text-xl font-black p-4 mb-2">
-                                Tu respuesta: <span className={status === 'correct' ? 'text-green-500' : 'text-red-500'}>{playerAnswer}</span>
-                            </div>
-                            {status === 'wrong' && (
+                            {status === 'failed' 
+                                ? <p className="text-red-500 font-black text-xl mb-2">⏱ Tiempo agotado</p>
+                                : <div className="text-xl font-black p-4 mb-2">Tu respuesta: <span className={status === 'correct' ? 'text-green-500' : 'text-red-500'}>{playerAnswer}</span></div>
+                            }
+                            {(status === 'wrong' || status === 'failed') && (
                                 <div className="text-slate-800 dark:text-zinc-200 font-bold text-lg text-left bg-slate-100 dark:bg-zinc-900 p-4 rounded-xl border border-slate-200 dark:border-zinc-800 mx-auto max-w-sm">
                                     <p>El error era: <span className="text-red-500 line-through">{data.error}</span></p>
                                     <p>La corrección es: <span className="text-green-500">{data.correction}</span></p>
@@ -738,11 +741,8 @@
                             </div>
                         </div>
                         <div className="p-8 overflow-y-auto relative custom-scrollbar flex-1">
-                            {modal.status === 'failed' ? (
-                                <div className="text-center animate-in"><div className="text-red-500 mb-4"><Timer size={64} className="mx-auto"/></div><h2 className="text-3xl font-black text-slate-800 dark:text-white mb-2">¡Tiempo Agotado!</h2><p className="text-slate-500 mb-8">Se acabó el tiempo para responder.</p></div>
-                            ) : (
-                                renderChallenge()
-                            )}
+                            {/* Siempre renderizamos el componente — él mismo maneja failed/wrong/correct */}
+                            {renderChallenge()}
 
                             {/* BOTÓN DE AVANCE (SÓLO EL MAESTRO/HOST LO VE AL RESOLVER LA PREGUNTA) */}
                             {isSupreme && modal.status !== 'playing' && (
@@ -777,11 +777,49 @@
             const [winner, setWinner] = useState(null);
             const [modal, setModal] = useState(null);
 
+            // ✅ RECONEXIÓN: sesión guardada en localStorage
+            const [recoverSession, setRecoverSession] = useState(null);
+
             useEffect(() => {
                 const init = async () => {
                     try {
                         const params = new URLSearchParams(window.location.search);
                         const id = params.get('id');
+
+                        // Revisar si había una sesión activa guardada
+                        const savedRoom = localStorage.getItem('c4_roomId');
+                        const savedRole = localStorage.getItem('c4_myRole');
+                        const savedIsHost = localStorage.getItem('c4_isHost');
+                        const savedQuizId = localStorage.getItem('c4_quizId');
+
+                        if (savedRoom) {
+                            // Verificar que la sala todavía existe en Firestore
+                            const roomSnap = await getDoc(doc(db, ROOMS_PATH, savedRoom));
+                            if (roomSnap.exists() && roomSnap.data().gameState !== 'finished') {
+                                setRecoverSession({
+                                    roomId: savedRoom,
+                                    role: savedRole,
+                                    isHost: savedIsHost === 'true',
+                                    quizId: savedQuizId,
+                                    gameState: roomSnap.data().gameState,
+                                });
+                                // Cargar quiz si tenemos el id
+                                if (id || savedQuizId) {
+                                    const qid = id || savedQuizId;
+                                    const snap = await getDoc(doc(db, QUIZZES_PATH, qid));
+                                    if (snap.exists()) { setGameData(snap.data()); setOriginalContent(snap.data().content); }
+                                }
+                                setStage('recover');
+                                return;
+                            } else {
+                                // Sala ya no existe, limpiar
+                                localStorage.removeItem('c4_roomId');
+                                localStorage.removeItem('c4_myRole');
+                                localStorage.removeItem('c4_isHost');
+                                localStorage.removeItem('c4_quizId');
+                            }
+                        }
+
                         if (id) {
                             const snap = await getDoc(doc(db, QUIZZES_PATH, id));
                             if (snap.exists()) {
@@ -799,6 +837,23 @@
                 const unsubAuth = onAuthStateChanged(auth, (u) => { if(!u) signInAnonymously(auth); });
                 return () => unsubAuth();
             }, []);
+
+            // Guardar sesión en localStorage cuando se une a una sala
+            const saveSession = (rId, role, host, quizId) => {
+                localStorage.setItem('c4_roomId', rId);
+                localStorage.setItem('c4_myRole', role || '');
+                localStorage.setItem('c4_isHost', host ? 'true' : 'false');
+                if (quizId) localStorage.setItem('c4_quizId', quizId);
+            };
+
+            const clearSession = () => {
+                localStorage.removeItem('c4_roomId');
+                localStorage.removeItem('c4_myRole');
+                localStorage.removeItem('c4_isHost');
+                localStorage.removeItem('c4_quizId');
+            };
+
+            // ── La pantalla de recover se renderiza al final junto con los otros stages ──
 
             useEffect(() => {
                 if (!roomId) return;
@@ -886,6 +941,7 @@
                     setRoomId(code);
                     setIsHost(true);
                     setStage('roles');
+                    saveSession(code, 'observer', true, new URLSearchParams(window.location.search).get('id'));
                 } catch(e) {
                     alert("Error creando sala. Revisa permisos de base de datos.");
                     console.error(e);
@@ -912,6 +968,7 @@
                         setRoomId(code);
                         setIsHost(data.hostUid === myUid);
                         setStage(data.gameState);
+                        saveSession(code, null, data.hostUid === myUid, data.gameId);
                     } else {
                         alert("Sala no encontrada o código incorrecto.");
                         setStage('lobby');
@@ -927,6 +984,7 @@
                 Object.keys(newRoles).forEach(k => { if(newRoles[k] === myUid) newRoles[k] = null; });
                 newRoles[roleId] = myUid;
                 await updateDoc(doc(db, ROOMS_PATH, roomId), { roles: newRoles });
+                saveSession(roomId, roleId, isHost, localStorage.getItem('c4_quizId'));
             };
 
             const handleStartGame = async () => {
@@ -1010,25 +1068,76 @@
             };
 
             if (stage === 'loading') return <div className="h-screen flex items-center justify-center bg-slate-900 dark:bg-zinc-950 text-white"><Loader2 className="animate-spin mr-3" size={40}/> Cargando...</div>;
+            if (stage === 'recover' && recoverSession) return (
+                <div className="fixed inset-0 bg-slate-900 dark:bg-zinc-950 z-50 flex flex-col items-center justify-center p-4 animate-in">
+                    <div className="bg-slate-800 dark:bg-zinc-900 p-8 rounded-[2.5rem] shadow-2xl border border-slate-700 dark:border-zinc-800 w-full max-w-sm text-center">
+                        <div className="text-5xl mb-4">🔌</div>
+                        <h2 className="text-2xl font-black text-white mb-2">¿Sigues en la partida?</h2>
+                        <p className="text-slate-400 text-sm font-bold mb-2">Detectamos que estabas en la sala:</p>
+                        <div className="bg-blue-500/10 border border-blue-500/30 px-4 py-2 rounded-full inline-block mb-6">
+                            <span className="text-2xl font-black text-blue-400 tracking-[0.3em]">{recoverSession.roomId}</span>
+                        </div>
+                        <div className="flex flex-col gap-3">
+                            <button
+                                onClick={async () => {
+                                    const roomSnap = await getDoc(doc(db, ROOMS_PATH, recoverSession.roomId));
+                                    if (!roomSnap.exists()) { clearSession(); setStage('lobby'); setRecoverSession(null); return; }
+                                    const data = roomSnap.data();
+                                    if (data.gameId && Object.keys(originalContent).length === 0) {
+                                        const qSnap = await getDoc(doc(db, QUIZZES_PATH, data.gameId));
+                                        if (qSnap.exists()) { setGameData(qSnap.data()); setOriginalContent(qSnap.data().content); fillPools(qSnap.data().content); }
+                                    } else if (Object.keys(originalContent).length > 0) {
+                                        fillPools(originalContent);
+                                    }
+                                    setRoomId(recoverSession.roomId);
+                                    setIsHost(recoverSession.isHost);
+                                    if (recoverSession.role) setMyRole(recoverSession.role);
+                                    setRecoverSession(null);
+                                    setStage(data.gameState === 'playing' ? 'playing' : data.gameState === 'roles' ? 'roles' : 'lobby');
+                                }}
+                                className="btn-juicy w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl border-blue-800 text-lg shadow-xl"
+                            >
+                                🚀 Reingresar
+                            </button>
+                            <button
+                                onClick={() => { clearSession(); setRecoverSession(null); setStage('lobby'); }}
+                                className="text-slate-400 hover:text-white font-bold py-3 transition-colors text-sm"
+                            >
+                                Olvidar partida anterior
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
             if (stage === 'lobby') return <LobbyScreen isTeacher={!!gameData} onCreateRoom={handleCreateRoom} onJoinRoom={handleJoinRoom} onLocalPlay={handleLocalPlay} />;
             if (stage === 'roles') return <RolesScreen roomData={{roles: roomRoles, playerNames}} roomCode={roomId} isHost={isHost} myUid={myUid} onSelectRole={handleSelectRole} onStartGame={handleStartGame}/>;
 
             return (
                 <div className="h-[100dvh] flex flex-col overflow-hidden font-sans relative">
-                    <div className="bg-white dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800 px-4 md:px-6 py-3 flex justify-between items-center z-10 shrink-0 h-20 shadow-sm transition-colors">
-                        <div>
-                            <h1 className="text-xl md:text-2xl font-black text-slate-800 dark:text-white tracking-tight leading-none truncate max-w-[200px] md:max-w-md">{gameData.title}</h1>
-                            <div className="flex gap-2 mt-1 items-center">
-                                <span className={`w-3 h-3 rounded-full ${currentPlayer==='red'?'bg-red-500 animate-pulse': 'bg-slate-200 dark:bg-zinc-700'}`}></span>
-                                <span className={`w-3 h-3 rounded-full ${currentPlayer==='yellow'?'bg-yellow-400 animate-pulse': 'bg-slate-200 dark:bg-zinc-700'}`}></span>
-                                <span className="text-[10px] md:text-xs font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest ml-1">Turno: <span className={currentPlayer === 'red' ? 'text-red-500' : 'text-yellow-500'}>{currentPlayer === 'red' ? 'Rojo' : 'Amarillo'}</span></span>
+                    <div className="bg-white dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800 px-4 md:px-6 py-3 flex justify-between items-center z-10 shrink-0 h-16 shadow-sm transition-colors">
+                        <div className="flex items-center gap-3 min-w-0">
+                            {/* Logo P */}
+                            <div className="bg-indigo-600 text-white font-black text-sm w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-md">P</div>
+                            <div className="min-w-0">
+                                <h1 className="text-base md:text-lg font-black text-slate-800 dark:text-white tracking-tight leading-none truncate max-w-[160px] md:max-w-md">{gameData.title}</h1>
+                                <div className="flex gap-2 mt-0.5 items-center">
+                                    <span className={`w-2.5 h-2.5 rounded-full ${currentPlayer==='red'?'bg-red-500 animate-pulse': 'bg-slate-200 dark:bg-zinc-700'}`}></span>
+                                    <span className={`w-2.5 h-2.5 rounded-full ${currentPlayer==='yellow'?'bg-yellow-400 animate-pulse': 'bg-slate-200 dark:bg-zinc-700'}`}></span>
+                                    <span className="text-[9px] md:text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest ml-1">Turno: <span className={currentPlayer === 'red' ? 'text-red-500' : 'text-yellow-500'}>{currentPlayer === 'red' ? 'Rojo' : 'Amarillo'}</span></span>
+                                </div>
                             </div>
                         </div>
-                        <div className="flex items-center gap-4">
-                            {roomId && <div className="hidden md:flex items-center gap-2 bg-blue-500/10 border border-blue-500/30 px-3 py-1.5 rounded-full"><Wifi size={14} className="text-blue-400"/><span className="text-xs font-bold text-blue-400 tracking-widest">SALA: {roomId}</span></div>}
-                            <div className="flex gap-2">
-                                {(isHost || myRole === 'local') && <button onClick={resetGame} className="btn-juicy p-2 md:p-3 bg-slate-100 dark:bg-zinc-800 border-b-4 border-slate-200 dark:border-zinc-950 hover:bg-slate-200 dark:hover:bg-zinc-700 rounded-xl text-slate-600 dark:text-zinc-400 transition-colors" title="Reiniciar Juego"><RotateCcw size={20}/></button>}
-                                <button onClick={() => window.location.href='index.html'} className="btn-juicy p-2 md:p-3 bg-slate-100 dark:bg-zinc-800 border-b-4 border-slate-200 dark:border-zinc-950 hover:bg-red-50 dark:hover:bg-red-900/30 hover:text-red-500 rounded-xl text-slate-400 dark:text-zinc-400 transition-colors" title="Salir"><LogOut size={20}/></button>
+                        <div className="flex items-center gap-2">
+                            {/* Código de sala — visible para todos, no solo desktop */}
+                            {roomId && (
+                                <div className="flex items-center gap-1.5 bg-blue-500/10 border border-blue-500/30 px-2.5 py-1.5 rounded-full cursor-default">
+                                    <Wifi size={12} className="text-blue-400"/>
+                                    <span className="text-xs font-black text-blue-400 tracking-widest">{roomId}</span>
+                                </div>
+                            )}
+                            <div className="flex gap-1.5">
+                                {(isHost || myRole === 'local') && <button onClick={resetGame} className="btn-juicy p-2 md:p-2.5 bg-slate-100 dark:bg-zinc-800 border-b-4 border-slate-200 dark:border-zinc-950 hover:bg-slate-200 dark:hover:bg-zinc-700 rounded-xl text-slate-600 dark:text-zinc-400 transition-colors" title="Reiniciar Juego"><RotateCcw size={18}/></button>}
+                                <button onClick={() => { clearSession(); window.location.href='index.html'; }} className="btn-juicy p-2 md:p-2.5 bg-slate-100 dark:bg-zinc-800 border-b-4 border-slate-200 dark:border-zinc-950 hover:bg-red-50 dark:hover:bg-red-900/30 hover:text-red-500 rounded-xl text-slate-400 dark:text-zinc-400 transition-colors" title="Salir"><LogOut size={18}/></button>
                             </div>
                         </div>
                     </div>
