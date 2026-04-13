@@ -111,9 +111,14 @@
             
             const [acceptedDisclaimer, setAcceptedDisclaimer] = useState(() => localStorage.getItem('periplo_disclaimer_v1') === 'true');
 
-            const [modeSelected, setModeSelected] = useState(() => sessionStorage.getItem('lingo_mode') || null);
-            const [isSinglePlayer, setIsSinglePlayer] = useState(() => sessionStorage.getItem('lingo_sp') === 'true');
-            const [roomCode, setRoomCode] = useState(() => sessionStorage.getItem('lingo_room') || '');
+            // Estados pendientes para el INTERCEPTOR de Reconexión
+            const [pendingRoom, setPendingRoom] = useState(() => sessionStorage.getItem('lingo_room') || null);
+            const [pendingMode, setPendingMode] = useState(() => sessionStorage.getItem('lingo_mode') || null);
+
+            // Estados activos de sesión
+            const [modeSelected, setModeSelected] = useState(null);
+            const [isSinglePlayer, setIsSinglePlayer] = useState(false);
+            const [roomCode, setRoomCode] = useState('');
             
             const [inputCode, setInputCode] = useState('');
             const [roomData, setRoomData] = useState(null);
@@ -143,48 +148,80 @@
             // ====== PERSISTENCIA DE SESIÓN ======
             useEffect(() => {
                 if (modeSelected) sessionStorage.setItem('lingo_mode', modeSelected);
-                else sessionStorage.removeItem('lingo_mode');
-                
-                sessionStorage.setItem('lingo_sp', isSinglePlayer);
-                
+                if (isSinglePlayer !== null) sessionStorage.setItem('lingo_sp', isSinglePlayer);
                 if (roomCode) sessionStorage.setItem('lingo_room', roomCode);
-                else sessionStorage.removeItem('lingo_room');
             }, [modeSelected, isSinglePlayer, roomCode]);
 
-            // ====== FIREBASE AUTH + INITIAL ROUTING ======
+            // ====== HELPERS ======
             const loadLeaderboardData = async (targetId) => {
                 const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${targetId}/leaderboard`), orderBy('time', 'asc'), limit(5));
                 const snap = await getDocs(q);
                 setLeaderboard(snap.docs.map(d => d.data()));
             };
 
+            const forgetRoom = () => {
+                sessionStorage.removeItem('lingo_room');
+                sessionStorage.removeItem('lingo_mode');
+                sessionStorage.removeItem('lingo_sp');
+                setPendingRoom(null);
+                setPendingMode(null);
+            };
+
+            const reconnectRoom = () => {
+                setRoomCode(pendingRoom);
+                setModeSelected(pendingMode);
+                setIsSinglePlayer(sessionStorage.getItem('lingo_sp') === 'true');
+                setPendingRoom(null);
+                setPendingMode(null);
+            };
+
+            // ====== FIREBASE AUTH + INITIAL FETCH ======
             useEffect(() => {
                 signInAnonymously(auth);
                 const unsub = onAuthStateChanged(auth, setUser);
                 
                 if (quizId) {
                     getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId)).then(async snap => {
-                        if (snap.exists()) {
-                            setQuizData(snap.data());
-                            if (isStudent && !modeSelected) {
-                                setIsSinglePlayer(true);
-                                setModeSelected('single');
-                                await loadLeaderboardData(quizId);
-                            }
-                        } else alert("Juego no encontrado");
+                        if (snap.exists()) setQuizData(snap.data());
+                        else alert("Juego no encontrado");
                     });
                 }
                 return () => unsub();
             }, [quizId]);
 
-            // ====== ROOM LISTENER ======
+            // ====== AUTO-SPEEDRUN (Solo para alumnos con ID que no tienen sala pendiente) ======
+            useEffect(() => {
+                if (quizData && isStudent && !pendingRoom && !modeSelected) {
+                    setIsSinglePlayer(true);
+                    setModeSelected('single');
+                    loadLeaderboardData(quizId);
+                }
+            }, [quizData, isStudent, pendingRoom, modeSelected, quizId]);
+
+            // ====== ROOM LISTENER (Seguro contra ciclos infinitos) ======
             useEffect(() => {
                 if (!user || !roomCode || isSinglePlayer) return;
                 const unsub = onSnapshot(doc(db, 'artifacts/periplo-app-v1/rooms', roomCode), (snap) => {
                     if (snap.exists()) {
-                        setRoomData(snap.data());
+                        const data = snap.data();
+                        setRoomData(data);
+                        
+                        // Si me reconecté pero no tengo la data de las cartas (entrando sin ID)
+                        setQuizData(prev => {
+                            if (!prev && data.quizId) {
+                                getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', data.quizId)).then(qSnap => {
+                                    if (qSnap.exists()) {
+                                        setQuizData(qSnap.data());
+                                        setQuizId(data.quizId);
+                                    }
+                                });
+                            }
+                            return prev;
+                        });
                     } else {
-                        setRoomCode(''); setRoomData(null); alert("La sala ha sido cerrada.");
+                        setRoomCode(''); setRoomData(null); alert("La sala ha sido cerrada por el host.");
+                        forgetRoom();
+                        setModeSelected(null);
                     }
                 });
                 return () => unsub();
@@ -221,7 +258,7 @@
                 }
             }, [roomData?.lastAction, myRole, isSinglePlayer]);
 
-            // ====== HELPERS ======
+            // ====== LOGIC HELPERS ======
             const triggerSequence = (steps, cb) => {
                 let i = 0; setCountdown(steps[0]);
                 const int = setInterval(() => {
@@ -252,7 +289,7 @@
                     setModeSelected(null);
                     setIsSinglePlayer(false);
                 }
-                sessionStorage.clear();
+                forgetRoom();
             };
 
             const generateBoardColumns = (pairs) => ({
@@ -642,10 +679,37 @@
                 </div>
             );
 
+            // ====== PANTALLA 0.5: INTERCEPTOR (RECONECTAR) ======
+            if (pendingRoom && !roomCode && !modeSelected) {
+                return (
+                    <div className="h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-zinc-950 overflow-auto">
+                        <div className="bg-zinc-900 border border-zinc-800 p-6 sm:p-8 rounded-3xl w-full max-w-sm shadow-2xl my-auto text-center fade-in">
+                            <div className="w-16 h-16 bg-amber-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                                <AlertTriangle size={32} className="text-amber-500"/>
+                            </div>
+                            <h2 className="text-xl font-black text-white mb-2 uppercase tracking-widest">Partida Pendiente</h2>
+                            <p className="text-zinc-400 text-sm font-bold mb-6">
+                                Tienes una partida sin terminar en la sala <strong className="text-white text-lg">{pendingRoom}</strong>. ¿Qué deseas hacer?
+                            </p>
+                            
+                            <div className="space-y-3">
+                                <button onClick={reconnectRoom} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 uppercase tracking-widest text-sm flex justify-center items-center gap-2 shadow-lg">
+                                    <Play size={18} fill="currentColor"/> RECONECTAR
+                                </button>
+                                
+                                <button onClick={forgetRoom} className="btn-juicy w-full bg-zinc-800 text-zinc-400 font-black py-4 rounded-xl border-zinc-950 uppercase tracking-widest text-sm flex justify-center items-center gap-2 hover:text-white transition-colors">
+                                    <XCircle size={18}/> OLVIDAR SALA
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
             // ====== PANTALLA 1: JOIN LOBBY (ALUMNOS SIN ID) ======
-            if (!quizId && !roomData) return (
+            if (!quizId && !roomData && !modeSelected) return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-zinc-950 overflow-auto">
-                    <div className="bg-zinc-900 border border-zinc-800 p-6 sm:p-8 rounded-3xl w-full max-w-sm shadow-2xl my-auto">
+                    <div className="bg-zinc-900 border border-zinc-800 p-6 sm:p-8 rounded-3xl w-full max-w-sm shadow-2xl my-auto fade-in">
                         <h2 className="text-center text-indigo-400 font-black italic text-xl sm:text-2xl mb-6 uppercase tracking-widest">Unirse a Arena</h2>
                         
                         <input value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="TU NOMBRE / APODO"
@@ -655,7 +719,7 @@
                             className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-3 text-center text-lg font-black uppercase outline-none focus:border-indigo-500 text-white mb-6" style={{ fontSize: '16px' }}/>
                         
                         <button onClick={joinRoom} disabled={!playerName.trim() || inputCode.length < 4}
-                            className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                            className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg">
                             <LogIn size={20}/> ENTRAR A LA SALA
                         </button>
                     </div>
@@ -663,16 +727,16 @@
             );
 
             // ====== RENDER GUARD (Carga de QuizData si ya tenemos ID) ======
-            if (quizId && !quizData) return <div className="h-[100dvh] flex items-center justify-center font-black animate-pulse text-xl">Conectando...</div>;
+            if (quizId && !quizData) return <div className="h-[100dvh] flex items-center justify-center font-black text-indigo-500 animate-pulse text-xl uppercase tracking-widest">Conectando...</div>;
 
             // ====== PANTALLA 2: TEACHER CHOICE (CON ID, NO ESTUDIANTE) ======
             if (quizId && !modeSelected) return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-6 bg-zinc-950 overflow-auto">
-                    <div className="text-center mb-10">
+                    <div className="text-center mb-10 fade-in">
                         <h1 className="text-3xl sm:text-4xl font-black italic text-indigo-500 mb-2 tracking-tighter">LINGOMATCH <span className="text-amber-400">TRIPLE</span></h1>
                         <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">{quizData?.title}</p>
                     </div>
-                    <div className="w-full max-w-sm space-y-4">
+                    <div className="w-full max-w-sm space-y-4 fade-in" style={{ animationDelay: '0.1s' }}>
                         <button onClick={setupSinglePlayer} className="btn-juicy w-full bg-amber-500 text-zinc-950 font-black py-5 rounded-2xl border-amber-700 flex flex-col items-center gap-1 shadow-xl">
                             <Timer size={32}/><span className="text-xl tracking-widest uppercase">TEST SPEEDRUN (1P)</span>
                             <span className="text-xs font-bold opacity-80">Juega y prueba el set localmente.</span>
@@ -682,14 +746,14 @@
                             <span className="text-xs font-bold opacity-80">Crear sala para los alumnos.</span>
                         </button>
                     </div>
-                    {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-8 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest">Volver al Hub</button>}
+                    {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-8 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest fade-in" style={{ animationDelay: '0.2s' }}>Volver al Hub</button>}
                 </div>
             );
 
             // ====== PANTALLA 3: SINGLE PLAYER SETUP ======
             if (modeSelected === 'single' && !roomData) return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 bg-zinc-950 overflow-auto">
-                    <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-5 sm:p-6 rounded-3xl shadow-2xl my-auto">
+                    <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-5 sm:p-6 rounded-3xl shadow-2xl my-auto fade-in">
                         <div className="flex items-center gap-3 mb-5 border-b border-zinc-800 pb-4">
                             <Trophy className="text-amber-400 flex-shrink-0" size={24}/>
                             <h2 className="text-lg sm:text-xl font-black uppercase italic text-white tracking-widest">Mejores Tiempos</h2>
@@ -709,10 +773,10 @@
                         </div>
                         <input value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="TU NOMBRE / APODO"
                             className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-3 text-center text-lg font-black uppercase outline-none focus:border-amber-500 text-white mb-4" style={{ fontSize: '16px' }}/>
-                        <button onClick={startSinglePlayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2">
+                        <button onClick={startSinglePlayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2 shadow-lg">
                             <Play fill="currentColor"/> EMPEZAR
                         </button>
-                        {!isStudent && <button onClick={() => setModeSelected(null)} className="w-full text-zinc-500 font-bold text-xs mt-4 hover:text-white">Volver</button>}
+                        {!isStudent && <button onClick={() => setModeSelected(null)} className="w-full text-zinc-500 font-bold text-xs mt-4 hover:text-white uppercase tracking-widest">Volver</button>}
                     </div>
                 </div>
             );
@@ -723,13 +787,13 @@
                 
                 return (
                     <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950 overflow-auto">
-                        <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[2rem] overflow-hidden shadow-2xl my-auto">
+                        <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[2rem] overflow-hidden shadow-2xl my-auto fade-in">
                             <div className="p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950">
                                 <div>
                                     <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">SALA ACTIVA</p>
                                     <p className="text-3xl sm:text-4xl font-black text-indigo-400 tracking-widest">{roomCode}</p>
                                 </div>
-                                {isHost && <button onClick={() => setRoomData(null)} className="p-2.5 bg-rose-500/10 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white"><XCircle size={20}/></button>}
+                                {isHost && <button onClick={() => setRoomData(null)} className="p-2.5 bg-rose-500/10 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white transition-colors"><XCircle size={20}/></button>}
                             </div>
                             <div className="p-5">
                                 <p className="text-xs text-zinc-400 font-bold uppercase tracking-widest mb-3 text-center">
@@ -745,9 +809,9 @@
                                             <button key={p.id} onClick={() => selectRole(p.id)} disabled={isOccupiedByOther}
                                                 className={`btn-juicy p-3 sm:p-4 rounded-xl border-b-4 font-black flex items-center gap-2 text-sm sm:text-base transition-all ${
                                                     isOccupiedByOther ? 'bg-zinc-950 border-zinc-900 text-zinc-600 opacity-50 cursor-not-allowed' :
-                                                    isMe ? `${p.color} border-black text-white ring-2 ring-white scale-105` :
-                                                    'bg-zinc-800 border-zinc-950 text-zinc-300'}`}>
-                                                <User size={18}/> {p.name}
+                                                    isMe ? `${p.color} border-black text-white ring-2 ring-white scale-105 shadow-lg` :
+                                                    'bg-zinc-800 border-zinc-950 text-zinc-300 hover:bg-zinc-700'}`}>
+                                                <User size={18}/> <span className="truncate">{p.name}</span>
                                             </button>
                                         );
                                     })}
@@ -755,7 +819,7 @@
 
                                 {isHost ? (
                                     roomData.players.some(p => p.occupied) ? (
-                                        <button onClick={startMultiplayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 flex items-center justify-center gap-2 text-lg uppercase tracking-widest">
+                                        <button onClick={startMultiplayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 flex items-center justify-center gap-2 text-lg uppercase tracking-widest shadow-lg">
                                             <Play fill="currentColor"/> {roomData.players.find(p => p.uid === user?.uid) ? 'INICIAR PARTIDA' : 'INICIAR COMO OBSERVADOR'}
                                         </button>
                                     ) : (
@@ -832,11 +896,11 @@
                                         {countdown}
                                     </div>
                                 ) : (
-                                    <div className="bg-zinc-900 p-8 rounded-3xl border border-zinc-800 text-center max-w-sm w-full">
+                                    <div className="bg-zinc-900 p-8 rounded-3xl border border-zinc-800 text-center max-w-sm w-full shadow-2xl">
                                         <Pause size={48} className="text-zinc-500 mx-auto mb-4"/>
                                         <h2 className="text-2xl font-black text-white mb-6 uppercase tracking-widest">Pausa</h2>
-                                        <button onClick={() => { setIsPaused(false); triggerSequence(['3','2','1','GO!']); }} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 mb-3">Reanudar</button>
-                                        <button onClick={resetToMenu} className="btn-juicy w-full bg-zinc-800 text-zinc-400 font-black py-4 rounded-xl border-zinc-950">Abandonar</button>
+                                        <button onClick={() => { setIsPaused(false); triggerSequence(['3','2','1','GO!']); }} className="btn-juicy w-full bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 mb-3 uppercase tracking-widest">Reanudar</button>
+                                        <button onClick={resetToMenu} className="btn-juicy w-full bg-zinc-800 text-zinc-400 font-black py-4 rounded-xl border-zinc-950 uppercase tracking-widest hover:text-white transition-colors">Abandonar</button>
                                     </div>
                                 )}
                             </div>
@@ -845,7 +909,7 @@
                         {/* DICE ROLL OVERLAY (Arena) */}
                         {!isSinglePlayer && roomData.dicePhase === 'roll' && (
                             <div className="fixed inset-0 bg-zinc-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                                <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 text-center max-w-sm w-full shadow-2xl">
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 text-center max-w-sm w-full shadow-2xl fade-in">
                                     <p className="text-xs text-zinc-400 font-bold uppercase tracking-widest mb-2">Turno de</p>
                                     <p className={`text-2xl font-black uppercase mb-6 ${activePlayerObj?.color?.replace('bg-','text-') || 'text-white'}`}>
                                         {activePlayerObj?.name || 'Jugador'}
@@ -857,7 +921,7 @@
 
                                     {isMyTurn ? (
                                         <button onClick={rollDice} disabled={diceRolling}
-                                            className="btn-juicy w-full bg-amber-500 text-black font-black py-4 rounded-xl border-amber-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2 disabled:opacity-50">
+                                            className="btn-juicy w-full bg-amber-500 text-black font-black py-4 rounded-xl border-amber-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg">
                                             <Dices size={24}/> {diceRolling ? 'TIRANDO...' : 'TIRAR DADO'}
                                         </button>
                                     ) : (
@@ -909,7 +973,7 @@
                                     <div className={`flex items-center gap-1.5 bg-zinc-950 border px-3 py-1.5 rounded-xl transition-all ${timerAnim ? 'border-rose-500 bg-rose-500/20 text-rose-500 scale-110 animate-shake' : 'border-zinc-800 text-amber-500'}`}>
                                         <Clock size={16}/><span className="font-black text-xl tabular-nums">{formatTime(timer)}</span>
                                     </div>
-                                    <button onClick={() => setIsPaused(true)} className="p-2 bg-zinc-800 rounded-xl text-zinc-400"><Pause size={18}/></button>
+                                    <button onClick={() => setIsPaused(true)} className="p-2 bg-zinc-800 rounded-xl text-zinc-400 hover:text-white transition-colors"><Pause size={18}/></button>
                                 </div>
                             )}
                         </header>
@@ -923,7 +987,7 @@
 
                         {/* SUBMIT BUTTON (Arena) */}
                         {!isSinglePlayer && showSubmit && isMyTurn && !showCorrectCards && (
-                            <div className="shrink-0 p-3 border-t border-zinc-800 bg-zinc-900/90 backdrop-blur-sm">
+                            <div className="shrink-0 p-3 border-t border-zinc-800 bg-zinc-900/90 backdrop-blur-sm slide-up">
                                 <button onClick={handleSubmitArena}
                                     className="btn-juicy w-full max-w-lg mx-auto block bg-indigo-600 text-white font-black py-4 rounded-xl border-indigo-800 uppercase tracking-widest text-lg flex items-center justify-center gap-2 shadow-xl">
                                     <Send size={20}/> CONFIRMAR
@@ -933,7 +997,7 @@
 
                         {/* NEXT BUTTON (Arena, after correct) */}
                         {!isSinglePlayer && showCorrectCards && (
-                            <div className="shrink-0 p-3 border-t border-emerald-800/50 bg-emerald-950/30 backdrop-blur-sm">
+                            <div className="shrink-0 p-3 border-t border-emerald-800/50 bg-emerald-950/30 backdrop-blur-sm slide-up">
                                 {isMyTurn ? (
                                     <button onClick={handleNextArena}
                                         className="btn-juicy w-full max-w-lg mx-auto block bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2 shadow-xl">
@@ -962,7 +1026,7 @@
                 return (
                     <div className="h-[100dvh] flex flex-col bg-zinc-950 overflow-auto">
                         <div className="flex-1 flex items-center justify-center p-4 sm:p-6">
-                            <div className="bg-zinc-900 p-6 sm:p-8 rounded-[2rem] shadow-2xl border border-zinc-800 max-w-md w-full text-center my-auto">
+                            <div className="bg-zinc-900 p-6 sm:p-8 rounded-[2rem] shadow-2xl border border-zinc-800 max-w-md w-full text-center my-auto fade-in">
                                 <Trophy size={64} className="text-amber-400 mx-auto mb-4"/>
                                 <h1 className="text-3xl sm:text-4xl font-black italic text-white mb-1 uppercase">¡Completado!</h1>
                                 <p className="text-zinc-500 font-bold uppercase tracking-widest text-[10px] mb-6">Dominaste {roomData.gamePool.length} conceptos</p>
@@ -988,32 +1052,32 @@
 
                                 <div className="space-y-3">
                                     {isSinglePlayer && (
-                                        <button onClick={() => { loadLeaderboardData(quizId); setShowLeaderboard(true); }} className="btn-juicy w-full bg-amber-600 text-white font-black py-3.5 rounded-xl border-amber-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                        <button onClick={() => { loadLeaderboardData(quizId); setShowLeaderboard(true); }} className="btn-juicy w-full bg-amber-600 text-white font-black py-3.5 rounded-xl border-amber-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2 shadow-md">
                                             <Trophy size={16}/> Leaderboard
                                         </button>
                                     )}
-                                    <button onClick={() => setShowLibrary(true)} className="btn-juicy w-full bg-indigo-600 text-white font-black py-3.5 rounded-xl border-indigo-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                    <button onClick={() => setShowLibrary(true)} className="btn-juicy w-full bg-indigo-600 text-white font-black py-3.5 rounded-xl border-indigo-800 text-sm uppercase tracking-widest flex items-center justify-center gap-2 shadow-md">
                                         <BookOpen size={16}/> Ver Vocabulario
                                     </button>
-                                    <button onClick={resetToMenu} className="btn-juicy w-full bg-zinc-800 text-white font-black py-3.5 rounded-xl border-zinc-950 text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                    <button onClick={resetToMenu} className="btn-juicy w-full bg-zinc-800 text-white font-black py-3.5 rounded-xl border-zinc-950 text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-zinc-700 transition-colors">
                                         <RotateCcw size={16}/> Volver al Inicio
                                     </button>
                                 </div>
-                                {(!isStudent && quizId) && <button onClick={() => window.location.href='index.html'} className="text-zinc-500 font-bold text-xs uppercase tracking-widest mt-6 hover:text-white block mx-auto">Salir al Hub</button>}
+                                {(!isStudent && quizId) && <button onClick={() => window.location.href='index.html'} className="text-zinc-500 font-bold text-xs uppercase tracking-widest mt-6 hover:text-white block mx-auto transition-colors">Salir al Hub</button>}
                             </div>
                         </div>
 
                         {/* Library modal */}
                         {showLibrary && (
                             <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
-                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-xl flex flex-col max-h-[85vh] shadow-2xl overflow-hidden">
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-xl flex flex-col max-h-[85vh] shadow-2xl overflow-hidden fade-in">
                                     <div className="p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
                                         <h3 className="font-black text-lg text-white uppercase tracking-widest flex items-center gap-2"><BookOpen size={18} className="text-indigo-400"/> Vocabulario</h3>
-                                        <button onClick={() => setShowLibrary(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400"><X size={20}/></button>
+                                        <button onClick={() => setShowLibrary(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 transition-colors"><X size={20}/></button>
                                     </div>
                                     <div className="p-4 overflow-y-auto custom-scrollbar space-y-2">
                                         {[...quizData.content.pairs].sort((a,b) => a.c1.localeCompare(b.c1)).map((p, i) => (
-                                            <div key={i} className="flex flex-col sm:flex-row gap-1 sm:gap-3 text-sm font-bold bg-zinc-900 p-3 rounded-xl border border-zinc-800">
+                                            <div key={i} className="flex flex-col sm:flex-row gap-1 sm:gap-3 text-sm font-bold bg-zinc-900 p-3 rounded-xl border border-zinc-800 hover:border-indigo-500/30 transition-colors">
                                                 <span className="flex-1 text-indigo-400">{p.c1}</span>
                                                 <span className="flex-1 text-zinc-300">{p.c2}</span>
                                                 <span className="flex-1 text-zinc-300">{p.c3}</span>
@@ -1027,10 +1091,10 @@
                         {/* Leaderboard modal */}
                         {showLeaderboard && (
                             <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
-                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm shadow-2xl overflow-hidden">
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm shadow-2xl overflow-hidden fade-in">
                                     <div className="p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
                                         <h3 className="font-black text-lg text-amber-400 uppercase tracking-widest flex items-center gap-2"><Trophy size={18}/> Top 5</h3>
-                                        <button onClick={() => setShowLeaderboard(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400"><X size={20}/></button>
+                                        <button onClick={() => setShowLeaderboard(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 transition-colors"><X size={20}/></button>
                                     </div>
                                     <div className="p-5 space-y-2">
                                         {leaderboard.length === 0 ? <p className="text-center text-zinc-500 font-bold">Sin récords aún.</p> :
