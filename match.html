@@ -64,6 +64,30 @@ const CROWNS=[
 ];
 const FADE_MS=5000;const BOARD_SIZE=5;
 
+/* ══════════════════════════════════════════════════════════════
+   WordBtn definido FUERA del componente padre.
+   CRÍTICO: si está dentro, cada render del padre crea una función
+   nueva → React desmonta/remonta el botón → el hover dispara
+   re-renders en loop → parpadeo en desktop con mouse.
+   Fuera del padre, React reutiliza el mismo componente siempre.
+══════════════════════════════════════════════════════════════ */
+/*
+ * WordBtn recibe side e idx como data-attributes en lugar de un onClick closure.
+ * El handler real vive en onClickCapture del <main> padre — es UNA función
+ * estable que nunca cambia referencia → React nunca re-renderiza los botones
+ * por cambio de prop onClick → cero parpadeo con mouse en desktop.
+ */
+const WordBtn=({item,side,idx})=>{
+    if(item.status==='empty')return<div className="h-14 sm:h-[4.2rem]"/>;
+    let bg='bg-zinc-800 border-zinc-700 text-zinc-200 hover-effect',anim='';
+    if(item.status==='selected')bg='bg-emerald-600 border-emerald-800 text-white';
+    else if(item.status==='matched'){bg='bg-emerald-500/40 border-emerald-700/40 text-emerald-300';anim='animate-slow-fade';}
+    else if(item.status==='wrong'){bg='bg-rose-500/70 border-rose-700 text-white';anim='animate-shake';}
+    else if(item.status==='entering')anim='animate-pop-in';
+    const dis=['matched','wrong','entering','empty'].includes(item.status);
+    return(<div className="h-14 sm:h-[4.2rem]"><button type="button" data-side={side} data-idx={idx} className={`btn-juicy w-full h-full rounded-2xl border-2 border-b-4 font-bold text-sm sm:text-base flex items-center justify-center px-3 leading-tight ${bg} ${anim}`} style={{touchAction:'manipulation',WebkitTapHighlightColor:'transparent'}} disabled={dis}>{item.text}</button></div>);
+};
+
 const MatchGame=()=>{
     const[loading,setLoading]=useState(true);
     const[gameData,setGameData]=useState(null);
@@ -104,6 +128,27 @@ const MatchGame=()=>{
     const scoreRef=useRef(0);const cpMatchedRef=useRef(0);const lockedRef=useRef(false);
     const queueRef=useRef([]);const allPairsRef=useRef([]);const fadingRef=useRef({});
     const cpIdxRef=useRef(0);const retriesRef=useRef(0);
+    /* refs para board y selectedSide — evitan que handleClick tenga deps de state
+       que causan re-renders en loop cuando el mouse hace hover en desktop */
+    const boardRef=useRef([]);const selectedSideRef=useRef(null);
+    const isPausedRef=useRef(false);const countdownRef2=useRef(null);
+    const screenRef=useRef('menu');const crownIdxRef=useRef(0);
+    const timeLeftRef=useRef(0);const playerNameRef=useRef('');
+    /* refs para funciones que cambian referencia — evitan que handleClick se recree */
+    const resolveAllFadingRef=useRef(null);const buildCPRef=useRef(null);
+
+    /* sync refs con state — O(1), no causan re-renders */
+    useEffect(()=>{boardRef.current=board;},[board]);
+    useEffect(()=>{selectedSideRef.current=selectedSide;},[selectedSide]);
+    useEffect(()=>{isPausedRef.current=isPaused;},[isPaused]);
+    useEffect(()=>{countdownRef2.current=countdown;},[countdown]);
+    useEffect(()=>{screenRef.current=screen;},[screen]);
+    useEffect(()=>{crownIdxRef.current=crownIdx;},[crownIdx]);
+    useEffect(()=>{timeLeftRef.current=timeLeft;},[timeLeft]);
+    useEffect(()=>{playerNameRef.current=playerName;},[playerName]);
+    /* sync function refs */
+    useEffect(()=>{resolveAllFadingRef.current=resolveAllFading;},[resolveAllFading]);
+    useEffect(()=>{buildCPRef.current=buildCP;},[buildCP]);
 
     /* ══════════════════════════════════════════════════
        CARGA FIREBASE
@@ -249,15 +294,18 @@ const MatchGame=()=>{
        La lógica de juego es EXACTAMENTE la original.
     ══════════════════════════════════════════════════ */
     const handleClick=useCallback((side,index)=>{
-        if(lockedRef.current||screen!=='playing')return;
-        if(isPaused||countdown)return;
+        /* Lee todo via refs — sin deps de state = no re-renders en loop */
+        if(lockedRef.current||screenRef.current!=='playing')return;
+        if(isPausedRef.current||countdownRef2.current!==null)return;
+        const board=boardRef.current;
+        const selectedSide=selectedSideRef.current;
         const row=board[index];const item=side==='left'?row.left:row.right;
         if(['matched','entering','wrong','empty'].includes(item.status))return;
-        resolveAllFading();
+        resolveAllFadingRef.current?.();
 
         if(selectedSide?.side===side){
             if(selectedSide.index===index){
-                setSelectedSide(null);
+                selectedSideRef.current=null;setSelectedSide(null);
                 setBoard(prev=>prev.map((r,i)=>i!==index?r:(side==='left'?{...r,left:{...r.left,status:'idle'}}:{...r,right:{...r.right,status:'idle'}})));
             }
             return;
@@ -265,7 +313,7 @@ const MatchGame=()=>{
 
         if(!selectedSide){
             setBoard(prev=>prev.map((r,i)=>i!==index?r:(side==='left'?{...r,left:{...r.left,status:'selected'}}:{...r,right:{...r.right,status:'selected'}})));
-            setSelectedSide({side,index});return;
+            selectedSideRef.current={side,index};setSelectedSide({side,index});return;
         }
 
         const prevRow=board[selectedSide.index];
@@ -342,7 +390,7 @@ const MatchGame=()=>{
                         setMilestone(null);fadingRef.current={};
                         cpIdxRef.current=nextCpI;setCpIdx(nextCpI);
                         cpMatchedRef.current=0;setCpMatched(0);
-                        buildCP(allPairsRef.current.slice(nextCpI*c.perCP,(nextCpI+1)*c.perCP));
+                        buildCPRef.current?.(allPairsRef.current.slice(nextCpI*c.perCP,(nextCpI+1)*c.perCP));
                         setScreen('playing');
                     },2000);
                 }
@@ -361,19 +409,10 @@ const MatchGame=()=>{
                 right:r.right.status==='wrong'?{...r.right,status:'idle'}:r.right,
             })));lockedRef.current=false},400);
         }
-    },[board,selectedSide,screen,crownIdx,resolveAllFading,buildCP,timeLeft,playerName,quizId,isPaused,countdown]);
+    /* sin deps de state → nunca se recrea → no causa re-renders de WordBtn */
+    /* sin deps: todo via refs, nunca se recrea */},[]);
 
-    /* ══ WordBtn — fix Opus 4.6 ══ */
-    const WordBtn=({item,onClick})=>{
-        if(item.status==='empty')return<div className="h-14 sm:h-[4.2rem]"/>;
-        let bg='bg-zinc-800 border-zinc-700 text-zinc-200 hover-effect',anim='';
-        if(item.status==='selected')bg='bg-emerald-600 border-emerald-800 text-white';
-        else if(item.status==='matched'){bg='bg-emerald-500/40 border-emerald-700/40 text-emerald-300';anim='animate-slow-fade';}
-        else if(item.status==='wrong'){bg='bg-rose-500/70 border-rose-700 text-white';anim='animate-shake';}
-        else if(item.status==='entering')anim='animate-pop-in';
-        const dis=['matched','wrong','entering','empty'].includes(item.status);
-        return(<div className="h-14 sm:h-[4.2rem]"><button type="button" className={`btn-juicy w-full h-full rounded-2xl border-2 border-b-4 font-bold text-sm sm:text-base flex items-center justify-center px-3 leading-tight ${bg} ${anim}`} style={{touchAction:'manipulation',WebkitTapHighlightColor:'transparent'}} onClick={onClick} disabled={dis}>{item.text}</button></div>);
-    };
+    /* WordBtn definido fuera del componente — ver abajo */
 
     /* ── Modales originales ── */
     const VocabModal=()=>showVocab?(
@@ -570,9 +609,14 @@ const MatchGame=()=>{
                     <p className="flex-1 text-center text-zinc-500 font-bold text-[10px] uppercase tracking-widest">English</p>
                 </div>
 
-                <main className="flex-1 flex gap-3 sm:gap-4 px-4 sm:px-8 pb-6 max-w-2xl mx-auto w-full items-center">
-                    <div className="flex-1 flex flex-col gap-2.5 sm:gap-3 justify-center">{board.map((r,i)=><WordBtn key={`l-${r.key}`} item={r.left} onClick={()=>handleClick('left',i)}/>)}</div>
-                    <div className="flex-1 flex flex-col gap-2.5 sm:gap-3 justify-center">{board.map((r,i)=><WordBtn key={`r-${r.key}`} item={r.right} onClick={()=>handleClick('right',i)}/>)}</div>
+                {/* onClickCapture en el main — UN solo handler estable, cero closures por botón */}
+                <main className="flex-1 flex gap-3 sm:gap-4 px-4 sm:px-8 pb-6 max-w-2xl mx-auto w-full items-center"
+                    onClickCapture={e=>{
+                        const btn=e.target.closest('[data-side]');
+                        if(btn)handleClick(btn.dataset.side,+btn.dataset.idx);
+                    }}>
+                    <div className="flex-1 flex flex-col gap-2.5 sm:gap-3 justify-center">{board.map((r,i)=><WordBtn key={`l-${r.key}`} item={r.left} side="left" idx={i}/>)}</div>
+                    <div className="flex-1 flex flex-col gap-2.5 sm:gap-3 justify-center">{board.map((r,i)=><WordBtn key={`r-${r.key}`} item={r.right} side="right" idx={i}/>)}</div>
                 </main>
             </div>
         );
