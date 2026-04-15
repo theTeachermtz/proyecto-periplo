@@ -11,9 +11,12 @@
         document.documentElement.classList.add('dark');
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/default.css">
     <script src="https://cdn.jsdelivr.net/npm/mobile-drag-drop@2.3.0-rc.2/index.min.js"></script>
-    <script>window.onload = function() { MobileDragDrop.polyfill({ holdToDrag: 400 }); };</script>
+    <script>
+        window.onload = function() { MobileDragDrop.polyfill({ holdToDrag: 400 }); };
+    </script>
 
     <script type="importmap">
     {
@@ -30,7 +33,6 @@
     }
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap'); 
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow-x: hidden; }
@@ -38,17 +40,29 @@
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .circle-transition { transition: stroke-dashoffset 1.5s ease-out; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
         @keyframes pulse-ring {
             0% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.6); }
             70% { box-shadow: 0 0 0 12px rgba(79, 70, 229, 0); }
             100% { box-shadow: 0 0 0 0 rgba(79, 70, 229, 0); }
         }
         .animate-invite { animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+        .sticky-col { position: sticky; left: 0; z-index: 40; }
+        .sticky-corner { position: sticky; left: 0; top: 0; z-index: 50; }
         .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #e2e8f0 31px, #e2e8f0 32px); background-attachment: local; line-height: 32px; padding-top: 6px; }
         .dark .notebook-lines { background-image: repeating-linear-gradient(transparent, transparent 31px, #3f3f46 31px, #3f3f46 32px); }
-        @keyframes shimmer { from { background-position: -200% 0; } to { background-position: 200% 0; } }
-        .shimmer { background: linear-gradient(90deg, #27272a 25%, #3f3f46 50%, #27272a 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+
+        .draggable-item { touch-action: pan-x pan-y; -webkit-user-drag: element; }
+        
+        @keyframes led-glow {
+            0% { box-shadow: 0 0 4px rgba(16,185,129,0.5), 0 0 8px rgba(16,185,129,0.3); }
+            50% { box-shadow: 0 0 10px rgba(16,185,129,1), 0 0 20px rgba(16,185,129,0.8); }
+            100% { box-shadow: 0 0 4px rgba(16,185,129,0.5), 0 0 8px rgba(16,185,129,0.3); }
+        }
+        .led-line { position: absolute; left: 0; width: 100%; height: 2px; background-color: #10b981; animation: led-glow 1.5s infinite alternate; z-index: 35; pointer-events: none; }
+        .cal-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+        .cal-scroll::-webkit-scrollbar-thumb { background: #52525b; border-radius: 4px; }
     </style>
 </head>
 <body class="bg-slate-50 dark:bg-zinc-950 text-slate-800 dark:text-zinc-100 min-h-screen font-sans pb-20 md:pb-0">
@@ -58,104 +72,172 @@
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
-        import { format, addDays } from 'date-fns';
+        import { getFirestore, doc, getDoc, collection, onSnapshot, addDoc, deleteDoc, updateDoc, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
+        import { format, startOfWeek, addDays, isSameDay, addWeeks, isAfter } from 'date-fns';
         import { es } from 'date-fns/locale';
-        import { 
-            Loader2, Target, Sparkles, Brain, Key, PenTool, Flame, ChevronLeft, ChevronRight,
-            BarChart, BookOpen, Palette, Home, Gamepad2, Library, Quote, Play,
-            Clock, Layers, Puzzle, Grid, Shuffle, Zap, CheckSquare, ArrowDownCircle,
-            Headphones, MessageSquare, HelpCircle, Smartphone, Presentation, Dices,
-            Users, Wifi, Trophy, Star, Calendar, Video, Eye, EyeOff, X
-        } from 'lucide-react';
+        import { Loader2, Calendar, Video, Trophy, Target, Sparkles, Brain, Key, PenTool, Flame, Lock, ChevronRight, ChevronLeft, ChevronDown, Eye, BarChart, BookOpen, Gamepad2, Library, Home, Quote, Music, Play, X, Clock, ArrowRightLeft, Save, ZoomIn, ZoomOut, LocateFixed, UserPlus, CheckCircle2, AlertCircle, HelpCircle, ListFilter } from 'lucide-react';
 
-        const firebaseConfig = { 
-            apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", 
-            authDomain: "proyecto-periplo.firebaseapp.com", 
-            projectId: "proyecto-periplo", 
-            storageBucket: "proyecto-periplo.firebasestorage.app", 
-            messagingSenderId: "236795998392", 
-            appId: "1:236795998392:web:0da24b4f018611b55c844d" 
-        };
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // ============================================================
-        // CONSTANTS
-        // ============================================================
+        // ==========================================
+        // VARIABLES Y FUNCIONES MAESTRAS GLOBALES
+        // ==========================================
         const LEVEL_HIERARCHY = ['basic', 'advanced', 'pro'];
-
-        const getPlayLink = (q) => {
-            const param = '&student=true';
-            if (['PHONECHAT', 'AUDIOTRANSLATOR', 'VOICEREPLY'].includes(q.type)) {
-                const mode = q.content?.gameMode || 'typing';
-                if (mode === 'unscramble') return `audiotranslator.html?id=${q.id}${param}`;
-                if (mode === 'voice') return `voicereply.html?id=${q.id}${param}`;
-                return `phonechat.html?id=${q.id}${param}`;
-            }
-            if (q.type === 'READING') return `reading.html?id=${q.id}${param}`;
-            if (q.type === 'MATCH') return `match.html?id=${q.id}${param}`;
-            if (q.type === 'LINGOMATCH') return `lingomatch.html?id=${q.id}${param}`;
-            if (q.type === 'WordCascade') return `wordcascade.html?id=${q.id}${param}`;
-            if (q.type === 'NEVEREVER') return `neverever.html?id=${q.id}${param}`;
-            if (q.type === 'TALKTIME') return `talktime.html?id=${q.id}${param}`;
-            if (q.type === 'UNO') return `uno.html?id=${q.id}${param}`;
-            if (q.type === 'LISTENING') return `listening.html?id=${q.id}${param}`;
-            if (q.type === 'FLASHCARDS') return `flashcards.html?id=${q.id}${param}`;
-            if (q.type === 'CROSSWORD') return `crossword.html?id=${q.id}${param}`;
-            if (q.type === 'ANAGRAM') return `anagram.html?id=${q.id}${param}`;
-            if (q.type === 'MEMORAMA') return `memorama.html?id=${q.id}${param}`;
-            if (q.type === 'EMOJISPELL') return `emojispell.html?id=${q.id}${param}`;
-            if (q.type === 'PRESENTATION') return `presentations.html?id=${q.id}${param}`;
-            if (q.type === 'BOARDGAME_BANK') return `periplo-party.html?id=${q.id}${param}`;
-            return `activity.html?id=${q.id}${param}`;
+        
+        const getMexicoTime = () => new Date(new Date().toLocaleString("en-US", { timeZone: "America/Mexico_City" }));
+        const getInitialDate = () => { const t = getMexicoTime(); if (t.getDay() === 0) return addDays(t, 1); return t; };
+        const parseLocal = (dateStr) => { if (!dateStr) return new Date(); const [y, m, d] = dateStr.split('-'); return new Date(y, m - 1, d); };
+        const TIMES = ['07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00'];
+        const formatTimeDisplay = (time24) => { const h = parseInt(time24.split(':')[0], 10); return `${h % 12 || 12}:00 ${h >= 12 ? 'pm' : 'am'}`; };
+        const normalizeName = (name) => name ? name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim() : "";
+        
+        const matchDays = (dbDay, gridDay) => {
+            if (!dbDay || !gridDay) return false;
+            let d1 = dbDay.toUpperCase().replace(/\./g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            let d2 = gridDay.toUpperCase().replace(/\./g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            if (d1 === 'MIER') d1 = 'MIE'; if (d2 === 'MIER') d2 = 'MIE';
+            return d1 === d2;
         };
-
-        // Emojis y colores por tipo de juego (Para juegos "Solo")
-        const GAME_META = {
-            FLASHCARDS:    { emoji: '🃏', color: 'from-sky-500 to-cyan-600',      label: 'Flashcards' },
-            MEMORAMA:      { emoji: '🧠', color: 'from-emerald-500 to-teal-600',   label: 'Memorama' },
-            CROSSWORD:     { emoji: '🧩', color: 'from-amber-500 to-orange-600',   label: 'Crucigrama' },
-            ANAGRAM:       { emoji: '🔠', color: 'from-pink-500 to-rose-600',      label: 'Anagrama' },
-            EMOJISPELL:    { emoji: '⚡', color: 'from-yellow-400 to-amber-500',   label: 'Emoji Spell' },
-            MATCH:         { emoji: '✅', color: 'from-violet-500 to-purple-600',  label: 'Match Game' },
-            LINGOMATCH:    { emoji: '🔀', color: 'from-fuchsia-500 to-pink-600',   label: 'LingoMatch' },
-            WordCascade:   { emoji: '🔤', color: 'from-cyan-500 to-sky-600',       label: 'Word Cascade' },
-            READING:       { emoji: '📖', color: 'from-lime-500 to-green-600',     label: 'Reading' },
-            LISTENING:     { emoji: '🎧', color: 'from-teal-500 to-emerald-600',   label: 'Listening' },
-            TALKTIME:      { emoji: '💬', color: 'from-sky-400 to-blue-500',       label: 'Talk Time' },
-            NEVEREVER:     { emoji: '🤫', color: 'from-fuchsia-400 to-violet-500', label: 'Never Ever' },
-            PHONECHAT:     { emoji: '📱', color: 'from-green-500 to-emerald-600',  label: 'Phone Chat' },
-            UNO:           { emoji: '🃏', color: 'from-red-500 to-rose-600',       label: 'Periplo UNO' },
-            PRESENTATION:  { emoji: '📽️', color: 'from-indigo-500 to-blue-600',    label: 'Presentación' },
-            BOARDGAME_BANK:{ emoji: '🎲', color: 'from-blue-500 to-indigo-600',    label: 'Party Game' },
+        
+        const checkIsMine = (event, studentName) => {
+            if (!event || !studentName) return false;
+            const sn = normalizeName(studentName); const evStudent = normalizeName(event.student);
+            if (evStudent === sn && sn !== "") return true;
+            const evTitle = normalizeName(event.title).replace("clase de ", "").trim();
+            const snFirstName = sn.split(' ')[0]; const titleFirstName = evTitle.split(' ')[0];
+            return (evTitle === sn || evTitle === snFirstName || titleFirstName === snFirstName);
         };
-
-        // Tipos que son multijugador en clase (Memorama añadido)
-        const MULTI_TYPES = ['BOARDGAME_BANK', 'NEVEREVER', 'TALKTIME', 'UNO', 'MEMORAMA'];
 
         const calculateArchetype = (s) => {
-            if (!s) return { name: "Limbo / Por Evaluar", desc: "Realiza la evaluación para perfilar.", color: "text-zinc-400" };
-            const vals = Object.values(s);
-            const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
-            if (avg >= 8) return { name: "The Linguist 🧠", desc: "Dominio excepcional del idioma.", color: "text-violet-400" };
-            if (avg >= 6) return { name: "The Communicator 💬", desc: "Expresión fluida y confiada.", color: "text-blue-400" };
-            if (avg >= 4) return { name: "The Explorer 🗺️", desc: "En camino, progresando bien.", color: "text-emerald-400" };
-            return { name: "The Rookie 🌱", desc: "Todo gran viaje comienza con un paso.", color: "text-amber-400" };
+            if (!s) return { name: "Limbo / Por Evaluar", desc: "Realiza la evaluación para perfilar." };
+            const g = parseInt(s.grammar)||0, v = parseInt(s.verbs)||0, n = parseInt(s.nouns)||0, a = parseInt(s.adjectives)||0, k = parseInt(s.key_structs)||0;
+            const avg = (g+v+n+a+k)/5;
+            if (avg >= 8) return { name: "The Linguist 🏆", desc: "Dominio casi total del idioma." };
+            if (g >= 7 && k >= 7) return { name: "Grammar Nerd 🤓", desc: "Fuerte en estructura, crecer en vocab." };
+            if (v >= 7 && n >= 7) return { name: "Vocab Machine 📚", desc: "Gran vocabulario, pulir gramática." };
+            if (avg >= 5) return { name: "The Climber 📈", desc: "Buen progreso en todas las áreas." };
+            return { name: "The Explorer 🗺️", desc: "Construyendo las bases del idioma." };
         };
 
-        const RocketIcon = ({size, className}) => (
-            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-                <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path>
-                <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path>
-                <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"></path>
-                <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path>
-            </svg>
-        );
+        // ==========================================
+        // CONFIG EVALUACIONES (igual que evaluaciones.html)
+        // ==========================================
+        const VOCAB_SKILLS = ['recognition', 'production', 'in_context'];
+        const CONFIG = {
+            basic: {
+                grammar: [ { id: 'modal_verbs', title: 'Modal Verbs', skills: ['can_could','should_must','may_might','would_shall','will_future','ought_able','have_to'] }, { id: 'present_simple', title: 'Present Simple', skills: ['affirmative','negative','questions','wh_questions','third_person','adverbs_frequency','time_expressions'] }, { id: 'present_continuous', title: 'Present Continuous', skills: ['affirmative','negative','questions','now_expressions','stative_verbs','spelling_rules','contrast_simple'] }, { id: 'future_going_to', title: 'Future (Going to)', skills: ['affirmative','negative','questions','predictions','intentions','plans','evidence'] } ],
+                verbs: ["Pack 1: Daily Routine","Pack 2: Home & Communication","Pack 3: Travel & Conflict","Pack 4: Business & Emotion","Pack 5: Action & Strategy","Pack 6: Thoughts & Senses","Pack 7: Social & Science","Pack 8: Corporate & Economy","Pack 9: Medical & Survival"],
+                nouns: [ { id: 'n_p_1', title: 'Pack 1: Modern Nomad', skills: VOCAB_SKILLS }, { id: 'n_p_2', title: 'Pack 2: Hungry Traveler', skills: VOCAB_SKILLS }, { id: 'n_p_3', title: 'Pack 3: Daily Grind', skills: VOCAB_SKILLS }, { id: 'n_p_4', title: 'Pack 4: Urban Chaos', skills: VOCAB_SKILLS }, { id: 'n_p_5', title: 'Pack 5: Weekend Getaway', skills: VOCAB_SKILLS } ],
+                adjectives: [ { id: 'adj_p_1', title: 'Pack 1: Personality & Looks', skills: VOCAB_SKILLS }, { id: 'adj_p_2', title: 'Pack 2: Feelings & State', skills: VOCAB_SKILLS }, { id: 'adj_p_3', title: 'Pack 3: Places & Vibes', skills: VOCAB_SKILLS }, { id: 'adj_p_4', title: 'Pack 4: The -ed/-ing Trap', skills: VOCAB_SKILLS }, { id: 'adj_p_5', title: 'Pack 5: Opinions & Taste', skills: VOCAB_SKILLS } ],
+                key_structs: ["WH Questions","FANBOYS & Correlative","Subordinating Conj.","Prep. Time","Prep. Place","Prep. Movement & Other","Possessive & Object Pron.","Quantifiers","Frequency Adverbs"]
+            },
+            advanced: {
+                grammar: [ { id: 'past_simple', title: 'Past Simple', skills: ['regular_verbs','irregular_verbs','negatives','questions','time_expressions','ago_expressions','narrative_use'] }, { id: 'second_conditional', title: 'Second Conditional', skills: ['if_clause','main_clause','were_form','imaginary_situations','advice_with_if','wish_present','inversion'] }, { id: 'past_continuous', title: 'Past Continuous', skills: ['affirmative','negative','questions','interrupted_actions','background_descriptions','when_while','parallel_actions'] }, { id: 'past_future_intention', title: 'Past Future Intention', skills: ['was_going_to','were_going_to','was_about_to','planned_intended','expected_supposed','was_planning','wasnt_going_to'] } ],
+                verbs: [ { id: 'v_a_f', title: 'Irregular A-F', skills: VOCAB_SKILLS }, { id: 'v_g_m', title: 'Irregular G-M', skills: VOCAB_SKILLS }, { id: 'v_r_s', title: 'Irregular R-S', skills: VOCAB_SKILLS }, { id: 'v_t_w', title: 'Irregular T-W', skills: VOCAB_SKILLS }, { id: 'v_reg_t', title: 'Regular /t/ Sound', skills: VOCAB_SKILLS }, { id: 'v_reg_d', title: 'Regular /d/ Sound', skills: VOCAB_SKILLS }, { id: 'v_reg_id', title: 'Regular /ɪd/ Sound', skills: VOCAB_SKILLS } ],
+                nouns: [ { id: 'n_a_1', title: 'Pack 1: Success & Failure', skills: VOCAB_SKILLS }, { id: 'n_a_2', title: 'Pack 2: Truth & Lies', skills: VOCAB_SKILLS }, { id: 'n_a_3', title: 'Pack 3: Media & Ent.', skills: VOCAB_SKILLS }, { id: 'n_a_4', title: 'Pack 4: Compound Nouns', skills: VOCAB_SKILLS }, { id: 'n_a_5', title: 'Pack 5: Env. & Science', skills: VOCAB_SKILLS } ],
+                adjectives: [ { id: 'adj_a_1', title: 'Short Comparatives', skills: VOCAB_SKILLS }, { id: 'adj_a_2', title: 'Long Comparatives', skills: VOCAB_SKILLS }, { id: 'adj_a_3', title: 'Irregular Comparatives', skills: VOCAB_SKILLS }, { id: 'adj_a_4', title: 'Superlatives', skills: VOCAB_SKILLS } ],
+                key_structs: ["Used to / Use to","Comparative Rules","Superlative Rules","Idiomatic Expressions","Possessive Nouns","Relative Clauses","Modals of Possibility","Passive Voice"]
+            },
+            pro: {
+                grammar: [ { id: 'present_past_perfect', title: 'Present/Past Perfect', skills: ['present_perfect_simple','past_perfect_simple','for_since','already_yet_just','ever_never','before_after','past_perfect_narrative'] }, { id: 'perfect_continuous', title: 'Perfect Continuous', skills: ['present_perfect_continuous','past_perfect_continuous','duration_focus','result_focus','recently_lately','how_long','contrast_simple'] }, { id: 'third_conditional', title: 'Third Conditional', skills: ['if_clause_past_perfect','main_clause_would_have','mixed_result','regret_criticism','speculation','but_for','inversion_had'] }, { id: 'mixed_conditionals', title: 'Mixed Conditionals', skills: ['past_if_present_result','present_if_past_result','unreal_past_present','wish_regret','identifying_type','transforming','discourse_markers'] } ],
+                verbs: [ { id: 'v_phrasal', title: 'Phrasal Verbs 2', skills: VOCAB_SKILLS }, { id: 'v_idioms', title: 'Idiomatic Expressions', skills: VOCAB_SKILLS }, { id: 'v_sayings', title: 'Sayings & Proverbs', skills: VOCAB_SKILLS }, { id: 'v_collocations', title: 'Advanced Collocations', skills: VOCAB_SKILLS } ],
+                nouns: [ { id: 'n_p_1', title: 'Pack 1: Law & Politics', skills: VOCAB_SKILLS }, { id: 'n_p_2', title: 'Pack 2: Finance & Econ.', skills: VOCAB_SKILLS }, { id: 'n_p_3', title: 'Pack 3: Collective Nouns', skills: VOCAB_SKILLS }, { id: 'n_p_4', title: 'Pack 4: Uncountables', skills: VOCAB_SKILLS }, { id: 'n_p_5', title: 'Pack 5: Formal & Academic', skills: VOCAB_SKILLS } ],
+                key_structs: [ "Inversion (Never have I...)", "Cleft Sentences (It was X who...)", "Participle Clauses", "Advanced Wish/Regret", "Double Comparatives", "Ellipsis & Substitution" ]
+            }
+        };
 
-        // ============================================================
-        // VISTA: HOME
-        // ============================================================
+        // ==========================================
+        // COMPONENTES UI (Anillos y Modales)
+        // ==========================================
+        const CircularProgress = ({ score, label, colorClass, strokeColor, icon: Icon, onClick }) => {
+            const percentage = (score / 10) * 100;
+            const radius = 36;
+            const circumference = 2 * Math.PI * radius;
+            const offset = circumference - (percentage / 100) * circumference;
+
+            return (
+                <button onClick={onClick} className="flex flex-col items-center bg-white dark:bg-zinc-900/50 p-4 rounded-3xl border border-slate-200 dark:border-zinc-800/50 relative overflow-hidden shadow-sm hover:shadow-md hover:border-indigo-500/50 transition-all w-[30%] min-w-[100px] max-w-[140px] group">
+                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-indigo-500 bg-indigo-50 dark:bg-indigo-900/40 p-1.5 rounded-full hidden sm:block"><Eye size={12}/></div>
+                    <div className="relative w-16 h-16 sm:w-24 sm:h-24 flex items-center justify-center">
+                        <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+                            <circle cx="50" cy="50" r={radius} stroke="currentColor" strokeWidth="8" fill="transparent" className="text-slate-100 dark:text-zinc-800" />
+                            <circle cx="50" cy="50" r={radius} stroke={strokeColor} strokeWidth="8" fill="transparent" strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" className="circle-transition" />
+                        </svg>
+                        <div className="absolute flex flex-col items-center"><span className="text-lg sm:text-2xl font-black text-slate-800 dark:text-white">{score}</span></div>
+                    </div>
+                    <div className={`mt-3 sm:mt-4 flex flex-col items-center gap-1 ${colorClass}`}>
+                        <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
+                        <span className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-center leading-tight">{label}</span>
+                    </div>
+                </button>
+            );
+        };
+
+        const DetailModal = ({ sectionKey, title, evalData, activeTrack, onClose }) => {
+            const trackConfig = CONFIG[activeTrack];
+            let topics = [];
+            if (sectionKey === 'grammar') topics = trackConfig.grammar;
+            else if (sectionKey === 'verbs' && activeTrack !== 'basic') topics = trackConfig.verbs;
+            else if (sectionKey === 'nouns') topics = trackConfig.nouns;
+            else if (sectionKey === 'adjectives') topics = trackConfig.adjectives;
+            else { topics = [{ id: sectionKey, title: 'General Mastery', skills: sectionKey === 'verbs' ? trackConfig.verbs : trackConfig.key_structs }]; }
+
+            const calculateItemScore = (topicId, skillList) => {
+                const topicData = evalData[topicId] || { skills: {} };
+                let earned = 0; if(skillList.length === 0) return 0;
+                skillList.forEach(s => { const status = topicData.skills[s] || 0; earned += (status === 2 ? 1 : status === 1 ? 0.5 : 0); });
+                return Math.round(((earned / skillList.length) * 10) * 10) / 10;
+            };
+
+            return (
+                <div className="absolute inset-0 z-[100] flex flex-col bg-white dark:bg-zinc-900 animate-in fade-in rounded-[2.5rem] overflow-hidden">
+                    <div className="p-5 sm:p-6 border-b border-slate-200 dark:border-zinc-800 flex justify-between items-center shrink-0 bg-white dark:bg-zinc-900">
+                        <div>
+                            <h2 className="text-xl font-black text-slate-800 dark:text-white uppercase tracking-widest flex items-center gap-2"><Target className="text-indigo-500"/> {title}</h2>
+                            <p className="text-[10px] font-bold text-slate-500 dark:text-zinc-400 mt-1 uppercase tracking-widest">Nivel: {activeTrack}</p>
+                        </div>
+                        <button onClick={onClose} className="p-3 rounded-2xl bg-slate-100 dark:bg-zinc-800 hover:bg-rose-100 dark:hover:bg-rose-900/30 hover:text-rose-500 transition-colors text-slate-500"><X size={20}/></button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-3">
+                        {Array.isArray(topics) && topics.map((topic, idx) => {
+                            const topicId = typeof topic === 'string' ? topic.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') : topic.id;
+                            const topicTitle = typeof topic === 'string' ? topic : topic.title;
+                            const skillList = typeof topic === 'string' ? [] : (topic.skills || []);
+                            const score = calculateItemScore(topicId, skillList);
+                            const getColor = (s) => s >= 8 ? 'bg-emerald-500' : s >= 5 ? 'bg-amber-400' : 'bg-rose-500';
+                            const getBg = (s) => s >= 8 ? 'bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800' : s >= 5 ? 'bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800' : 'bg-rose-50 dark:bg-rose-900/10 border-rose-200 dark:border-rose-800';
+                            return (
+                                <div key={idx} className={`p-4 rounded-2xl border ${getBg(score)}`}>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="font-bold text-sm text-slate-700 dark:text-zinc-200">{topicTitle}</span>
+                                        <span className="font-black text-base text-slate-800 dark:text-white">{skillList.length > 0 ? score : '—'}</span>
+                                    </div>
+                                    {skillList.length > 0 && (
+                                        <div className="w-full bg-slate-200 dark:bg-zinc-700 rounded-full h-2">
+                                            <div className={`h-2 rounded-full transition-all ${getColor(score)}`} style={{width:`${(score/10)*100}%`}}></div>
+                                        </div>
+                                    )}
+                                    {skillList.length > 0 && (
+                                        <div className="flex flex-wrap gap-1 mt-3">
+                                            {skillList.map(s => {
+                                                const status = (evalData[topicId]?.skills?.[s]) || 0;
+                                                return <button key={s} className={`px-2 py-0.5 text-[9px] sm:text-[10px] font-bold rounded-md hover:scale-105 active:scale-95 transition-transform cursor-pointer ${status === 2 ? 'bg-emerald-100 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400' : status === 1 ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-amber-700 dark:text-amber-400' : 'bg-rose-50 dark:bg-rose-900/10 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-400'}`}>{s}</button>;
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        };
+
+        // ==========================================
+        // VISTA 1: HOME
+        // ==========================================
         const HomeView = ({ student, setTab }) => (
             <div className="space-y-6 fade-in">
                 <div className="bg-gradient-to-br from-indigo-600 to-purple-800 p-8 sm:p-10 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden">
@@ -179,368 +261,389 @@
                         <div className="bg-white dark:bg-zinc-900 rounded-[2rem] p-6 shadow-xl border border-slate-200 dark:border-zinc-800 flex items-center justify-between">
                             <div className="flex items-center gap-4">
                                 <div className="bg-indigo-100 dark:bg-indigo-500/20 p-4 rounded-2xl text-indigo-600 dark:text-indigo-400"><Calendar size={24} /></div>
-                                <div>
-                                    <h3 className="font-black text-slate-800 dark:text-white text-lg">Tu Agenda</h3>
-                                    <p className="text-slate-500 dark:text-zinc-400 text-xs font-bold uppercase tracking-widest">Reserva y ve tus clases</p>
-                                </div>
+                                <div><h3 className="font-black text-slate-800 dark:text-white text-lg">Tu Agenda</h3><p className="text-slate-500 dark:text-zinc-400 text-xs font-bold uppercase tracking-widest">Reserva y ve tus clases</p></div>
                             </div>
                             <button onClick={() => setTab('schedule')} className="bg-indigo-600 hover:bg-indigo-500 text-white font-black p-4 rounded-xl transition-transform active:scale-95 shadow-lg shadow-indigo-500/30">
                                 <ChevronRight size={20} />
                             </button>
                         </div>
-
-                        <button onClick={() => setTab('playground')} className="w-full bg-gradient-to-r from-rose-500 to-orange-500 rounded-[2rem] p-6 shadow-xl text-white flex items-center justify-between hover:scale-[1.02] transition-transform text-left">
-                            <div>
-                                <h3 className="font-black text-2xl mb-1">Juegos 🎮</h3>
-                                <p className="text-rose-100 text-xs font-bold uppercase tracking-widest">Practica y aprende jugando</p>
-                            </div>
-                            <div className="bg-white/20 p-4 rounded-2xl"><Gamepad2 size={28}/></div>
+                        <button onClick={() => setTab('playground')} className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 rounded-[2rem] p-6 shadow-xl text-white flex items-center justify-between hover:scale-[1.02] transition-transform text-left">
+                            <div><h3 className="font-black text-2xl mb-1">Modo Solo ⚡</h3><p className="text-violet-100 text-xs font-bold uppercase tracking-widest">Juega LingoMatch a tu ritmo</p></div>
+                            <div className="bg-white/20 p-4 rounded-2xl"><ListFilter size={28}/></div>
                         </button>
-
                         <button onClick={() => setTab('performance')} className="w-full bg-white dark:bg-zinc-900 rounded-[2rem] p-6 shadow-xl border border-slate-200 dark:border-zinc-800 flex items-center justify-between hover:border-indigo-500 transition-colors text-left group">
-                            <div>
-                                <h3 className="font-black text-slate-800 dark:text-white text-lg">My Performance</h3>
-                                <p className="text-slate-500 dark:text-zinc-400 text-xs font-bold uppercase tracking-widest">Ver mi progreso y fallas</p>
-                            </div>
-                            <div className="bg-slate-100 dark:bg-zinc-800 p-4 rounded-2xl text-slate-400 group-hover:text-indigo-500 group-hover:bg-indigo-50 dark:group-hover:bg-indigo-900/30 transition-colors">
-                                <Target size={24}/>
-                            </div>
+                            <div><h3 className="font-black text-slate-800 dark:text-white text-lg">My Performance</h3><p className="text-slate-500 dark:text-zinc-400 text-xs font-bold uppercase tracking-widest">Ver mi progreso y fallas</p></div>
+                            <div className="bg-slate-100 dark:bg-zinc-800 p-4 rounded-2xl text-slate-400 group-hover:text-indigo-500 group-hover:bg-indigo-50 dark:group-hover:bg-indigo-900/30 transition-colors"><Target size={24}/></div>
                         </button>
                     </div>
-
                     <div className="space-y-4">
                         <div className="bg-amber-50 dark:bg-amber-900/10 rounded-[2rem] p-6 sm:p-8 shadow-sm border border-amber-200 dark:border-amber-900/30 relative">
                             <Quote className="text-amber-200 dark:text-amber-900/50 absolute top-4 right-4" size={60}/>
                             <h4 className="text-[10px] font-black text-amber-500 uppercase tracking-widest mb-3">Frase del Día</h4>
                             <p className="text-xl sm:text-2xl font-black text-slate-800 dark:text-amber-50 leading-tight relative z-10">"A smooth sea never made a skilled sailor."</p>
-                            <p className="text-sm text-slate-500 dark:text-amber-200/60 mt-2 font-bold">— Franklin D. Roosevelt</p>
+                            <p className="text-amber-600 dark:text-amber-400 font-bold text-sm mt-4">— Franklin D. Roosevelt</p>
                         </div>
-                        <button onClick={() => setTab('library')} className="w-full bg-white dark:bg-zinc-900 rounded-[2rem] p-6 shadow-xl border border-slate-200 dark:border-zinc-800 flex items-center justify-between hover:border-indigo-500 transition-colors text-left group">
-                            <div>
-                                <h3 className="font-black text-slate-800 dark:text-white text-lg">Biblioteca</h3>
-                                <p className="text-slate-500 dark:text-zinc-400 text-xs font-bold uppercase tracking-widest">Recursos y presentaciones</p>
+                        <div className="bg-slate-900 rounded-[2rem] p-6 shadow-xl relative overflow-hidden flex flex-col justify-between min-h-[160px] group cursor-pointer border border-slate-800">
+                            <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500 rounded-full blur-[60px] opacity-40 group-hover:opacity-60 transition-opacity"></div>
+                            <h4 className="text-[10px] font-black text-rose-400 uppercase tracking-widest flex items-center gap-2"><Music size={14}/> Song of the week</h4>
+                            <div className="flex items-end justify-between relative z-10 mt-4">
+                                <div><p className="text-white font-black text-xl leading-tight">Blinding Lights</p><p className="text-slate-400 font-bold text-sm">The Weeknd</p></div>
+                                <div className="bg-white text-black p-3 rounded-full hover:scale-110 transition-transform"><Play size={20} fill="currentColor"/></div>
                             </div>
-                            <div className="bg-slate-100 dark:bg-zinc-800 p-4 rounded-2xl text-slate-400 group-hover:text-indigo-500 group-hover:bg-indigo-50 dark:group-hover:bg-indigo-900/30 transition-colors">
-                                <Library size={24}/>
-                            </div>
-                        </button>
+                        </div>
                     </div>
                 </div>
             </div>
         );
 
-        // ============================================================
-        // VISTA: PERFORMANCE
-        // ============================================================
+        // ==========================================
+        // VISTA 2: MY PERFORMANCE (Gráficas)
+        // ==========================================
         const PerformanceView = ({ student, evalData }) => {
             const [activeTrack, setActiveTrack] = useState(student?.level || 'basic');
+            const [chartView, setChartView] = useState('radar'); 
+            const [detailModal, setDetailModal] = useState(null); 
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
 
-            const CONFIG = {
-                basic: {
-                    grammar: [
-                        { id: 'g_present_simple', title: 'Present Simple', skills: ['Affirmative', 'Negative', 'Questions', 'Short Answers', 'Frequency Adverbs'] },
-                        { id: 'g_present_cont', title: 'Present Continuous', skills: ['Form', 'Usage vs Simple', 'Stative Verbs'] },
-                        { id: 'g_past_simple', title: 'Past Simple', skills: ['Regular Verbs', 'Irregular Verbs', 'Questions', 'Negatives'] },
-                        { id: 'g_future', title: 'Future (will/going to)', skills: ['Will vs Going To', 'Predictions', 'Plans'] },
-                        { id: 'g_modals_basic', title: 'Modal Verbs (Basic)', skills: ['Can/Could', 'Must/Have to', 'Should'] },
-                    ],
-                    nouns: [
-                        { id: 'n_p_1', title: 'Pack 1: Essential Verbs', skills: ['Recognition', 'Usage in Context', 'Collocations'] },
-                        { id: 'n_p_2', title: 'Pack 2: Daily Routines', skills: ['Recognition', 'Usage in Context', 'Collocations'] },
-                        { id: 'n_p_3', title: 'Pack 3: Social & Emot.', skills: ['Recognition', 'Usage in Context', 'Collocations'] },
-                    ],
-                },
-                advanced: {
-                    grammar: [
-                        { id: 'a_g_perf', title: 'Perfect Tenses', skills: ['Present Perfect Simple', 'Present Perfect Continuous', 'Past Perfect'] },
-                        { id: 'a_g_cond', title: 'Conditionals', skills: ['Zero & First', 'Second', 'Third', 'Mixed'] },
-                        { id: 'a_g_passive', title: 'Passive Voice', skills: ['Present/Past Passive', 'Modal Passives', 'Reporting Passives'] },
-                    ],
-                    nouns: [
-                        { id: 'a_n_p1', title: 'Pack 1: Business Vocab', skills: ['Recognition', 'Usage in Context'] },
-                        { id: 'a_n_p2', title: 'Pack 2: Academic Vocab', skills: ['Recognition', 'Usage in Context'] },
-                    ],
-                },
-                pro: {
-                    grammar: [
-                        { id: 'p_g_inv', title: 'Advanced Structures', skills: ['Inversion', 'Cleft Sentences', 'Subjunctive'] },
-                        { id: 'p_g_disc', title: 'Discourse Markers', skills: ['Cohesion', 'Register', 'Hedging'] },
-                    ],
-                    nouns: [
-                        { id: 'p_n_p1', title: 'Pack 1: Formal Register', skills: ['Recognition', 'Usage'] },
-                    ],
+            const getSkill = (key) => parseInt(student?.skills?.[key]) || 0;
+            
+            const getRealScore = (section) => {
+                const viewIdx = LEVEL_HIERARCHY.indexOf(activeTrack);
+                const stuIdx = LEVEL_HIERARCHY.indexOf(student?.level || 'basic');
+                if(viewIdx < stuIdx) return 10.0; if(viewIdx > stuIdx) return 0.0;  
+                
+                const trackConfig = CONFIG[activeTrack];
+                let topics = trackConfig[section];
+                if (!topics && section !== 'verbs' && section !== 'key_structs') return 0.0;
+
+                const calculateItemScore = (topicId, skillList) => {
+                    const topicData = evalData[topicId] || { skills: {} };
+                    let earned = 0; if(skillList.length === 0) return 0;
+                    skillList.forEach(s => { const status = topicData.skills[s] || 0; earned += (status === 2 ? 1 : status === 1 ? 0.5 : 0); });
+                    return Math.round(((earned / skillList.length) * 10) * 10) / 10;
+                };
+
+                if (section === 'grammar') { if (!topics || topics.length === 0) return 0; const scores = topics.map(t => calculateItemScore(t.id, t.skills)); return Math.round((scores.reduce((a,b)=>a+b,0)/scores.length)*10)/10; }
+                if (section === 'verbs') { const vTopics = trackConfig.verbs; if (!vTopics || vTopics.length === 0) return 0; if (typeof vTopics[0] === 'string') return getSkill('verbs'); const scores = vTopics.map(t => calculateItemScore(t.id, t.skills)); return Math.round((scores.reduce((a,b)=>a+b,0)/scores.length)*10)/10; }
+                if (section === 'nouns') { if (!topics || topics.length === 0) return 0; const scores = topics.map(t => calculateItemScore(t.id, t.skills)); return Math.round((scores.reduce((a,b)=>a+b,0)/scores.length)*10)/10; }
+                if (section === 'adjectives') { if (!topics || topics.length === 0) return 0; const scores = topics.map(t => calculateItemScore(t.id, t.skills)); return Math.round((scores.reduce((a,b)=>a+b,0)/scores.length)*10)/10; }
+                if (section === 'key_structs') { const ks = trackConfig.key_structs; if (!ks) return 0; return getSkill('key_structs'); }
+                return 0;
+            };
+
+            const scores = { grammar: getRealScore('grammar'), verbs: getRealScore('verbs'), nouns: getRealScore('nouns'), adjectives: getRealScore('adjectives'), key_structs: getRealScore('key_structs') };
+
+            useEffect(() => {
+                if (!chartRef.current) return;
+                if (chartInstance.current) chartInstance.current.destroy();
+                const labels = ['Grammar', 'Verbs', 'Nouns', 'Adjectives', 'Key Structs'];
+                const data = [scores.grammar, scores.verbs, scores.nouns, scores.adjectives, scores.key_structs];
+                const ctx = chartRef.current.getContext('2d');
+                chartInstance.current = new Chart(ctx, {
+                    type: chartView,
+                    data: { labels, datasets: [{ label: 'Mastery Score', data, backgroundColor: 'rgba(99, 102, 241, 0.15)', borderColor: 'rgba(99, 102, 241, 0.8)', borderWidth: 2, pointBackgroundColor: 'rgba(99,102,241,1)', pointRadius: 5 }] },
+                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: chartView === 'radar' ? { r: { beginAtZero: true, max: 10, ticks: { stepSize: 2, color: '#6b7280', font: { size: 10 } }, grid: { color: 'rgba(107,114,128,0.2)' }, pointLabels: { color: '#9ca3af', font: { size: 11, weight: 'bold' } } } } : { y: { beginAtZero: true, max: 10, ticks: { color: '#6b7280' }, grid: { color: 'rgba(107,114,128,0.15)' } }, x: { ticks: { color: '#6b7280' }, grid: { display: false } } } }
+                });
+                return () => { if (chartInstance.current) chartInstance.current.destroy(); };
+            }, [activeTrack, chartView, evalData]);
+
+            const studentLevelIndex = LEVEL_HIERARCHY.indexOf(student?.level || 'basic');
+
+            return (
+                <div className="space-y-6 fade-in relative">
+                    {detailModal && <DetailModal sectionKey={detailModal.key} title={detailModal.title} evalData={evalData} activeTrack={activeTrack} onClose={() => setDetailModal(null)} />}
+                    <div className="bg-white dark:bg-zinc-900 rounded-[2.5rem] p-6 sm:p-8 shadow-xl border border-slate-200 dark:border-zinc-800">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+                            <div>
+                                <h2 className="text-2xl font-black text-slate-800 dark:text-white">My Performance</h2>
+                                <p className="text-slate-500 dark:text-zinc-400 text-xs font-bold uppercase tracking-widest mt-1">Tu mapa de dominio del idioma</p>
+                            </div>
+                            <div className="flex p-1 bg-slate-100 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-2xl w-fit">
+                                {LEVEL_HIERARCHY.map((lvl, idx) => {
+                                    const isLocked = idx > studentLevelIndex;
+                                    return (
+                                        <button key={lvl} disabled={isLocked} onClick={() => setActiveTrack(lvl)}
+                                            className={`px-4 py-2 rounded-xl font-black text-xs transition-all flex items-center gap-1 
+                                                ${isLocked ? 'opacity-40 cursor-not-allowed text-slate-400' : 
+                                                  activeTrack === lvl ? 'bg-white dark:bg-zinc-700 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-500 dark:text-zinc-400 hover:text-slate-700 dark:hover:text-white'}`}>
+                                            {isLocked && <Lock size={10}/>} {lvl.toUpperCase()}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        <div className="flex justify-around gap-2 mb-6 flex-wrap">
+                            <CircularProgress score={scores.grammar} label="Grammar" colorClass="text-indigo-500" strokeColor="#6366f1" icon={Brain} onClick={() => setDetailModal({key:'grammar', title:'Grammar'})}/>
+                            <CircularProgress score={scores.verbs} label="Verbs" colorClass="text-emerald-500" strokeColor="#10b981" icon={Sparkles} onClick={() => setDetailModal({key:'verbs', title:'Verbs'})}/>
+                            <CircularProgress score={scores.nouns} label="Nouns" colorClass="text-amber-500" strokeColor="#f59e0b" icon={BookOpen} onClick={() => setDetailModal({key:'nouns', title:'Nouns'})}/>
+                            <CircularProgress score={scores.adjectives} label="Adjectives" colorClass="text-rose-500" strokeColor="#f43f5e" icon={Flame} onClick={() => setDetailModal({key:'adjectives', title:'Adjectives'})}/>
+                            <CircularProgress score={scores.key_structs} label="Key Structs" colorClass="text-purple-500" strokeColor="#a855f7" icon={Key} onClick={() => setDetailModal({key:'key_structs', title:'Key Structures'})}/>
+                        </div>
+
+                        <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Vista Gráfica</h3>
+                            <button onClick={() => setChartView(chartView === 'radar' ? 'bar' : 'radar')} className="flex items-center gap-1.5 text-[10px] uppercase font-bold tracking-widest text-slate-500 hover:text-slate-800 dark:hover:text-white bg-slate-100 dark:bg-zinc-800 px-3 py-2 rounded-xl transition-colors">
+                                {chartView === 'radar' ? <><BarChart size={14}/> Ver Barras</> : <><Target size={14}/> Ver Radar</>} <ChevronRight size={14}/>
+                            </button>
+                        </div>
+                        <div className="w-full h-64 sm:h-80 relative"><canvas id="radarChart" ref={chartRef}></canvas></div>
+                    </div>
+                </div>
+            );
+        };
+
+        // ==========================================
+        // VISTA 3: AGENDA
+        // ==========================================
+        const ScheduleView = ({ student }) => {
+            const [events, setEvents] = useState([]);
+            const [studentsList, setStudentsList] = useState([]); 
+            
+            const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+            useEffect(() => {
+                const handleResize = () => setIsMobile(window.innerWidth < 768);
+                window.addEventListener('resize', handleResize);
+                return () => window.removeEventListener('resize', handleResize);
+            }, []);
+
+            const [currentDate, setCurrentDate] = useState(getInitialDate());
+            const [now, setNow] = useState(getMexicoTime());
+            
+            const [bookingModal, setBookingModal] = useState(null); 
+            const [classHubModal, setClassHubModal] = useState(null); 
+            const [rescheduleMode, setRescheduleMode] = useState(null); 
+            const [vocabNotes, setVocabNotes] = useState('');
+            const [grammarNotes, setGrammarNotes] = useState('');
+            const [isSavingNotes, setIsSavingNotes] = useState(false);
+            const [draggedEventId, setDraggedEventId] = useState(null);
+
+            const studentName = student?.name || "Alumno";
+
+            useEffect(() => {
+                const timer = setInterval(() => setNow(getMexicoTime()), 60000);
+                const qEvents = query(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'));
+                const unsubscribeEvents = onSnapshot(qEvents, (snapshot) => { setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))); });
+                const qStudents = query(collection(db, 'artifacts', 'periplo-app-v1', 'students'));
+                const unsubscribeStudents = onSnapshot(qStudents, (snapshot) => { setStudentsList(snapshot.docs.map(d => d.data())); });
+                setTimeout(() => { const liveEl = document.getElementById('live-cell'); if(liveEl) liveEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' }); }, 150);
+                return () => { clearInterval(timer); unsubscribeEvents(); unsubscribeStudents(); };
+            }, []);
+
+            const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
+            const displayDays = isMobile ? [currentDate] : Array.from({length: 6}, (_, i) => addDays(weekStart, i));
+            const DAY_NAMES = isMobile ? [format(currentDate, 'EEEE', {locale: es}).toUpperCase().slice(0,3)] : ['LUN','MAR','MIÉ','JUE','VIE','SÁB'];
+
+            const canBookMore = (targetDateStr, name) => {
+                const targetDate = parseLocal(targetDateStr);
+                const myEvents = events.filter(e => checkIsMine(e, name));
+                const hasClassToday = myEvents.some(e => e.date === targetDateStr || (!e.date && matchDays(e.day, format(targetDate,'EEEE',{locale:es}))));
+                if (hasClassToday) { alert("⚠️ Ya tienes una clase agendada para este día. El límite es 1 clase por día."); return false; }
+                const targetWeekStart = startOfWeek(targetDate, { weekStartsOn: 1 });
+                const targetWeekEnd = addDays(targetWeekStart, 6);
+                const startStr = format(targetWeekStart, 'yyyy-MM-dd');
+                const endStr = format(targetWeekEnd, 'yyyy-MM-dd');
+                let countThisWeek = 0; let detectedDates = [];
+                myEvents.forEach(e => {
+                    if (!e.date) { countThisWeek++; detectedDates.push(`${e.day} (Fija)`); } 
+                    else if (e.date >= startStr && e.date <= endStr) { countThisWeek++; detectedDates.push(e.date); }
+                });
+                if (countThisWeek >= 3) { alert(`⚠️ Límite de 3 clases por semana.\n\nTienes en:\n➡️ ${detectedDates.join('\n➡️ ')}`); return false; }
+                return true;
+            };
+
+            const getEventForSlot = (dateStr, dayName, time) => events.find(e => (e.date === dateStr && e.time === time) || (!e.date && matchDays(e.day, dayName) && e.time === time));
+
+            const handleSlotClick = (dateStr, dayName, time) => {
+                const existing = getEventForSlot(dateStr, dayName, time);
+                if (rescheduleMode) {
+                    if (existing) return; 
+                    if (confirm(`¿Mover clase al ${dayName} ${dateStr} a las ${formatTimeDisplay(time)}?`)) performReschedule(dateStr, dayName, time);
+                    return;
+                }
+                if (existing) {
+                    if (checkIsMine(existing, studentName)) {
+                        setVocabNotes(existing.notes_vocab || '');
+                        setGrammarNotes(existing.notes_grammar || '');
+                        setClassHubModal(existing);
+                    }
+                    return;
+                }
+                if (canBookMore(dateStr, studentName)) {
+                    if(confirm(`¿Reservar NUEVA clase el ${dateStr} a las ${formatTimeDisplay(time)}?`)) bookClass(dateStr, dayName, time, studentName);
                 }
             };
 
-            const trackConfig = CONFIG[activeTrack] || CONFIG.basic;
-
-            const getRealScore = (section) => {
-                let totalSkills = 0, earnedPoints = 0;
-                const sections = section === 'grammar' ? trackConfig.grammar : trackConfig.nouns;
-                if (!sections) return 0;
-                sections.forEach(topic => {
-                    const topicData = evalData[topic.id] || { skills: {} };
-                    const skillList = topic.skills || [];
-                    skillList.forEach(s => {
-                        totalSkills++;
-                        const status = topicData.skills?.[s] || 0;
-                        earnedPoints += (status === 2 ? 1 : status === 1 ? 0.5 : 0);
-                    });
-                });
-                return totalSkills === 0 ? 0 : Math.round((earnedPoints / totalSkills) * 100) / 10;
+            const handleDragStart = (e, id) => { setDraggedEventId(id); e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; };
+            const handleDrop = async (e, tDate, tDay, tTime) => {
+                e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); if(!id) return;
+                const evToMove = events.find(x => x.id === id); if(!evToMove) return;
+                if(getEventForSlot(tDate, tDay, tTime)) { alert("⚠️ Ese espacio ya está ocupado."); setDraggedEventId(null); return; }
+                if(confirm(`¿Mover tu clase al ${tDate} a las ${formatTimeDisplay(tTime)}?`)) {
+                    try { await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', id), { date: tDate, day: tDay, time: tTime }); } catch(err) { alert(err.message); }
+                }
+                setDraggedEventId(null);
             };
 
-            const macroTotal = Math.round(
-                [getRealScore('grammar'), getRealScore('nouns')].reduce((a, b) => a + b, 0)
-            );
-
-            const archetypeData = calculateArchetype(student?.skills);
-
-            const CircularProgress = ({ score, label, colorClass, strokeColor, icon: Icon }) => {
-                const radius = 36; const circumference = 2 * Math.PI * radius;
-                const offset = circumference - (score / 10) * circumference;
-                return (
-                    <button className="flex flex-col items-center gap-2 group hover:scale-105 transition-transform">
-                        <div className="relative w-24 h-24 sm:w-28 sm:h-28">
-                            <svg className="w-full h-full -rotate-90" viewBox="0 0 88 88">
-                                <circle cx="44" cy="44" r={radius} fill="none" stroke="currentColor" strokeWidth="8" className="text-slate-200 dark:text-zinc-800"/>
-                                <circle cx="44" cy="44" r={radius} fill="none" stroke={strokeColor} strokeWidth="8" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} className="circle-transition"/>
-                            </svg>
-                            <div className="absolute inset-0 flex flex-col items-center justify-center">
-                                <span className="text-lg sm:text-2xl font-black text-slate-800 dark:text-white">{score}</span>
-                            </div>
-                        </div>
-                        <div className={`flex flex-col items-center gap-1 ${colorClass}`}>
-                            <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
-                            <span className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-center leading-tight">{label}</span>
-                        </div>
-                    </button>
-                );
+            const bookClass = async (dateStr, dayName, time, name) => {
+                const sn = normalizeName(name);
+                const studentRecord = studentsList.find(s => normalizeName(s.name) === sn);
+                const studentColor = studentRecord?.color || 'bg-emerald-200 border-emerald-300 text-emerald-900 dark:bg-emerald-900/50 dark:border-emerald-500 dark:text-emerald-100'; 
+                try {
+                    await addDoc(collection(db, 'artifacts', 'periplo-app-v1', 'schedule'), { date: dateStr, day: dayName, time, title: "Clase de " + name.split(' ')[0], student: name, type: 'class', notes: 'Agendado por alumno', customColor: studentColor, meetLink: '' });
+                    setBookingModal(null);
+                } catch (e) { alert("Error: " + e.message); }
             };
+
+            const saveNotes = async () => {
+                if(!classHubModal) return;
+                setIsSavingNotes(true);
+                try {
+                    await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', classHubModal.id), { notes_vocab: vocabNotes, notes_grammar: grammarNotes });
+                    setTimeout(() => setIsSavingNotes(false), 500);
+                } catch (e) { alert(e.message); setIsSavingNotes(false); }
+            };
+
+            const cancelClass = async () => {
+                if (!classHubModal) return;
+                if (confirm("¿Seguro que quieres CANCELAR esta clase? El espacio quedará libre.")) {
+                    try { await deleteDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', classHubModal.id)); setClassHubModal(null); } catch(e) { alert(e.message); }
+                }
+            };
+
+            const initReschedule = () => { setRescheduleMode(classHubModal.id); setClassHubModal(null); };
+            const performReschedule = async (tDate, tDay, tTime) => {
+                try { await updateDoc(doc(db, 'artifacts', 'periplo-app-v1', 'schedule', rescheduleMode), { date: tDate, day: tDay, time: tTime }); setRescheduleMode(null); } catch(err) { alert(err.message); }
+            };
+
+            const nowStr = format(now, 'yyyy-MM-dd');
+            const nowTime = `${now.getHours().toString().padStart(2,'0')}:00`;
+            const ZOOM_LEVELS = [36, 48, 64, 80];
+            const [zoomIdx, setZoomIdx] = useState(1);
+            const cellH = ZOOM_LEVELS[zoomIdx];
 
             return (
-                <div className="space-y-6 fade-in">
-                    <div className="bg-gradient-to-r from-slate-800 to-zinc-900 rounded-[2.5rem] p-6 sm:p-8 shadow-xl border border-zinc-700 text-white">
-                        <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
-                            <div>
-                                <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-1">Macro Evaluación</p>
-                                <h2 className={`text-2xl sm:text-3xl font-black flex items-center gap-2 ${archetypeData.color}`}>
-                                    <Flame size={28}/> {archetypeData.name}
-                                </h2>
-                                <p className="text-sm text-slate-300 mt-2 max-w-md">{archetypeData.desc}</p>
-                            </div>
-                            <div className="bg-white/5 border border-white/10 p-5 rounded-2xl text-center shrink-0">
-                                <span className="block text-4xl font-black text-amber-500">{macroTotal} <span className="text-xl text-slate-400">/ 20</span></span>
-                                <span className="text-[10px] text-slate-400 uppercase font-bold tracking-widest">Global Pts</span>
-                            </div>
+                <div className="space-y-4 fade-in">
+                    {rescheduleMode && (
+                        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-2xl p-4 flex items-center justify-between">
+                            <div className="flex items-center gap-3"><ArrowRightLeft size={20} className="text-amber-600"/><div><p className="font-black text-amber-800 dark:text-amber-300 text-sm">Selecciona el nuevo horario</p><p className="text-amber-600 dark:text-amber-400 text-xs">Toca un espacio libre en el calendario</p></div></div>
+                            <button onClick={() => setRescheduleMode(null)} className="text-amber-600 hover:text-amber-800 dark:hover:text-amber-200 font-bold text-xs px-3 py-2 bg-amber-100 dark:bg-amber-900/40 rounded-xl transition-colors">Cancelar</button>
                         </div>
-                    </div>
-
-                    <div className="bg-white dark:bg-zinc-900 rounded-[2.5rem] p-4 sm:p-8 shadow-lg border border-slate-200 dark:border-zinc-800">
-                        <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
-                            <h3 className="font-black text-slate-800 dark:text-white uppercase tracking-widest text-xs sm:text-sm flex items-center gap-2">
-                                <Sparkles className="text-indigo-500" size={18}/> MASTERY MODULES
-                            </h3>
-                            <div className="flex items-center bg-slate-100 dark:bg-zinc-800/50 border border-slate-200 dark:border-zinc-700 rounded-2xl p-1">
-                                <button onClick={() => { const i = LEVEL_HIERARCHY.indexOf(activeTrack); if(i > 0) setActiveTrack(LEVEL_HIERARCHY[i-1]); }} disabled={LEVEL_HIERARCHY.indexOf(activeTrack) === 0} className="p-1.5 text-slate-400 hover:text-indigo-500 disabled:opacity-30 hover:bg-white dark:hover:bg-zinc-700 rounded-lg transition-colors"><ChevronLeft size={16}/></button>
-                                <span className="font-black text-xs uppercase tracking-widest text-slate-700 dark:text-zinc-200 px-4">{activeTrack} MASTERY</span>
-                                <button onClick={() => { const i = LEVEL_HIERARCHY.indexOf(activeTrack); if(i < 2) setActiveTrack(LEVEL_HIERARCHY[i+1]); }} disabled={LEVEL_HIERARCHY.indexOf(activeTrack) === 2} className="p-1.5 text-slate-400 hover:text-indigo-500 disabled:opacity-30 hover:bg-white dark:hover:bg-zinc-700 rounded-lg transition-colors"><ChevronRight size={16}/></button>
+                    )}
+                    <div className="bg-white dark:bg-zinc-900 rounded-[2.5rem] shadow-xl border border-slate-200 dark:border-zinc-800 overflow-hidden">
+                        <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-100 dark:border-zinc-800 gap-2">
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => setCurrentDate(addDays(currentDate, isMobile ? -1 : -7))} className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors"><ChevronLeft size={18}/></button>
+                                <button onClick={() => setCurrentDate(getMexicoTime())} className="px-3 py-1.5 rounded-xl bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 font-black text-xs uppercase tracking-widest hover:bg-indigo-200 transition-colors"><LocateFixed size={14} className="inline mr-1"/>Hoy</button>
+                                <button onClick={() => setCurrentDate(addDays(currentDate, isMobile ? 1 : 7))} className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors"><ChevronRight size={18}/></button>
+                            </div>
+                            <h2 className="font-black text-sm text-slate-600 dark:text-zinc-300 uppercase tracking-widest text-center flex-1 truncate">
+                                {isMobile ? format(currentDate, "d 'de' MMMM", {locale:es}) : `${format(weekStart,"d MMM",{locale:es})} – ${format(addDays(weekStart,5),"d MMM yyyy",{locale:es})}`}
+                            </h2>
+                            <div className="flex items-center gap-1">
+                                <button onClick={() => setZoomIdx(Math.max(0, zoomIdx-1))} disabled={zoomIdx===0} className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 disabled:opacity-40 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors"><ZoomOut size={14}/></button>
+                                <button onClick={() => setZoomIdx(Math.min(ZOOM_LEVELS.length-1, zoomIdx+1))} disabled={zoomIdx===ZOOM_LEVELS.length-1} className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 disabled:opacity-40 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors"><ZoomIn size={14}/></button>
                             </div>
                         </div>
+                        <div className="overflow-auto cal-scroll" style={{maxHeight:'60vh'}}>
+                            <table className="w-full border-collapse" style={{minWidth: isMobile ? '300px' : '500px'}}>
+                                <thead>
+                                    <tr>
+                                        <th className="sticky-corner w-12 sm:w-16 bg-white dark:bg-zinc-900 border-b border-r border-slate-100 dark:border-zinc-800 text-[10px] text-slate-400 font-bold p-2"></th>
+                                        {displayDays.map((day, i) => {
+                                            const dateStr = format(day, 'yyyy-MM-dd');
+                                            const isToday = dateStr === nowStr;
+                                            return (
+                                                <th key={i} className={`border-b border-slate-100 dark:border-zinc-800 p-2 text-center min-w-[80px] sm:min-w-[100px] ${isToday ? 'bg-indigo-50 dark:bg-indigo-900/20' : 'bg-white dark:bg-zinc-900'}`}>
+                                                    <div className={`text-[10px] font-black uppercase tracking-widest ${isToday ? 'text-indigo-500' : 'text-slate-400 dark:text-zinc-500'}`}>{DAY_NAMES[i]}</div>
+                                                    <div className={`text-lg font-black ${isToday ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-700 dark:text-zinc-200'}`}>{format(day,'d')}</div>
+                                                </th>
+                                            );
+                                        })}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {TIMES.map(time => (
+                                        <tr key={time} className="group">
+                                            <td className="sticky-col bg-white dark:bg-zinc-900 border-r border-slate-100 dark:border-zinc-800 p-1 text-[10px] text-slate-400 dark:text-zinc-600 font-bold text-right pr-2 align-top w-12 sm:w-16" style={{height:`${cellH}px`}}>
+                                                {formatTimeDisplay(time)}
+                                            </td>
+                                            {displayDays.map((day, dayIdx) => {
+                                                const dateStr = format(day, 'yyyy-MM-dd');
+                                                const dayName = DAY_NAMES[dayIdx];
+                                                const isToday = dateStr === nowStr;
+                                                const isLive = isToday && time === nowTime;
+                                                const event = getEventForSlot(dateStr, dayName, time);
+                                                const isMine = event ? checkIsMine(event, studentName) : false;
+                                                const isPast = dateStr < nowStr || (isToday && time < nowTime);
+                                                
+                                                let cellContent = null;
+                                                let cellClass = `border-b border-slate-50 dark:border-zinc-800/50 relative transition-colors ${isToday ? 'bg-indigo-50/30 dark:bg-indigo-900/10' : ''}`;
 
-                        <div className="flex flex-col gap-4 w-full px-2 sm:px-8">
-                            <div className="flex justify-center gap-3 sm:gap-6 w-full">
-                                <CircularProgress score={getRealScore('grammar')} label="Grammar" colorClass="text-sky-500" strokeColor="#0ea5e9" icon={Brain}/>
-                                <CircularProgress score={getRealScore('nouns')} label="Vocabulary" colorClass="text-emerald-500" strokeColor="#10b981" icon={BookOpen}/>
-                                <CircularProgress score={macroTotal} label="Total" colorClass="text-amber-500" strokeColor="#f59e0b" icon={Trophy}/>
-                            </div>
+                                                if (event) {
+                                                    const colorClasses = event.customColor || 'bg-indigo-100 border-indigo-200 text-indigo-800 dark:bg-indigo-900/50 dark:border-indigo-500 dark:text-indigo-100';
+                                                    if (isMine) {
+                                                        cellClass += " cursor-pointer";
+                                                        cellContent = (
+                                                            <div draggable onDragStart={(e) => handleDragStart(e, event.id)} onDragEnd={() => setDraggedEventId(null)}
+                                                                className={`h-full w-full flex flex-col justify-between p-1.5 rounded-xl border draggable-item ${isPast ? 'opacity-40' : ''} ${colorClasses}`}>
+                                                                <div><div className="text-[8px] sm:text-[9px] font-black uppercase mb-1 flex items-center gap-1 opacity-80"><BookOpen size={10}/> MI CLASE</div><div className="text-xs font-bold leading-tight line-clamp-2" title={event.title}>{event.title}</div></div>
+                                                                <span className="text-[8px] sm:text-[9px] mt-1 font-bold flex items-center justify-center gap-1 bg-white/40 dark:bg-black/20 w-full py-1 rounded opacity-90"><PenTool size={10}/> Detalles</span>
+                                                            </div>
+                                                        );
+                                                    } else {
+                                                        cellClass += " cursor-not-allowed";
+                                                        cellContent = <div className="h-full w-full bg-stone-100 dark:bg-zinc-800/50 border border-stone-200 dark:border-zinc-700 rounded-xl flex items-center justify-center opacity-70"><div className="flex flex-col sm:flex-row items-center gap-1 text-stone-400 dark:text-zinc-600 font-bold text-[10px] uppercase"><Lock size={12}/> <span className="hidden sm:block">Ocupado</span></div></div>;
+                                                    }
+                                                } else {
+                                                    cellClass += " cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20";
+                                                    cellContent = <div className="h-full w-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><div className="flex flex-col items-center gap-1 text-teal-500 dark:text-teal-400"><UserPlus size={20}/><span className="text-[9px] font-bold uppercase hidden sm:block">Apartar</span></div></div>;
+                                                }
+
+                                                return (
+                                                    <td id={isLive ? 'live-cell' : undefined} key={dayIdx} style={{height:`${cellH}px`, padding:'2px'}}
+                                                        className={cellClass}
+                                                        onClick={() => !event ? handleSlotClick(dateStr, dayName, time) : (isMine ? handleSlotClick(dateStr, dayName, time) : null)}
+                                                        onDragOver={e => e.preventDefault()}
+                                                        onDrop={(e) => handleDrop(e, dateStr, dayName, time)}>
+                                                        {isLive && <div className="led-line" style={{top:'0px'}}></div>}
+                                                        {cellContent}
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
-                </div>
-            );
-        };
 
-        // ============================================================
-        // VISTA: SCHEDULE
-        // ============================================================
-        const ScheduleView = ({ student }) => (
-            <div className="space-y-6 fade-in">
-                <div className="bg-white dark:bg-zinc-900 rounded-[2.5rem] p-8 shadow-xl border border-slate-200 dark:border-zinc-800 text-center">
-                    <div className="bg-indigo-50 dark:bg-indigo-900/20 p-6 rounded-full inline-flex mb-6 text-indigo-500"><Calendar size={48}/></div>
-                    <h2 className="text-2xl font-black text-slate-800 dark:text-white mb-3">Tu Agenda</h2>
-                    <p className="text-slate-500 dark:text-zinc-400 font-semibold max-w-md mx-auto">Aquí verás tus clases reservadas y podrás agendar nuevas sesiones con tu teacher.</p>
-                </div>
-            </div>
-        );
-
-        // ============================================================
-        // VISTA: PLAYGROUND
-        // ============================================================
-        const MULTI_GAMES_STATIC = [
-            { id: 'connect4', name: 'Connect 4', desc: 'Conecta 4 fichas y responde desafíos', emoji: '🔴', color: 'from-blue-600 to-blue-800', url: 'connect4.html?student=true' },
-            { id: 'periplo-party', name: 'Periplo Party', desc: 'El juego de mesa del salón', emoji: '🎲', color: 'from-emerald-500 to-teal-700', url: 'periplo-party.html?student=true' },
-            { id: 'memorama', name: 'Memorama', desc: 'Encuentra los pares en equipo', emoji: '🧠', color: 'from-sky-500 to-cyan-700', url: 'memorama.html?student=true' },
-            { id: 'neverever', name: 'Never Have I Ever', desc: 'Conversación con Present Perfect', emoji: '🤫', color: 'from-fuchsia-500 to-pink-700', url: 'neverever.html?student=true' },
-            { id: 'talktime', name: 'Talk Time', desc: 'Dilemas y conversación guiada', emoji: '💬', color: 'from-violet-500 to-purple-700', url: 'talktime.html?student=true' },
-            { id: 'uno', name: 'Periplo UNO', desc: 'UNO con vocabulario en inglés', emoji: '🃏', color: 'from-red-500 to-rose-700', url: 'uno.html?student=true' },
-        ];
-
-        const PlaygroundView = ({ student }) => {
-            const [singleGames, setSingleGames] = useState([]);
-            const [loadingSingle, setLoadingSingle] = useState(true);
-            const [activeSection, setActiveSection] = useState('single');
-
-            useEffect(() => {
-                const fetchGames = async () => {
-                    try {
-                        const q = query(
-                            collection(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes'),
-                            where('studentVisible', '==', true)
-                        );
-                        const snap = await getDocs(q);
-                        const list = snap.docs
-                            .map(d => ({ id: d.id, ...d.data() }))
-                            .filter(d => !MULTI_TYPES.includes(d.type));
-                        setSingleGames(list);
-                    } catch(e) {
-                        console.error('Error cargando juegos:', e);
-                    } finally {
-                        setLoadingSingle(false);
-                    }
-                };
-                fetchGames();
-            }, []);
-
-            // Generador de rutas para las carpetas
-            const getGroupPath = (game) => {
-                if (!game.tags || (!game.tags.level && !game.tags.category && !game.tags.topic)) return 'Otros Juegos';
-                const parts = [];
-                if (game.tags.level) parts.push(game.tags.level.charAt(0).toUpperCase() + game.tags.level.slice(1));
-                if (game.tags.category) parts.push(game.tags.category.charAt(0).toUpperCase() + game.tags.category.slice(1));
-                if (game.tags.topic) parts.push(game.tags.topic.charAt(0).toUpperCase() + game.tags.topic.slice(1));
-                return parts.join(' ❯ ');
-            };
-
-            const groupedGames = singleGames.reduce((acc, game) => {
-                const key = getGroupPath(game);
-                if (!acc[key]) acc[key] = [];
-                acc[key].push(game);
-                return acc;
-            }, {});
-
-            const SingleCard = ({ game }) => {
-                const meta = GAME_META[game.type] || { emoji: '🎮', color: 'from-slate-500 to-slate-600', label: game.type };
-                return (
-                    <a
-                        href={getPlayLink(game)}
-                        className="group bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-xl hover:shadow-indigo-500/10 hover:scale-[1.03] transition-all flex flex-col"
-                    >
-                        <div className={`w-full h-16 bg-gradient-to-br ${meta.color} flex items-center justify-center text-4xl shrink-0`}>
-                            {meta.emoji}
-                        </div>
-                        <div className="p-3 flex-1 flex flex-col gap-1">
-                            <p className="font-black text-xs text-slate-800 dark:text-white leading-tight line-clamp-2">{game.title}</p>
-                            <p className="text-[9px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-wider">{meta.label}</p>
-                        </div>
-                    </a>
-                );
-            };
-
-            const MultiCard = ({ game }) => (
-                <a
-                    href={game.url}
-                    className="group bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-500 hover:shadow-xl hover:shadow-emerald-500/10 hover:scale-[1.03] transition-all flex flex-col"
-                >
-                    <div className={`w-full h-20 bg-gradient-to-br ${game.color} flex items-center justify-center text-5xl shrink-0`}>
-                        {game.emoji}
-                    </div>
-                    <div className="p-4 flex-1 flex flex-col gap-1">
-                        <p className="font-black text-sm text-slate-800 dark:text-white leading-tight">{game.name}</p>
-                        <p className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 leading-snug">{game.desc}</p>
-                    </div>
-                    <div className="px-4 pb-4">
-                        <span className="text-[9px] font-black uppercase tracking-widest bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 px-2 py-1 rounded-full flex items-center gap-1 w-fit">
-                            <Wifi size={8}/> Necesitas código de sala
-                        </span>
-                    </div>
-                </a>
-            );
-
-            const SkeletonCard = () => (
-                <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
-                    <div className="w-full h-16 shimmer"/>
-                    <div className="p-3 space-y-2">
-                        <div className="h-3 rounded shimmer w-4/5"/>
-                        <div className="h-2 rounded shimmer w-2/5"/>
-                    </div>
-                </div>
-            );
-
-            return (
-                <div className="space-y-6 fade-in">
-                    <div className="bg-gradient-to-br from-rose-500 to-orange-500 p-6 sm:p-8 rounded-[2.5rem] shadow-2xl text-white">
-                        <p className="text-rose-200 font-bold text-xs tracking-widest uppercase mb-2">Área de Juegos</p>
-                        <h1 className="text-3xl sm:text-4xl font-black mb-2">Game Zone 🎮</h1>
-                        <p className="text-rose-100 text-sm font-bold">
-                            {loadingSingle ? 'Cargando...' : `${singleGames.length} juego${singleGames.length !== 1 ? 's' : ''} solo · ${MULTI_GAMES_STATIC.length} en clase`}
-                        </p>
-                    </div>
-
-                    <div className="flex bg-slate-100 dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-1 gap-1">
-                        <button
-                            onClick={() => setActiveSection('single')}
-                            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${activeSection === 'single' ? 'bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-400 dark:text-zinc-500 hover:text-slate-600 dark:hover:text-zinc-300'}`}
-                        >
-                            <Gamepad2 size={14}/> Solo ({loadingSingle ? '...' : singleGames.length})
-                        </button>
-                        <button
-                            onClick={() => setActiveSection('multi')}
-                            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${activeSection === 'multi' ? 'bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-400 dark:text-zinc-500 hover:text-slate-600 dark:hover:text-zinc-300'}`}
-                        >
-                            <Users size={14}/> En Clase ({MULTI_GAMES_STATIC.length})
-                        </button>
-                    </div>
-
-                    {activeSection === 'single' && (
-                        <div className="space-y-6">
-                            {loadingSingle ? (
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                                    {[...Array(6)].map((_, i) => <SkeletonCard key={i}/>)}
+                    {classHubModal && (
+                        <div className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                            <div className="bg-white dark:bg-zinc-900 rounded-[2rem] w-full max-w-md shadow-2xl border border-slate-200 dark:border-zinc-800 overflow-hidden">
+                                <div className="p-5 border-b border-slate-100 dark:border-zinc-800 flex items-center justify-between">
+                                    <div><h3 className="font-black text-lg text-slate-800 dark:text-white">{classHubModal.title}</h3><p className="text-slate-500 text-xs font-bold">{classHubModal.date} · {formatTimeDisplay(classHubModal.time)}</p></div>
+                                    <button onClick={() => setClassHubModal(null)} className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 transition-colors"><X size={18}/></button>
                                 </div>
-                            ) : singleGames.length === 0 ? (
-                                <div className="text-center py-16 bg-white dark:bg-zinc-900 rounded-[2rem] border border-slate-200 dark:border-zinc-800">
-                                    <p className="text-4xl mb-4">🎮</p>
-                                    <p className="font-bold text-slate-500 dark:text-zinc-500">Tu teacher aún no ha publicado juegos.</p>
-                                    <p className="text-sm text-slate-400 dark:text-zinc-600 mt-1">¡Vuelve pronto!</p>
-                                </div>
-                            ) : (
-                                Object.entries(groupedGames).map(([groupName, games]) => (
-                                    <div key={groupName} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-3xl p-4 sm:p-6 shadow-sm">
-                                        <h3 className="text-xs sm:text-sm font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                            <Layers size={18} className="text-slate-400"/> {groupName}
-                                        </h3>
-                                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                                            {games.map(g => <SingleCard key={g.id} game={g}/>)}
-                                        </div>
+                                <div className="p-5 space-y-4">
+                                    {classHubModal.meetLink && <a href={classHubModal.meetLink} target="_blank" rel="noreferrer" className="w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-white font-black py-3 rounded-xl transition-colors"><Video size={18}/> Unirse a la clase</a>}
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">📝 Vocabulario de la clase</label>
+                                        <textarea value={vocabNotes} onChange={e => setVocabNotes(e.target.value)} className="w-full bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-xl p-3 text-sm font-medium resize-none outline-none focus:border-indigo-500 min-h-[80px] notebook-lines dark:text-white" placeholder="Palabras, frases, expresiones..."/>
                                     </div>
-                                ))
-                            )}
-                        </div>
-                    )}
-
-                    {activeSection === 'multi' && (
-                        <div className="space-y-4">
-                            <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-900/30 rounded-2xl p-4 flex gap-3">
-                                <Wifi className="text-amber-500 shrink-0 mt-0.5" size={18}/>
-                                <div>
-                                    <p className="font-black text-amber-800 dark:text-amber-300 text-sm">¿Cómo funciona?</p>
-                                    <p className="text-amber-700 dark:text-amber-400/80 text-xs font-bold mt-0.5">
-                                        Tu teacher abre el juego en clase y te da un código de sala. Entra al juego y escríbelo para unirte.
-                                    </p>
+                                    <div>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">📐 Gramática de la clase</label>
+                                        <textarea value={grammarNotes} onChange={e => setGrammarNotes(e.target.value)} className="w-full bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 rounded-xl p-3 text-sm font-medium resize-none outline-none focus:border-indigo-500 min-h-[80px] notebook-lines dark:text-white" placeholder="Notas de gramática..."/>
+                                    </div>
+                                    <button onClick={saveNotes} disabled={isSavingNotes} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-3 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+                                        {isSavingNotes ? <Loader2 size={16} className="animate-spin"/> : <Save size={16}/>} Guardar notas
+                                    </button>
+                                    <div className="flex gap-2 pt-1">
+                                        <button onClick={cancelClass} className="flex-1 py-2.5 text-rose-500 bg-rose-50 dark:bg-rose-900/20 hover:bg-rose-100 rounded-xl font-bold text-xs transition-colors border border-rose-200 dark:border-rose-800">Cancelar Clase</button>
+                                        <button onClick={initReschedule} className="flex-1 py-2.5 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 hover:bg-stone-200 dark:hover:bg-zinc-700 rounded-xl font-bold text-xs transition-colors border border-stone-200 dark:border-zinc-700">Mover Horario</button>
+                                    </div>
                                 </div>
-                            </div>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                                {MULTI_GAMES_STATIC.map(g => <MultiCard key={g.id} game={g}/>)}
                             </div>
                         </div>
                     )}
@@ -548,78 +651,148 @@
             );
         };
 
-        // ============================================================
-        // VISTA: LIBRARY
-        // ============================================================
-        const LibraryView = ({ student }) => {
-            const [presentations, setPresentations] = useState([]);
+        // ==========================================
+        // VISTA 4: PLAYGROUND — LingoMatch Solo ⭐ NUEVO
+        // ==========================================
+        const PlaygroundView = ({ student }) => {
+            const [soloGames, setSoloGames] = useState([]);
             const [loading, setLoading] = useState(true);
 
             useEffect(() => {
-                const fetchPresentations = async () => {
+                const fetchSoloGames = async () => {
                     try {
                         const q = query(
                             collection(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes'),
+                            where('type', '==', 'LINGOMATCH'),
                             where('studentVisible', '==', true)
                         );
                         const snap = await getDocs(q);
-                        const list = snap.docs
-                            .map(d => ({ id: d.id, ...d.data() }))
-                            .filter(d => d.type === 'PRESENTATION');
-                        setPresentations(list);
+                        const games = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        setSoloGames(games);
                     } catch(e) {
-                        console.error(e);
+                        console.error('Error cargando juegos solo:', e);
                     } finally {
                         setLoading(false);
                     }
                 };
-                fetchPresentations();
+                fetchSoloGames();
             }, []);
+
+            const getLevelBadge = (level) => {
+                if (level === 'basic') return 'text-emerald-600 bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50';
+                if (level === 'advanced') return 'text-amber-600 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50';
+                if (level === 'pro') return 'text-violet-600 bg-violet-50 dark:text-violet-400 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800/50';
+                return 'text-slate-500 bg-slate-100 dark:text-zinc-400 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700';
+            };
 
             return (
                 <div className="space-y-6 fade-in">
-                    <div className="bg-gradient-to-br from-indigo-500 to-blue-600 p-6 sm:p-8 rounded-[2.5rem] shadow-2xl text-white">
-                        <p className="text-indigo-200 font-bold text-xs tracking-widest uppercase mb-2">Recursos</p>
-                        <h1 className="text-3xl sm:text-4xl font-black mb-2">Biblioteca 📚</h1>
-                        <p className="text-indigo-100 text-sm font-bold">Presentaciones y materiales de clase</p>
+                    {/* Header */}
+                    <div className="bg-gradient-to-br from-violet-600 to-indigo-700 p-8 sm:p-10 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden">
+                        <div className="absolute top-0 right-0 opacity-10 transform translate-x-6 -translate-y-6">
+                            <ListFilter size={160}/>
+                        </div>
+                        <div className="relative z-10">
+                            <p className="text-violet-200 font-bold text-xs tracking-widest uppercase mb-2">Modo Solo</p>
+                            <h1 className="text-3xl sm:text-4xl font-black mb-2">Patio de Juegos ⚡</h1>
+                            <p className="text-violet-100 text-sm font-medium max-w-md">Practica a tu ritmo. Tu tiempo y posición en el ranking quedan guardados automáticamente.</p>
+                        </div>
                     </div>
 
-                    {loading ? (
-                        <div className="flex items-center justify-center py-16">
-                            <Loader2 className="animate-spin text-indigo-500" size={32}/>
+                    {/* Sección En Clase — carcasa informativa */}
+                    <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-[2rem] p-6 shadow-sm">
+                        <div className="flex items-center gap-3 mb-1">
+                            <div className="bg-indigo-100 dark:bg-indigo-900/30 p-2.5 rounded-xl">
+                                <ListFilter size={18} className="text-indigo-600 dark:text-indigo-400"/>
+                            </div>
+                            <div>
+                                <h2 className="font-black text-slate-800 dark:text-white text-base">LingoMatch Triple</h2>
+                                <p className="text-slate-500 dark:text-zinc-400 text-xs">En clase · Tu teacher proyecta y da el código</p>
+                            </div>
+                            <span className="ml-auto text-[10px] font-black text-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800/40 px-2.5 py-1 rounded-full uppercase tracking-wide">En Clase</span>
                         </div>
-                    ) : presentations.length === 0 ? (
-                        <div className="text-center py-16 bg-white dark:bg-zinc-900 rounded-[2rem] border border-slate-200 dark:border-zinc-800">
-                            <p className="text-4xl mb-4">📚</p>
-                            <p className="font-bold text-slate-500 dark:text-zinc-500">Aún no hay presentaciones publicadas.</p>
+                        <p className="text-slate-400 dark:text-zinc-500 text-xs mt-3 leading-relaxed pl-1">Cuando tu teacher inicie el juego en clase, te dará un código de sala para unirte desde tu dispositivo.</p>
+                    </div>
+
+                    {/* Sección Modo Solo */}
+                    <div>
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="bg-violet-100 dark:bg-violet-900/30 p-2.5 rounded-xl">
+                                <Trophy size={18} className="text-violet-600 dark:text-violet-400"/>
+                            </div>
+                            <div>
+                                <h2 className="font-black text-slate-800 dark:text-white text-base">Disponibles para ti</h2>
+                                <p className="text-slate-500 dark:text-zinc-400 text-xs">Cronómetro · Rankings personales</p>
+                            </div>
                         </div>
-                    ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {presentations.map(p => (
-                                <a
-                                    key={p.id}
-                                    href={`presentations.html?id=${p.id}&student=true`}
-                                    className="group bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-5 hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-lg transition-all flex items-center gap-4"
-                                >
-                                    <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-blue-600 rounded-xl flex items-center justify-center text-white shrink-0">
-                                        <Presentation size={20}/>
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="font-black text-slate-800 dark:text-white truncate">{p.title}</p>
-                                        <p className="text-xs text-slate-400 dark:text-zinc-500 font-bold uppercase tracking-wider mt-0.5">{p.tags?.level || ''} · {p.tags?.category || ''}</p>
-                                    </div>
-                                    <Play size={16} className="text-indigo-500 shrink-0 group-hover:scale-110 transition-transform"/>
-                                </a>
-                            ))}
-                        </div>
-                    )}
+
+                        {loading ? (
+                            <div className="flex items-center justify-center py-16">
+                                <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin"/>
+                            </div>
+                        ) : soloGames.length === 0 ? (
+                            <div className="bg-white dark:bg-zinc-900 border border-dashed border-slate-300 dark:border-zinc-700 rounded-[2rem] p-12 text-center">
+                                <div className="text-5xl mb-4">🔒</div>
+                                <p className="font-black text-slate-600 dark:text-zinc-300 text-lg mb-2">Sin actividades disponibles</p>
+                                <p className="text-slate-400 dark:text-zinc-500 text-sm max-w-xs mx-auto">Tu teacher habilitará los juegos cuando estén listos para practicar.</p>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                {soloGames.map(game => (
+                                    <button
+                                        key={game.id}
+                                        onClick={() => window.location.href = `lingomatch.html?id=${game.id}&mode=solo`}
+                                        className="w-full text-left bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-[1.75rem] p-5 hover:border-violet-400 dark:hover:border-violet-500 hover:shadow-xl hover:shadow-violet-500/10 transition-all group active:scale-[0.98]"
+                                    >
+                                        <div className="flex items-start justify-between gap-3 mb-4">
+                                            <div className="bg-gradient-to-br from-violet-500 to-indigo-600 w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-lg shadow-violet-500/30 group-hover:scale-110 transition-transform">
+                                                <ListFilter size={20} className="text-white"/>
+                                            </div>
+                                            <div className="bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-800/40 text-violet-600 dark:text-violet-400 text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-wide flex items-center gap-1 shrink-0">
+                                                ⚡ Solo
+                                            </div>
+                                        </div>
+                                        <h3 className="font-black text-slate-800 dark:text-white text-sm leading-snug mb-3">{game.title}</h3>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            {game.tags?.level && (
+                                                <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wide ${getLevelBadge(game.tags.level)}`}>
+                                                    {game.tags.level}
+                                                </span>
+                                            )}
+                                            {game.tags?.topic && (
+                                                <span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 bg-slate-50 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 px-2.5 py-1 rounded-full uppercase tracking-wide truncate max-w-[120px]">
+                                                    {game.tags.topic}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="mt-4 flex items-center gap-2 text-violet-500 dark:text-violet-400">
+                                            <Play size={14} fill="currentColor"/>
+                                            <span className="text-xs font-black uppercase tracking-widest">Jugar ahora</span>
+                                            <ChevronRight size={14} className="ml-auto group-hover:translate-x-1 transition-transform"/>
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </div>
             );
         };
 
-        // ============================================================
+        // ==========================================
+        // VISTA 5: BIBLIOTECA (placeholder)
+        // ==========================================
+        const PlaceholderView = ({ title, icon: Icon, desc }) => (
+            <div className="h-[60vh] flex flex-col items-center justify-center text-center bg-white dark:bg-zinc-900 rounded-[2.5rem] border border-slate-200 dark:border-zinc-800 shadow-xl fade-in p-6">
+                <div className="bg-indigo-50 dark:bg-indigo-900/20 p-6 rounded-full mb-6 text-indigo-500"><Icon size={64}/></div>
+                <h2 className="text-3xl font-black text-slate-800 dark:text-white mb-3">{title}</h2>
+                <p className="text-slate-500 dark:text-zinc-400 font-semibold max-w-md">{desc}</p>
+            </div>
+        );
+
+        // ==========================================
         // APP ROOT
-        // ============================================================
+        // ==========================================
         const StudentApp = () => {
             const [student, setStudent] = useState(null);
             const [evalData, setEvalData] = useState({});
@@ -632,7 +805,6 @@
                 const params = new URLSearchParams(window.location.search);
                 const id = params.get('id');
                 if (!id) { setLoading(false); return; }
-
                 getDoc(doc(db, 'artifacts/periplo-app-v1/students', id)).then(docSnap => {
                     if (docSnap.exists()) {
                         const data = docSnap.data();
@@ -643,101 +815,65 @@
                 });
             }, []);
 
-            if (loading) return (
-                <div className="h-screen flex items-center justify-center bg-zinc-950">
-                    <Loader2 className="animate-spin text-indigo-500" size={48}/>
-                </div>
-            );
+            if (loading) return <div className="h-screen flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-indigo-500" size={48}/></div>;
 
             if (!student) return (
                 <div className="h-screen flex flex-col items-center justify-center bg-zinc-950 text-white p-8 text-center">
-                    <p className="text-6xl mb-6">🚀</p>
-                    <h1 className="text-3xl font-black mb-3">Periplo Student Hub</h1>
-                    <p className="text-zinc-400 font-bold mb-2">Accede con tu link personalizado.</p>
-                    <p className="text-zinc-600 text-sm">Si no tienes uno, pídelo a tu teacher.</p>
+                    <div className="text-6xl mb-6">🚀</div>
+                    <h1 className="text-3xl font-black mb-3">Portal de Alumno</h1>
+                    <p className="text-zinc-400 font-medium max-w-sm">Accede con el link personalizado que te dio tu teacher.</p>
                 </div>
             );
 
             const NAV_ITEMS = [
-                { id: 'home',        label: 'Inicio',     icon: Home },
+                { id: 'home', label: 'Inicio', icon: Home },
                 { id: 'performance', label: 'Mi Progreso', icon: Target },
-                { id: 'schedule',    label: 'Agenda',     icon: Calendar },
-                { id: 'playground',  label: 'Juegos',     icon: Gamepad2 },
-                { id: 'library',     label: 'Biblioteca', icon: Library },
+                { id: 'schedule', label: 'Agenda', icon: Calendar },
+                { id: 'playground', label: 'Playground', icon: Gamepad2 },
+                { id: 'library', label: 'Biblioteca', icon: Library }
             ];
 
             return (
                 <div className="min-h-screen flex flex-col md:flex-row bg-slate-50 dark:bg-zinc-950 overflow-x-hidden">
-
                     <aside className={`hidden md:flex flex-col bg-white dark:bg-zinc-900 border-r border-slate-200 dark:border-zinc-800 fixed h-full z-50 transition-all duration-300 ease-in-out ${isSidebarOpen ? 'w-64' : 'w-20'}`}>
                         <div className={`p-6 pb-2 border-b border-slate-100 dark:border-zinc-800/50 flex items-center h-[88px] ${isSidebarOpen ? 'justify-start gap-3' : 'justify-center'}`}>
-                            <button
-                                onClick={() => { setIsSidebarOpen(!isSidebarOpen); setHasClickedMenu(true); }}
-                                className={`bg-indigo-600 p-2.5 rounded-xl text-white transition-all hover:bg-indigo-500 shadow-md shrink-0 ${!hasClickedMenu ? 'animate-invite' : ''}`}
-                                title={isSidebarOpen ? "Colapsar menú" : "Expandir menú"}
-                            >
-                                <RocketIcon size={20}/>
-                            </button>
+                            <button onClick={() => { setIsSidebarOpen(!isSidebarOpen); setHasClickedMenu(true); }} className={`bg-indigo-600 p-2.5 rounded-xl text-white transition-all hover:bg-indigo-500 shadow-md shrink-0 ${!hasClickedMenu ? 'animate-invite' : ''}`} title={isSidebarOpen ? "Colapsar menú" : "Expandir menú"}><RocketIcon size={20}/></button>
                             {isSidebarOpen && <h1 className="text-xl font-black tracking-tight whitespace-nowrap fade-in">Periplo</h1>}
                         </div>
-
                         <nav className={`flex-1 py-4 space-y-2 overflow-y-auto no-scrollbar flex flex-col ${isSidebarOpen ? 'px-4' : 'items-center px-0'}`}>
                             {isSidebarOpen && <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-3 mb-4 mt-2 w-full fade-in">Menú Principal</div>}
                             {NAV_ITEMS.map(item => (
-                                <button
-                                    key={item.id}
-                                    onClick={() => setCurrentTab(item.id)}
-                                    title={!isSidebarOpen ? item.label : ''}
-                                    className={`flex items-center rounded-2xl font-bold transition-all ${isSidebarOpen ? 'w-full px-4 py-3 gap-3 justify-start' : 'w-12 h-12 justify-center shrink-0'} ${currentTab === item.id ? 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400' : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800/50 hover:text-slate-900 dark:hover:text-white'}`}
-                                >
-                                    <item.icon size={20} className={`${currentTab === item.id ? 'stroke-[2.5px]' : ''} shrink-0`}/>
+                                <button key={item.id} onClick={() => setCurrentTab(item.id)} title={!isSidebarOpen ? item.label : ''} className={`flex items-center rounded-2xl font-bold transition-all ${isSidebarOpen ? 'w-full px-4 py-3 gap-3 justify-start' : 'w-12 h-12 justify-center shrink-0'} ${currentTab === item.id ? 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400' : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800/50 hover:text-slate-900 dark:hover:text-white'}`}>
+                                    <item.icon size={20} className={currentTab === item.id ? 'stroke-[2.5px] shrink-0' : 'shrink-0'}/> 
                                     {isSidebarOpen && <span className="whitespace-nowrap fade-in">{item.label}</span>}
                                 </button>
                             ))}
                         </nav>
-
                         <div className={`p-4 border-t border-slate-100 dark:border-zinc-800/50 flex ${isSidebarOpen ? 'items-center justify-start gap-3' : 'justify-center'}`}>
-                            <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-zinc-800 flex items-center justify-center font-black text-indigo-600 dark:text-indigo-400 shrink-0">
-                                {student?.name?.charAt(0) || '?'}
-                            </div>
-                            {isSidebarOpen && (
-                                <div className="overflow-hidden fade-in">
-                                    <p className="text-sm font-bold truncate text-slate-800 dark:text-white">{student?.name}</p>
-                                    <p className="text-[10px] font-black text-indigo-500 uppercase tracking-widest truncate">{student?.level}</p>
-                                </div>
-                            )}
+                            <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-zinc-800 flex items-center justify-center font-black text-slate-500 shrink-0">{student?.name?.charAt(0)}</div>
+                            {isSidebarOpen && <div className="overflow-hidden fade-in"><p className="text-sm font-bold truncate text-slate-800 dark:text-white">{student?.name}</p><p className="text-[10px] font-black text-indigo-500 uppercase tracking-widest truncate">{student?.level}</p></div>}
                         </div>
                     </aside>
 
                     <main className={`flex-1 min-w-0 relative pb-24 md:pb-8 transition-all duration-300 ease-in-out ${isSidebarOpen ? 'md:ml-64' : 'md:ml-20'}`}>
                         <header className="md:hidden bg-white/80 dark:bg-zinc-900/80 backdrop-blur-md border-b border-slate-200 dark:border-zinc-800 sticky top-0 z-40 p-4 flex justify-between items-center">
-                            <h1 className="text-lg font-black flex items-center gap-2">
-                                <RocketIcon size={20} className="text-indigo-500"/> Periplo
-                            </h1>
-                            <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-zinc-800 flex items-center justify-center font-black text-indigo-600 dark:text-indigo-400 text-xs">
-                                {student?.name?.charAt(0) || '?'}
-                            </div>
+                            <h1 className="text-lg font-black flex items-center gap-2"><RocketIcon size={20} className="text-indigo-500"/> Periplo</h1>
+                            <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-zinc-800 flex items-center justify-center font-black text-indigo-600 dark:text-indigo-400 text-xs">{student?.name?.charAt(0)}</div>
                         </header>
 
                         <div className="max-w-5xl mx-auto p-4 sm:p-6 lg:p-8 w-full">
-                            {currentTab === 'home'        && <HomeView student={student} setTab={setCurrentTab}/>}
-                            {currentTab === 'performance' && <PerformanceView student={student} evalData={evalData}/>}
-                            {currentTab === 'schedule'    && <ScheduleView student={student}/>}
-                            {currentTab === 'playground'  && <PlaygroundView student={student}/>}
-                            {currentTab === 'library'     && <LibraryView student={student}/>}
+                            {currentTab === 'home' && <HomeView student={student} setTab={setCurrentTab}/>}
+                            {currentTab === 'performance' && <PerformanceView student={student} evalData={evalData} />}
+                            {currentTab === 'schedule' && <ScheduleView student={student} />}
+                            {currentTab === 'playground' && <PlaygroundView student={student} />}
+                            {currentTab === 'library' && <PlaceholderView title="La Biblioteca" desc="Recursos didácticos, PDFs y explicaciones en video sobre los temas que estamos viendo en clase." icon={Library}/>}
                         </div>
                     </main>
 
                     <nav className="md:hidden fixed bottom-0 w-full bg-white/90 dark:bg-zinc-900/90 backdrop-blur-lg border-t border-slate-200 dark:border-zinc-800 pb-safe z-50 flex justify-around px-2 py-2">
                         {NAV_ITEMS.map(item => (
-                            <button
-                                key={item.id}
-                                onClick={() => setCurrentTab(item.id)}
-                                className={`flex flex-col items-center justify-center w-16 h-14 rounded-2xl transition-all ${currentTab === item.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300'}`}
-                            >
-                                <div className={`${currentTab === item.id ? 'bg-indigo-50 dark:bg-indigo-500/20 p-1.5 rounded-xl mb-1' : 'mb-1'}`}>
-                                    <item.icon size={20} className={currentTab === item.id ? 'stroke-[2.5px]' : ''}/>
-                                </div>
+                            <button key={item.id} onClick={() => setCurrentTab(item.id)} className={`flex flex-col items-center justify-center w-16 h-14 rounded-2xl transition-all ${currentTab === item.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300'}`}>
+                                <div className={`${currentTab === item.id ? 'bg-indigo-50 dark:bg-indigo-500/20 p-1.5 rounded-xl mb-1' : 'mb-1'}`}><item.icon size={20} className={currentTab === item.id ? 'stroke-[2.5px]' : ''}/></div>
                                 <span className={`text-[9px] font-bold ${currentTab === item.id ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>{item.label}</span>
                             </button>
                         ))}
@@ -746,6 +882,8 @@
             );
         };
 
+        const RocketIcon = ({size, className}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"></path><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path></svg>;
+        
         const root = createRoot(document.getElementById('root'));
         root.render(<StudentApp />);
     </script>
