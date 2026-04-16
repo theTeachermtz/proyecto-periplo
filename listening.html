@@ -21,7 +21,6 @@
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; }
 
-        /* ── Range slider ── */
         input[type=range] { -webkit-appearance: none; background: transparent; }
         input[type=range]::-webkit-slider-thumb {
             -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%;
@@ -32,40 +31,27 @@
         input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: transparent; border-radius: 2px; }
         input[type=range]:focus { outline: none; }
 
-        /* ── Subtitle overlay transition ── */
         .sub-overlay { transition: opacity 0.3s ease, transform 0.3s ease; }
         .sub-overlay-active { opacity: 1; transform: translateY(0); }
         .sub-overlay-fading { opacity: 0.45; transform: translateY(0); }
         .sub-overlay-hidden { opacity: 0; transform: translateY(6px); pointer-events: none; }
 
-        /* ── Panel animations ── */
         .panel-enter { animation: panelIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         @keyframes panelIn {
             from { opacity: 0; transform: translateY(12px) scale(0.97); }
             to { opacity: 1; transform: translateY(0) scale(1); }
         }
 
-        /* ── Mode pill ── */
         .mode-pill { transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
-
-        /* ── Quiz hover (desktop only) ── */
-        @media (hover: hover) {
-            .quiz-opt:hover:not(:disabled) { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.25); transform: translateY(-1px); }
-        }
-
-        /* ── iOS Safari ── */
         button, a, [role="button"] { touch-action: manipulation; }
 
-        /* ── Scrollbar ── */
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
-
-        /* ── Speed badge ── */
         .speed-badge { font-variant-numeric: tabular-nums; }
     </style>
 </head>
-<body class="bg-zinc-950 text-slate-100 min-h-[100dvh] relative overflow-x-hidden">
-    <div id="root"></div>
+<body class="bg-zinc-950 text-slate-100 min-h-[100dvh] relative overflow-x-hidden flex flex-col">
+    <div id="root" class="flex-1"></div>
 
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -101,32 +87,28 @@
             const [panelVisible, setPanelVisible] = useState(true);
             const [focusedClip, setFocusedClip] = useState(-1);
             
-            // Interaction States (Identificadores únicos basados en índice de clip + índice de elemento)
-            const [expandedVocabKey, setExpandedVocabKey] = useState(null); // "cIdx-vIdx"
-            const [visibleOptions, setVisibleOptions] = useState(new Set()); // Set de "cIdx-qIdx"
-            const [answeredQuestions, setAnsweredQuestions] = useState({}); // Mapa "cIdx-qIdx" -> answerIndex
+            // Interaction States
+            const [expandedVocabKey, setExpandedVocabKey] = useState(null); 
+            const [visibleOptions, setVisibleOptions] = useState(new Set()); 
+            const [answeredQuestions, setAnsweredQuestions] = useState({}); 
 
             const playerRef = useRef(null);
             const playerReady = useRef(false);
             const speedMenuRef = useRef(null);
             const lastSubIdx = useRef(-1);
+            
+            // NUEVO: Referencia para pausar automáticamente al terminar el clip actual
+            const autoPauseTarget = useRef(null);
 
-            /* ── STICKY SUBTITLE with grace period ── */
             const SUBTITLE_GRACE = 1.2;
-
             const getSubtitleState = useCallback(() => {
                 if (parsedSubs.length === 0) return { activeIdx: -1, displayIdx: -1 };
                 let activeIdx = parsedSubs.findIndex(sub => currentTime >= sub.start && currentTime < sub.end);
-                if (activeIdx !== -1) {
-                    lastSubIdx.current = activeIdx;
-                    return { activeIdx, displayIdx: activeIdx };
-                }
+                if (activeIdx !== -1) { lastSubIdx.current = activeIdx; return { activeIdx, displayIdx: activeIdx }; }
                 const lastIdx = lastSubIdx.current;
                 if (lastIdx >= 0 && lastIdx < parsedSubs.length) {
                     const lastSub = parsedSubs[lastIdx];
-                    if (currentTime >= lastSub.end && currentTime < lastSub.end + SUBTITLE_GRACE) {
-                        return { activeIdx: -1, displayIdx: lastIdx };
-                    }
+                    if (currentTime >= lastSub.end && currentTime < lastSub.end + SUBTITLE_GRACE) { return { activeIdx: -1, displayIdx: lastIdx }; }
                 }
                 const nextIdx = parsedSubs.findIndex(sub => sub.start > currentTime);
                 if (nextIdx > 0) { lastSubIdx.current = nextIdx - 1; return { activeIdx: -1, displayIdx: nextIdx - 1 }; }
@@ -136,7 +118,7 @@
 
             const { activeIdx: activeSubIndex, displayIdx: displaySubIndex } = getSubtitleState();
 
-            /* ── Firebase Fetch & Legacy Fallback ── */
+            /* ── Firebase Fetch ── */
             useEffect(() => {
                 const fetchTaller = async () => {
                     const params = new URLSearchParams(window.location.search);
@@ -149,16 +131,12 @@
                             setTaller(data);
                             setParsedSubs(data.parsedTranscript || []);
                             
-                            // Migración al vuelo: Si tiene clips, los usamos. Si no, metemos todo en 1 clip gigante.
                             if (data.clips && data.clips.length > 0) {
                                 setClips(data.clips);
                             } else {
                                 setClips([{
-                                    startSeconds: 0,
-                                    endSeconds: 9999, // Se ajustará a la duración real
-                                    reason: "Lección Completa",
-                                    vocabulary: data.vocabulary || [],
-                                    questions: data.questions || []
+                                    startSeconds: 0, endSeconds: 9999, reason: "Lección Completa",
+                                    vocabulary: data.vocabulary || [], questions: data.questions || []
                                 }]);
                             }
                             loadYouTubeScript(data.videoId);
@@ -168,7 +146,7 @@
                 fetchTaller();
             }, []);
 
-            /* ── YouTube Player ── */
+            /* ── YouTube Player & Auto-Pause ── */
             const loadYouTubeScript = (vidId) => {
                 if (!window.YT) {
                     const tag = document.createElement('script');
@@ -194,18 +172,51 @@
 
             useEffect(() => {
                 const interval = setInterval(() => {
-                    if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function')
-                        setCurrentTime(playerRef.current.getCurrentTime());
+                    if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+                        const t = playerRef.current.getCurrentTime();
+                        setCurrentTime(t);
+
+                        // NUEVA LÓGICA: Auto-Pausar al llegar al final del clip objetivo
+                        if (autoPauseTarget.current !== null) {
+                            // Validar que entramos al tiempo exacto del final (con un buffer de 2s por si el timer salta)
+                            if (t >= autoPauseTarget.current && t < autoPauseTarget.current + 2) {
+                                playerRef.current.pauseVideo();
+                                setIsPlaying(false);
+                                autoPauseTarget.current = null; // Limpiar objetivo
+                            } else if (t < autoPauseTarget.current - 5 || t > autoPauseTarget.current + 2) {
+                                // Si el usuario brinca manualmente lejos del objetivo, abortamos el auto-pause
+                                autoPauseTarget.current = null;
+                            }
+                        }
+                    }
                 }, 80);
                 return () => clearInterval(interval);
             }, []);
+
+            // NUEVA LÓGICA: Auto-Sync (Avanzar el panel junto con el video)
+            useEffect(() => {
+                if (!clips || clips.length === 0 || focusedClip === -1) return;
+                
+                let activeIdx = clips.findIndex(c => {
+                    const end = c.endSeconds === 9999 ? duration : c.endSeconds;
+                    return currentTime >= c.startSeconds && currentTime < end;
+                });
+
+                // Cambiar el foco si el video entró a un nuevo clip automáticamente (y si hay más de 1 clip para no romper material viejo)
+                if (activeIdx !== -1 && activeIdx !== focusedClip && clips.length > 1) {
+                    setFocusedClip(activeIdx);
+                    // Reseteamos las opciones para que se vea limpio el nuevo clip
+                    setVisibleOptions(new Set());
+                    setExpandedVocabKey(null);
+                }
+            }, [currentTime, clips, focusedClip, duration]);
 
             /* ── Transport Controls ── */
             const togglePlayPause = useCallback(() => {
                 if (!playerRef.current || !playerReady.current) return;
                 const st = playerRef.current.getPlayerState();
                 if (st === 1 || st === 3) { playerRef.current.pauseVideo(); setIsPlaying(false); }
-                else { playerRef.current.playVideo(); setIsPlaying(true); }
+                else { playerRef.current.playVideo(); setIsPlaying(true); autoPauseTarget.current = null; } // Si le da play manual, cancela auto-pause
             }, []);
 
             const seekTo = useCallback((time) => {
@@ -224,6 +235,13 @@
 
             const handleSeek = useCallback((e) => { const t = parseFloat(e.target.value); setCurrentTime(t); seekTo(t); }, [seekTo]);
 
+            // Reproducir clip específico
+            const playSpecificClip = (start, end) => {
+                seekTo(start);
+                playerRef.current.playVideo();
+                autoPauseTarget.current = end; // Armar la trampa de pausa
+            };
+
             const changeSpeed = useCallback((rate) => {
                 setPlaybackRate(rate); setShowSpeedMenu(false);
                 if (playerRef.current?.setPlaybackRate) playerRef.current.setPlaybackRate(rate);
@@ -235,7 +253,6 @@
                 return () => document.removeEventListener('pointerdown', handler);
             }, [showSpeedMenu]);
 
-            /* ── Handlers ── */
             const handleAnswer = useCallback((qKey, ansIdx) => {
                 if (answeredQuestions[qKey] !== undefined) return;
                 setAnsweredQuestions(prev => ({ ...prev, [qKey]: ansIdx }));
@@ -249,7 +266,6 @@
                 });
             };
 
-            /* ── Timeline markers for Clips ── */
             const timelineMarkers = useMemo(() => {
                 if (duration <= 0 || clips.length === 0) return [];
                 return clips.map(clip => {
@@ -263,12 +279,7 @@
                 });
             }, [clips, currentTime, duration]);
 
-            const subOverlayClass = !subsVisible ? 'sub-overlay-hidden'
-                : activeSubIndex >= 0 ? 'sub-overlay-active'
-                : displaySubIndex >= 0 ? 'sub-overlay-fading'
-                : 'sub-overlay-hidden';
-
-            /* ══════════════ RENDER ══════════════ */
+            const subOverlayClass = !subsVisible ? 'sub-overlay-hidden' : activeSubIndex >= 0 ? 'sub-overlay-active' : displaySubIndex >= 0 ? 'sub-overlay-fading' : 'sub-overlay-hidden';
 
             if (!taller) return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center gap-4">
@@ -278,7 +289,7 @@
             );
 
             return (
-                <div className="relative min-h-[100dvh]">
+                <div className="relative flex-1 flex flex-col">
                     {/* ── Blurred BG ── */}
                     {taller.thumbnailUrl && (
                         <div className="fixed inset-0 z-0 bg-cover bg-center opacity-20 blur-[80px] scale-110 saturate-150"
@@ -286,10 +297,10 @@
                     )}
                     <div className="fixed inset-0 z-0 bg-gradient-to-b from-zinc-950/70 via-zinc-950/90 to-zinc-950"/>
 
-                    <div className="relative z-10 max-w-7xl mx-auto px-4 md:px-6 pt-5 pb-16">
+                    <div className="relative z-10 max-w-7xl mx-auto px-4 md:px-6 pt-5 pb-6 flex-1 flex flex-col w-full">
 
                         {/* ── HEADER ── */}
-                        <header className="mb-4">
+                        <header className="mb-4 shrink-0">
                             <div className="flex items-start justify-between gap-4">
                                 <div className="min-w-0">
                                     {taller.channelName && (
@@ -310,10 +321,10 @@
                         {/* ══════════════════════════════════════════
                             MAIN LAYOUT
                         ══════════════════════════════════════════ */}
-                        <div className={`flex flex-col ${panelVisible ? 'lg:flex-row' : ''} gap-4`}>
+                        <div className={`flex flex-col ${panelVisible ? 'lg:flex-row' : ''} gap-4 flex-1 min-h-0`}>
 
                             {/* ── LEFT COLUMN: Video + Controls ── */}
-                            <div className={`${panelVisible ? 'lg:flex-1 lg:min-w-0' : 'w-full max-w-5xl mx-auto'} transition-all duration-300`}>
+                            <div className={`${panelVisible ? 'lg:flex-1 lg:min-w-0' : 'w-full max-w-5xl mx-auto'} flex flex-col transition-all duration-300 shrink-0 lg:shrink`}>
 
                                 {/* Player card */}
                                 <div className="rounded-2xl overflow-hidden bg-black/60 backdrop-blur-xl border border-white/8 shadow-2xl shadow-black/40">
@@ -335,14 +346,12 @@
 
                                     {/* ── Transport controls ── */}
                                     <div className="px-3 md:px-4 pt-2.5 pb-3">
-                                        {/* Timeline */}
                                         <div className="flex items-center gap-2.5 mb-2.5">
                                             <span className="text-[10px] font-mono text-zinc-500 w-8 text-right tabular-nums">{formatTime(currentTime)}</span>
                                             <div className="relative w-full flex items-center h-5">
                                                 <div className="absolute left-0 right-0 h-1 bg-white/10 rounded-full"/>
                                                 <div className="absolute left-0 h-1 bg-white/40 rounded-full" style={{ width: duration > 0 ? `${(currentTime/duration)*100}%` : '0%' }}/>
                                                 
-                                                {/* Timeline Markers for Clips */}
                                                 {timelineMarkers.map((m, i) => (
                                                     <React.Fragment key={i}>
                                                         {m.active && (
@@ -359,7 +368,6 @@
                                             <span className="text-[10px] font-mono text-zinc-500 w-8 tabular-nums">{formatTime(duration)}</span>
                                         </div>
 
-                                        {/* Controls row */}
                                         <div className="flex items-center justify-between">
                                             <div className="relative" ref={speedMenuRef}>
                                                 <button onClick={() => setShowSpeedMenu(!showSpeedMenu)}
@@ -402,7 +410,7 @@
                                 </div>
 
                                 {/* ── MODE TOGGLE ── */}
-                                <div className="flex items-center justify-center mt-3">
+                                <div className="flex items-center justify-center mt-3 pb-3 lg:pb-0">
                                     <button onClick={() => setPanelVisible(!panelVisible)}
                                         className={`mode-pill relative flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-extrabold border transition-all ${panelVisible ? 'text-amber-400 bg-amber-400/15 border-amber-400/30' : 'text-zinc-400 bg-white/5 border-transparent hover:bg-white/8 hover:text-zinc-300'}`}>
                                         <List size={18}/>
@@ -416,39 +424,40 @@
 
                             {/* ── RIGHT COLUMN: Side Panel (Clips Navigation) ── */}
                             {panelVisible && (
-                                <div className="lg:w-[380px] xl:w-[420px] lg:shrink-0 flex flex-col">
-                                    <div className="panel-enter rounded-2xl border border-amber-500/15 bg-amber-950/10 backdrop-blur-md flex-1 flex flex-col px-5 py-6 min-h-[400px] max-h-[600px] lg:max-h-[calc(100vh-150px)]">
+                                /* FIX CSS MÓVIL: En dispositivos móviles, le asignamos una altura controlada h-[500px] y overflow-hidden
+                                   En pantallas grandes, se auto-ajusta hasta el calc del viewport */
+                                <div className="w-full lg:w-[380px] xl:w-[420px] lg:shrink-0 flex flex-col h-[500px] lg:h-auto lg:max-h-[calc(100vh-150px)]">
+                                    <div className="panel-enter rounded-2xl border border-amber-500/15 bg-amber-950/10 backdrop-blur-md flex-1 flex flex-col px-5 py-6 overflow-hidden min-h-0">
                                         
                                         {focusedClip !== -1 ? (
                                             /* ════ DETAIL VIEW (Single Clip) ════ */
-                                            <div className="flex flex-col h-full w-full">
+                                            <div className="flex flex-col h-full w-full min-h-0">
                                                 <button onClick={() => setFocusedClip(-1)} className="self-start flex items-center gap-1.5 text-amber-500 hover:text-amber-400 text-xs font-bold mb-4 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1.5 rounded-lg transition-colors shrink-0">
                                                     <ArrowLeft size={14} /> Volver a Clips
                                                 </button>
 
-                                                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-6 pb-4">
+                                                {/* FIX CSS MÓVIL: Aseguramos que solo esta caja tenga scroll y el contenido no rompa hacia afuera */}
+                                                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-6 pb-4 min-h-0">
                                                     {(() => {
                                                         const clip = clips[focusedClip];
                                                         const endSec = clip.endSeconds === 9999 ? duration : clip.endSeconds;
                                                         return (
-                                                            <div className="w-full">
-                                                                {/* Clip Header Info */}
+                                                            <div className="w-full flex flex-col">
                                                                 <div className="mb-6 shrink-0 border-b border-white/10 pb-5">
                                                                     <div className="inline-flex items-center gap-1.5 bg-amber-500/15 text-amber-400 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-[0.15em] mb-3 border border-amber-500/20">
                                                                         <Scissors size={12}/> Clip {focusedClip + 1}
                                                                     </div>
                                                                     <h2 className="text-xl font-black text-white leading-snug break-words mb-3">{clip.reason}</h2>
                                                                     <div className="flex items-center gap-3">
-                                                                        <span className="text-xs font-mono text-amber-500/70 bg-amber-500/10 px-2 py-1 rounded-md flex items-center gap-1.5">
+                                                                        <span className="text-xs font-mono text-amber-500/70 bg-amber-500/10 px-2 py-1 rounded-md flex items-center gap-1.5 shrink-0">
                                                                             <Clock size={12}/> {formatTime(clip.startSeconds)} - {formatTime(endSec)}
                                                                         </span>
-                                                                        <button onClick={() => { seekTo(clip.startSeconds); playerRef.current.playVideo(); }} className="text-xs font-bold text-black bg-amber-400 hover:bg-amber-300 px-3 py-1 rounded-md transition-colors shadow-lg shadow-amber-500/20 flex items-center gap-1">
-                                                                            <Play size={12} fill="currentColor"/> Reproducir
+                                                                        <button onClick={() => playSpecificClip(clip.startSeconds, endSec)} className="text-xs font-bold text-black bg-amber-400 hover:bg-amber-300 px-3 py-1 rounded-md transition-colors shadow-lg shadow-amber-500/20 flex items-center gap-1 shrink-0">
+                                                                            <Play size={12} fill="currentColor"/> Reproducir Clip
                                                                         </button>
                                                                     </div>
                                                                 </div>
 
-                                                                {/* Vocab Section */}
                                                                 {clip.vocabulary && clip.vocabulary.length > 0 && (
                                                                     <div className="mb-6 shrink-0">
                                                                         <h3 className="text-sm font-black text-emerald-400 flex items-center gap-2 mb-3"><BookOpen size={16}/> Vocabulario</h3>
@@ -477,11 +486,10 @@
                                                                     </div>
                                                                 )}
 
-                                                                {/* Questions Section */}
                                                                 {clip.questions && clip.questions.length > 0 && (
                                                                     <div className="shrink-0">
                                                                         <h3 className="text-sm font-black text-indigo-400 flex items-center gap-2 mb-3"><HelpCircle size={16}/> Preguntas</h3>
-                                                                        <div className="flex flex-col gap-5">
+                                                                        <div className="flex flex-col gap-5 pb-2">
                                                                             {clip.questions.map((q, qIdx) => {
                                                                                 const qKey = `${focusedClip}-${qIdx}`;
                                                                                 const isOptionsVisible = visibleOptions.has(qKey);
@@ -531,18 +539,17 @@
                                             </div>
                                         ) : (
                                             /* ════ LIST VIEW (All Clips) ════ */
-                                            <div className="flex flex-col h-full w-full">
+                                            <div className="flex flex-col h-full w-full min-h-0">
                                                 <div className="flex items-center gap-2 mb-5 shrink-0">
                                                     <List className="text-amber-500" size={20} />
                                                     <h3 className="text-white font-black text-lg">Segmentos de Lección</h3>
                                                 </div>
 
-                                                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-3 pb-2">
+                                                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-3 pb-2 min-h-0">
                                                     {clips.length > 0 ? clips.map((clip, idx) => {
                                                         const endSec = clip.endSeconds === 9999 ? duration : clip.endSeconds;
                                                         const isActive = currentTime >= clip.startSeconds && currentTime <= endSec;
                                                         
-                                                        // Calculate progress in this clip
                                                         const qCount = clip.questions?.length || 0;
                                                         let qAnswered = 0;
                                                         if (qCount > 0) {
@@ -556,13 +563,13 @@
                                                             <button key={idx} onClick={() => setFocusedClip(idx)}
                                                                 className={`w-full text-left p-4 rounded-2xl border transition-all duration-300 flex flex-col gap-2.5 shrink-0 ${borderStyle} ${bgStyle}`}>
                                                                 <div className="flex justify-between items-start gap-2">
-                                                                    <div className="flex flex-col">
+                                                                    <div className="flex flex-col min-w-0 flex-1">
                                                                         <span className="text-[10px] font-black uppercase tracking-widest text-amber-500/80 mb-1">Clip {idx + 1}</span>
-                                                                        <span className="font-bold text-sm text-white/90 leading-snug break-words">{clip.reason}</span>
+                                                                        <span className="font-bold text-sm text-white/90 leading-snug break-words pr-2">{clip.reason}</span>
                                                                     </div>
                                                                     {isActive && (
-                                                                        <span className="shrink-0 flex items-center gap-1.5 text-[9px] font-bold text-amber-400 bg-amber-500/20 px-2 py-1 rounded">
-                                                                            <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"/> PLAYING
+                                                                        <span className="shrink-0 flex items-center gap-1.5 text-[9px] font-bold text-amber-400 bg-amber-500/20 px-2 py-1 rounded mt-1">
+                                                                            <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"/> EN TURNO
                                                                         </span>
                                                                     )}
                                                                 </div>
@@ -573,12 +580,12 @@
                                                                     </span>
                                                                     <div className="flex gap-2">
                                                                         {(clip.vocabulary?.length || 0) > 0 && (
-                                                                            <span className="text-[10px] font-bold text-emerald-500/70 bg-emerald-500/10 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                                                            <span className="text-[10px] font-bold text-emerald-500/70 bg-emerald-500/10 px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
                                                                                 <BookOpen size={10}/> {clip.vocabulary.length}
                                                                             </span>
                                                                         )}
                                                                         {qCount > 0 && (
-                                                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 ${qAnswered === qCount ? 'text-indigo-400 bg-indigo-500/20' : 'text-indigo-500/70 bg-indigo-500/10'}`}>
+                                                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0 ${qAnswered === qCount ? 'text-indigo-400 bg-indigo-500/20' : 'text-indigo-500/70 bg-indigo-500/10'}`}>
                                                                                 <HelpCircle size={10}/> {qAnswered}/{qCount}
                                                                             </span>
                                                                         )}
