@@ -91,6 +91,9 @@
             const [dropped, setDropped] = useState({});
             const [selectedWord, setSelectedWord] = useState(null);
             
+            // Nuevo: Memoria de párrafos ya verificados para que siempre se vean verdes al regresar
+            const [completedParagraphs, setCompletedParagraphs] = useState([]);
+            
             const [isDarkMode, setIsDarkMode] = useState(true);
             const [fontSize, setFontSize] = useState(window.innerWidth < 768 ? 18 : 22);
 
@@ -108,8 +111,6 @@
             // Q&A
             const [qaMode, setQaMode] = useState(false);
             const [currentQIdx, setCurrentQIdx] = useState(0);
-            const [qaOptions, setQaOptions] = useState([]);
-            const [optionsVisible, setOptionsVisible] = useState(false);
             const [qaFinished, setQaFinished] = useState(false);
             const [score, setScore] = useState(0);
             const [answeredQ, setAnsweredQ] = useState({});
@@ -121,12 +122,13 @@
                 return currentStory.flatTokens.filter(t => t.isHidden).map(t => t.text).sort(() => Math.random() - 0.5); 
             }, [currentStory]);
 
+            // AUTO-GUARDADO (Incluyendo completedParagraphs)
             useEffect(() => {
                 if (activityId && curIdx !== -1 && !pendingResume) {
-                    const saveObj = { currentSlide, dropped, score, answeredQ, instructionsDismissed };
+                    const saveObj = { currentSlide, dropped, score, answeredQ, instructionsDismissed, completedParagraphs, qaMode, qaFinished, currentQIdx };
                     localStorage.setItem(`periplo_reading_${activityId}_${curIdx}`, JSON.stringify(saveObj));
                 }
-            }, [currentSlide, dropped, score, answeredQ, instructionsDismissed, activityId, curIdx, pendingResume]);
+            }, [currentSlide, dropped, score, answeredQ, instructionsDismissed, completedParagraphs, qaMode, qaFinished, currentQIdx, activityId, curIdx, pendingResume]);
 
             useEffect(() => {
                 if (isDarkMode) document.documentElement.classList.add('dark');
@@ -179,7 +181,7 @@
                 if (saved) {
                     try {
                         const parsed = JSON.parse(saved);
-                        if (parsed.currentSlide > 0) {
+                        if (parsed.currentSlide > 0 || parsed.qaMode) {
                             setPendingResume({ index, savedData: parsed });
                             return; 
                         }
@@ -197,6 +199,10 @@
                 setScore(data.score || 0); 
                 setAnsweredQ(data.answeredQ || {});
                 setInstructionsDismissed(data.instructionsDismissed || false);
+                setCompletedParagraphs(data.completedParagraphs || []);
+                setQaMode(data.qaMode || false);
+                setQaFinished(data.qaFinished || false);
+                setCurrentQIdx(data.currentQIdx || 0);
                 setPendingResume(null);
             };
 
@@ -218,7 +224,7 @@
             const resetProgress = () => {
                 setCurrentSlide(0); setDropped({}); setSlideResult(null); setSelectedWord(null);
                 setQaMode(false); setQaFinished(false); setCurrentQIdx(0); setScore(0); setAnsweredQ({});
-                setShowSpanish(false); setInstructionsDismissed(false);
+                setShowSpanish(false); setInstructionsDismissed(false); setCompletedParagraphs([]);
             };
 
             const toggleTheme = () => { setIsDarkMode(!isDarkMode); localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light'); };
@@ -240,8 +246,9 @@
             };
 
             const handleWordTap = (word) => { if (slideResult !== 'correct') setSelectedWord(selectedWord === word ? null : word); };
+            
             const handleBlankTap = (tokenId) => {
-                if (slideResult === 'correct') return;
+                if (slideResult === 'correct' || completedParagraphs.includes(currentSlide)) return;
                 if (dropped[tokenId]) {
                     const newDropped = { ...dropped }; delete newDropped[tokenId];
                     setDropped(newDropped); setSlideResult(null); return;
@@ -254,38 +261,51 @@
                 const hidden = currentStory.paragraphs[currentParagraphIdx].filter(t => t.isHidden);
                 const isAllCorrect = hidden.every(t => dropped[t.id] === t.text);
                 setSlideResult(isAllCorrect ? 'correct' : 'wrong');
-                if (isAllCorrect) confetti({ particleCount: 150, spread: 70, origin: { y: 0.7 } });
-                else setTimeout(() => {
-                    const newDropped = { ...dropped };
-                    hidden.forEach(t => { if (newDropped[t.id] !== t.text) delete newDropped[t.id]; });
-                    setDropped(newDropped); setSlideResult(null);
-                }, 1200);
+                if (isAllCorrect) {
+                    confetti({ particleCount: 150, spread: 70, origin: { y: 0.7 } });
+                    setCompletedParagraphs(prev => [...new Set([...prev, currentSlide])]);
+                } else {
+                    setTimeout(() => {
+                        const newDropped = { ...dropped };
+                        hidden.forEach(t => { if (newDropped[t.id] !== t.text) delete newDropped[t.id]; });
+                        setDropped(newDropped); setSlideResult(null);
+                    }, 1200);
+                }
             };
 
             const nextSlide = () => { setSlideResult(null); setSelectedWord(null); setCurrentSlide(c => c + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); };
             const prevSlide = () => { if (currentSlide > 1) { setSlideResult(null); setSelectedWord(null); setCurrentSlide(c => c - 1); window.scrollTo({ top: 0, behavior: 'smooth' }); } };
 
-            const startChallenge = () => { setQaMode(true); setCurrentQIdx(0); setScore(0); setAnsweredQ({}); generateOptionsFor(0); };
-            const generateOptionsFor = (qIndex) => {
-                setOptionsVisible(false);
-                const currentQ = currentStory.questions[qIndex];
-                if (currentQ.options && typeof currentQ.correctIndex === 'number') { setQaOptions(currentQ.options); return; }
-                let distractors = currentStory.questions.filter((_, idx) => idx !== qIndex).map(q => q.a).filter(a => a && a.length > 0);
-                const generic = ["I don't know", "Not mentioned", "Maybe later", "It depends"];
-                while (distractors.length < 3) distractors.push(generic.pop());
-                let opts = [currentQ.a || "Yes", ...distractors.slice(0, 3)].sort(() => Math.random() - 0.5);
-                setQaOptions(opts);
+            const startChallenge = () => { 
+                setQaMode(true); 
+                setCurrentQIdx(0); 
+                setScore(0); 
+                setAnsweredQ({}); 
             };
 
             const handleAnswer = (ansIdx) => {
                 if (answeredQ[currentQIdx] !== undefined) return;
-                const isCorrect = currentStory.questions[currentQIdx].options ? currentStory.questions[currentQIdx].correctIndex === ansIdx : qaOptions[ansIdx] === currentStory.questions[currentQIdx].a;
+                
+                const currentQ = currentStory.questions[currentQIdx];
+                const correctIdx = currentQ.correctIndex !== undefined ? currentQ.correctIndex : 0;
+                const isCorrect = correctIdx === ansIdx;
+                
                 setAnsweredQ(prev => ({ ...prev, [currentQIdx]: ansIdx }));
-                if (isCorrect) { setScore(s => s + 1); confetti({ particleCount: 50, spread: 30, origin: { y: 0.8 } }); }
-                setTimeout(() => {
-                    if (currentQIdx < currentStory.questions.length - 1) { setCurrentQIdx(idx => idx + 1); generateOptionsFor(currentQIdx + 1); } 
-                    else { setQaFinished(true); confetti({ particleCount: 200, spread: 100, origin: { y: 0.5 } }); }
-                }, 1500);
+                
+                if (isCorrect) { 
+                    setScore(s => s + 1); 
+                    confetti({ particleCount: 50, spread: 30, origin: { y: 0.8 } }); 
+                }
+                // NO HACE AUTO-ADVANCE. El usuario debe clickear el botón de "Siguiente".
+            };
+
+            const nextQuestion = () => {
+                if (currentQIdx < currentStory.questions.length - 1) {
+                    setCurrentQIdx(idx => idx + 1);
+                } else {
+                    setQaFinished(true);
+                    confetti({ particleCount: 200, spread: 100, origin: { y: 0.5 } });
+                }
             };
 
             // ════════ Lógica de Slides ════════
@@ -367,7 +387,7 @@
             const availableWords = wordBank.filter(word => Object.values(dropped).filter(w => w === word).length < currentStory.flatTokens.filter(t => t.text === word && t.isHidden).length);
             const currentTokens = isOnParagraph ? currentStory.paragraphs[currentParagraphIdx] : [];
             const requiresCheck = currentTokens.filter(t => t.isHidden).length > 0;
-            const isSlideComplete = slideResult === 'correct' || !requiresCheck;
+            const isSlideComplete = slideResult === 'correct' || completedParagraphs.includes(currentSlide) || !requiresCheck;
 
             return (
                 <div className="min-h-screen font-sans flex flex-col transition-all duration-700 relative">
@@ -386,7 +406,7 @@
                                 <div className="flex flex-col">
                                     <h1 className="text-sm md:text-base font-black leading-tight line-clamp-1">{currentStory.title}</h1>
                                     <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">
-                                        {currentSlide === 0 ? 'Portada' : isInstructions ? 'Instrucciones' : isOnParagraph ? `Párrafo ${currentParagraphIdx + 1} / ${currentStory.paragraphs.length}` : 'Resumen'}
+                                        {qaMode ? 'Challenge Q&A' : currentSlide === 0 ? 'Portada' : isInstructions ? 'Instrucciones' : isOnParagraph ? `Párrafo ${currentParagraphIdx + 1} / ${currentStory.paragraphs.length}` : 'Resumen'}
                                     </span>
                                 </div>
                             </div>
@@ -401,41 +421,12 @@
                             </div>
                         </div>
 
-                        {/* Q&A OVERLAY */}
-                        {qaMode && (
-                            <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-scaleIn">
-                                {qaFinished ? (
-                                    <div className={`rounded-[3rem] p-10 md:p-12 text-center max-w-lg w-full shadow-2xl ${isDarkMode ? 'bg-slate-800 text-white' : 'bg-white text-slate-800'}`}>
-                                        <Trophy size={48} className="text-emerald-500 mx-auto mb-6"/>
-                                        <h2 className="text-4xl font-black mb-8">¡Completado!</h2>
-                                        <button onClick={() => restartStory(curIdx)} className="btn-juicy w-full bg-indigo-600 text-white py-4 rounded-2xl font-black shadow-xl flex items-center justify-center gap-2"><RotateCcw size={20}/> Reiniciar Lectura</button>
-                                    </div>
-                                ) : (
-                                    <div className={`w-full max-w-2xl rounded-[2rem] overflow-hidden shadow-2xl flex flex-col ${isDarkMode ? 'bg-slate-800 text-white' : 'bg-white text-slate-800'}`}>
-                                        <div className="bg-slate-900 text-white p-5 flex justify-between items-center"><span className="font-black text-xs uppercase flex items-center gap-2"><Swords size={16}/> Q&A {currentQIdx + 1}/{currentStory.questions.length}</span><button onClick={() => setQaMode(false)}><X size={16}/></button></div>
-                                        <div className="p-6 md:p-10 flex flex-col items-center">
-                                            <h3 className="text-xl md:text-2xl font-black mb-8 text-center">"{currentStory.questions[currentQIdx].q}"</h3>
-                                            {!optionsVisible && answeredQ[currentQIdx] === undefined ? (
-                                                <button onClick={() => setOptionsVisible(true)} className="btn-juicy bg-indigo-600 text-white px-8 py-3.5 rounded-xl font-bold flex items-center gap-2"><Eye size={20}/> Mostrar Opciones</button>
-                                            ) : (
-                                                <div className="flex flex-col gap-3 w-full max-w-md">
-                                                    {qaOptions.map((opt, idx) => (
-                                                        <button key={idx} onClick={() => handleAnswer(idx)} disabled={answeredQ[currentQIdx] !== undefined} className="p-4 rounded-xl border text-left font-bold flex justify-between items-center bg-slate-700/50 border-slate-600"><span>{opt}</span></button>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        <div className={`max-w-[1400px] mx-auto w-full p-4 md:p-8 flex-1 flex flex-col lg:grid lg:grid-cols-12 gap-6 md:gap-8 items-start ${qaMode ? 'hidden' : ''}`}>
+                        <div className={`max-w-[1400px] mx-auto w-full p-4 md:p-8 flex-1 flex flex-col lg:grid lg:grid-cols-12 gap-6 md:gap-8 items-start`}>
                             
-                            {/* ── AREA PRINCIPAL ── */}
-                            <div className={`w-full flex-1 flex flex-col justify-center animate-fadeUp ${currentSlide >= 1 && currentSlide <= SLIDE_PARAGRAPH_END ? 'order-2 lg:order-1 lg:col-span-8' : 'order-1 lg:col-span-12'}`}>
+                            {/* ── AREA PRINCIPAL (Texto o Portada) ── */}
+                            <div className={`w-full flex-1 flex flex-col justify-center animate-fadeUp ${(!qaMode && currentSlide >= 1 && currentSlide <= SLIDE_PARAGRAPH_END) || (qaMode && !qaFinished) ? 'order-2 lg:order-1 lg:col-span-8' : 'order-1 lg:col-span-12'}`}>
                                 
-                                {currentSlide === SLIDE_COVER && (
+                                {!qaMode && currentSlide === SLIDE_COVER && (
                                     <div className={`rounded-[3rem] shadow-2xl border p-8 md:p-16 text-center animate-scaleIn ${isDarkMode ? 'bg-slate-800/80 border-slate-700/50 text-white' : 'bg-white/80 border-white/50 text-slate-800'}`}>
                                         {currentStory.image_url && <img src={currentStory.image_url} className="w-28 h-28 mx-auto rounded-3xl object-cover mb-8 shadow-2xl"/>}
                                         <h2 className="text-4xl md:text-6xl font-black mb-10">{currentStory.title}</h2>
@@ -444,7 +435,7 @@
                                 )}
 
                                 {/* SLIDE 1: INSTRUCCIONES FORMALES */}
-                                {isInstructions && (
+                                {!qaMode && isInstructions && (
                                     <div className={`relative rounded-[2rem] shadow-2xl border p-6 md:p-10 transition-all duration-300 animate-scaleIn ${isDarkMode ? 'bg-slate-800/90 border-slate-700 text-slate-200' : 'bg-white/90 border-white text-slate-800'}`}>
                                         <div className="flex items-center gap-3 mb-6 border-b pb-4 border-slate-200 dark:border-slate-700">
                                             <div className="w-10 h-10 bg-amber-500/20 text-amber-500 rounded-xl flex items-center justify-center shrink-0">
@@ -495,8 +486,8 @@
                                     </div>
                                 )}
 
-                                {/* SLIDES DE PÁRRAFOS */}
-                                {isOnParagraph && (
+                                {/* SLIDES DE PÁRRAFOS (MODO NORMAL) */}
+                                {!qaMode && isOnParagraph && (
                                     <div className="space-y-4 md:space-y-6" key={`slide-${currentSlide}`}>
                                         <div className={`relative rounded-[2rem] shadow-2xl border p-6 md:p-10 leading-loose transition-all duration-300 animate-scaleIn flex items-stretch ${isDarkMode ? 'bg-slate-800/90 border-slate-700 text-slate-200' : 'bg-white/90 border-white text-slate-700'}`} style={{ fontSize: `${fontSize}px` }}>
                                             
@@ -512,10 +503,17 @@
                                                 {currentTokens.map((t, i) => {
                                                     if (t.isHidden) {
                                                         const val = dropped[t.id];
+                                                        const isSlideVerified = completedParagraphs.includes(currentSlide);
+                                                        
                                                         let stateClass = isDarkMode ? 'token-hidden-dark' : 'token-hidden-light';
                                                         if (val) stateClass = 'token-filled'; 
-                                                        if (slideResult === 'correct') stateClass = 'token-correct';
-                                                        if (slideResult === 'wrong' && val) stateClass = val === t.text ? 'token-correct' : 'token-wrong';
+                                                        
+                                                        if (isSlideVerified || slideResult === 'correct') {
+                                                            stateClass = 'token-correct';
+                                                        } else if (slideResult === 'wrong' && val) {
+                                                            stateClass = val === t.text ? 'token-correct' : 'token-wrong';
+                                                        }
+
                                                         return <span key={i} onClick={() => handleBlankTap(t.id)} className={`token-base token-single ${stateClass} ${!val && selectedWord ? 'animate-pulseGlow' : ''}`}>{val || ""}</span>;
                                                     }
                                                     if (t.text.match(/\n/)) return <br key={i}/>;
@@ -538,7 +536,8 @@
                                     </div>
                                 )}
 
-                                {currentSlide > SLIDE_PARAGRAPH_END && (
+                                {/* SLIDE TRANSICIÓN A CHALLENGE */}
+                                {!qaMode && currentSlide > SLIDE_PARAGRAPH_END && (
                                     <div className={`rounded-[3rem] shadow-2xl border p-8 md:p-14 text-center max-w-2xl mx-auto animate-scaleIn ${isDarkMode ? 'bg-slate-800 text-white' : 'bg-white'}`}>
                                         <CheckCircle2 size={56} className="text-emerald-500 mx-auto mb-8" />
                                         <h2 className="text-4xl font-black mb-10">¡Lectura Completada!</h2>
@@ -548,11 +547,53 @@
                                         </div>
                                     </div>
                                 )}
+
+                                {/* ── LECTURA COMPLETA (MODO Q&A) ── */}
+                                {qaMode && !qaFinished && (
+                                    <div className={`relative rounded-[2rem] shadow-2xl border p-6 md:p-10 leading-loose transition-all duration-300 animate-scaleIn flex flex-col gap-6 ${isDarkMode ? 'bg-slate-800/90 border-slate-700 text-slate-200' : 'bg-white/90 border-white text-slate-700'}`} style={{ fontSize: `${fontSize}px` }}>
+                                        <div className="flex items-center justify-between mb-2 border-b pb-3 border-slate-200 dark:border-slate-700">
+                                            <span className="text-xs font-black uppercase opacity-40">Lectura Completa</span>
+                                            <span className="text-xs font-black uppercase text-indigo-500 bg-indigo-500/10 px-3 py-1 rounded-full flex items-center gap-1"><Swords size={14}/> Modo Challenge</span>
+                                        </div>
+                                        <div className="flex-1 font-medium text-justify space-y-6 max-h-[60vh] overflow-y-auto custom-scrollbar pr-2">
+                                            {currentStory.paragraphs.map((para, pIdx) => (
+                                                <p key={pIdx}>
+                                                    {para.map((t, i) => {
+                                                        if (t.isHidden) return <span key={i} className={`token-base token-single token-correct`}>{t.text}</span>;
+                                                        if (t.text.match(/\n/)) return <br key={i}/>;
+                                                        return <span key={i}>{t.text}</span>;
+                                                    })}
+                                                </p>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* RESULTADOS FINALES Q&A */}
+                                {qaMode && qaFinished && (
+                                    <div className={`rounded-[3rem] shadow-2xl border p-8 md:p-14 text-center max-w-2xl mx-auto animate-scaleIn ${isDarkMode ? 'bg-slate-800 text-white' : 'bg-white'}`}>
+                                        <Trophy size={56} className="text-yellow-500 mx-auto mb-6" />
+                                        <h2 className="text-4xl font-black mb-4">¡Desafío Completado!</h2>
+                                        <div className="flex items-center justify-center gap-1 mb-8">
+                                            {currentStory.questions.map((_, i) => (
+                                                <Star key={i} size={32} className={i < score ? 'text-yellow-400 fill-yellow-400' : (isDarkMode ? 'text-slate-700' : 'text-slate-200')} />
+                                            ))}
+                                        </div>
+                                        <p className="text-lg font-bold mb-10 opacity-70">Obtuviste {score} de {currentStory.questions.length} aciertos.</p>
+                                        <div className="flex flex-col gap-3 max-w-sm mx-auto">
+                                            <button onClick={() => restartStory(curIdx)} className="btn-juicy w-full bg-indigo-600 text-white py-4 rounded-2xl font-black shadow-xl flex items-center justify-center gap-2"><RotateCcw size={20}/> Jugar de Nuevo</button>
+                                            <button onClick={backToMenu} className={`btn-juicy w-full py-4 rounded-2xl font-black border ${isDarkMode ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`}>Volver al Menú</button>
+                                        </div>
+                                    </div>
+                                )}
+
                             </div>
 
-                            {/* ── WORD BANK SIDEBAR (Visible desde Instrucciones hasta el último párrafo) ── */}
-                            {(isInstructions || isOnParagraph) && (
-                                <div className={`order-1 lg:order-2 lg:col-span-4 w-full lg:sticky lg:top-20 flex flex-col gap-4 animate-fadeUp`}>
+                            {/* ── PANEL LATERAL (WORD BANK O Q&A) ── */}
+                            
+                            {/* WORD BANK */}
+                            {!qaMode && (isInstructions || isOnParagraph) && (
+                                <div className={`order-1 lg:order-2 lg:col-span-4 w-full lg:sticky lg:top-20 flex flex-col gap-4 animate-fadeUp ${!instructionsDismissed ? 'hidden lg:flex opacity-30 pointer-events-none blur-sm' : ''}`}>
                                     <div className={`rounded-[2rem] shadow-xl border overflow-hidden flex flex-col max-h-[350px] lg:max-h-[calc(100vh-8rem)] ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/90 border-white'}`}>
                                         <div className="bg-slate-900 p-4 flex items-center justify-between text-white shrink-0">
                                             <div className="flex items-center gap-2 font-black uppercase text-xs tracking-widest"><Puzzle size={18} className="text-indigo-400"/> Word Bank <span className="ml-2 bg-slate-800 px-2 py-1 rounded-lg text-[10px] text-slate-400">{availableWords.length} left</span></div>
@@ -574,6 +615,64 @@
                                     </div>
                                 </div>
                             )}
+
+                            {/* Q&A PANEL */}
+                            {qaMode && !qaFinished && (() => {
+                                const currentQ = currentStory.questions[currentQIdx];
+                                const options = currentQ.options || [currentQ.a || "Respuesta", "Opción B", "Opción C", "Opción D"];
+                                const correctIdx = currentQ.correctIndex !== undefined ? currentQ.correctIndex : 0;
+                                
+                                return (
+                                    <div className="order-1 lg:order-2 lg:col-span-4 w-full lg:sticky lg:top-20 flex flex-col gap-4 animate-fadeUp">
+                                        <div className={`rounded-[2rem] shadow-xl border overflow-hidden flex flex-col max-h-[600px] lg:max-h-[calc(100vh-8rem)] ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/90 border-white'}`}>
+                                            <div className="bg-slate-900 p-4 flex items-center justify-between text-white shrink-0">
+                                                <div className="flex items-center gap-2 font-black uppercase text-xs tracking-widest"><Swords size={18} className="text-emerald-400"/> Challenge</div>
+                                                <span className="ml-2 bg-slate-800 px-2 py-1 rounded-lg text-[10px] text-slate-400">{currentQIdx + 1} / {currentStory.questions.length}</span>
+                                            </div>
+                                            <div className={`p-4 md:p-6 overflow-y-auto custom-scrollbar flex-1 flex flex-col ${isDarkMode ? 'bg-slate-800/50' : 'bg-slate-50'}`}>
+                                                <h3 className="text-lg font-black mb-6 leading-snug">"{currentQ.q}"</h3>
+                                                <div className="flex flex-col gap-3 flex-1">
+                                                    {options.map((opt, idx) => {
+                                                        const isAnswered = answeredQ[currentQIdx] !== undefined;
+                                                        const selectedIdx = answeredQ[currentQIdx];
+                                                        
+                                                        let btnClass = isDarkMode ? 'bg-slate-700 border-slate-600 text-slate-200' : 'bg-white border-slate-200 text-slate-700';
+                                                        
+                                                        if (isAnswered) {
+                                                            if (idx === correctIdx) {
+                                                                btnClass = 'bg-emerald-100 border-emerald-500 text-emerald-800 dark:bg-emerald-900/30 dark:border-emerald-500 dark:text-emerald-400 ring-2 ring-emerald-500 shadow-lg';
+                                                            } else if (idx === selectedIdx) {
+                                                                btnClass = 'bg-rose-100 border-rose-500 text-rose-800 dark:bg-rose-900/30 dark:border-rose-500 dark:text-rose-400';
+                                                            } else {
+                                                                btnClass = isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-500 opacity-50' : 'bg-slate-100 border-slate-200 text-slate-400 opacity-50';
+                                                            }
+                                                        } else {
+                                                            btnClass += isDarkMode ? ' hover:bg-slate-600 hover:border-slate-500' : ' hover:bg-slate-50 hover:border-slate-300 cursor-pointer hover-lift';
+                                                        }
+
+                                                        return (
+                                                            <button key={idx} disabled={isAnswered} onClick={() => handleAnswer(idx)} className={`w-full p-4 rounded-xl border text-left font-bold text-sm transition-all flex justify-between items-center gap-2 ${btnClass}`}>
+                                                                <span>{opt}</span>
+                                                                {isAnswered && idx === correctIdx && <CheckCircle2 size={18} className="shrink-0 text-emerald-500"/>}
+                                                                {isAnswered && idx === selectedIdx && idx !== correctIdx && <XCircle size={18} className="shrink-0 text-rose-500"/>}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                                
+                                                {/* BOTÓN SIGUIENTE PREGUNTA (Aparece tras responder) */}
+                                                {answeredQ[currentQIdx] !== undefined && (
+                                                    <div className="mt-6 pt-4 border-t border-slate-200 dark:border-slate-700 animate-fadeUp">
+                                                        <button onClick={nextQuestion} className="btn-juicy w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-xl shadow-lg flex items-center justify-center gap-2">
+                                                            {currentQIdx < currentStory.questions.length - 1 ? 'Siguiente Pregunta' : 'Ver Resultados'} <ArrowRight size={20}/>
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
 
                         </div>
                     </div>
