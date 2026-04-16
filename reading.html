@@ -131,7 +131,7 @@
             const [isDarkMode, setIsDarkMode] = useState(true);
             const [fontSize, setFontSize] = useState(window.innerWidth < 768 ? 18 : 22);
 
-            // Q&A States (Option Select version)
+            // Q&A States
             const [qaMode, setQaMode] = useState(false);
             const [currentQIdx, setCurrentQIdx] = useState(0);
             const [qaFinished, setQaFinished] = useState(false);
@@ -341,7 +341,6 @@
 
             const prevSlide = () => {
                 if (currentSlide > 1) {
-                    // Mantenemos el estado de dropped y confiamos en que el slide ya estaba completado
                     setSlideResult(null);
                     setSelectedWord(null);
                     setCurrentSlide(c => c - 1);
@@ -375,7 +374,7 @@
                         el.classList.add('animate-shake');
                         setTimeout(() => el.classList.remove('animate-shake'), 500);
                     }
-                    setTimeout(() => nextQuestion(), 2000); // 2 segundos para ver cuál era la correcta y avanzar
+                    setTimeout(() => nextQuestion(), 2000);
                 }
             };
 
@@ -387,6 +386,51 @@
                     setQaFinished(true);
                     confetti({ particleCount: 200, spread: 100, origin: { y: 0.5 } });
                 }
+            };
+
+            // ── RADAR DE PÁRRAFO (Smart Text Extractor) ──
+            const getReferenceText = () => {
+                if (!currentStory || !currentStory.questions || !currentStory.questions[currentQIdx]) return "";
+                
+                const q = currentStory.questions[currentQIdx];
+                const cleanText = currentStory.text.replace(/\[([^\]]+)\]/g, '$1');
+                
+                // Dividimos de forma robusta por cualquier secuencia de saltos de línea
+                const paragraphs = cleanText.split(/\n+/).filter(p => p.trim().length > 0);
+                
+                // 1. Intento rápido: si la IA guardó el índice
+                if (q.paragraph_index !== undefined && paragraphs[q.paragraph_index]) {
+                    return paragraphs[q.paragraph_index];
+                }
+
+                // 2. Modo Rescate: Buscamos la respuesta dentro de los párrafos
+                let correctAnswer = "";
+                if (q.a) correctAnswer = q.a;
+                else if (q.options && typeof q.correctIndex === 'number') correctAnswer = q.options[q.correctIndex];
+
+                if (correctAnswer) {
+                    const normalize = str => str.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+                    const cleanAns = normalize(correctAnswer);
+                    const ansWords = cleanAns.split(' ').filter(w => w.length > 3); // Palabras significativas
+                    
+                    let bestMatch = paragraphs[0];
+                    let maxMatches = -1;
+
+                    for (let p of paragraphs) {
+                        const normP = normalize(p);
+                        if (normP.includes(cleanAns)) return p; // Match exacto
+                        
+                        let matches = ansWords.filter(w => normP.includes(w)).length;
+                        if (matches > maxMatches) {
+                            maxMatches = matches;
+                            bestMatch = p;
+                        }
+                    }
+                    if (maxMatches > 0) return bestMatch; // Match parcial
+                }
+
+                // 3. Peor de los casos: Mostramos todo el texto
+                return cleanText; 
             };
 
             if (loading) return (
@@ -504,16 +548,13 @@
             const isOnParagraph = currentSlide >= SLIDE_PARAGRAPH_START && currentSlide <= SLIDE_PARAGRAPH_END;
             const currentParagraphIdx = isOnParagraph ? currentSlide - 1 : -1;
             
-            // Ya que permitimos volver atrás, validamos si este párrafo específico ya tiene todos los huecos correctos.
             const currentTokens = isOnParagraph ? currentStory.paragraphs[currentParagraphIdx] : [];
             const hiddenInSlide = currentTokens.filter(t => t.isHidden);
             const requiresCheck = hiddenInSlide.length > 0;
             const isFullyFilled = requiresCheck && hiddenInSlide.every(t => dropped[t.id] === t.text);
             
-            // Actualizamos la condición de "slide completo": O acaba de dar click en Verificar (y estuvo bien), o ya lo había llenado.
             const isSlideComplete = slideResult === 'correct' || (!requiresCheck) || isFullyFilled;
 
-            const isLeftEmoji = currentSlide % 2 !== 0; // Ya no aplica para la franja lateral, pero podemos usar currentEmojis
             const currentEmojis = EMOJI_SETS[currentSlide % EMOJI_SETS.length];
 
             const isFunFactSlide = SLIDE_FUN_FACT !== null && currentSlide === SLIDE_FUN_FACT;
@@ -567,9 +608,9 @@
                             </div>
                         </div>
 
-                        {/* ── Q&A MODAL OVERLAY (MULTIPLE CHOICE) ── */}
+                        {/* ── Q&A MODAL OVERLAY (MULTIPLE CHOICE) CON ALTURA ESTRICTA ── */}
                         {qaMode && (
-                            <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 md:p-6 animate-scaleIn overflow-y-auto">
+                            <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 md:p-6 animate-scaleIn">
                                 {qaFinished ? (
                                     <div className={`rounded-[3rem] p-10 md:p-12 text-center max-w-lg w-full shadow-2xl my-auto ${isDarkMode ? 'bg-slate-800' : 'bg-white'}`}>
                                         <div className="w-24 h-24 bg-emerald-100 dark:bg-emerald-900/50 text-emerald-500 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-6">
@@ -592,53 +633,52 @@
                                         </div>
                                     </div>
                                 ) : (
-                                    <div id="qa-box" className={`w-full max-w-5xl rounded-[2rem] overflow-hidden shadow-2xl transition-colors duration-200 flex flex-col md:flex-row my-auto ${isDarkMode ? 'bg-slate-800' : 'bg-white'}`}>
+                                    <div id="qa-box" className={`w-full max-w-5xl rounded-[2rem] overflow-hidden shadow-2xl transition-colors duration-200 flex flex-col md:flex-row my-auto h-[85vh] md:h-[600px] ${isDarkMode ? 'bg-slate-800' : 'bg-white'}`}>
                                         
-                                        {/* TEXT AREA FOR REFERENCE */}
-                                        <div className={`md:w-1/2 p-6 md:p-8 border-b md:border-b-0 md:border-r ${isDarkMode ? 'border-slate-700 bg-slate-800/50' : 'border-slate-200 bg-slate-50'}`}>
-                                            <h4 className="text-xs font-black uppercase tracking-widest text-indigo-500 mb-4 flex items-center gap-2"><BookOpen size={16}/> Texto de referencia</h4>
-                                            <p className={`leading-relaxed text-base md:text-lg font-medium ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
-                                                {/* Sacamos el texto limpio de llaves y buscamos el párrafo correcto si existe */}
-                                                {(() => {
-                                                    const cleanText = currentStory.text.replace(/\[([^\]]+)\]/g, '$1');
-                                                    const paragraphs = cleanText.split(/\n\n+/);
-                                                    const pIdx = currentStory.questions[currentQIdx].paragraph_index;
-                                                    return pIdx !== undefined && paragraphs[pIdx] ? paragraphs[pIdx] : cleanText;
-                                                })()}
-                                            </p>
+                                        {/* TEXT AREA FOR REFERENCE (SCROLLABLE) */}
+                                        <div className={`md:w-1/2 p-6 md:p-8 border-b md:border-b-0 md:border-r flex flex-col min-h-0 ${isDarkMode ? 'border-slate-700 bg-slate-800/50' : 'border-slate-200 bg-slate-50'}`}>
+                                            <h4 className="text-xs font-black uppercase tracking-widest text-indigo-500 mb-4 shrink-0 flex items-center gap-2"><BookOpen size={16}/> Texto de referencia</h4>
+                                            
+                                            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 min-h-0">
+                                                <p className={`leading-relaxed text-base md:text-lg font-medium whitespace-pre-wrap ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                                                    {getReferenceText()}
+                                                </p>
+                                            </div>
                                         </div>
                                         
-                                        {/* QUESTION & OPTIONS AREA */}
-                                        <div className="md:w-1/2 p-6 md:p-8 flex flex-col justify-center">
-                                            <div className="flex justify-between items-center mb-6">
+                                        {/* QUESTION & OPTIONS AREA (SCROLLABLE) */}
+                                        <div className="md:w-1/2 p-6 md:p-8 flex flex-col min-h-0">
+                                            <div className="flex justify-between items-center mb-6 shrink-0">
                                                 <span className="font-black tracking-widest text-slate-400 text-xs uppercase flex items-center gap-2"><Swords size={16}/> Pregunta {currentQIdx + 1}/{currentStory.questions.length}</span>
                                                 <button onClick={() => setQaMode(false)} className="text-slate-500 hover:text-white transition-colors p-1"><X size={16}/></button>
                                             </div>
                                             
-                                            <h3 className={`text-xl md:text-2xl font-black mb-8 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>"{currentStory.questions[currentQIdx].q}"</h3>
-                                            
-                                            <div className="flex flex-col gap-3">
-                                                {(currentStory.questions[currentQIdx].options || []).map((opt, idx) => {
-                                                    const isSelected = selectedOption === idx;
-                                                    const isCorrect = idx === currentStory.questions[currentQIdx].correctIndex;
-                                                    const showResult = selectedOption !== null;
-                                                    
-                                                    let btnClass = isDarkMode ? 'bg-slate-700 text-slate-300 border-slate-600 hover:bg-slate-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50';
-                                                    
-                                                    if (showResult) {
-                                                        if (isCorrect) btnClass = 'bg-emerald-500/20 text-emerald-500 border-emerald-500/50';
-                                                        else if (isSelected) btnClass = 'bg-rose-500/20 text-rose-500 border-rose-500/50';
-                                                        else btnClass = isDarkMode ? 'bg-slate-800 text-slate-500 border-slate-700 opacity-50' : 'bg-slate-100 text-slate-400 border-slate-200 opacity-50';
-                                                    }
-                                                    
-                                                    return (
-                                                        <button key={idx} disabled={showResult} onClick={() => handleOptionClick(idx)} className={`p-4 rounded-xl border-2 font-bold text-left transition-all flex justify-between items-center ${btnClass}`}>
-                                                            <span>{opt}</span>
-                                                            {showResult && isCorrect && <CheckCircle2 size={20} className="text-emerald-500 shrink-0"/>}
-                                                            {showResult && isSelected && !isCorrect && <XCircle size={20} className="text-rose-500 shrink-0"/>}
-                                                        </button>
-                                                    )
-                                                })}
+                                            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 min-h-0 flex flex-col justify-center">
+                                                <h3 className={`text-xl md:text-2xl font-black mb-8 shrink-0 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>"{currentStory.questions[currentQIdx].q}"</h3>
+                                                
+                                                <div className="flex flex-col gap-3 shrink-0">
+                                                    {(currentStory.questions[currentQIdx].options || []).map((opt, idx) => {
+                                                        const isSelected = selectedOption === idx;
+                                                        const isCorrect = idx === currentStory.questions[currentQIdx].correctIndex;
+                                                        const showResult = selectedOption !== null;
+                                                        
+                                                        let btnClass = isDarkMode ? 'bg-slate-700 text-slate-300 border-slate-600 hover:bg-slate-600' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50';
+                                                        
+                                                        if (showResult) {
+                                                            if (isCorrect) btnClass = 'bg-emerald-500/20 text-emerald-500 border-emerald-500/50';
+                                                            else if (isSelected) btnClass = 'bg-rose-500/20 text-rose-500 border-rose-500/50';
+                                                            else btnClass = isDarkMode ? 'bg-slate-800 text-slate-500 border-slate-700 opacity-50' : 'bg-slate-100 text-slate-400 border-slate-200 opacity-50';
+                                                        }
+                                                        
+                                                        return (
+                                                            <button key={idx} disabled={showResult} onClick={() => handleOptionClick(idx)} className={`p-4 rounded-xl border-2 font-bold text-left transition-all flex justify-between items-center ${btnClass}`}>
+                                                                <span>{opt}</span>
+                                                                {showResult && isCorrect && <CheckCircle2 size={20} className="text-emerald-500 shrink-0"/>}
+                                                                {showResult && isSelected && !isCorrect && <XCircle size={20} className="text-rose-500 shrink-0"/>}
+                                                            </button>
+                                                        )
+                                                    })}
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
