@@ -70,7 +70,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Loader2, CheckCircle2, RotateCcw, ArrowLeft, Lightbulb, Puzzle, Moon, Sun, ZoomIn, ZoomOut, Swords, ArrowRight, BookOpen, Edit2, LayoutGrid, Star, Trophy, X, Info, Languages, Eye, XCircle, Hand, BrainCircuit, Sparkles } from 'lucide-react';
+        import { Loader2, CheckCircle2, RotateCcw, ArrowLeft, Lightbulb, Puzzle, Moon, Sun, ZoomIn, ZoomOut, Swords, ArrowRight, BookOpen, Edit2, LayoutGrid, Star, Trophy, X, Info, Languages, Eye, XCircle } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -94,13 +94,13 @@
             const [isDarkMode, setIsDarkMode] = useState(true);
             const [fontSize, setFontSize] = useState(window.innerWidth < 768 ? 18 : 22);
 
+            // Modal Progreso Guardado
+            const [pendingResume, setPendingResume] = useState(null);
+
             // Traductor
             const [translations, setTranslations] = useState({});
             const [isTranslating, setIsTranslating] = useState(false);
             const [showSpanish, setShowSpanish] = useState(false);
-
-            // Instrucciones Visuales
-            const [instructionsDismissed, setInstructionsDismissed] = useState(false);
 
             // Q&A
             const [qaMode, setQaMode] = useState(false);
@@ -119,11 +119,11 @@
             }, [currentStory]);
 
             useEffect(() => {
-                if (activityId && curIdx !== -1) {
-                    const saveObj = { currentSlide, dropped, score, answeredQ, instructionsDismissed };
+                if (activityId && curIdx !== -1 && !pendingResume) {
+                    const saveObj = { currentSlide, dropped, score, answeredQ };
                     localStorage.setItem(`periplo_reading_${activityId}_${curIdx}`, JSON.stringify(saveObj));
                 }
-            }, [currentSlide, dropped, score, answeredQ, instructionsDismissed, activityId, curIdx]);
+            }, [currentSlide, dropped, score, answeredQ, activityId, curIdx, pendingResume]);
 
             useEffect(() => {
                 if (isDarkMode) document.documentElement.classList.add('dark');
@@ -172,27 +172,50 @@
             }, []);
 
             const openStory = (index, docId = activityId) => {
-                setCurIdx(index);
                 const saved = localStorage.getItem(`periplo_reading_${docId}_${index}`);
                 if (saved) {
                     try {
                         const parsed = JSON.parse(saved);
-                        setCurrentSlide(parsed.currentSlide || 0); setDropped(parsed.dropped || {});
-                        setScore(parsed.score || 0); setAnsweredQ(parsed.answeredQ || {});
-                        setInstructionsDismissed(parsed.instructionsDismissed || false);
-                    } catch(e) { resetProgress(); }
-                } else resetProgress();
+                        // Si ya avanzaron más allá de la portada, preguntamos si quieren retomar.
+                        if (parsed.currentSlide > 0) {
+                            setPendingResume({ index, savedData: parsed });
+                            return;
+                        }
+                    } catch(e) {}
+                }
+                setCurIdx(index);
+                resetProgress();
             };
 
-            const restartStory = (index, docId = activityId) => {
+            const resumeSavedProgress = () => {
+                const data = pendingResume.savedData;
+                setCurIdx(pendingResume.index);
+                setCurrentSlide(data.currentSlide || 0); 
+                setDropped(data.dropped || {});
+                setScore(data.score || 0); 
+                setAnsweredQ(data.answeredQ || {});
+                setPendingResume(null);
+            };
+
+            const startFresh = () => {
+                const index = pendingResume.index;
+                localStorage.removeItem(`periplo_reading_${activityId}_${index}`);
+                setCurIdx(index);
+                resetProgress();
+                setPendingResume(null);
+            };
+
+            const restartStory = (index = curIdx, docId = activityId) => {
+                if(index === -1) return;
                 localStorage.removeItem(`periplo_reading_${docId}_${index}`);
-                setCurIdx(index); resetProgress();
+                setCurIdx(index); 
+                resetProgress();
             };
 
             const resetProgress = () => {
                 setCurrentSlide(0); setDropped({}); setSlideResult(null); setSelectedWord(null);
                 setQaMode(false); setQaFinished(false); setCurrentQIdx(0); setScore(0); setAnsweredQ({});
-                setShowSpanish(false); setInstructionsDismissed(false);
+                setShowSpanish(false); 
             };
 
             const toggleTheme = () => { setIsDarkMode(!isDarkMode); localStorage.setItem('themePreference', !isDarkMode ? 'dark' : 'light'); };
@@ -224,7 +247,8 @@
             };
             
             const checkSlideAnswers = () => {
-                const hidden = currentStory.paragraphs[currentSlide - 1].filter(t => t.isHidden);
+                if(!currentStory) return;
+                const hidden = currentStory.paragraphs[currentParagraphIdx].filter(t => t.isHidden);
                 const isAllCorrect = hidden.every(t => dropped[t.id] === t.text);
                 setSlideResult(isAllCorrect ? 'correct' : 'wrong');
                 if (isAllCorrect) confetti({ particleCount: 150, spread: 70, origin: { y: 0.7 } });
@@ -261,13 +285,35 @@
                 }, 1500);
             };
 
+            // ════════ Lógica de Slides ════════
+            const SLIDE_COVER = 0;
+            const SLIDE_INSTRUCTIONS = 1;
+            const SLIDE_PARAGRAPH_START = 2;
+            const SLIDE_PARAGRAPH_END = currentStory ? currentStory.paragraphs.length + 1 : 0;
+            
+            const isInstructions = currentSlide === SLIDE_INSTRUCTIONS;
+            const isOnParagraph = currentSlide >= SLIDE_PARAGRAPH_START && currentSlide <= SLIDE_PARAGRAPH_END;
+            const currentParagraphIdx = isOnParagraph ? currentSlide - SLIDE_PARAGRAPH_START : -1;
+            
+            // Emojis (Usamos el índice del párrafo)
+            const isLeftEmoji = currentParagraphIdx % 2 !== 0;
+            const currentEmojis = isOnParagraph ? EMOJI_SETS[currentParagraphIdx % EMOJI_SETS.length] : [];
+
+            // ════════ Renders Rápidos ════════
             if (loading) return <div className="h-screen flex items-center justify-center bg-slate-950"><Loader2 className="animate-spin text-indigo-500" size={40}/></div>;
-            if (curIdx === -1) return (
+            
+            if (curIdx === -1 && !pendingResume) return (
                 <div className={`min-h-screen font-sans flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-800'}`}>
                     <div className={`px-6 py-4 flex items-center justify-between shrink-0 shadow-sm ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200 border-b'}`}>
                         <div className="flex items-center gap-4">
                             <button onClick={handleExit} className={`p-2 rounded-full transition-colors btn-juicy ${isDarkMode ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`}><ArrowLeft size={20}/></button>
-                            <span className="font-bold uppercase tracking-widest text-xs opacity-50 flex items-center gap-2"><BookOpen size={16}/> Reading Module</span>
+                            <div className="flex items-center gap-2.5">
+                                <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-black text-lg shadow-lg">P</div>
+                                <div className="flex flex-col justify-center">
+                                    <span className="font-black uppercase tracking-widest text-[11px] leading-none mb-0.5">Periplo</span>
+                                    <span className="font-bold text-[9px] opacity-60 uppercase tracking-widest leading-none">Reading & Comprehension</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div className="flex-1 overflow-y-auto p-6 md:p-12 custom-scrollbar">
@@ -287,13 +333,36 @@
             );
 
             const availableWords = wordBank.filter(word => Object.values(dropped).filter(w => w === word).length < currentStory.flatTokens.filter(t => t.text === word && t.isHidden).length);
-            const isOnParagraph = currentSlide >= 1 && currentSlide <= currentStory.paragraphs.length;
-            const currentTokens = isOnParagraph ? currentStory.paragraphs[currentSlide - 1] : [];
+            const currentTokens = isOnParagraph ? currentStory.paragraphs[currentParagraphIdx] : [];
             const requiresCheck = currentTokens.filter(t => t.isHidden).length > 0;
             const isSlideComplete = slideResult === 'correct' || !requiresCheck;
 
             return (
-                <div className="min-h-screen font-sans flex flex-col transition-all duration-700">
+                <div className="min-h-screen font-sans flex flex-col transition-all duration-700 relative">
+                    
+                    {/* MODAL DE PROGRESO GUARDADO */}
+                    {pendingResume && (
+                        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-scaleIn">
+                            <div className={`w-full max-w-md rounded-[2rem] p-8 text-center shadow-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-800'}`}>
+                                <div className="w-20 h-20 bg-indigo-500/20 text-indigo-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                                    <BookOpen size={40} />
+                                </div>
+                                <h2 className="text-2xl font-black mb-3">Progreso Guardado</h2>
+                                <p className="text-sm opacity-70 mb-8 leading-relaxed">
+                                    Vimos que dejaste esta lectura a medias. ¿Quieres continuar donde te quedaste o prefieres empezar de cero?
+                                </p>
+                                <div className="flex flex-col gap-3">
+                                    <button onClick={resumeSavedProgress} className="btn-juicy w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black shadow-lg">
+                                        Continuar Lectura
+                                    </button>
+                                    <button onClick={startFresh} className={`btn-juicy w-full py-3.5 rounded-xl font-bold border ${isDarkMode ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`}>
+                                        Empezar de Cero
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {currentStory.image_url ? (
                         <div className="fixed inset-0 z-0">
                             <img src={currentStory.image_url} className="w-full h-full object-cover" style={{ objectPosition: 'center top' }}/>
@@ -302,20 +371,25 @@
                     ) : <div className={`fixed inset-0 z-0 ${isDarkMode ? 'bg-slate-900' : 'bg-slate-100'}`}></div>}
 
                     <div className="relative z-10 flex-1 flex flex-col w-full h-full">
-                        {/* NAVBAR */}
+                        {/* NAVBAR OFICIAL PERIPLO */}
                         <div className={`px-4 md:px-6 py-3 flex items-center justify-between shrink-0 sticky top-0 z-50 backdrop-blur-xl border-b transition-colors ${isDarkMode ? 'bg-slate-900/70 border-white/5 text-white' : 'bg-white/70 border-slate-200 text-slate-800'}`}>
                             <div className="flex items-center gap-3">
                                 <button onClick={backToMenu} className={`p-2 rounded-full transition-colors btn-juicy ${isDarkMode ? 'hover:bg-slate-700 text-slate-300' : 'hover:bg-slate-200 text-slate-600'}`}><ArrowLeft size={20}/></button>
                                 <div className="flex flex-col">
                                     <h1 className="text-sm md:text-base font-black leading-tight line-clamp-1">{currentStory.title}</h1>
+                                    <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">
+                                        {currentSlide === 0 ? 'Portada' : isInstructions ? 'Instrucciones' : isOnParagraph ? `Párrafo ${currentParagraphIdx + 1} / ${currentStory.paragraphs.length}` : 'Resumen'}
+                                    </span>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
-                                <div className={`flex items-center gap-1 md:gap-2 px-2 py-1.5 md:px-3 rounded-xl border shrink-0 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
-                                    <button onClick={() => setFontSize(s => Math.max(14, s - 2))} className="p-1 md:p-1.5 btn-juicy"><ZoomOut size={18}/></button>
-                                    <button onClick={() => setFontSize(s => Math.min(40, s + 2))} className="p-1 md:p-1.5 btn-juicy"><ZoomIn size={18}/></button>
+                                <div className={`flex items-center px-1.5 py-1.5 rounded-xl border shrink-0 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
+                                    <button onClick={() => setFontSize(s => Math.max(14, s - 2))} className="p-1 md:p-1.5 btn-juicy text-slate-400 hover:text-slate-600 dark:hover:text-white"><ZoomOut size={18}/></button>
+                                    <button onClick={() => setFontSize(s => Math.min(40, s + 2))} className="p-1 md:p-1.5 btn-juicy text-slate-400 hover:text-slate-600 dark:hover:text-white"><ZoomIn size={18}/></button>
+                                    <div className="w-px h-5 bg-slate-300 dark:bg-slate-700 mx-1"></div>
+                                    <button onClick={() => restartStory(curIdx)} className="p-1 md:p-1.5 btn-juicy text-rose-500 hover:bg-rose-500/10 rounded-lg transition-colors" title="Reiniciar de Cero"><RotateCcw size={18}/></button>
                                 </div>
-                                <button onClick={toggleTheme} className={`p-2 rounded-full btn-juicy ${isDarkMode ? 'hover:bg-slate-700 text-yellow-400' : 'bg-white border hover:bg-slate-100 text-slate-600'}`}>{isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}</button>
+                                <button onClick={toggleTheme} className={`p-2 rounded-full btn-juicy hidden md:block ${isDarkMode ? 'hover:bg-slate-700 text-yellow-400' : 'bg-white border hover:bg-slate-100 text-slate-600'}`}>{isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}</button>
                             </div>
                         </div>
 
@@ -350,126 +424,127 @@
 
                         <div className={`max-w-[1400px] mx-auto w-full p-4 md:p-8 flex-1 flex flex-col lg:grid lg:grid-cols-12 gap-6 md:gap-8 items-start ${qaMode ? 'hidden' : ''}`}>
                             
-                            {/* TEXT AREA */}
-                            <div className={`w-full flex-1 flex flex-col justify-center animate-fadeUp ${isOnParagraph ? 'order-2 lg:order-1 lg:col-span-8' : 'order-1 lg:col-span-12'}`}>
+                            {/* ── AREA PRINCIPAL (Instrucciones o Texto) ── */}
+                            <div className={`w-full flex-1 flex flex-col justify-center animate-fadeUp ${currentSlide >= 1 && currentSlide <= SLIDE_PARAGRAPH_END ? 'order-2 lg:order-1 lg:col-span-8' : 'order-1 lg:col-span-12'}`}>
                                 
-                                {currentSlide === 0 && (
+                                {currentSlide === SLIDE_COVER && (
                                     <div className={`rounded-[3rem] shadow-2xl border p-8 md:p-16 text-center animate-scaleIn ${isDarkMode ? 'bg-slate-800/80 border-slate-700/50 text-white' : 'bg-white/80 border-white/50 text-slate-800'}`}>
                                         {currentStory.image_url && <img src={currentStory.image_url} className="w-28 h-28 mx-auto rounded-3xl object-cover mb-8 shadow-2xl"/>}
                                         <h2 className="text-4xl md:text-6xl font-black mb-10">{currentStory.title}</h2>
-                                        <button onClick={nextSlide} className="btn-juicy px-10 py-5 bg-indigo-600 text-white rounded-full font-black text-xl shadow-xl flex items-center gap-3 mx-auto">Comenzar <ArrowRight size={24}/></button>
+                                        <button onClick={nextSlide} className="btn-juicy px-10 py-5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-black text-xl shadow-xl flex items-center gap-3 mx-auto">Comenzar <ArrowRight size={24}/></button>
                                     </div>
                                 )}
 
+                                {/* SLIDE 1: INSTRUCCIONES FORMALES */}
+                                {isInstructions && (
+                                    <div className={`relative rounded-[2rem] shadow-2xl border p-6 md:p-10 transition-all duration-300 animate-scaleIn ${isDarkMode ? 'bg-slate-800/90 border-slate-700 text-slate-200' : 'bg-white/90 border-white text-slate-800'}`}>
+                                        <div className="flex items-center gap-3 mb-6 border-b pb-4 border-slate-200 dark:border-slate-700">
+                                            <div className="w-10 h-10 bg-amber-500/20 text-amber-500 rounded-xl flex items-center justify-center shrink-0">
+                                                <Info size={24}/>
+                                            </div>
+                                            <h3 className="font-black text-2xl">¿Cómo funciona?</h3>
+                                        </div>
+                                        
+                                        <div className={`p-5 rounded-2xl flex flex-col gap-6 mb-8 border ${isDarkMode ? 'bg-black/40 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                                            <div className="flex gap-4 items-start">
+                                                <div className="w-8 h-8 rounded-full bg-indigo-500/20 text-indigo-500 flex items-center justify-center shrink-0 font-black border border-indigo-500/30">1</div>
+                                                <div>
+                                                    <h4 className="font-bold mb-1">Traduce tu Word Bank</h4>
+                                                    <p className="text-sm opacity-70 leading-relaxed">Usa el botón "Traducir" en el panel lateral para conocer el significado de las palabras antes de empezar.</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-4 items-start">
+                                                <div className="w-8 h-8 rounded-full bg-rose-500/20 text-rose-500 flex items-center justify-center shrink-0 font-black border border-rose-500/30">2</div>
+                                                <div>
+                                                    <h4 className="font-bold mb-1">Toca, no arrastres</h4>
+                                                    <p className="text-sm opacity-70 leading-relaxed">Toca la palabra correcta y luego toca el hueco en el texto. ¡Evita arrastrar para no recargar la página por error!</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-4 items-start">
+                                                <div className="w-8 h-8 rounded-full bg-amber-500/20 text-amber-500 flex items-center justify-center shrink-0 font-black border border-amber-500/30">3</div>
+                                                <div>
+                                                    <h4 className="font-bold mb-1">Verifica y avanza</h4>
+                                                    <p className="text-sm opacity-70 leading-relaxed">Llena todos los huecos del párrafo y dale a "Verificar". Las palabras erróneas volverán al banco.</p>
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-4 items-start">
+                                                <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-500 flex items-center justify-center shrink-0 font-black border border-emerald-500/30">4</div>
+                                                <div>
+                                                    <h4 className="font-bold mb-1">Challenge Q&A</h4>
+                                                    <p className="text-sm opacity-70 leading-relaxed">Al terminar toda la lectura, prueba tu comprensión completando el quiz final de opción múltiple.</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="flex justify-between items-center pt-2">
+                                            <button onClick={prevSlide} className={`btn-juicy px-5 py-3.5 rounded-2xl font-bold flex items-center gap-2 ${isDarkMode ? 'bg-slate-700 text-slate-300' : 'bg-slate-200 text-slate-600'}`}>
+                                                <ArrowLeft size={18}/> Atrás
+                                            </button>
+                                            <button onClick={nextSlide} className="btn-juicy bg-emerald-500 text-white px-8 py-3.5 rounded-2xl font-black flex items-center gap-2 shadow-lg shadow-emerald-500/20">
+                                                ¡Entendido, a leer! <ArrowRight size={20}/>
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* SLIDES DE PÁRRAFOS */}
                                 {isOnParagraph && (
                                     <div className="space-y-4 md:space-y-6" key={`slide-${currentSlide}`}>
-                                        
-                                        {/* ════ VISTA: INSTRUCCIONES EXACTAMENTE COMO LO PEDISTE ════ */}
-                                        {currentSlide === 1 && !instructionsDismissed && (
-                                            <div className="flex flex-col h-full w-full overflow-hidden bg-slate-900 rounded-[2rem] shadow-2xl border border-slate-700 animate-scaleIn">
-                                                <div className="px-5 pt-6 shrink-0 mb-3 border-b border-white/5 pb-4">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="w-8 h-8 bg-amber-500/20 text-amber-500 rounded-lg flex items-center justify-center shrink-0">
-                                                            <Info size={18}/>
-                                                        </div>
-                                                        <h3 className="text-white font-black text-lg">¿Cómo funciona?</h3>
-                                                    </div>
+                                        <div className={`relative rounded-[2rem] shadow-2xl border p-6 md:p-10 leading-loose transition-all duration-300 animate-scaleIn flex items-stretch ${isDarkMode ? 'bg-slate-800/90 border-slate-700 text-slate-200' : 'bg-white/90 border-white text-slate-700'}`} style={{ fontSize: `${fontSize}px` }}>
+                                            
+                                            {/* Emojis Izquierda */}
+                                            {isLeftEmoji && <div className="hidden md:flex flex-col justify-between text-3xl pr-6 border-r border-slate-200 dark:border-slate-700 mr-6 opacity-40 z-10 select-none">{currentEmojis.map((e,i)=><span key={i}>{e}</span>)}</div>}
+                                            
+                                            <div className="flex-1 font-medium text-justify relative z-20">
+                                                <div className="flex items-center justify-between mb-4 md:mb-6 border-b pb-3 border-slate-200 dark:border-slate-700">
+                                                    <span className="text-xs font-black uppercase opacity-40">Párrafo {currentParagraphIdx + 1} / {currentStory.paragraphs.length}</span>
+                                                    {requiresCheck && !isSlideComplete && <span className="text-xs font-black uppercase text-amber-500 bg-amber-500/10 px-3 py-1 rounded-full">{currentTokens.filter(t=>t.isHidden).length - Object.keys(dropped).filter(k => currentTokens.some(h => h.id === parseInt(k))).length} restantes</span>}
+                                                    {isSlideComplete && <span className="text-xs font-black uppercase text-emerald-500 bg-emerald-500/10 px-3 py-1 rounded-full flex items-center gap-1"><CheckCircle2 size={14}/> Correcto</span>}
                                                 </div>
-                                                
-                                                <div className="flex-1 overflow-y-auto px-5 pb-6 custom-scrollbar flex flex-col gap-5 pt-2">
-                                                    <div className="bg-black/40 border border-white/10 p-5 rounded-2xl flex flex-col gap-6">
-                                                        
-                                                        <div className="flex gap-4">
-                                                            <div className="w-8 h-8 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0 font-black border border-indigo-500/30">1</div>
-                                                            <div>
-                                                                <h4 className="text-white font-bold mb-1">Traduce tu Word Bank</h4>
-                                                                <p className="text-zinc-400 text-xs leading-relaxed">Antes de leer, usa el botón "Traducir" en el panel lateral para conocer el significado de las palabras.</p>
-                                                            </div>
-                                                        </div>
-
-                                                        <div className="flex gap-4">
-                                                            <div className="w-8 h-8 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 font-black border border-rose-500/30">2</div>
-                                                            <div>
-                                                                <h4 className="text-white font-bold mb-1">Toca, no arrastres</h4>
-                                                                <p className="text-zinc-400 text-xs leading-relaxed">Toca la palabra correcta en el panel y luego toca el hueco en el texto. ¡Evita arrastrar para no recargar la página!</p>
-                                                            </div>
-                                                        </div>
-
-                                                        <div className="flex gap-4">
-                                                            <div className="w-8 h-8 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 font-black border border-amber-500/30">3</div>
-                                                            <div>
-                                                                <h4 className="text-white font-bold mb-1">Verifica y avanza</h4>
-                                                                <p className="text-zinc-400 text-xs leading-relaxed">Llena todos los huecos del párrafo. Si te equivocas, las palabras erróneas volverán al banco automáticamente.</p>
-                                                            </div>
-                                                        </div>
-
-                                                        <div className="flex gap-4">
-                                                            <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 font-black border border-emerald-500/30">4</div>
-                                                            <div>
-                                                                <h4 className="text-white font-bold mb-1">Challenge Q&A</h4>
-                                                                <p className="text-zinc-400 text-xs leading-relaxed">Al terminar toda la lectura, prueba tu comprensión completando el quiz final de opción múltiple.</p>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                    
-                                                    <button onClick={() => setInstructionsDismissed(true)} className="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-black text-sm py-3.5 rounded-xl shadow-lg shadow-amber-500/20 transition-transform active:scale-95 flex items-center justify-center gap-2">
-                                                        ¡Entendido, comenzar lección!
-                                                    </button>
-                                                </div>
+                                                {currentTokens.map((t, i) => {
+                                                    if (t.isHidden) {
+                                                        const val = dropped[t.id];
+                                                        let stateClass = isDarkMode ? 'token-hidden-dark' : 'token-hidden-light';
+                                                        if (val) stateClass = 'token-filled'; 
+                                                        if (slideResult === 'correct') stateClass = 'token-correct';
+                                                        if (slideResult === 'wrong' && val) stateClass = val === t.text ? 'token-correct' : 'token-wrong';
+                                                        return <span key={i} onClick={() => handleBlankTap(t.id)} className={`token-base token-single ${stateClass} ${!val && selectedWord ? 'animate-pulseGlow' : ''}`}>{val || ""}</span>;
+                                                    }
+                                                    if (t.text.match(/\n/)) return <br key={i}/>;
+                                                    return <span key={i}>{t.text}</span>;
+                                                })}
                                             </div>
-                                        )}
 
-                                        {/* TEXTO DEL PÁRRAFO (Se oculta si no han aceptado las instrucciones) */}
-                                        {instructionsDismissed && (
-                                            <div className={`relative rounded-[2rem] shadow-2xl border p-6 md:p-10 leading-loose transition-all duration-300 animate-scaleIn ${isDarkMode ? 'bg-slate-800/90 border-slate-700 text-slate-200' : 'bg-white/90 border-white text-slate-700'}`} style={{ fontSize: `${fontSize}px` }}>
-                                                <div className="flex-1 font-medium text-justify relative z-20">
-                                                    <div className="flex items-center justify-between mb-4 md:mb-6 border-b pb-3 border-slate-200 dark:border-slate-700">
-                                                        <span className="text-xs font-black uppercase opacity-40">Párrafo {currentSlide} / {currentStory.paragraphs.length}</span>
-                                                    </div>
-                                                    {currentTokens.map((t, i) => {
-                                                        if (t.isHidden) {
-                                                            const val = dropped[t.id];
-                                                            let stateClass = isDarkMode ? 'token-hidden-dark' : 'token-hidden-light';
-                                                            if (val) stateClass = 'token-filled'; 
-                                                            if (slideResult === 'correct') stateClass = 'token-correct';
-                                                            if (slideResult === 'wrong' && val) stateClass = val === t.text ? 'token-correct' : 'token-wrong';
-                                                            return <span key={i} onClick={() => handleBlankTap(t.id)} className={`token-base token-single ${stateClass} ${!val && selectedWord ? 'animate-pulseGlow' : ''}`}>{val || ""}</span>;
-                                                        }
-                                                        if (t.text.match(/\n/)) return <br key={i}/>;
-                                                        return <span key={i}>{t.text}</span>;
-                                                    })}
-                                                </div>
-                                            </div>
-                                        )}
+                                            {/* Emojis Derecha */}
+                                            {!isLeftEmoji && <div className="hidden md:flex flex-col justify-between text-3xl pl-6 border-l border-slate-200 dark:border-slate-700 ml-6 opacity-40 z-10 select-none">{currentEmojis.map((e,i)=><span key={i}>{e}</span>)}</div>}
+                                        </div>
 
-                                        {instructionsDismissed && (
-                                            <div className="flex justify-between items-center pt-2">
-                                                <button onClick={prevSlide} className={`btn-juicy px-5 py-3.5 rounded-2xl font-bold flex items-center gap-2 ${currentSlide === 1 ? 'opacity-0 pointer-events-none' : (isDarkMode ? 'bg-slate-700 text-slate-300' : 'bg-slate-200 text-slate-600')}`}><ArrowLeft size={18}/> Atrás</button>
-                                                {requiresCheck && !isSlideComplete ? (
-                                                    <button onClick={checkSlideAnswers} className={`btn-juicy px-8 py-3.5 rounded-2xl font-black flex items-center gap-2 ${isDarkMode ? 'bg-slate-700 text-white' : 'bg-slate-900 text-white'}`}><CheckCircle2 size={20}/> Verificar</button>
-                                                ) : (
-                                                    <button onClick={nextSlide} className="btn-juicy bg-emerald-500 text-white px-8 py-3.5 rounded-2xl font-black flex items-center gap-2">Siguiente <ArrowRight size={20}/></button>
-                                                )}
-                                            </div>
-                                        )}
+                                        <div className="flex justify-between items-center pt-2">
+                                            <button onClick={prevSlide} className={`btn-juicy px-5 py-3.5 rounded-2xl font-bold flex items-center gap-2 ${isDarkMode ? 'bg-slate-700 text-slate-300 hover:bg-slate-600' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}><ArrowLeft size={18}/> Atrás</button>
+                                            {requiresCheck && !isSlideComplete ? (
+                                                <button onClick={checkSlideAnswers} className={`btn-juicy px-8 py-3.5 rounded-2xl font-black flex items-center gap-2 shadow-lg ${isDarkMode ? 'bg-slate-700 text-white hover:bg-slate-600' : 'bg-slate-900 text-white hover:bg-slate-800'}`}><CheckCircle2 size={20}/> Verificar</button>
+                                            ) : (
+                                                <button onClick={nextSlide} className="btn-juicy bg-emerald-500 text-white px-8 py-3.5 rounded-2xl font-black flex items-center gap-2 shadow-lg shadow-emerald-500/20">Siguiente <ArrowRight size={20}/></button>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
 
-                                {currentSlide > currentStory.paragraphs.length && (
+                                {currentSlide > SLIDE_PARAGRAPH_END && (
                                     <div className={`rounded-[3rem] shadow-2xl border p-8 md:p-14 text-center max-w-2xl mx-auto animate-scaleIn ${isDarkMode ? 'bg-slate-800 text-white' : 'bg-white'}`}>
                                         <CheckCircle2 size={56} className="text-emerald-500 mx-auto mb-8" />
-                                        <h2 className="text-4xl font-black mb-10">¡Completado!</h2>
+                                        <h2 className="text-4xl font-black mb-10">¡Lectura Completada!</h2>
                                         <div className="flex flex-col gap-3 max-w-sm mx-auto">
-                                            {currentStory.questions && currentStory.questions.length > 0 && <button onClick={startChallenge} className="btn-juicy w-full bg-indigo-600 text-white py-4 rounded-2xl font-black mb-2 flex items-center justify-center gap-2"><Swords size={24}/> CHALLENGE Q&A</button>}
-                                            <button onClick={() => restartStory(curIdx)} className="btn-juicy w-full py-4 rounded-2xl font-black border border-slate-600 text-slate-300">Volver a Leer</button>
+                                            {currentStory.questions && currentStory.questions.length > 0 && <button onClick={startChallenge} className="btn-juicy w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-2xl font-black shadow-xl mb-2 flex items-center justify-center gap-2"><Swords size={24}/> CHALLENGE Q&A</button>}
+                                            <button onClick={() => restartStory(curIdx)} className={`btn-juicy w-full py-4 rounded-2xl font-black border ${isDarkMode ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`}><RotateCcw size={20}/> Volver a Leer</button>
                                         </div>
                                     </div>
                                 )}
                             </div>
 
-                            {/* WORD BANK SIDEBAR */}
-                            {isOnParagraph && (
-                                <div className={`order-1 lg:order-2 lg:col-span-4 w-full lg:sticky lg:top-20 flex flex-col gap-4 animate-fadeUp ${!instructionsDismissed ? 'hidden lg:flex opacity-30 pointer-events-none blur-sm' : ''}`}>
+                            {/* ── WORD BANK SIDEBAR (Visible desde Instrucciones hasta el último párrafo) ── */}
+                            {(isInstructions || isOnParagraph) && (
+                                <div className={`order-1 lg:order-2 lg:col-span-4 w-full lg:sticky lg:top-20 flex flex-col gap-4 animate-fadeUp`}>
                                     <div className={`rounded-[2rem] shadow-xl border overflow-hidden flex flex-col max-h-[350px] lg:max-h-[calc(100vh-8rem)] ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/90 border-white'}`}>
                                         <div className="bg-slate-900 p-4 flex items-center justify-between text-white shrink-0">
                                             <div className="flex items-center gap-2 font-black uppercase text-xs tracking-widest"><Puzzle size={18} className="text-indigo-400"/> Word Bank <span className="ml-2 bg-slate-800 px-2 py-1 rounded-lg text-[10px] text-slate-400">{availableWords.length} left</span></div>
