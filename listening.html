@@ -56,13 +56,6 @@
         /* ── iOS Safari ── */
         button, a, [role="button"] { touch-action: manipulation; }
 
-        /* ── Vocab shimmer ── */
-        .vocab-shimmer {
-            background: linear-gradient(135deg, rgba(16,185,129,0.08) 0%, rgba(16,185,129,0.02) 50%, rgba(16,185,129,0.08) 100%);
-            background-size: 200% 200%; animation: shimmer 3s ease infinite;
-        }
-        @keyframes shimmer { 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
-
         /* ── Scrollbar ── */
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
@@ -79,7 +72,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Play, Pause, SkipBack, SkipForward, ExternalLink, Subtitles, EyeOff, BrainCircuit, HelpCircle, CheckCircle2, XCircle, Sparkles, Gauge, Eye, ChevronDown, ChevronUp, ArrowLeft } from 'lucide-react';
+        import { Play, Pause, SkipBack, SkipForward, ExternalLink, Subtitles, EyeOff, BrainCircuit, HelpCircle, CheckCircle2, XCircle, Sparkles, Gauge, Eye, ChevronDown, ChevronUp, ArrowLeft, Scissors, Clock, BookOpen, List } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
@@ -95,31 +88,23 @@
         const ListeningApp = () => {
             const [taller, setTaller] = useState(null);
             const [parsedSubs, setParsedSubs] = useState([]);
-            const [vocabulary, setVocabulary] = useState([]);
-            const [questions, setQuestions] = useState([]);
+            const [clips, setClips] = useState([]);
 
             const [currentTime, setCurrentTime] = useState(0);
             const [duration, setDuration] = useState(0);
             const [isPlaying, setIsPlaying] = useState(false);
             const [playbackRate, setPlaybackRate] = useState(1);
             const [showSpeedMenu, setShowSpeedMenu] = useState(false);
-
-            // Subs toggle — independent of side panel
             const [subsVisible, setSubsVisible] = useState(true);
 
-            // Side panel mode: 'vocab' | 'questions' | 'none'
-            const [sideMode, setSideMode] = useState('none');
-
-            // NEW: Panel Interactive States
-            const [expandedVocab, setExpandedVocab] = useState(-1);
-            const [focusedQuestion, setFocusedQuestion] = useState(-1);
-
-            // Quiz tracking
-            const [answeredQuestions, setAnsweredQuestions] = useState({});
-            const [optionsVisible, setOptionsVisible] = useState(false);
-
-            // Vocab tracking
-            const [seenVocab, setSeenVocab] = useState(new Set());
+            // UI States
+            const [panelVisible, setPanelVisible] = useState(true);
+            const [focusedClip, setFocusedClip] = useState(-1);
+            
+            // Interaction States (Identificadores únicos basados en índice de clip + índice de elemento)
+            const [expandedVocabKey, setExpandedVocabKey] = useState(null); // "cIdx-vIdx"
+            const [visibleOptions, setVisibleOptions] = useState(new Set()); // Set de "cIdx-qIdx"
+            const [answeredQuestions, setAnsweredQuestions] = useState({}); // Mapa "cIdx-qIdx" -> answerIndex
 
             const playerRef = useRef(null);
             const playerReady = useRef(false);
@@ -151,7 +136,7 @@
 
             const { activeIdx: activeSubIndex, displayIdx: displaySubIndex } = getSubtitleState();
 
-            /* ── Firebase ── */
+            /* ── Firebase Fetch & Legacy Fallback ── */
             useEffect(() => {
                 const fetchTaller = async () => {
                     const params = new URLSearchParams(window.location.search);
@@ -163,8 +148,19 @@
                             const data = docSnap.data();
                             setTaller(data);
                             setParsedSubs(data.parsedTranscript || []);
-                            setVocabulary(data.vocabulary || []);
-                            setQuestions(data.questions || []);
+                            
+                            // Migración al vuelo: Si tiene clips, los usamos. Si no, metemos todo en 1 clip gigante.
+                            if (data.clips && data.clips.length > 0) {
+                                setClips(data.clips);
+                            } else {
+                                setClips([{
+                                    startSeconds: 0,
+                                    endSeconds: 9999, // Se ajustará a la duración real
+                                    reason: "Lección Completa",
+                                    vocabulary: data.vocabulary || [],
+                                    questions: data.questions || []
+                                }]);
+                            }
                             loadYouTubeScript(data.videoId);
                         }
                     } catch (e) { console.error("Fetch error:", e); }
@@ -172,7 +168,7 @@
                 fetchTaller();
             }, []);
 
-            /* ── YouTube ── */
+            /* ── YouTube Player ── */
             const loadYouTubeScript = (vidId) => {
                 if (!window.YT) {
                     const tag = document.createElement('script');
@@ -204,7 +200,7 @@
                 return () => clearInterval(interval);
             }, []);
 
-            /* ── Controls ── */
+            /* ── Transport Controls ── */
             const togglePlayPause = useCallback(() => {
                 if (!playerRef.current || !playerReady.current) return;
                 const st = playerRef.current.getPlayerState();
@@ -239,53 +235,38 @@
                 return () => document.removeEventListener('pointerdown', handler);
             }, [showSpeedMenu]);
 
-            /* ── Active detections for tracking progress ── */
-            const activeVocab = useMemo(() => vocabulary.find(v => currentTime >= v.startSeconds && currentTime <= v.endSeconds), [currentTime, vocabulary]);
-            
-            useEffect(() => {
-                if (activeVocab && !seenVocab.has(activeVocab.word))
-                    setSeenVocab(prev => new Set([...prev, activeVocab.word]));
-            }, [activeVocab]);
-
-            /* ── Timeline markers ── */
-            const timelineMarkers = useMemo(() => {
-                if (duration <= 0) return [];
-                if (sideMode === 'vocab') return vocabulary.map(v => ({
-                    left: (v.startSeconds / duration) * 100,
-                    width: ((v.endSeconds - v.startSeconds) / duration) * 100,
-                    active: currentTime >= v.startSeconds && currentTime <= v.endSeconds,
-                    color: 'emerald'
-                }));
-                if (sideMode === 'questions') return questions.map(q => ({
-                    left: (q.startSeconds / duration) * 100,
-                    width: ((q.endSeconds - q.startSeconds) / duration) * 100,
-                    active: currentTime >= q.startSeconds && currentTime <= q.endSeconds,
-                    color: 'indigo'
-                }));
-                return [];
-            }, [sideMode, vocabulary, questions, currentTime, duration]);
-
-            /* ── Quiz ── */
-            const handleAnswer = useCallback((qIdx, ansIdx) => {
-                if (answeredQuestions[qIdx] !== undefined) return;
-                setAnsweredQuestions(prev => ({ ...prev, [qIdx]: ansIdx }));
+            /* ── Handlers ── */
+            const handleAnswer = useCallback((qKey, ansIdx) => {
+                if (answeredQuestions[qKey] !== undefined) return;
+                setAnsweredQuestions(prev => ({ ...prev, [qKey]: ansIdx }));
             }, [answeredQuestions]);
 
-            const quizScore = useMemo(() => {
-                let correct = 0;
-                Object.entries(answeredQuestions).forEach(([qIdx, ansIdx]) => {
-                    if (questions[qIdx] && questions[qIdx].correctIndex === ansIdx) correct++;
+            const toggleOptions = (qKey) => {
+                setVisibleOptions(prev => {
+                    const newSet = new Set(prev);
+                    if (newSet.has(qKey)) newSet.delete(qKey); else newSet.add(qKey);
+                    return newSet;
                 });
-                return { answered: Object.keys(answeredQuestions).length, correct, total: questions.length };
-            }, [answeredQuestions, questions]);
+            };
 
-            /* ── Subtitle overlay class ── */
+            /* ── Timeline markers for Clips ── */
+            const timelineMarkers = useMemo(() => {
+                if (duration <= 0 || clips.length === 0) return [];
+                return clips.map(clip => {
+                    const end = clip.endSeconds === 9999 ? duration : clip.endSeconds;
+                    return {
+                        left: (clip.startSeconds / duration) * 100,
+                        width: ((end - clip.startSeconds) / duration) * 100,
+                        active: currentTime >= clip.startSeconds && currentTime <= end,
+                        color: 'amber'
+                    };
+                });
+            }, [clips, currentTime, duration]);
+
             const subOverlayClass = !subsVisible ? 'sub-overlay-hidden'
                 : activeSubIndex >= 0 ? 'sub-overlay-active'
                 : displaySubIndex >= 0 ? 'sub-overlay-fading'
                 : 'sub-overlay-hidden';
-
-            const hasSidePanel = sideMode === 'vocab' || sideMode === 'questions';
 
             /* ══════════════ RENDER ══════════════ */
 
@@ -327,24 +308,22 @@
                         </header>
 
                         {/* ══════════════════════════════════════════
-                            MAIN LAYOUT: side-by-side on lg, stacked on mobile
+                            MAIN LAYOUT
                         ══════════════════════════════════════════ */}
-                        <div className={`flex flex-col ${hasSidePanel ? 'lg:flex-row' : ''} gap-4`}>
+                        <div className={`flex flex-col ${panelVisible ? 'lg:flex-row' : ''} gap-4`}>
 
-                            {/* ── LEFT COLUMN: Video + Controls + Mode Tabs ── */}
-                            <div className={`${hasSidePanel ? 'lg:flex-1 lg:min-w-0' : 'w-full max-w-5xl mx-auto'} transition-all duration-300`}>
+                            {/* ── LEFT COLUMN: Video + Controls ── */}
+                            <div className={`${panelVisible ? 'lg:flex-1 lg:min-w-0' : 'w-full max-w-5xl mx-auto'} transition-all duration-300`}>
 
                                 {/* Player card */}
                                 <div className="rounded-2xl overflow-hidden bg-black/60 backdrop-blur-xl border border-white/8 shadow-2xl shadow-black/40">
 
-                                    {/* Video */}
                                     <div className="w-full relative aspect-video bg-black">
                                         <div className="absolute inset-0 w-full h-full pointer-events-none">
                                             <div id="yt-player-container" className="w-full h-full"></div>
                                         </div>
                                         <div onClick={togglePlayPause} className="absolute inset-0 z-10 cursor-pointer"/>
 
-                                        {/* ── SUBTITLE OVERLAY — only source of subs, controlled by CC toggle ── */}
                                         {displaySubIndex >= 0 && parsedSubs[displaySubIndex] && (
                                             <div className={`sub-overlay absolute bottom-3 md:bottom-5 left-0 right-0 z-20 flex justify-center pointer-events-none px-3 ${subOverlayClass}`}>
                                                 <p className="bg-black/75 backdrop-blur-sm text-white text-sm md:text-lg font-semibold px-4 py-2 md:px-6 md:py-2.5 rounded-xl max-w-[95%] text-center leading-snug shadow-lg">
@@ -362,25 +341,26 @@
                                             <div className="relative w-full flex items-center h-5">
                                                 <div className="absolute left-0 right-0 h-1 bg-white/10 rounded-full"/>
                                                 <div className="absolute left-0 h-1 bg-white/40 rounded-full" style={{ width: duration > 0 ? `${(currentTime/duration)*100}%` : '0%' }}/>
+                                                
+                                                {/* Timeline Markers for Clips */}
                                                 {timelineMarkers.map((m, i) => (
                                                     <React.Fragment key={i}>
                                                         {m.active && (
-                                                            <div className={`absolute h-1.5 rounded-full z-10 ${m.color === 'emerald' ? 'bg-emerald-400/80 shadow-[0_0_6px_rgba(52,211,153,0.6)]' : 'bg-indigo-400/80 shadow-[0_0_6px_rgba(129,140,248,0.6)]'}`}
+                                                            <div className="absolute h-1.5 rounded-full z-10 bg-amber-400/80 shadow-[0_0_6px_rgba(251,191,36,0.6)]"
                                                                 style={{ left: `${m.left}%`, width: `${m.width}%` }}/>
                                                         )}
-                                                        <div className={`absolute w-1.5 h-1.5 rounded-full z-20 transition-all ${m.active ? (m.color === 'emerald' ? 'bg-emerald-300 scale-150' : 'bg-indigo-300 scale-150') : (m.color === 'emerald' ? 'bg-emerald-500/60' : 'bg-indigo-500/60')}`}
-                                                            style={{ left: `${m.left}%`, top: '50%', transform: `translateY(-50%) ${m.active ? 'scale(1.5)' : 'scale(1)'}` }}/>
+                                                        <div className={`absolute h-1.5 rounded-full z-0 transition-all ${m.active ? 'bg-amber-300' : 'bg-amber-500/40 hover:bg-amber-500/60'}`}
+                                                            style={{ left: `${m.left}%`, width: `${m.width}%` }}/>
                                                     </React.Fragment>
                                                 ))}
                                                 <input type="range" min="0" max={duration || 100} step="0.1" value={currentTime} onChange={handleSeek}
-                                                    className="absolute inset-0 w-full h-full z-30 m-0 cursor-pointer"/>
+                                                    className="absolute inset-0 w-full h-full z-30 m-0 cursor-pointer opacity-0"/>
                                             </div>
                                             <span className="text-[10px] font-mono text-zinc-500 w-8 tabular-nums">{formatTime(duration)}</span>
                                         </div>
 
                                         {/* Controls row */}
                                         <div className="flex items-center justify-between">
-                                            {/* Left: speed */}
                                             <div className="relative" ref={speedMenuRef}>
                                                 <button onClick={() => setShowSpeedMenu(!showSpeedMenu)}
                                                     className="speed-badge text-[11px] font-extrabold text-zinc-400 hover:text-white bg-white/5 hover:bg-white/10 px-2 py-1.5 rounded-lg transition flex items-center gap-1">
@@ -398,7 +378,6 @@
                                                 )}
                                             </div>
 
-                                            {/* Center: playback */}
                                             <div className="flex items-center gap-4">
                                                 <button onClick={() => jumpSeconds(-5)} className="text-zinc-500 hover:text-white transition active:scale-90">
                                                     <SkipBack size={18} fill="currentColor"/>
@@ -412,7 +391,6 @@
                                                 </button>
                                             </div>
 
-                                            {/* Right: CC toggle */}
                                             <button onClick={() => setSubsVisible(!subsVisible)}
                                                 className={`text-[11px] font-extrabold px-2.5 py-1.5 rounded-lg transition flex items-center gap-1 ${subsVisible ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20' : 'text-zinc-500 bg-white/5 hover:bg-white/10'}`}
                                                 title={subsVisible ? 'Ocultar subtítulos' : 'Mostrar subtítulos'}>
@@ -423,200 +401,198 @@
                                     </div>
                                 </div>
 
-                                {/* ── MODE TABS (below video card) ── */}
-                                <div className="flex items-center justify-center gap-2 mt-3">
-                                    {[
-                                        { id: 'vocab', icon: BrainCircuit, label: 'Vocab', color: 'emerald', count: vocabulary.length, progress: seenVocab.size },
-                                        { id: 'questions', icon: HelpCircle, label: 'Quiz', color: 'indigo', count: questions.length, progress: quizScore.answered },
-                                    ].map(tab => {
-                                        const isActive = sideMode === tab.id;
-                                        const colorMap = {
-                                            emerald: 'text-emerald-400 bg-emerald-400/15 border-emerald-400/30',
-                                            indigo: 'text-indigo-400 bg-indigo-400/15 border-indigo-400/30'
-                                        };
-                                        const inactiveStyle = 'text-zinc-500 bg-white/5 border-transparent hover:bg-white/8 hover:text-zinc-300';
-                                        const Icon = tab.icon;
-                                        return (
-                                            <button key={tab.id}
-                                                onClick={() => setSideMode(sideMode === tab.id ? 'none' : tab.id)}
-                                                className={`mode-pill relative flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-extrabold border transition-all ${isActive ? colorMap[tab.color] : inactiveStyle}`}>
-                                                <Icon size={15}/>
-                                                {tab.label}
-                                                <span className={`ml-0.5 text-[10px] font-black ${isActive ? '' : 'text-zinc-600'}`}>
-                                                    {tab.progress || 0}/{tab.count}
-                                                </span>
-                                            </button>
-                                        );
-                                    })}
+                                {/* ── MODE TOGGLE ── */}
+                                <div className="flex items-center justify-center mt-3">
+                                    <button onClick={() => setPanelVisible(!panelVisible)}
+                                        className={`mode-pill relative flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-extrabold border transition-all ${panelVisible ? 'text-amber-400 bg-amber-400/15 border-amber-400/30' : 'text-zinc-400 bg-white/5 border-transparent hover:bg-white/8 hover:text-zinc-300'}`}>
+                                        <List size={18}/>
+                                        Lección 
+                                        <span className="ml-1 text-[11px] font-black bg-black/30 px-2 py-0.5 rounded-md">
+                                            {clips.length} Clips
+                                        </span>
+                                    </button>
                                 </div>
                             </div>
 
-                            {/* ── RIGHT COLUMN: Side Panel (vocab or quiz) ── */}
-                            {hasSidePanel && (
+                            {/* ── RIGHT COLUMN: Side Panel (Clips Navigation) ── */}
+                            {panelVisible && (
                                 <div className="lg:w-[380px] xl:w-[420px] lg:shrink-0 flex flex-col">
+                                    <div className="panel-enter rounded-2xl border border-amber-500/15 bg-amber-950/10 backdrop-blur-md flex-1 flex flex-col px-5 py-6 min-h-[400px] max-h-[600px] lg:max-h-[calc(100vh-150px)]">
+                                        
+                                        {focusedClip !== -1 ? (
+                                            /* ════ DETAIL VIEW (Single Clip) ════ */
+                                            <div className="flex flex-col h-full w-full">
+                                                <button onClick={() => setFocusedClip(-1)} className="self-start flex items-center gap-1.5 text-amber-500 hover:text-amber-400 text-xs font-bold mb-4 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1.5 rounded-lg transition-colors shrink-0">
+                                                    <ArrowLeft size={14} /> Volver a Clips
+                                                </button>
 
-                                    {/* ════ VOCAB PANEL (List View) ════ */}
-                                    {sideMode === 'vocab' && (
-                                        <div className="panel-enter rounded-2xl border border-emerald-500/15 bg-emerald-950/10 backdrop-blur-md flex-1 flex flex-col px-5 py-6 min-h-[400px] max-h-[600px] lg:max-h-[calc(100vh-150px)]">
-                                            <div className="flex items-center gap-2 mb-4 shrink-0">
-                                                <BrainCircuit className="text-emerald-400" size={20} />
-                                                <h3 className="text-white font-black text-lg">Vocabulario</h3>
-                                            </div>
-                                            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-2.5 pb-2">
-                                                {vocabulary.length > 0 ? vocabulary.map((v, idx) => (
-                                                    <div key={idx} className="bg-black/40 border border-emerald-500/20 rounded-xl overflow-hidden transition-all shrink-0">
-                                                        <button
-                                                            onClick={() => setExpandedVocab(expandedVocab === idx ? -1 : idx)}
-                                                            className="w-full px-4 py-3.5 flex justify-between items-center hover:bg-white/5 transition-colors text-left"
-                                                        >
-                                                            <span className="font-bold text-emerald-100 text-sm">{v.word}</span>
-                                                            {expandedVocab === idx ? <ChevronUp size={16} className="text-emerald-400 shrink-0"/> : <ChevronDown size={16} className="text-emerald-600 shrink-0"/>}
-                                                        </button>
-                                                        {expandedVocab === idx && (
-                                                            <div className="px-4 pb-4 pt-1 border-t border-emerald-500/20 bg-emerald-500/5">
-                                                                <div className="inline-flex items-center gap-1 bg-emerald-500/15 text-emerald-400 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider mb-2 mt-2">
-                                                                    <Sparkles size={10}/> {v.type || "Término"}
-                                                                </div>
-                                                                <p className="text-sm text-emerald-100/80 italic leading-relaxed break-words">{v.definition}</p>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )) : (
-                                                    <p className="text-emerald-500/50 text-sm text-center mt-10">No hay vocabulario disponible.</p>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* ════ QUIZ PANEL (List & Focus View) ════ */}
-                                    {sideMode === 'questions' && (
-                                        <div className="panel-enter rounded-2xl border border-indigo-500/15 bg-indigo-950/20 backdrop-blur-md flex-1 flex flex-col px-5 py-6 min-h-[400px] max-h-[600px] lg:max-h-[calc(100vh-150px)]">
-                                            
-                                            {focusedQuestion !== -1 ? (
-                                                /* -- FOCUSED QUESTION VIEW -- */
-                                                <div className="w-full flex flex-col h-full">
-                                                    <button onClick={() => setFocusedQuestion(-1)} className="self-start flex items-center gap-1.5 text-indigo-400 hover:text-indigo-300 text-xs font-bold mb-4 bg-indigo-500/10 hover:bg-indigo-500/20 px-3 py-1.5 rounded-lg transition-colors shrink-0">
-                                                        <ArrowLeft size={14} /> Volver a la lista
-                                                    </button>
-
-                                                    <div className="flex-1 w-full overflow-y-auto custom-scrollbar pr-1 flex flex-col items-center justify-center">
-                                                        {(() => {
-                                                            const qIdx = focusedQuestion;
-                                                            const qData = questions[qIdx];
-                                                            return (
-                                                                <div className="w-full">
-                                                                    <div className="inline-flex items-center justify-center gap-1.5 bg-indigo-500/15 text-indigo-400 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-[0.15em] mb-3 border border-indigo-500/20 mx-auto table">
-                                                                        <HelpCircle size={12} className="inline"/> Pregunta {qIdx + 1}
+                                                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-6 pb-4">
+                                                    {(() => {
+                                                        const clip = clips[focusedClip];
+                                                        const endSec = clip.endSeconds === 9999 ? duration : clip.endSeconds;
+                                                        return (
+                                                            <div className="w-full">
+                                                                {/* Clip Header Info */}
+                                                                <div className="mb-6 shrink-0 border-b border-white/10 pb-5">
+                                                                    <div className="inline-flex items-center gap-1.5 bg-amber-500/15 text-amber-400 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-[0.15em] mb-3 border border-amber-500/20">
+                                                                        <Scissors size={12}/> Clip {focusedClip + 1}
                                                                     </div>
-                                                                    <h2 className="text-lg lg:text-xl font-black text-white mb-5 text-center leading-snug break-words">{qData.q}</h2>
+                                                                    <h2 className="text-xl font-black text-white leading-snug break-words mb-3">{clip.reason}</h2>
+                                                                    <div className="flex items-center gap-3">
+                                                                        <span className="text-xs font-mono text-amber-500/70 bg-amber-500/10 px-2 py-1 rounded-md flex items-center gap-1.5">
+                                                                            <Clock size={12}/> {formatTime(clip.startSeconds)} - {formatTime(endSec)}
+                                                                        </span>
+                                                                        <button onClick={() => { seekTo(clip.startSeconds); playerRef.current.playVideo(); }} className="text-xs font-bold text-black bg-amber-400 hover:bg-amber-300 px-3 py-1 rounded-md transition-colors shadow-lg shadow-amber-500/20 flex items-center gap-1">
+                                                                            <Play size={12} fill="currentColor"/> Reproducir
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
 
-                                                                    {!optionsVisible && answeredQuestions[qIdx] === undefined ? (
-                                                                        <div className="flex justify-center shrink-0">
-                                                                            <button onClick={() => setOptionsVisible(true)}
-                                                                                className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2.5 rounded-xl font-bold shadow-lg transition-transform active:scale-95 flex items-center gap-2 text-sm">
-                                                                                <Eye size={16}/> Mostrar Opciones
-                                                                           </button>
-                                                                        </div>
-                                                                    ) : (
-                                                                        <div className="flex flex-col gap-2.5 w-full pb-4">
-                                                                            {qData.options.map((opt, idx) => {
-                                                                                const selected = answeredQuestions[qIdx];
-                                                                                const isSelected = selected === idx;
-                                                                                const isCorrect = qData.correctIndex === idx;
-                                                                                const showResult = selected !== undefined;
-                                                                                let style = "quiz-opt bg-white/5 border-white/10 text-white";
-                                                                                if (showResult) {
-                                                                                    if (isCorrect) style = "bg-emerald-500/15 border-emerald-500/60 text-emerald-300 ring-1 ring-emerald-500/40";
-                                                                                    else if (isSelected && !isCorrect) style = "bg-rose-500/15 border-rose-500/60 text-rose-300";
-                                                                                    else style = "bg-black/20 border-transparent text-zinc-600";
-                                                                                }
+                                                                {/* Vocab Section */}
+                                                                {clip.vocabulary && clip.vocabulary.length > 0 && (
+                                                                    <div className="mb-6 shrink-0">
+                                                                        <h3 className="text-sm font-black text-emerald-400 flex items-center gap-2 mb-3"><BookOpen size={16}/> Vocabulario</h3>
+                                                                        <div className="flex flex-col gap-2">
+                                                                            {clip.vocabulary.map((v, vIdx) => {
+                                                                                const vKey = `${focusedClip}-${vIdx}`;
+                                                                                const isExpanded = expandedVocabKey === vKey;
                                                                                 return (
-                                                                                    <button key={idx} onClick={() => handleAnswer(qIdx, idx)} disabled={showResult}
-                                                                                        className={`p-3 rounded-xl border text-left font-semibold transition-all duration-200 flex justify-between items-center gap-2 text-sm shrink-0 ${style}`}>
-                                                                                        <span className="break-words">{opt}</span>
-                                                                                        {showResult && isCorrect && <CheckCircle2 size={16} className="text-emerald-400 shrink-0"/>}
-                                                                                        {showResult && isSelected && !isCorrect && <XCircle size={16} className="text-rose-400 shrink-0"/>}
-                                                                                    </button>
-                                                                                );
+                                                                                    <div key={vIdx} className="bg-black/40 border border-emerald-500/20 rounded-xl overflow-hidden shrink-0">
+                                                                                        <button onClick={() => setExpandedVocabKey(isExpanded ? null : vKey)} className="w-full px-4 py-3 flex justify-between items-center hover:bg-white/5 transition-colors text-left">
+                                                                                            <span className="font-bold text-emerald-100 text-sm break-words pr-2">{v.word}</span>
+                                                                                            {isExpanded ? <ChevronUp size={16} className="text-emerald-400 shrink-0"/> : <ChevronDown size={16} className="text-emerald-600 shrink-0"/>}
+                                                                                        </button>
+                                                                                        {isExpanded && (
+                                                                                            <div className="px-4 pb-4 pt-1 border-t border-emerald-500/20 bg-emerald-500/5">
+                                                                                                <div className="inline-flex items-center gap-1 bg-emerald-500/15 text-emerald-400 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider mb-2 mt-2">
+                                                                                                    <Sparkles size={10}/> {v.type || "Término"}
+                                                                                                </div>
+                                                                                                <p className="text-sm text-emerald-100/80 italic leading-relaxed break-words">{v.definition}</p>
+                                                                                            </div>
+                                                                                        )}
+                                                                                    </div>
+                                                                                )
                                                                             })}
                                                                         </div>
+                                                                    </div>
+                                                                )}
+
+                                                                {/* Questions Section */}
+                                                                {clip.questions && clip.questions.length > 0 && (
+                                                                    <div className="shrink-0">
+                                                                        <h3 className="text-sm font-black text-indigo-400 flex items-center gap-2 mb-3"><HelpCircle size={16}/> Preguntas</h3>
+                                                                        <div className="flex flex-col gap-5">
+                                                                            {clip.questions.map((q, qIdx) => {
+                                                                                const qKey = `${focusedClip}-${qIdx}`;
+                                                                                const isOptionsVisible = visibleOptions.has(qKey);
+                                                                                const selected = answeredQuestions[qKey];
+                                                                                const showResult = selected !== undefined;
+
+                                                                                return (
+                                                                                    <div key={qIdx} className="bg-indigo-950/20 border border-indigo-500/20 rounded-xl p-4 shrink-0">
+                                                                                        <h4 className="font-bold text-sm text-white mb-4 leading-snug break-words">{q.q}</h4>
+                                                                                        
+                                                                                        {!isOptionsVisible && !showResult ? (
+                                                                                            <button onClick={() => toggleOptions(qKey)} className="w-full bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-2 text-xs">
+                                                                                                <Eye size={14}/> Mostrar Opciones
+                                                                                            </button>
+                                                                                        ) : (
+                                                                                            <div className="flex flex-col gap-2">
+                                                                                                {q.options.map((opt, oIdx) => {
+                                                                                                    const isSelected = selected === oIdx;
+                                                                                                    const isCorrect = q.correctIndex === oIdx;
+                                                                                                    let style = "bg-black/40 border-white/10 text-white hover:bg-white/5";
+                                                                                                    if (showResult) {
+                                                                                                        if (isCorrect) style = "bg-emerald-500/15 border-emerald-500/60 text-emerald-300 ring-1 ring-emerald-500/40";
+                                                                                                        else if (isSelected && !isCorrect) style = "bg-rose-500/15 border-rose-500/60 text-rose-300";
+                                                                                                        else style = "bg-black/20 border-transparent text-zinc-600";
+                                                                                                    }
+                                                                                                    return (
+                                                                                                        <button key={oIdx} onClick={() => handleAnswer(qKey, oIdx)} disabled={showResult}
+                                                                                                            className={`p-2.5 rounded-lg border text-left font-medium transition-all flex justify-between items-center gap-2 text-xs shrink-0 ${style}`}>
+                                                                                                            <span className="break-words">{opt}</span>
+                                                                                                            {showResult && isCorrect && <CheckCircle2 size={14} className="text-emerald-400 shrink-0"/>}
+                                                                                                            {showResult && isSelected && !isCorrect && <XCircle size={14} className="text-rose-400 shrink-0"/>}
+                                                                                                        </button>
+                                                                                                    );
+                                                                                                })}
+                                                                                            </div>
+                                                                                        )}
+                                                                                    </div>
+                                                                                )
+                                                                            })}
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        )
+                                                    })()}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            /* ════ LIST VIEW (All Clips) ════ */
+                                            <div className="flex flex-col h-full w-full">
+                                                <div className="flex items-center gap-2 mb-5 shrink-0">
+                                                    <List className="text-amber-500" size={20} />
+                                                    <h3 className="text-white font-black text-lg">Segmentos de Lección</h3>
+                                                </div>
+
+                                                <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-3 pb-2">
+                                                    {clips.length > 0 ? clips.map((clip, idx) => {
+                                                        const endSec = clip.endSeconds === 9999 ? duration : clip.endSeconds;
+                                                        const isActive = currentTime >= clip.startSeconds && currentTime <= endSec;
+                                                        
+                                                        // Calculate progress in this clip
+                                                        const qCount = clip.questions?.length || 0;
+                                                        let qAnswered = 0;
+                                                        if (qCount > 0) {
+                                                            clip.questions.forEach((_, qIdx) => { if(answeredQuestions[`${idx}-${qIdx}`] !== undefined) qAnswered++; });
+                                                        }
+
+                                                        let borderStyle = isActive ? "border-amber-400 ring-1 ring-amber-400/50" : "border-white/10 hover:border-white/20";
+                                                        let bgStyle = isActive ? "bg-amber-500/10" : "bg-black/40 hover:bg-white/5";
+
+                                                        return (
+                                                            <button key={idx} onClick={() => setFocusedClip(idx)}
+                                                                className={`w-full text-left p-4 rounded-2xl border transition-all duration-300 flex flex-col gap-2.5 shrink-0 ${borderStyle} ${bgStyle}`}>
+                                                                <div className="flex justify-between items-start gap-2">
+                                                                    <div className="flex flex-col">
+                                                                        <span className="text-[10px] font-black uppercase tracking-widest text-amber-500/80 mb-1">Clip {idx + 1}</span>
+                                                                        <span className="font-bold text-sm text-white/90 leading-snug break-words">{clip.reason}</span>
+                                                                    </div>
+                                                                    {isActive && (
+                                                                        <span className="shrink-0 flex items-center gap-1.5 text-[9px] font-bold text-amber-400 bg-amber-500/20 px-2 py-1 rounded">
+                                                                            <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"/> PLAYING
+                                                                        </span>
                                                                     )}
                                                                 </div>
-                                                            )
-                                                        })()}
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                /* -- LIST OF QUESTIONS VIEW -- */
-                                                <div className="flex flex-col h-full w-full">
-                                                    <div className="flex items-center justify-between mb-4 shrink-0">
-                                                        <div className="flex items-center gap-2">
-                                                            <HelpCircle className="text-indigo-400" size={20} />
-                                                            <h3 className="text-white font-black text-lg">Preguntas</h3>
-                                                        </div>
-                                                        <div className="text-xs font-bold text-indigo-300/70">
-                                                            {quizScore.answered}/{questions.length} Respondidas
-                                                        </div>
-                                                    </div>
-
-                                                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-2.5 pb-2">
-                                                        {questions.length > 0 ? questions.map((q, idx) => {
-                                                            const isApproachingOrActive = currentTime >= (q.startSeconds - 5) && currentTime <= q.endSeconds;
-                                                            const isAnswered = answeredQuestions[idx] !== undefined;
-                                                            const isCorrect = isAnswered && answeredQuestions[idx] === q.correctIndex;
-
-                                                            let borderStyle = "border-white/10";
-                                                            let bgStyle = "bg-black/40 hover:bg-white/5";
-                                                            let textStyle = "text-white/90";
-                                                            let shadowStyle = "";
-
-                                                            if (isApproachingOrActive && !isAnswered) {
-                                                                borderStyle = "border-indigo-400";
-                                                                bgStyle = "bg-indigo-500/20";
-                                                                shadowStyle = "shadow-[0_0_15px_rgba(99,102,241,0.3)] scale-[1.02] z-10";
-                                                            } else if (isAnswered) {
-                                                                borderStyle = isCorrect ? "border-emerald-500/30" : "border-rose-500/30";
-                                                                bgStyle = "bg-black/60";
-                                                                textStyle = "text-white/50";
-                                                            }
-
-                                                            return (
-                                                                <button
-                                                                    key={idx}
-                                                                    onClick={() => {
-                                                                        setFocusedQuestion(idx);
-                                                                        setOptionsVisible(false);
-                                                                    }}
-                                                                    className={`w-full text-left p-3.5 rounded-xl border transition-all duration-300 flex flex-col gap-2 shrink-0 ${borderStyle} ${bgStyle} ${textStyle} ${shadowStyle}`}
-                                                                >
-                                                                    <div className="flex justify-between items-start gap-2">
-                                                                        <span className="font-bold text-sm leading-snug break-words">{q.q}</span>
-                                                                        {isAnswered && (
-                                                                            <span className="shrink-0 mt-0.5">
-                                                                                {isCorrect ? <CheckCircle2 size={16} className="text-emerald-500" /> : <XCircle size={16} className="text-rose-500" />}
+                                                                
+                                                                <div className="flex items-center justify-between mt-1">
+                                                                    <span className="text-[10px] font-mono text-zinc-500 flex items-center gap-1">
+                                                                        <Clock size={10}/> {formatTime(clip.startSeconds)} - {formatTime(endSec)}
+                                                                    </span>
+                                                                    <div className="flex gap-2">
+                                                                        {(clip.vocabulary?.length || 0) > 0 && (
+                                                                            <span className="text-[10px] font-bold text-emerald-500/70 bg-emerald-500/10 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                                                                <BookOpen size={10}/> {clip.vocabulary.length}
+                                                                            </span>
+                                                                        )}
+                                                                        {qCount > 0 && (
+                                                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 ${qAnswered === qCount ? 'text-indigo-400 bg-indigo-500/20' : 'text-indigo-500/70 bg-indigo-500/10'}`}>
+                                                                                <HelpCircle size={10}/> {qAnswered}/{qCount}
                                                                             </span>
                                                                         )}
                                                                     </div>
-                                                                    <div className="flex items-center gap-2">
-                                                                        <span className="text-[10px] font-mono text-indigo-300/60 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                                                                            {formatTime(q.startSeconds)}
-                                                                        </span>
-                                                                        {isApproachingOrActive && !isAnswered && (
-                                                                            <span className="text-[10px] font-bold text-indigo-300 animate-pulse flex items-center gap-1">
-                                                                                <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full"></div> En turno
-                                                                            </span>
-                                                                        )}
-                                                                    </div>
-                                                                </button>
-                                                            );
-                                                        }) : (
-                                                            <p className="text-indigo-500/50 text-sm text-center mt-10">No hay preguntas disponibles.</p>
-                                                        )}
-                                                    </div>
+                                                                </div>
+                                                            </button>
+                                                        );
+                                                    }) : (
+                                                        <p className="text-zinc-500 text-sm text-center mt-10">No hay clips disponibles.</p>
+                                                    )}
                                                 </div>
-                                            )}
-                                        </div>
-                                    )}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
                         </div>
