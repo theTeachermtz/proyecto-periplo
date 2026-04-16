@@ -93,14 +93,11 @@
             const [dropped, setDropped] = useState({});
             const [selectedWord, setSelectedWord] = useState(null);
             
-            // Nuevo: Memoria de párrafos ya verificados para que siempre se vean verdes al regresar
+            // Memoria de párrafos ya verificados para que siempre se vean verdes al regresar
             const [completedParagraphs, setCompletedParagraphs] = useState([]);
             
             const [isDarkMode, setIsDarkMode] = useState(true);
             const [fontSize, setFontSize] = useState(window.innerWidth < 768 ? 18 : 22);
-
-            // Modal Progreso Guardado
-            const [pendingResume, setPendingResume] = useState(null);
 
             // Traductor
             const [translations, setTranslations] = useState({});
@@ -123,14 +120,6 @@
                 if (!currentStory) return [];
                 return currentStory.flatTokens.filter(t => t.isHidden).map(t => t.text).sort(() => Math.random() - 0.5); 
             }, [currentStory]);
-
-            // AUTO-GUARDADO (Incluyendo completedParagraphs)
-            useEffect(() => {
-                if (activityId && curIdx !== -1 && !pendingResume) {
-                    const saveObj = { currentSlide, dropped, score, answeredQ, instructionsDismissed, completedParagraphs, qaMode, qaFinished, currentQIdx };
-                    localStorage.setItem(`periplo_reading_${activityId}_${curIdx}`, JSON.stringify(saveObj));
-                }
-            }, [currentSlide, dropped, score, answeredQ, instructionsDismissed, completedParagraphs, qaMode, qaFinished, currentQIdx, activityId, curIdx, pendingResume]);
 
             useEffect(() => {
                 if (isDarkMode) document.documentElement.classList.add('dark');
@@ -171,54 +160,24 @@
                             return { ...s, paragraphs: parsedParagraphs, flatTokens: parsedParagraphs.flat() };
                         });
                         setStories(processed);
-                        if (processed.length === 1) openStory(0, id);
+                        
+                        // Entrar directo si solo hay 1 lectura
+                        if (processed.length === 1) {
+                            openStory(0, id);
+                        }
                     }
                     setLoading(false);
                 };
                 init();
             }, []);
 
-            const openStory = (index, docId = activityId) => {
-                const saved = localStorage.getItem(`periplo_reading_${docId}_${index}`);
-                if (saved) {
-                    try {
-                        const parsed = JSON.parse(saved);
-                        if (parsed.currentSlide > 0 || parsed.qaMode) {
-                            setPendingResume({ index, savedData: parsed });
-                            return; 
-                        }
-                    } catch(e) {}
-                }
+            const openStory = (index) => {
                 setCurIdx(index);
                 resetProgress();
             };
 
-            const resumeSavedProgress = () => {
-                const data = pendingResume.savedData;
-                setCurIdx(pendingResume.index);
-                setCurrentSlide(data.currentSlide || 0); 
-                setDropped(data.dropped || {});
-                setScore(data.score || 0); 
-                setAnsweredQ(data.answeredQ || {});
-                setInstructionsDismissed(data.instructionsDismissed || false);
-                setCompletedParagraphs(data.completedParagraphs || []);
-                setQaMode(data.qaMode || false);
-                setQaFinished(data.qaFinished || false);
-                setCurrentQIdx(data.currentQIdx || 0);
-                setPendingResume(null);
-            };
-
-            const startFresh = () => {
-                const index = pendingResume.index;
-                localStorage.removeItem(`periplo_reading_${activityId}_${index}`);
-                setCurIdx(index);
-                resetProgress();
-                setPendingResume(null);
-            };
-
-            const restartStory = (index = curIdx, docId = activityId) => {
+            const restartStory = (index = curIdx) => {
                 if(index === -1) return;
-                localStorage.removeItem(`periplo_reading_${docId}_${index}`);
                 setCurIdx(index); 
                 resetProgress();
             };
@@ -298,7 +257,6 @@
                     setScore(s => s + 1); 
                     confetti({ particleCount: 50, spread: 30, origin: { y: 0.8 } }); 
                 }
-                // NO HACE AUTO-ADVANCE. El usuario debe clickear el botón de "Siguiente".
             };
 
             const nextQuestion = () => {
@@ -320,24 +278,23 @@
             const isOnParagraph = currentSlide >= SLIDE_PARAGRAPH_START && currentSlide <= SLIDE_PARAGRAPH_END;
             const currentParagraphIdx = isOnParagraph ? currentSlide - SLIDE_PARAGRAPH_START : -1;
             
-            // Emojis
+            // Emojis (Misma lógica, pero siempre visibles)
             const isLeftEmoji = currentParagraphIdx % 2 !== 0;
             const currentEmojis = isOnParagraph ? EMOJI_SETS[currentParagraphIdx % EMOJI_SETS.length] : [];
 
-            // ════════ Render Menu / Modal ════════
+            // ════════ Render Load ════════
             if (loading) return <div className="h-screen flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-rose-500" size={40}/></div>;
             
             // ═══════════════════════════════════════════════════════════
-            //   MENÚ (curIdx === -1) — ESTANDARIZADO ESTILO LISTENING
+            //   MENÚ (curIdx === -1)
             // ═══════════════════════════════════════════════════════════
             if (curIdx === -1) {
-                // Usa la imagen de la primera lectura disponible como fondo del banner
                 const bannerImage = stories.find(s => s.image_url)?.image_url || '';
 
                 return (
                     <div className={`min-h-screen font-sans flex flex-col relative overflow-x-hidden transition-colors duration-300 ${isDarkMode ? 'bg-zinc-950 text-white' : 'bg-slate-50 text-slate-800'}`}>
                         
-                        {/* ── FONDO BLUREADO (patrón listening) ── */}
+                        {/* ── FONDO BLUREADO ── */}
                         {isDarkMode && bannerImage && (
                             <div className="fixed inset-0 z-0 bg-cover bg-center opacity-20 blur-[80px] scale-110 saturate-150"
                                 style={{ backgroundImage: `url(${bannerImage})` }}/>
@@ -346,33 +303,7 @@
                             <div className="fixed inset-0 z-0 bg-gradient-to-b from-zinc-950/70 via-zinc-950/90 to-zinc-950"/>
                         )}
 
-                        {/* ── MODAL PROGRESO GUARDADO ── */}
-                        {pendingResume && (
-                            <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-scaleIn">
-                                <div className={`w-full max-w-md rounded-[2rem] p-8 text-center shadow-2xl border ${isDarkMode ? 'bg-zinc-900 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-800'}`}>
-                                    <div className="w-20 h-20 bg-rose-500/20 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-6">
-                                        <BookOpen size={40} />
-                                    </div>
-                                    <h2 className="text-2xl font-black mb-3">Progreso Guardado</h2>
-                                    <p className="text-sm opacity-70 mb-8 leading-relaxed">
-                                        Vimos que dejaste esta lectura a medias. ¿Quieres continuar donde te quedaste o prefieres empezar de cero?
-                                    </p>
-                                    <div className="flex flex-col gap-3">
-                                        <button onClick={resumeSavedProgress} className="btn-juicy w-full py-3.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-black shadow-lg shadow-rose-500/20">
-                                            Continuar Lectura
-                                        </button>
-                                        <button onClick={startFresh} className={`btn-juicy w-full py-3.5 rounded-xl font-bold border ${isDarkMode ? 'border-white/10 text-slate-300 hover:bg-white/5' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`}>
-                                            Empezar de Cero
-                                        </button>
-                                        <button onClick={() => setPendingResume(null)} className="mt-2 text-xs font-bold text-slate-500 hover:text-slate-300 transition-colors">
-                                            Cancelar
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* ── NAVBAR TOP (translúcido estilo listening) ── */}
+                        {/* ── NAVBAR TOP MENU ── */}
                         <div className={`relative z-10 px-4 md:px-6 py-3 flex items-center justify-between shrink-0 backdrop-blur-xl border-b transition-colors ${isDarkMode ? 'bg-zinc-900/40 border-white/5' : 'bg-white/80 border-slate-200'}`}>
                             <div className="flex items-center gap-3">
                                 <button onClick={handleExit} className={`p-2 rounded-full transition-colors btn-juicy ${isDarkMode ? 'hover:bg-white/10 text-slate-300' : 'hover:bg-slate-100 text-slate-500'}`} title="Volver"><ArrowLeft size={20}/></button>
@@ -393,7 +324,7 @@
                         <div className="relative z-10 flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar">
                             <div className="max-w-7xl mx-auto w-full px-0 md:px-4 pt-2 md:pt-4">
                                 
-                                {/* ── HERO / BANNER (patrón listening: eyebrow rosa + título grande) ── */}
+                                {/* ── HERO / BANNER ── */}
                                 <header className="mb-8 md:mb-12 animate-fadeUp">
                                     <div className="flex items-start justify-between gap-4">
                                         <div className="min-w-0 flex-1">
@@ -461,7 +392,7 @@
                 );
             }
 
-            // ════════ Render LECTURA (sin cambios - mantenemos la lógica interior) ════════
+            // ════════ Render LECTURA ════════
             const availableWords = wordBank.filter(word => Object.values(dropped).filter(w => w === word).length < currentStory.flatTokens.filter(t => t.text === word && t.isHidden).length);
             const currentTokens = isOnParagraph ? currentStory.paragraphs[currentParagraphIdx] : [];
             const requiresCheck = currentTokens.filter(t => t.isHidden).length > 0;
@@ -477,15 +408,19 @@
                     ) : <div className={`fixed inset-0 z-0 ${isDarkMode ? 'bg-slate-900' : 'bg-slate-100'}`}></div>}
 
                     <div className="relative z-10 flex-1 flex flex-col w-full h-full">
-                        {/* NAVBAR OFICIAL PERIPLO */}
+                        {/* NAVBAR OFICIAL PERIPLO (DENTRO DE LA LECTURA) */}
                         <div className={`px-4 md:px-6 py-3 flex items-center justify-between shrink-0 sticky top-0 z-50 backdrop-blur-xl border-b transition-colors ${isDarkMode ? 'bg-slate-900/70 border-white/5 text-white' : 'bg-white/70 border-slate-200 text-slate-800'}`}>
                             <div className="flex items-center gap-3">
                                 <button onClick={backToMenu} className={`p-2 rounded-full transition-colors btn-juicy ${isDarkMode ? 'hover:bg-slate-700 text-slate-300' : 'hover:bg-slate-200 text-slate-600'}`}><ArrowLeft size={20}/></button>
-                                <div className="flex flex-col">
-                                    <h1 className="text-sm md:text-base font-black leading-tight line-clamp-1">{currentStory.title}</h1>
-                                    <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">
-                                        {qaMode ? 'Challenge Q&A' : currentSlide === 0 ? 'Portada' : isInstructions ? 'Instrucciones' : isOnParagraph ? `Párrafo ${currentParagraphIdx + 1} / ${currentStory.paragraphs.length}` : 'Resumen'}
-                                    </span>
+                                
+                                <div className="flex items-center gap-2.5">
+                                    <div className="hidden md:flex w-8 h-8 rounded-lg bg-rose-500 text-white items-center justify-center font-black text-lg shadow-lg shadow-rose-500/20">P</div>
+                                    <div className="flex flex-col justify-center">
+                                        <h1 className="text-sm md:text-base font-black leading-tight line-clamp-1">{currentStory.title}</h1>
+                                        <span className="text-[10px] font-bold uppercase tracking-widest opacity-40">
+                                            {qaMode ? 'Challenge Q&A' : currentSlide === 0 ? 'Portada' : isInstructions ? 'Instrucciones' : isOnParagraph ? `Párrafo ${currentParagraphIdx + 1} / ${currentStory.paragraphs.length}` : 'Resumen'}
+                                        </span>
+                                    </div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -570,7 +505,7 @@
                                         <div className={`relative rounded-[2rem] shadow-2xl border p-6 md:p-10 leading-loose transition-all duration-300 animate-scaleIn flex items-stretch ${isDarkMode ? 'bg-slate-800/90 border-slate-700 text-slate-200' : 'bg-white/90 border-white text-slate-700'}`} style={{ fontSize: `${fontSize}px` }}>
                                             
                                             {/* Emojis Izquierda */}
-                                            {isLeftEmoji && <div className="hidden md:flex flex-col justify-between text-3xl pr-6 border-r border-slate-200 dark:border-slate-700 mr-6 opacity-40 z-10 select-none">{currentEmojis.map((e,i)=><span key={i}>{e}</span>)}</div>}
+                                            {isLeftEmoji && <div className="flex flex-col justify-between text-xl md:text-3xl pr-4 md:pr-6 border-r border-slate-200 dark:border-slate-700 mr-4 md:mr-6 opacity-40 z-10 select-none">{currentEmojis.map((e,i)=><span key={i}>{e}</span>)}</div>}
                                             
                                             <div className="flex-1 font-medium text-justify relative z-20">
                                                 <div className="flex items-center justify-between mb-4 md:mb-6 border-b pb-3 border-slate-200 dark:border-slate-700">
@@ -600,7 +535,7 @@
                                             </div>
 
                                             {/* Emojis Derecha */}
-                                            {!isLeftEmoji && <div className="hidden md:flex flex-col justify-between text-3xl pl-6 border-l border-slate-200 dark:border-slate-700 ml-6 opacity-40 z-10 select-none">{currentEmojis.map((e,i)=><span key={i}>{e}</span>)}</div>}
+                                            {!isLeftEmoji && <div className="flex flex-col justify-between text-xl md:text-3xl pl-4 md:pl-6 border-l border-slate-200 dark:border-slate-700 ml-4 md:ml-6 opacity-40 z-10 select-none">{currentEmojis.map((e,i)=><span key={i}>{e}</span>)}</div>}
                                         </div>
 
                                         <div className="flex justify-between items-center pt-2">
