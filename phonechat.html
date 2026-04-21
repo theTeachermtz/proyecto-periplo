@@ -118,16 +118,10 @@
         );
 
         // ====== ACTIVE BUBBLE — WORD BY WORD ======
-        // The answer is split into words. The student types each word in its own input.
-        // Scoring: each correctly typed word (without hint) = 1 point.
-        // Blind bonus: +50% extra points if transcript was never revealed before submission.
-        // Hint: reveals that word's letters — word scores 0.
-        // Wrong attempt on a word: shake + no score penalty (just no bonus for blind if they peek later).
         const ActiveBubble = ({data, onNext, setTotalScore, isTutorial, transcriptVisible, botPlayClicked}) => {
 
-            // Build word list from expectedAnswer (preserve punctuation attached to words)
+            // Build word list from expectedAnswer
             const wordList = useMemo(() => {
-                // Split on spaces, keep each token as a "word"
                 return data.expectedAnswer.trim().split(/\s+/).filter(Boolean);
             }, [data.expectedAnswer]);
 
@@ -136,7 +130,6 @@
 
             // Per-word state
             const [inputs, setInputs] = useState(() => Array(totalWords).fill(''));
-            // 'idle' | 'error' | 'correct' per word
             const [wordStatus, setWordStatus] = useState(() => Array(totalWords).fill('idle'));
             const [hintedWords, setHintedWords] = useState(() => Array(totalWords).fill(false));
             const [phase, setPhase] = useState('waiting'); // waiting | typing | correct
@@ -144,12 +137,11 @@
             const [stepScore, setStepScore] = useState(0);
             const [tutStep, setTutStep] = useState(isTutorial ? 0 : -1);
             const [tutPlayClicked, setTutPlayClicked] = useState(false);
-            const [activeWord, setActiveWord] = useState(0); // which word is focused
+            const [activeWord, setActiveWord] = useState(0);
 
             const inputRefs = useRef([]);
             const userEmoji = useMemo(() => pickUserEmoji(data.expectedAnswer), [data.expectedAnswer]);
 
-            // Tutorial: track when bot audio played
             useEffect(() => {
                 if(botPlayClicked && tutStep === 0 && !tutPlayClicked) setTutPlayClicked(true);
             }, [botPlayClicked, tutStep]);
@@ -163,7 +155,6 @@
                 setTimeout(() => { if(inputRefs.current[0]) inputRefs.current[0].focus(); }, 300);
             };
 
-            // Normalize: strip punctuation at edges for comparison
             const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9']/g, '');
 
             const checkWord = (idx, value) => {
@@ -174,19 +165,17 @@
 
             const handleInputChange = (idx, val) => {
                 const ni = [...inputs]; ni[idx] = val; setInputs(ni);
-                // Clear error on change
                 const ws = [...wordStatus]; ws[idx] = 'idle'; setWordStatus(ws);
             };
 
             const handleWordSubmit = (idx) => {
                 if(hintedWords[idx]) {
-                    // Already hinted, just move to next
                     focusNext(idx); return;
                 }
                 if(!inputs[idx].trim()) return;
+                
                 if(checkWord(idx, inputs[idx])) {
                     const ws = [...wordStatus]; ws[idx] = 'correct'; setWordStatus(ws);
-                    // Check if all words done
                     const allDone = ws.every((s, i) => s === 'correct' || hintedWords[i]);
                     if(allDone) {
                         finishAnswer(ws);
@@ -194,10 +183,11 @@
                         focusNext(idx);
                     }
                 } else {
-                    // Wrong
-                    const ws = [...wordStatus]; ws[idx] = 'error'; setWordStatus(ws);
+                    // ARQUITECTURA: Se marca rojo y se borra el input para reintentar
+                    setWordStatus(prev => { const p = [...prev]; p[idx] = 'error'; return p; });
                     setTimeout(() => {
-                        const ws2 = [...wordStatus]; ws2[idx] = 'idle'; setWordStatus(ws2);
+                        setWordStatus(prev => { const p = [...prev]; p[idx] = 'idle'; return p; });
+                        setInputs(prev => { const p = [...prev]; p[idx] = ''; return p; });
                     }, 600);
                 }
             };
@@ -208,7 +198,6 @@
                         if(inputRefs.current[i]) { inputRefs.current[i].focus(); setActiveWord(i); return; }
                     }
                 }
-                // Try to find any unfinished word
                 for(let i = 0; i < totalWords; i++) {
                     if(!hintedWords[i] && wordStatus[i] !== 'correct') {
                         if(inputRefs.current[i]) { inputRefs.current[i].focus(); setActiveWord(i); return; }
@@ -216,13 +205,11 @@
                 }
             };
 
-            // Also handle Enter key
             const handleKeyDown = (idx, e) => {
                 if(e.key === 'Enter') { e.preventDefault(); handleWordSubmit(idx); }
             };
 
             const finishAnswer = (finalWordStatus) => {
-                // Count correctly typed words (not hinted)
                 const correctCount = finalWordStatus.filter((s, i) => s === 'correct' && !hintedWords[i]).length;
                 let earned = correctCount;
                 if(!transcriptVisible) earned += LISTEN_BONUS; // blind bonus
@@ -233,7 +220,6 @@
                 setTimeout(() => speak(data.expectedAnswer, 'en-US', 0.85), 600);
             };
 
-            // Check if all words answered (to auto-finish when last hinted word is revealed)
             useEffect(() => {
                 if(phase !== 'typing') return;
                 const allDone = wordStatus.every((s, i) => s === 'correct' || hintedWords[i]);
@@ -247,7 +233,6 @@
                 const ni = [...inputs]; ni[idx] = wordList[idx]; setInputs(ni);
                 const ws = [...wordStatus]; ws[idx] = 'correct'; setWordStatus(ws);
                 setShowHintPicker(false);
-                // Check if all done after hint
                 const allDone = ws.every((s, wi) => s === 'correct' || nh[wi]);
                 if(allDone) { setTimeout(() => finishAnswer(ws), 150); }
                 else focusNext(idx);
@@ -280,7 +265,6 @@
                 );
             };
 
-            // ====== WAITING ======
             if(phase === 'waiting') return (
                 <div className="flex flex-col items-end w-full space-y-2 animate-pop">
                     <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm">
@@ -292,7 +276,6 @@
                 </div>
             );
 
-            // ====== CORRECT ======
             if(phase === 'correct') return (
                 <div className="flex flex-col items-end w-full space-y-2 animate-pop">
                     <div className="w-[95%] sm:w-[88%] bg-emerald-600 p-4 rounded-2xl rounded-tr-sm">
@@ -314,26 +297,27 @@
             // ====== TYPING ======
             return (
                 <div className="flex flex-col items-end w-full space-y-2 animate-pop">
-                    {/* Spanish hint only when transcript visible */}
-                    {transcriptVisible && (
-                        <div className="flex items-center gap-2 mr-2 flex-wrap justify-end">
-                            <span className="text-base font-bold text-amber-400 bg-amber-500/10 px-4 py-2 rounded-xl border border-amber-500/20">💡 {data.userHint}</span>
-                        </div>
-                    )}
-                    {/* Blind bonus indicator */}
+                    {/* ARQUITECTURA: La instrucción en español ahora SIEMPRE está visible para que sepan qué traducir. */}
+                    <div className="flex items-center gap-2 mr-2 flex-wrap justify-end mb-1">
+                        <span className="text-sm font-black text-amber-400 bg-amber-500/10 px-4 py-2.5 rounded-xl border border-amber-500/20">
+                            🇲🇽 Traduce: {data.userHint}
+                        </span>
+                    </div>
+                    
+                    {/* Indicador de Bono */}
                     {!transcriptVisible && (
-                        <div className="flex items-center gap-2 mr-2">
-                            <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 rounded-full border border-emerald-500/20">👂 +{LISTEN_BONUS} bonus sin ver</span>
+                        <div className="flex items-center gap-2 mr-2 mb-1">
+                            <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 rounded-full border border-emerald-500/20">
+                                👂 +{LISTEN_BONUS} pts si no ves la transcripción
+                            </span>
                         </div>
                     )}
 
                     <div className={`w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm`}>
-                        {/* Word inputs */}
                         <div className="flex flex-wrap gap-x-3 gap-y-4 justify-start">
                             {wordList.map((word, idx) => {
                                 const isHinted = hintedWords[idx];
                                 const status = wordStatus[idx];
-                                // Width hint: approx chars
                                 const approxWidth = Math.max(60, Math.min(140, word.replace(/[^a-zA-Z]/g,'').length * 14 + 20));
                                 return (
                                     <div key={idx} className="flex flex-col items-center gap-1">
@@ -351,7 +335,6 @@
                                                 style={{ width: approxWidth, fontSize: '16px' }}
                                                 placeholder={isHinted ? '' : '···'}
                                             />
-                                            {/* Checkmark button */}
                                             {!isHinted && status !== 'correct' && (
                                                 <button
                                                     onClick={() => handleWordSubmit(idx)}
@@ -363,7 +346,6 @@
                                                 <span className="absolute -right-5 top-1/2 -translate-y-1/2 text-emerald-300 text-sm">✓</span>
                                             )}
                                         </div>
-                                        {/* Word length hint: number of letters */}
                                         <span className="text-[10px] text-white/30 font-bold">
                                             {word.replace(/[^a-zA-Z]/g,'').length} letras
                                         </span>
@@ -372,7 +354,6 @@
                             })}
                         </div>
 
-                        {/* Hint button */}
                         <div className="mt-4 flex items-center gap-2 flex-wrap">
                             <button
                                 onClick={() => setShowHintPicker(!showHintPicker)}
@@ -429,7 +410,6 @@
                     if(!quizId) { setError("Falta el ID."); setLoading(false); return; }
                     try {
                         const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId));
-                        // ← BUG FIX: Cierra el if con } antes del else
                         if(snap.exists()) {
                             const d = snap.data();
                             setGameTitle(d.title || 'Chat');
