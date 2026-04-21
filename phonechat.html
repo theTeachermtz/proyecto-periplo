@@ -33,37 +33,46 @@
         .animate-slide-up { animation: slideUp 0.25s ease-out forwards; }
         @keyframes pulse-bar { 0%,100%{opacity:0.4} 50%{opacity:1} }
         .voice-bar { animation: pulse-bar 1.2s ease-in-out infinite; }
-        @keyframes glowPulse { 0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,0.3)} 50%{box-shadow:0 0 14px 4px rgba(251,191,36,0.15)} }
-        .glow-hint { animation: glowPulse 1.5s ease-in-out infinite; }
-        
-        /* NUEVA ANIMACIÓN HACIA ARRIBA PARA EL DEDITO */
         @keyframes pointUp { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
         .point-up { animation: pointUp 1s ease-in-out infinite; }
-
-        .cell-input {
-            width: 28px; height: 36px; font-size: 16px; text-align: center;
-            border: none; border-bottom: 3px solid; background: transparent;
-            outline: none; padding: 0; margin: 0; font-weight: 800;
-            text-transform: uppercase; caret-color: #a78bfa; -webkit-appearance: none;
+        /* Word input styling */
+        .word-input {
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid rgba(255,255,255,0.3);
+            outline: none;
+            color: white;
+            font-weight: 800;
+            font-size: 16px;
+            text-align: center;
+            padding: 4px 6px;
+            min-width: 60px;
+            max-width: 140px;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            caret-color: #a78bfa;
+            -webkit-appearance: none;
+            border-radius: 0;
         }
-        @media (min-width: 640px) { .cell-input { width: 32px; height: 40px; font-size: 18px; } }
+        .word-input:focus { border-bottom-color: white; background: rgba(255,255,255,0.05); border-radius: 8px 8px 0 0; }
+        .word-input.error { border-bottom-color: #f87171; color: #fca5a5; background: rgba(239,68,68,0.1); border-radius: 8px 8px 0 0; }
+        .word-input.hinted { border-bottom-color: rgba(251,191,36,0.5); color: #fbbf24; opacity: 0.85; cursor: not-allowed; }
+        .word-input.correct { border-bottom-color: rgba(52,211,153,0.5); color: #6ee7b7; }
     </style>
 </head>
 <body class="text-zinc-100 h-[100dvh]">
     <div id="root" class="h-full"></div>
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef, useMemo } from 'react';
+        import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
         import confetti from 'canvas-confetti';
-        import { Loader2, Volume2, Lightbulb, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, Eye, Mic, CheckSquare, Square } from 'lucide-react';
+        import { Loader2, Volume2, Lightbulb, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, Eye, CheckSquare, Square } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // TTS — strips emojis before speaking
         const stripEmoji = (s) => s.replace(/[\u{1F600}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1FA00}-\u{1FAFF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '').trim();
         const speak = (text, lang='en-US', rate=0.85, onEnd) => {
             if(!window.speechSynthesis) { if(onEnd) onEnd(); return; }
@@ -95,7 +104,7 @@
             return{name:'Chat Partner',emoji:'💬'};
         };
 
-        // Voice note
+        // Voice note component
         const VoiceNote = ({text, onPlay, isPlaying}) => (
             <div className="flex items-center gap-2 bg-zinc-700/50 rounded-2xl px-3 py-2.5 max-w-[220px]">
                 <button onClick={onPlay} className="w-9 h-9 rounded-full bg-emerald-500 flex items-center justify-center text-white flex-shrink-0 active:scale-90 transition-transform">
@@ -108,157 +117,173 @@
             </div>
         );
 
-        // ====== ACTIVE BUBBLE ======
-        const ActiveBubble = ({data, onNext, setTotalScore, isTutorial, showTranscriptCb, transcriptVisible, botPlayClicked}) => {
-            const {parsed, words} = useMemo(() => {
-                const p=data.expectedAnswer.split('').map((c,i)=>({id:i,char:c,isLetter:/[a-zA-Z]/.test(c)}));
-                const w=[]; let cur=[];
-                p.forEach(item=>{if(item.char===' '){if(cur.length>0)w.push(cur);cur=[];}else cur.push(item);});
-                if(cur.length>0)w.push(cur);
-                return{parsed:p,words:w};
-            },[data.expectedAnswer]);
+        // ====== ACTIVE BUBBLE — WORD BY WORD ======
+        // The answer is split into words. The student types each word in its own input.
+        // Scoring: each correctly typed word (without hint) = 1 point.
+        // Blind bonus: +50% extra points if transcript was never revealed before submission.
+        // Hint: reveals that word's letters — word scores 0.
+        // Wrong attempt on a word: shake + no score penalty (just no bonus for blind if they peek later).
+        const ActiveBubble = ({data, onNext, setTotalScore, isTutorial, transcriptVisible, botPlayClicked}) => {
 
-            const answerWords = useMemo(()=>{
-                const r=[]; let wc=[]; let ws=-1;
-                parsed.forEach((p,i)=>{if(p.char===' '){if(wc.length>0)r.push({start:ws,chars:wc});wc=[];ws=-1;}else{if(ws===-1)ws=i;wc.push(p);}});
-                if(wc.length>0)r.push({start:ws,chars:wc});
-                return r;
-            },[parsed]);
+            // Build word list from expectedAnswer (preserve punctuation attached to words)
+            const wordList = useMemo(() => {
+                // Split on spaces, keep each token as a "word"
+                return data.expectedAnswer.trim().split(/\s+/).filter(Boolean);
+            }, [data.expectedAnswer]);
 
-            const totalLetters = parsed.filter(p=>p.isLetter).length;
-            const LISTEN_BONUS = Math.ceil(totalLetters*0.5);
+            const totalWords = wordList.length;
+            const LISTEN_BONUS = Math.ceil(totalWords * 0.5); // 50% extra if no transcript peeked
 
-            const [phase, setPhase] = useState('waiting'); // waiting (for user to start) | typing | correct
-            const [blindMode, setBlindMode] = useState(true);
-            const [inputs, setInputs] = useState(Array(parsed.length).fill(''));
-            const [status, setStatus] = useState('typing');
-            const [errorIndices, setErrorIndices] = useState(new Set());
-            const [hintedIndices, setHintedIndices] = useState(new Set());
-            const [attempts, setAttempts] = useState(0);
+            // Per-word state
+            const [inputs, setInputs] = useState(() => Array(totalWords).fill(''));
+            // 'idle' | 'error' | 'correct' per word
+            const [wordStatus, setWordStatus] = useState(() => Array(totalWords).fill('idle'));
+            const [hintedWords, setHintedWords] = useState(() => Array(totalWords).fill(false));
+            const [phase, setPhase] = useState('waiting'); // waiting | typing | correct
             const [showHintPicker, setShowHintPicker] = useState(false);
             const [stepScore, setStepScore] = useState(0);
-            const [tutStep, setTutStep] = useState(isTutorial?0:-1);
-            const [firstErrorDone, setFirstErrorDone] = useState(false);
-            const inputRefs = useRef([]);
-            const userEmoji = useMemo(()=>pickUserEmoji(data.expectedAnswer),[data.expectedAnswer]);
+            const [tutStep, setTutStep] = useState(isTutorial ? 0 : -1);
+            const [tutPlayClicked, setTutPlayClicked] = useState(false);
+            const [activeWord, setActiveWord] = useState(0); // which word is focused
 
-            // When transcript becomes visible externally, lose blind mode
-            useEffect(()=>{if(transcriptVisible) setBlindMode(false);},[transcriptVisible]);
+            const inputRefs = useRef([]);
+            const userEmoji = useMemo(() => pickUserEmoji(data.expectedAnswer), [data.expectedAnswer]);
+
+            // Tutorial: track when bot audio played
+            useEffect(() => {
+                if(botPlayClicked && tutStep === 0 && !tutPlayClicked) setTutPlayClicked(true);
+            }, [botPlayClicked, tutStep]);
+
+            useEffect(() => {
+                if(tutStep === 1) startTyping();
+            }, [tutStep]);
 
             const startTyping = () => {
                 setPhase('typing');
-                setTimeout(()=>{const f=parsed.findIndex(p=>p.isLetter);if(f!==-1&&inputRefs.current[f])inputRefs.current[f].focus();},300);
+                setTimeout(() => { if(inputRefs.current[0]) inputRefs.current[0].focus(); }, 300);
             };
 
-            // Tutorial: after audio played, advance to step 1
-            const onBotAudioEnd = () => {
-                if(tutStep===0) setTutStep(1);
+            // Normalize: strip punctuation at edges for comparison
+            const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9']/g, '');
+
+            const checkWord = (idx, value) => {
+                const typed = normalize(value);
+                const expected = normalize(wordList[idx]);
+                return typed === expected;
             };
 
-            // Start typing from tutorial step 1
-            useEffect(()=>{
-                if(tutStep===1) startTyping();
-            },[tutStep]);
-
-            const findNext=(idx)=>{for(let i=idx+1;i<parsed.length;i++)if(parsed[i].isLetter&&!hintedIndices.has(i))return i;return-1;};
-            const findPrev=(idx)=>{for(let i=idx-1;i>=0;i--)if(parsed[i].isLetter&&!hintedIndices.has(i))return i;return-1;};
-
-            const handleChange=(e,index)=>{
-                if(status==='correct')return;
-                const char=e.target.value.slice(-1);
-                const ni=[...inputs];ni[index]=char;setInputs(ni);
-                if(errorIndices.has(index)){const ne=new Set(errorIndices);ne.delete(index);setErrorIndices(ne);}
-                if(char!==''){const n=findNext(index);if(n!==-1&&inputRefs.current[n])inputRefs.current[n].focus();}
+            const handleInputChange = (idx, val) => {
+                const ni = [...inputs]; ni[idx] = val; setInputs(ni);
+                // Clear error on change
+                const ws = [...wordStatus]; ws[idx] = 'idle'; setWordStatus(ws);
             };
 
-            const handleKeyDown=(e,index)=>{
-                if(status==='correct')return;
-                if(e.key==='Backspace'&&!inputs[index]){
-                    e.preventDefault();const p=findPrev(index);
-                    if(p!==-1&&inputRefs.current[p]){const ni=[...inputs];ni[p]='';setInputs(ni);inputRefs.current[p].focus();if(errorIndices.has(p)){const ne=new Set(errorIndices);ne.delete(p);setErrorIndices(ne);}}
+            const handleWordSubmit = (idx) => {
+                if(hintedWords[idx]) {
+                    // Already hinted, just move to next
+                    focusNext(idx); return;
+                }
+                if(!inputs[idx].trim()) return;
+                if(checkWord(idx, inputs[idx])) {
+                    const ws = [...wordStatus]; ws[idx] = 'correct'; setWordStatus(ws);
+                    // Check if all words done
+                    const allDone = ws.every((s, i) => s === 'correct' || hintedWords[i]);
+                    if(allDone) {
+                        finishAnswer(ws);
+                    } else {
+                        focusNext(idx);
+                    }
+                } else {
+                    // Wrong
+                    const ws = [...wordStatus]; ws[idx] = 'error'; setWordStatus(ws);
+                    setTimeout(() => {
+                        const ws2 = [...wordStatus]; ws2[idx] = 'idle'; setWordStatus(ws2);
+                    }, 600);
                 }
             };
 
-            useEffect(()=>{
-                if(phase!=='typing'||status!=='typing')return;
-                const li=parsed.filter(p=>p.isLetter).map(p=>p.id);
-                if(!li.every(i=>inputs[i]!==''))return;
-                const wrong=new Set();
-                li.forEach(i=>{if(inputs[i].toLowerCase()!==parsed[i].char.toLowerCase())wrong.add(i);});
-                if(wrong.size===0){
-                    const h=[...hintedIndices].filter(i=>parsed[i]?.isLetter).length;
-                    let earned=Math.max(0,totalLetters-h-attempts);
-                    if(blindMode)earned+=LISTEN_BONUS;
-                    setStepScore(earned);setTotalScore(prev=>prev+earned);
-                    setStatus('correct');setPhase('correct');
-                    confetti({particleCount:80,spread:60,origin:{y:0.6}});
-                    setTimeout(()=>speak(data.expectedAnswer,'en-US',0.85),600);
-                }else{
-                    setErrorIndices(wrong);setAttempts(prev=>prev+wrong.size);
-                    setStatus('error');setTimeout(()=>setStatus('typing'),800);
-                    if(isTutorial&&!firstErrorDone){setFirstErrorDone(true);setTutStep(2);}
+            const focusNext = (idx) => {
+                for(let i = idx + 1; i < totalWords; i++) {
+                    if(!hintedWords[i] && wordStatus[i] !== 'correct') {
+                        if(inputRefs.current[i]) { inputRefs.current[i].focus(); setActiveWord(i); return; }
+                    }
                 }
-            },[inputs,parsed,status,phase]);
-
-            const handleHint=(wi)=>{
-                const w=answerWords[wi];if(!w)return;
-                const ni=[...inputs];const nh=new Set(hintedIndices);
-                w.chars.forEach(c=>{ni[c.id]=c.char;nh.add(c.id);});
-                setInputs(ni);setHintedIndices(nh);setShowHintPicker(false);
-                const last=w.chars[w.chars.length-1].id;const n=findNext(last);
-                if(n!==-1&&inputRefs.current[n])setTimeout(()=>inputRefs.current[n].focus(),100);
+                // Try to find any unfinished word
+                for(let i = 0; i < totalWords; i++) {
+                    if(!hintedWords[i] && wordStatus[i] !== 'correct') {
+                        if(inputRefs.current[i]) { inputRefs.current[i].focus(); setActiveWord(i); return; }
+                    }
+                }
             };
 
-            // ====== TUTORIAL TOOLTIPS (integrado en el flujo) ======
-            const [tutPlayClicked, setTutPlayClicked] = useState(false);
+            // Also handle Enter key
+            const handleKeyDown = (idx, e) => {
+                if(e.key === 'Enter') { e.preventDefault(); handleWordSubmit(idx); }
+            };
 
-            useEffect(()=>{
-                if(botPlayClicked && tutStep===0 && !tutPlayClicked) setTutPlayClicked(true);
-            },[botPlayClicked, tutStep]);
+            const finishAnswer = (finalWordStatus) => {
+                // Count correctly typed words (not hinted)
+                const correctCount = finalWordStatus.filter((s, i) => s === 'correct' && !hintedWords[i]).length;
+                let earned = correctCount;
+                if(!transcriptVisible) earned += LISTEN_BONUS; // blind bonus
+                setStepScore(earned);
+                setTotalScore(prev => prev + earned);
+                setPhase('correct');
+                confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+                setTimeout(() => speak(data.expectedAnswer, 'en-US', 0.85), 600);
+            };
 
+            // Check if all words answered (to auto-finish when last hinted word is revealed)
+            useEffect(() => {
+                if(phase !== 'typing') return;
+                const allDone = wordStatus.every((s, i) => s === 'correct' || hintedWords[i]);
+                if(allDone && wordList.length > 0 && (wordStatus.some(s => s === 'correct') || hintedWords.some(Boolean))) {
+                    finishAnswer(wordStatus);
+                }
+            }, [hintedWords, wordStatus, phase]);
+
+            const handleHint = (idx) => {
+                const nh = [...hintedWords]; nh[idx] = true; setHintedWords(nh);
+                const ni = [...inputs]; ni[idx] = wordList[idx]; setInputs(ni);
+                const ws = [...wordStatus]; ws[idx] = 'correct'; setWordStatus(ws);
+                setShowHintPicker(false);
+                // Check if all done after hint
+                const allDone = ws.every((s, wi) => s === 'correct' || nh[wi]);
+                if(allDone) { setTimeout(() => finishAnswer(ws), 150); }
+                else focusNext(idx);
+            };
+
+            // ====== TUTORIAL TOOLTIPS ======
             const renderTutorial = () => {
-                if(tutStep<0) return null;
+                if(tutStep < 0) return null;
                 return (
-                    <div className="w-full flex justify-center mt-2 z-[60]" style={{pointerEvents:'none'}}>
-                        <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-5 max-w-sm w-full shadow-2xl animate-slide-up text-left" style={{pointerEvents:'auto'}}>
-                            {tutStep===0 && !tutPlayClicked && (
-                                <>
-                                    <div className="text-center mb-2 point-up text-2xl">☝️</div>
-                                    <h3 className="text-base font-black text-white mb-1.5">🎧 Escucha la nota de voz</h3>
-                                    <p className="text-zinc-300 text-sm leading-relaxed">Dale play al botón verde de arriba para escuchar la pregunta.</p>
-                                </>
-                            )}
-                            {tutStep===0 && tutPlayClicked && (
-                                <>
-                                    <h3 className="text-base font-black text-white mb-1.5">🎧 ¡Bien! Ya escuchaste</h3>
-                                    <p className="text-zinc-300 text-sm leading-relaxed mb-4">Ahora intenta responder. Si no entendiste, puedes darle play otra vez o ver la transcripción debajo del audio (pero pierdes puntos extra).</p>
-                                    <button onClick={()=>{setTutStep(1);}} className="w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-sm active:scale-95">Siguiente →</button>
-                                </>
-                            )}
-                            {tutStep===1 && (
-                                <>
-                                    <div className="text-center mb-2 point-up text-2xl">☝️</div>
-                                    <h3 className="text-base font-black text-white mb-1.5">✍️ Intenta responder</h3>
-                                    <p className="text-zinc-300 text-sm leading-relaxed mb-4">Escribe lo que escuchaste en las casillas. Si necesitas ayuda, toca "Ver transcripción" debajo del audio para ver qué dijo y la pista en español.</p>
-                                    <button onClick={()=>setTutStep(-1)} className="w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-sm active:scale-95">¡Entendido!</button>
-                                </>
-                            )}
-                            {tutStep===2 && (
-                                <>
-                                    <h3 className="text-base font-black text-white mb-1.5">👁️ ¿Te equivocaste? No pasa nada</h3>
-                                    <p className="text-zinc-300 text-sm leading-relaxed mb-4">Puedes ver la transcripción debajo del audio. También pide pistas por palabra con el botón 💡 — pero esas letras no suman puntos.</p>
-                                    <button onClick={()=>setTutStep(-1)} className="w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-sm active:scale-95">¡Listo, a jugar!</button>
-                                </>
-                            )}
+                    <div className="w-full flex justify-center mt-2 z-[60]">
+                        <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-5 max-w-sm w-full shadow-2xl animate-slide-up text-left">
+                            {tutStep === 0 && !tutPlayClicked && (<>
+                                <div className="text-center mb-2 point-up text-2xl">☝️</div>
+                                <h3 className="text-base font-black text-white mb-1.5">🎧 Escucha la nota de voz</h3>
+                                <p className="text-zinc-300 text-sm leading-relaxed">Dale play al botón verde para escuchar la pregunta.</p>
+                            </>)}
+                            {tutStep === 0 && tutPlayClicked && (<>
+                                <h3 className="text-base font-black text-white mb-1.5">🎧 ¡Bien! Ya escuchaste</h3>
+                                <p className="text-zinc-300 text-sm leading-relaxed mb-4">Ahora intenta responder. Escribe cada palabra en su casilla y presiona Enter (o toca ✓) para confirmarla.</p>
+                                <button onClick={() => setTutStep(1)} className="w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-sm active:scale-95">Siguiente →</button>
+                            </>)}
+                            {tutStep === 1 && (<>
+                                <div className="text-center mb-2 point-up text-2xl">☝️</div>
+                                <h3 className="text-base font-black text-white mb-1.5">✍️ Palabra por palabra</h3>
+                                <p className="text-zinc-300 text-sm leading-relaxed mb-4">Escribe cada palabra y confirma con Enter. Si necesitas ayuda usa el botón 💡 (pero esa palabra no dará puntos).</p>
+                                <button onClick={() => setTutStep(-1)} className="w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-sm active:scale-95">¡Entendido!</button>
+                            </>)}
                         </div>
                     </div>
                 );
             };
 
-            // ====== WAITING (before typing starts) ======
-            if(phase==='waiting') return (
-                <div className="flex flex-col items-end w-full space-y-2 animate-pop relative">
-                    <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm space-y-3">
+            // ====== WAITING ======
+            if(phase === 'waiting') return (
+                <div className="flex flex-col items-end w-full space-y-2 animate-pop">
+                    <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm">
                         <button onClick={startTyping} className="w-full bg-white text-indigo-700 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-1.5 active:scale-95">
                             ✍️ Responder
                         </button>
@@ -267,72 +292,108 @@
                 </div>
             );
 
-            // ====== TYPING / CORRECT ======
+            // ====== CORRECT ======
+            if(phase === 'correct') return (
+                <div className="flex flex-col items-end w-full space-y-2 animate-pop">
+                    <div className="w-[95%] sm:w-[88%] bg-emerald-600 p-4 rounded-2xl rounded-tr-sm">
+                        <p className="text-white font-bold text-base sm:text-lg leading-relaxed">{data.expectedAnswer}{userEmoji}</p>
+                        <div className="flex items-center gap-2 mt-3 flex-wrap">
+                            <button onClick={() => speak(data.expectedAnswer, 'en-US', 0.85)} className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full"><Volume2 size={16}/></button>
+                            <div className="flex items-center gap-1 bg-white/20 px-3 py-1.5 rounded-full"><Star size={13} className="text-amber-300"/><span className="text-white font-black text-sm">+{stepScore}</span></div>
+                            {!transcriptVisible && <span className="text-emerald-200 text-[10px] font-bold bg-white/10 px-2 py-1 rounded-full">👂 Bonus</span>}
+                        </div>
+                        <div className="mt-4 text-right">
+                            <button onClick={onNext} className="bg-white text-emerald-700 font-black py-2.5 px-6 rounded-xl shadow-lg text-sm uppercase tracking-wider flex items-center gap-1 ml-auto active:scale-95">
+                                Enviar <ChevronRight size={16}/>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            // ====== TYPING ======
             return (
-                <div className="flex flex-col items-end w-full space-y-2 animate-pop relative">
-                    {/* Spanish hint ONLY shows when transcript is visible */}
-                    {transcriptVisible && phase!=='correct' && (
+                <div className="flex flex-col items-end w-full space-y-2 animate-pop">
+                    {/* Spanish hint only when transcript visible */}
+                    {transcriptVisible && (
                         <div className="flex items-center gap-2 mr-2 flex-wrap justify-end">
                             <span className="text-base font-bold text-amber-400 bg-amber-500/10 px-4 py-2 rounded-xl border border-amber-500/20">💡 {data.userHint}</span>
                         </div>
                     )}
-                    {/* Bonus indicator only when still blind */}
-                    {blindMode && phase!=='correct' && !transcriptVisible && (
+                    {/* Blind bonus indicator */}
+                    {!transcriptVisible && (
                         <div className="flex items-center gap-2 mr-2">
-                            <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 rounded-full border border-emerald-500/20">👂 +{LISTEN_BONUS} bonus</span>
+                            <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 rounded-full border border-emerald-500/20">👂 +{LISTEN_BONUS} bonus sin ver</span>
                         </div>
                     )}
 
-                    <div className={`w-[95%] sm:w-[88%] p-4 rounded-2xl rounded-tr-sm transition-colors duration-500 ${phase==='correct'?'bg-emerald-600':'bg-indigo-600'} ${status==='error'?'animate-shake':''}`}>
-                        {phase==='correct' ? (
-                            <div>
-                                <p className="text-white font-bold text-base sm:text-lg leading-relaxed">{data.expectedAnswer}{userEmoji}</p>
-                                <div className="flex items-center gap-2 mt-3 flex-wrap">
-                                    <button onClick={()=>speak(data.expectedAnswer,'en-US',0.85)} className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full"><Volume2 size={16}/></button>
-                                    <div className="flex items-center gap-1 bg-white/20 px-3 py-1.5 rounded-full"><Star size={13} className="text-amber-300"/><span className="text-white font-black text-sm">+{stepScore}</span></div>
-                                    {blindMode && <span className="text-emerald-200 text-[10px] font-bold bg-white/10 px-2 py-1 rounded-full">👂 Bonus</span>}
-                                </div>
-                                <div className="mt-4 text-right">
-                                    <button onClick={onNext} className="bg-white text-emerald-700 font-black py-2.5 px-6 rounded-xl shadow-lg text-sm uppercase tracking-wider flex items-center gap-1 ml-auto active:scale-95">Enviar <ChevronRight size={16}/></button>
-                                </div>
-                            </div>
-                        ) : (
-                            <div>
-                                <div className="flex flex-wrap gap-x-3 gap-y-3 justify-start">
-                                    {words.map((word,wi)=>(
-                                        <div key={wi} className="flex gap-[3px] items-end">
-                                            {word.map(item=>{
-                                                if(!item.isLetter) return <span key={item.id} className="text-lg font-bold text-white/60 pb-1">{item.char}</span>;
-                                                const isH=hintedIndices.has(item.id); const isE=errorIndices.has(item.id);
-                                                return (<input key={item.id} ref={el=>inputRefs.current[item.id]=el}
-                                                    type="text" maxLength="1" value={inputs[item.id]}
-                                                    onChange={(e)=>handleChange(e,item.id)} onKeyDown={(e)=>handleKeyDown(e,item.id)}
-                                                    disabled={isH} autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck="false"
-                                                    className={`cell-input ${isH?'text-amber-300 border-amber-400/50 opacity-80':isE?'text-rose-300 border-rose-400 bg-rose-500/20':'text-white border-white/40 focus:border-white focus:bg-white/10'}`}
-                                                    style={{fontSize:'16px'}}/>);
-                                            })}
+                    <div className={`w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm`}>
+                        {/* Word inputs */}
+                        <div className="flex flex-wrap gap-x-3 gap-y-4 justify-start">
+                            {wordList.map((word, idx) => {
+                                const isHinted = hintedWords[idx];
+                                const status = wordStatus[idx];
+                                // Width hint: approx chars
+                                const approxWidth = Math.max(60, Math.min(140, word.replace(/[^a-zA-Z]/g,'').length * 14 + 20));
+                                return (
+                                    <div key={idx} className="flex flex-col items-center gap-1">
+                                        <div className="relative">
+                                            <input
+                                                ref={el => inputRefs.current[idx] = el}
+                                                type="text"
+                                                value={inputs[idx]}
+                                                disabled={isHinted || status === 'correct'}
+                                                autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck="false"
+                                                onChange={e => handleInputChange(idx, e.target.value)}
+                                                onKeyDown={e => handleKeyDown(idx, e)}
+                                                onFocus={() => setActiveWord(idx)}
+                                                className={`word-input ${isHinted ? 'hinted' : status === 'error' ? 'error animate-shake' : status === 'correct' ? 'correct' : ''}`}
+                                                style={{ width: approxWidth, fontSize: '16px' }}
+                                                placeholder={isHinted ? '' : '···'}
+                                            />
+                                            {/* Checkmark button */}
+                                            {!isHinted && status !== 'correct' && (
+                                                <button
+                                                    onClick={() => handleWordSubmit(idx)}
+                                                    className="absolute -right-7 top-1/2 -translate-y-1/2 text-white/40 hover:text-white active:scale-90 transition-all text-lg font-black"
+                                                    style={{lineHeight:1}}
+                                                >✓</button>
+                                            )}
+                                            {status === 'correct' && !isHinted && (
+                                                <span className="absolute -right-5 top-1/2 -translate-y-1/2 text-emerald-300 text-sm">✓</span>
+                                            )}
                                         </div>
-                                    ))}
-                                </div>
-                                <div className="mt-4 flex items-center gap-2 flex-wrap">
-                                    <button onClick={()=>setShowHintPicker(!showHintPicker)}
-                                        className="bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-amber-500/20">
-                                        <Lightbulb size={13}/> Pista
-                                    </button>
-                                    <span className="text-indigo-300/40 text-[9px] font-bold">No suman pts</span>
-                                </div>
-                                {showHintPicker && (
-                                    <div className="mt-2 flex flex-wrap gap-2 animate-slide-up">
-                                        {answerWords.map((w,i)=>{
-                                            const wt=w.chars.map(c=>c.char).join('');
-                                            const done=w.chars.every(c=>hintedIndices.has(c.id));
-                                            return (<button key={i} disabled={done} onClick={()=>handleHint(i)}
-                                                className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${done?'bg-zinc-700/50 text-zinc-500 border-zinc-700':'bg-amber-500/10 text-amber-300 border-amber-500/20 hover:bg-amber-500/20 active:scale-95'}`}>
-                                                {done?wt:`Palabra ${i+1} (${w.chars.filter(c=>c.isLetter).length} letras)`}
-                                            </button>);
-                                        })}
+                                        {/* Word length hint: number of letters */}
+                                        <span className="text-[10px] text-white/30 font-bold">
+                                            {word.replace(/[^a-zA-Z]/g,'').length} letras
+                                        </span>
                                     </div>
-                                )}
+                                );
+                            })}
+                        </div>
+
+                        {/* Hint button */}
+                        <div className="mt-4 flex items-center gap-2 flex-wrap">
+                            <button
+                                onClick={() => setShowHintPicker(!showHintPicker)}
+                                className="bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-amber-500/20"
+                            >
+                                <Lightbulb size={13}/> Pista por palabra
+                            </button>
+                            <span className="text-indigo-300/40 text-[9px] font-bold">No suma pts</span>
+                        </div>
+
+                        {showHintPicker && (
+                            <div className="mt-2 flex flex-wrap gap-2 animate-slide-up">
+                                {wordList.map((word, idx) => {
+                                    const done = hintedWords[idx] || wordStatus[idx] === 'correct';
+                                    return (
+                                        <button key={idx} disabled={done} onClick={() => handleHint(idx)}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${done ? 'bg-zinc-700/50 text-zinc-500 border-zinc-700' : 'bg-amber-500/10 text-amber-300 border-amber-500/20 hover:bg-amber-500/20 active:scale-95'}`}>
+                                            {done ? word : `"${word.replace(/./g, '·')}" (${word.replace(/[^a-zA-Z]/g,'').length})`}
+                                        </button>
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -343,117 +404,119 @@
 
         // ====== MAIN APP ======
         const App = () => {
-            const [chatFlow,setChatFlow]=useState([]);
-            const [gameTitle,setGameTitle]=useState('');
-            const [currentStep,setCurrentStep]=useState(0);
-            const [loading,setLoading]=useState(true);
-            const [error,setError]=useState(null);
-            const [totalScore,setTotalScore]=useState(0);
-            const [isStudent]=useState(new URLSearchParams(window.location.search).get('student')==='true');
-            const [quizId]=useState(new URLSearchParams(window.location.search).get('id'));
-            const [screen,setScreen]=useState('name');
-            const [playerName,setPlayerName]=useState('');
-            const [rememberChoice,setRememberChoice]=useState(true);
-            const [showTutorial,setShowTutorial]=useState(false);
-            const [leaderboard,setLeaderboard]=useState([]);
-            const [scoreSaved,setScoreSaved]=useState(false);
-            // Per-step: track if transcript is shown (lives in parent so NPC bubble can show it)
-            const [transcriptVisible,setTranscriptVisible]=useState(false);
-            const [isPlayingBot,setIsPlayingBot]=useState(false);
-            const [botAudioDone,setBotAudioDone]=useState(false);
+            const [chatFlow, setChatFlow] = useState([]);
+            const [gameTitle, setGameTitle] = useState('');
+            const [currentStep, setCurrentStep] = useState(0);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [totalScore, setTotalScore] = useState(0);
+            const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
+            const [quizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [screen, setScreen] = useState('name');
+            const [playerName, setPlayerName] = useState('');
+            const [rememberChoice, setRememberChoice] = useState(true);
+            const [showTutorial, setShowTutorial] = useState(false);
+            const [leaderboard, setLeaderboard] = useState([]);
+            const [scoreSaved, setScoreSaved] = useState(false);
+            const [transcriptVisible, setTranscriptVisible] = useState(false);
+            const [isPlayingBot, setIsPlayingBot] = useState(false);
+            const [botPlayClicked, setBotPlayClicked] = useState(false);
 
-            const messagesEndRef=useRef(null);
+            const messagesEndRef = useRef(null);
 
-            useEffect(()=>{
-                const load=async()=>{
-                    if(!quizId){setError("Falta el ID.");setLoading(false);return;}
-                    try{
-                        const snap=await getDoc(doc(db,'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes',quizId));
-                        if(snap.exists()){const d=snap.data();setGameTitle(d.title||'Chat');setChatFlow(d.content?.flow || d.content || []);
-                        else setError("Juego no encontrado.");
-                        const q=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`),orderBy('score','desc'),limit(5));
-                        const lbSnap=await getDocs(q);setLeaderboard(lbSnap.docs.map(d=>d.data()));
-                    }catch(e){setError(e.message);}
+            useEffect(() => {
+                const load = async () => {
+                    if(!quizId) { setError("Falta el ID."); setLoading(false); return; }
+                    try {
+                        const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId));
+                        // ← BUG FIX: Cierra el if con } antes del else
+                        if(snap.exists()) {
+                            const d = snap.data();
+                            setGameTitle(d.title || 'Chat');
+                            setChatFlow(d.content?.flow || d.content || []);
+                        } else {
+                            setError("Juego no encontrado.");
+                        }
+                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score', 'desc'), limit(5));
+                        const lbSnap = await getDocs(q);
+                        setLeaderboard(lbSnap.docs.map(d => d.data()));
+                    } catch(e) { setError(e.message); }
                     setLoading(false);
-                };load();
-            },[quizId]);
+                };
+                load();
+            }, [quizId]);
 
-            const contact=useMemo(()=>guessContact(chatFlow),[chatFlow]);
-            useEffect(()=>{setTimeout(()=>messagesEndRef.current?.scrollIntoView({behavior:'smooth'}),200);},[currentStep]);
+            const contact = useMemo(() => guessContact(chatFlow), [chatFlow]);
+            useEffect(() => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 200); }, [currentStep]);
 
-            const handleNext=()=>{
-                if(currentStep<chatFlow.length){
-                    setCurrentStep(prev=>prev+1);
+            const handleNext = () => {
+                if(currentStep < chatFlow.length) {
+                    setCurrentStep(prev => prev + 1);
                     setTranscriptVisible(false);
                     setIsPlayingBot(false);
-                    setBotAudioDone(false);
                     setBotPlayClicked(false);
                 }
             };
 
-            const goToGame=(played)=>{
-                if(rememberChoice&&played) localStorage.setItem(`periplo-chat-played-${quizId}`,'yes');
+            const goToGame = (played) => {
+                if(rememberChoice && played) localStorage.setItem(`periplo-chat-played-${quizId}`, 'yes');
                 setShowTutorial(!played);
                 setScreen('game');
             };
 
-            const goBackToName=()=>{setScreen('name');setCurrentStep(0);setTotalScore(0);setScoreSaved(false);setTranscriptVisible(false);};
+            const goBackToName = () => { setScreen('name'); setCurrentStep(0); setTotalScore(0); setScoreSaved(false); setTranscriptVisible(false); };
 
-            const isComplete = screen==='game' && currentStep===chatFlow.length && chatFlow.length>0;
+            const isComplete = screen === 'game' && currentStep === chatFlow.length && chatFlow.length > 0;
 
-            useEffect(()=>{
-                if(isComplete&&!scoreSaved&&playerName){
-                    addDoc(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`),{playerName,score:totalScore,date:serverTimestamp()}).then(()=>{
+            useEffect(() => {
+                if(isComplete && !scoreSaved && playerName) {
+                    addDoc(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), { playerName, score: totalScore, date: serverTimestamp() }).then(() => {
                         setScoreSaved(true);
-                        const q=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`),orderBy('score','desc'),limit(5));
-                        getDocs(q).then(s=>setLeaderboard(s.docs.map(d=>d.data())));
+                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score', 'desc'), limit(5));
+                        getDocs(q).then(s => setLeaderboard(s.docs.map(d => d.data())));
                     });
                 }
-            },[isComplete,scoreSaved]);
+            }, [isComplete, scoreSaved]);
 
-            const [botPlayClicked, setBotPlayClicked] = useState(false);
-
-            // Play current bot audio
-            const playCurrentBot=()=>{
-                const d=chatFlow[currentStep];
+            const playCurrentBot = () => {
+                const d = chatFlow[currentStep];
                 if(!d) return;
                 setIsPlayingBot(true);
                 setBotPlayClicked(true);
-                speak(d.botMessage,'en-US',0.85,()=>{setIsPlayingBot(false);setBotAudioDone(true);});
-                // Fallback: if onend doesn't fire, stop playing after estimated duration
+                speak(d.botMessage, 'en-US', 0.85, () => setIsPlayingBot(false));
                 const est = Math.max(2000, d.botMessage.length * 75);
-                setTimeout(()=>setIsPlayingBot(false), est);
+                setTimeout(() => setIsPlayingBot(false), est);
             };
 
-            // Auto-play bot on new step (non-tutorial)
-            useEffect(()=>{
-                if(screen==='game'&&!showTutorial&&currentStep<chatFlow.length){
-                    setTimeout(()=>playCurrentBot(),400);
+            useEffect(() => {
+                if(screen === 'game' && !showTutorial && currentStep < chatFlow.length) {
+                    setTimeout(() => playCurrentBot(), 400);
                 }
-            },[currentStep,screen]);
+            }, [currentStep, screen]);
 
-            if(loading)return<div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-indigo-500" size={40}/></div>;
-            if(error)return(
+            if(loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-indigo-500" size={40}/></div>;
+            if(error) return (
                 <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 p-6">
                     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 text-center max-w-sm">
-                        <p className="text-rose-400 font-bold mb-2">Error</p><p className="text-zinc-400 text-sm mb-6">{error}</p>
-                        <button onClick={()=>window.location.href='index.html'} className="bg-zinc-800 text-white font-bold px-6 py-2 rounded-xl">Volver</button>
+                        <p className="text-rose-400 font-bold mb-2">Error</p>
+                        <p className="text-zinc-400 text-sm mb-6">{error}</p>
+                        <button onClick={() => window.location.href='index.html'} className="bg-zinc-800 text-white font-bold px-6 py-2 rounded-xl">Volver</button>
                     </div>
                 </div>
             );
 
-            // NAME
-            if(screen==='name')return(
+            // NAME SCREEN
+            if(screen === 'name') return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950 overflow-auto">
                     <div className="max-w-sm w-full my-auto">
                         <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] p-6 shadow-2xl text-center">
                             <div className="w-16 h-16 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-3xl mx-auto mb-4">{contact.emoji}</div>
                             <h1 className="text-2xl font-black text-white mb-1">{gameTitle}</h1>
                             <p className="text-zinc-500 text-sm font-medium mb-6">Practica con {contact.name}</p>
-                            {leaderboard.length>0&&(
+                            {leaderboard.length > 0 && (
                                 <div className="mb-6 space-y-2">
                                     <div className="flex items-center gap-2 justify-center mb-2"><Trophy size={16} className="text-amber-400"/><span className="text-amber-400 font-black text-xs uppercase tracking-widest">Top Scores</span></div>
-                                    {leaderboard.map((l,i)=>(
+                                    {leaderboard.map((l, i) => (
                                         <div key={i} className="flex items-center justify-between bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5">
                                             <div className="flex items-center gap-2"><span className={`font-black text-sm ${i===0?'text-amber-400':i===1?'text-zinc-400':'text-zinc-600'}`}>#{i+1}</span><span className="font-bold text-white text-sm uppercase">{l.playerName}</span></div>
                                             <div className="flex items-center gap-1"><Star size={12} className="text-amber-400"/><span className="font-black text-amber-400 text-sm">{l.score}</span></div>
@@ -461,21 +524,21 @@
                                     ))}
                                 </div>
                             )}
-                            <input type="text" placeholder="Tu nombre..." value={playerName} onChange={(e)=>setPlayerName(e.target.value)}
-                                onKeyDown={(e)=>e.key==='Enter'&&playerName.trim()&&(localStorage.getItem(`periplo-chat-played-${quizId}`)==='yes'?goToGame(true):setScreen('askPlayed'))}
+                            <input type="text" placeholder="Tu nombre..." value={playerName} onChange={e => setPlayerName(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && playerName.trim() && (localStorage.getItem(`periplo-chat-played-${quizId}`) === 'yes' ? goToGame(true) : setScreen('askPlayed'))}
                                 className="w-full bg-zinc-950 border-2 border-zinc-800 rounded-xl p-3 text-center text-lg font-bold text-white mb-4 outline-none focus:border-indigo-500" style={{fontSize:'16px'}}/>
-                            <button disabled={!playerName.trim()} onClick={()=>{
-                                if(localStorage.getItem(`periplo-chat-played-${quizId}`)==='yes') goToGame(true);
+                            <button disabled={!playerName.trim()} onClick={() => {
+                                if(localStorage.getItem(`periplo-chat-played-${quizId}`) === 'yes') goToGame(true);
                                 else setScreen('askPlayed');
                             }} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-black py-3.5 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm">Continuar</button>
                         </div>
-                        {!isStudent&&<button onClick={()=>window.location.href='index.html'} className="mt-4 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest block mx-auto">Volver al Hub</button>}
+                        {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-4 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest block mx-auto">Volver al Hub</button>}
                     </div>
                 </div>
             );
 
-            // ASK PLAYED
-            if(screen==='askPlayed')return(
+            // ASK PLAYED SCREEN
+            if(screen === 'askPlayed') return (
                 <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950 overflow-auto">
                     <div className="max-w-sm w-full my-auto">
                         <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] p-6 shadow-2xl text-center">
@@ -483,53 +546,60 @@
                             <h2 className="text-xl font-black text-white mb-2">¿Ya has jugado antes?</h2>
                             <p className="text-zinc-400 text-sm mb-6">Si es tu primera vez te mostramos cómo funciona.</p>
                             <div className="space-y-3 mb-6">
-                                <button onClick={()=>goToGame(true)} className="w-full bg-indigo-600 text-white font-black py-3.5 rounded-xl text-sm uppercase tracking-widest active:scale-95">Sí, ya sé cómo</button>
-                                <button onClick={()=>goToGame(false)} className="w-full bg-zinc-800 text-zinc-200 font-black py-3.5 rounded-xl text-sm uppercase tracking-widest active:scale-95 border border-zinc-700">No, muéstrame</button>
+                                <button onClick={() => goToGame(true)} className="w-full bg-indigo-600 text-white font-black py-3.5 rounded-xl text-sm uppercase tracking-widest active:scale-95">Sí, ya sé cómo</button>
+                                <button onClick={() => goToGame(false)} className="w-full bg-zinc-800 text-zinc-200 font-black py-3.5 rounded-xl text-sm uppercase tracking-widest active:scale-95 border border-zinc-700">No, muéstrame</button>
                             </div>
-                            <button onClick={()=>setRememberChoice(!rememberChoice)} className="flex items-center gap-2 mx-auto text-zinc-500 text-xs font-bold hover:text-zinc-300">
-                                {rememberChoice?<CheckSquare size={16} className="text-indigo-400"/>:<Square size={16}/>} Recordar mi respuesta
+                            <button onClick={() => setRememberChoice(!rememberChoice)} className="flex items-center gap-2 mx-auto text-zinc-500 text-xs font-bold hover:text-zinc-300">
+                                {rememberChoice ? <CheckSquare size={16} className="text-indigo-400"/> : <Square size={16}/>} Recordar mi respuesta
                             </button>
                         </div>
                     </div>
                 </div>
             );
 
-            // GAME
+            // GAME SCREEN
             const currentData = chatFlow[currentStep];
 
-            return(
+            return (
                 <div className="h-[100dvh] flex flex-col bg-zinc-950 max-w-lg mx-auto sm:my-4 sm:rounded-[2rem] sm:border sm:border-zinc-800 sm:shadow-2xl overflow-hidden sm:h-[calc(100dvh-2rem)]">
+                    {/* Header */}
                     <header className="bg-zinc-900 px-4 py-3 flex items-center justify-between shrink-0 border-b border-zinc-800">
                         <div className="flex items-center gap-3">
                             <button onClick={goBackToName} className="p-2 text-zinc-500 hover:text-white rounded-xl"><ArrowLeft size={18}/></button>
-                            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-xl border border-indigo-500/30 relative">{contact.emoji}<div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900"/></div>
+                            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-xl border border-indigo-500/30 relative">
+                                {contact.emoji}
+                                <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900"/>
+                            </div>
                             <div><h1 className="font-black text-white text-sm leading-none">{contact.name}</h1><p className="text-[10px] text-zinc-500 font-bold mt-0.5">{gameTitle}</p></div>
                         </div>
-                        <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-full"><Star size={14} className="text-amber-400"/><span className="text-amber-400 font-black text-sm tabular-nums">{totalScore}</span></div>
+                        <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-full">
+                            <Star size={14} className="text-amber-400"/>
+                            <span className="text-amber-400 font-black text-sm tabular-nums">{totalScore}</span>
+                        </div>
                     </header>
 
+                    {/* Messages */}
                     <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 custom-scrollbar">
-                        {chatFlow.slice(0,currentStep+1).map((data,index)=>{
-                            const isCurrent=index===currentStep&&!isComplete;
-                            const isDone=index<currentStep;
-                            const isFirstTutorial=showTutorial&&index===0&&isCurrent;
+                        {chatFlow.slice(0, currentStep + 1).map((data, index) => {
+                            const isCurrent = index === currentStep && !isComplete;
+                            const isDone = index < currentStep;
+                            const isFirstTutorial = showTutorial && index === 0 && isCurrent;
 
-                            return(
-                                <div key={data.id||index} className="space-y-3 animate-pop">
+                            return (
+                                <div key={data.id || index} className="space-y-3 animate-pop">
                                     {/* NPC bubble */}
                                     <div className="flex w-full gap-2">
                                         <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">{contact.emoji}</div>
                                         {isDone ? (
                                             <div className="bg-zinc-800 text-zinc-200 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[82%]">
                                                 <p className="text-sm leading-relaxed">{data.botMessage}</p>
-                                                <button onClick={()=>speak(data.botMessage,'en-US',0.85)} className="mt-1.5 text-indigo-400 hover:text-indigo-300 flex items-center gap-1 text-[11px] font-bold"><Volume2 size={12}/> Escuchar</button>
+                                                <button onClick={() => speak(data.botMessage, 'en-US', 0.85)} className="mt-1.5 text-indigo-400 hover:text-indigo-300 flex items-center gap-1 text-[11px] font-bold"><Volume2 size={12}/> Escuchar</button>
                                             </div>
                                         ) : (
                                             <div className="bg-zinc-800 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[82%] space-y-2">
                                                 <VoiceNote text={data.botMessage} onPlay={playCurrentBot} isPlaying={isPlayingBot}/>
-                                                {/* See transcript — below the voice note */}
                                                 {!transcriptVisible ? (
-                                                    <button onClick={()=>setTranscriptVisible(true)} className="text-zinc-500 hover:text-zinc-300 text-xs font-bold flex items-center gap-1">
+                                                    <button onClick={() => setTranscriptVisible(true)} className="text-zinc-500 hover:text-zinc-300 text-xs font-bold flex items-center gap-1">
                                                         <Eye size={12}/> Ver transcripción
                                                     </button>
                                                 ) : (
@@ -544,9 +614,10 @@
                                     {/* User response */}
                                     {isCurrent ? (
                                         <ActiveBubble
-                                            data={data} onNext={handleNext} setTotalScore={setTotalScore}
+                                            data={data}
+                                            onNext={handleNext}
+                                            setTotalScore={setTotalScore}
                                             isTutorial={isFirstTutorial}
-                                            showTranscriptCb={()=>setTranscriptVisible(true)}
                                             transcriptVisible={transcriptVisible}
                                             botPlayClicked={botPlayClicked}
                                         />
@@ -554,22 +625,38 @@
                                         <div className="flex flex-col items-end w-full space-y-1">
                                             <div className="bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-4 py-3 max-w-[85%]">
                                                 <p className="text-sm font-medium leading-relaxed">{data.expectedAnswer}{pickUserEmoji(data.expectedAnswer)}</p>
-                                                <button onClick={()=>speak(data.expectedAnswer,'en-US',0.85)} className="mt-1 text-indigo-200 hover:text-white flex items-center gap-1 text-[11px] font-bold ml-auto"><Volume2 size={12}/> Repetir</button>
+                                                <button onClick={() => speak(data.expectedAnswer, 'en-US', 0.85)} className="mt-1 text-indigo-200 hover:text-white flex items-center gap-1 text-[11px] font-bold ml-auto"><Volume2 size={12}/> Repetir</button>
                                             </div>
                                         </div>
-                                    ):null}
+                                    ) : null}
                                 </div>
                             );
                         })}
 
-                        {isComplete&&(
+                        {/* Completion card */}
+                        {isComplete && (
                             <div className="text-center py-6 animate-pop">
                                 <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-xs mx-auto">
                                     <Trophy size={36} className="text-amber-400 mx-auto mb-3"/>
                                     <h2 className="text-lg font-black text-white mb-1">¡Chat Completado!</h2>
-                                    <div className="flex items-center justify-center gap-2 mb-4"><Star size={16} className="text-amber-400"/><span className="text-2xl font-black text-amber-400">{totalScore}</span><span className="text-zinc-500 text-sm font-bold">pts</span></div>
-                                    {leaderboard.length>0&&(<div className="mb-4 space-y-1.5">{leaderboard.slice(0,3).map((l,i)=>(<div key={i} className="flex justify-between bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs"><span className="font-bold text-zinc-300">{i===0?'🥇':i===1?'🥈':'🥉'} {l.playerName}</span><span className="font-black text-amber-400">{l.score}</span></div>))}</div>)}
-                                    <button onClick={()=>window.location.reload()} className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2 mb-2"><RotateCcw size={14}/> Jugar de nuevo</button>
+                                    <div className="flex items-center justify-center gap-2 mb-4">
+                                        <Star size={16} className="text-amber-400"/>
+                                        <span className="text-2xl font-black text-amber-400">{totalScore}</span>
+                                        <span className="text-zinc-500 text-sm font-bold">pts</span>
+                                    </div>
+                                    {leaderboard.length > 0 && (
+                                        <div className="mb-4 space-y-1.5">
+                                            {leaderboard.slice(0,3).map((l,i) => (
+                                                <div key={i} className="flex justify-between bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs">
+                                                    <span className="font-bold text-zinc-300">{i===0?'🥇':i===1?'🥈':'🥉'} {l.playerName}</span>
+                                                    <span className="font-black text-amber-400">{l.score}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <button onClick={() => window.location.reload()} className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2 mb-2">
+                                        <RotateCcw size={14}/> Jugar de nuevo
+                                    </button>
                                     <button onClick={goBackToName} className="w-full bg-zinc-800 text-zinc-400 font-bold py-2.5 rounded-xl text-sm">Volver</button>
                                 </div>
                             </div>
@@ -577,7 +664,14 @@
                         <div ref={messagesEndRef}/>
                     </div>
 
-                    {!isComplete&&(<div className="bg-zinc-900 px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0"><div className="flex-1 bg-zinc-800 rounded-full h-10 px-4 flex items-center border border-zinc-700/50"><span className="text-zinc-500 text-sm">Escribe arriba...</span></div></div>)}
+                    {/* Fake input bar */}
+                    {!isComplete && (
+                        <div className="bg-zinc-900 px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0">
+                            <div className="flex-1 bg-zinc-800 rounded-full h-10 px-4 flex items-center border border-zinc-700/50">
+                                <span className="text-zinc-500 text-sm">Escribe arriba...</span>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         };
