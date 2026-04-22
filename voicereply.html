@@ -41,15 +41,15 @@
         import React, { useState, useEffect, useRef, useMemo } from 'react';
         import { createRoot } from 'react-dom/client';
         import confetti from 'canvas-confetti';
-        import { Loader2, Mic, Eye, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, CheckCircle2, AlertCircle, Ear, Info, Volume2, Plus } from 'lucide-react';
+        import { Loader2, Mic, Eye, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, CheckCircle2, AlertCircle, Ear, Info, Volume2, Plus, CheckSquare, Square } from 'lucide-react';
         import { initializeApp } from 'firebase/app';
-        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+        import { getFirestore, doc, getDoc, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-// TTS Helpers & Emoji Stripper
+        // TTS Helpers & Emoji Stripper
         const stripEmoji = (s) => s.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1FA00}-\u{1FAFF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '').trim();
 
         const speakWord = (text, rate=0.6) => {
@@ -70,11 +70,40 @@
             window.speechSynthesis.speak(u);
         };
 
+        const pickUserEmoji = (t) => {
+            const l=t.toLowerCase();
+            if(/thank|thanks/.test(l)) return ' 🙏'; if(/please/.test(l)) return ' 🤝';
+            if(/hello|hi |hey/.test(l)) return ' 👋'; if(/bye|goodbye|see you/.test(l)) return ' 👋';
+            if(/sorry/.test(l)) return ' 😅'; if(/love|amazing|great|awesome/.test(l)) return ' 😍';
+            if(/yes|sure|of course/.test(l)) return ' 👍'; if(/food|eat|hungry|dinner/.test(l)) return ' 🍽️';
+            if(/happy|glad|excited/.test(l)) return ' 😊'; if(/work|job|office/.test(l)) return ' 💼';
+            const r=[' 💬',' ✨','','','']; return r[Math.floor(Math.random()*r.length)];
+        };
+
+        const guessContact = (cf) => {
+            if(!cf||cf.length===0) return{name:'Teacher',emoji:'🧑‍🏫'};
+            const t=cf.map(c=>(c.botMessage||'')+(c.expectedAnswer||'')).join(' ').toLowerCase();
+            const p=[{k:['boss','manager','meeting','deadline','office'],n:'Boss',e:'👔'},{k:['doctor','appointment','health','hospital'],n:'Dr. Smith',e:'🩺'},{k:['waiter','menu','order','restaurant','food','bill'],n:'Server',e:'🍽️'},{k:['bartender','bar','cocktail','beer'],n:'Bartender',e:'🍸'},{k:['friend','party','hang out','movie','weekend','bro'],n:'Best Friend',e:'😎'},{k:['mom','mother','mama','family'],n:'Mom',e:'👩‍🦱'},{k:['dad','father','papa'],n:'Dad',e:'👨‍🦳'},{k:['grandma','grandmother','abuela'],n:'Grandma',e:'👵'},{k:['hotel','reservation','room','check in'],n:'Hotel Staff',e:'🏨'},{k:['store','buy','price','shopping'],n:'Cashier',e:'🛒'},{k:['teacher','class','homework','school'],n:'Teacher',e:'📚'},{k:['taxi','uber','driver','ride','airport'],n:'Driver',e:'🚕'},{k:['interview','hire','resume','job'],n:'Interviewer',e:'💼'}];
+            for(const x of p) if(x.k.some(k=>t.includes(k))) return{name:x.n,emoji:x.e};
+            return{name:'Chat Partner',emoji:'💬'};
+        };
+
+        const VoiceNote = ({text, onPlay, isPlaying}) => (
+            <div className="flex items-center gap-2 bg-zinc-700/50 rounded-2xl px-3 py-2.5 max-w-[220px]">
+                <button onClick={onPlay} className="w-9 h-9 rounded-full bg-emerald-500 flex items-center justify-center text-white flex-shrink-0 active:scale-90 transition-transform">
+                    {isPlaying?<div className="w-2.5 h-2.5 bg-white rounded-sm"/>:<Play size={15} fill="white"/>}
+                </button>
+                <div className="flex-1 flex items-center gap-[2px] h-5 overflow-hidden">
+                    {[...Array(16)].map((_,i)=>(<div key={i} className={`w-[3px] rounded-full bg-emerald-400 ${isPlaying?'voice-bar':''}`} style={{height:`${Math.random()*60+30}%`,animationDelay:`${i*0.08}s`,opacity:isPlaying?undefined:0.4}}/>))}
+                </div>
+                <span className="text-[10px] text-zinc-400 font-bold flex-shrink-0">0:{String(Math.ceil(text.length/14)).padStart(2,'0')}</span>
+            </div>
+        );
+
         // ====== NPC BUBBLE (Click to Translate & Listen) ======
         const BotBubble = ({ englishText, spanishTranslation, isHistory }) => {
             const [showTranslation, setShowTranslation] = useState(false);
 
-            // Extraemos el emoji inicial si existe
             const match = englishText.match(/^([\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]+)/u);
             let emoji = match ? match[0] : "🤖";
             let cleanText = match ? englishText.replace(emoji, '').trim() : englishText;
@@ -301,17 +330,26 @@
             const [chatFlow, setChatFlow] = useState([]);
             const [gameTitle, setGameTitle] = useState('Voice Reply Challenge');
             const [screen, setScreen] = useState('name'); 
-            const [playerName, setPlayerName] = useState('');
+            
+            // NOMBRE DEL USUARIO (CON SOPORTE LOCAL STORAGE)
+            const [playerName, setPlayerName] = useState(() => {
+                return localStorage.getItem('periplo_student_name') || '';
+            });
+
+            const [rememberChoice, setRememberChoice] = useState(true);
+            const [showTutorial, setShowTutorial] = useState(false);
             const [totalScore, setTotalScore] = useState(0);
             const [currentStep, setCurrentStep] = useState(0);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
-            
+            const [quizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [leaderboard, setLeaderboard] = useState([]);
+            const [scoreSaved, setScoreSaved] = useState(false);
+
             const messagesEndRef = useRef(null);
             useEffect(() => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 200); }, [currentStep, screen]);
 
             useEffect(() => {
-                const quizId = new URLSearchParams(window.location.search).get('id');
                 if (!quizId) {
                     setChatFlow(mockData);
                     setLoading(false);
@@ -328,13 +366,35 @@
                         } else {
                             setError("Juego no encontrado.");
                         }
+                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score', 'desc'), limit(5));
+                        const lbSnap = await getDocs(q);
+                        setLeaderboard(lbSnap.docs.map(d => d.data()));
                     } catch (e) { setError(e.message); }
                     setLoading(false);
                 }; 
                 load();
-            }, []);
+            }, [quizId]);
 
-            const startGame = () => setScreen('game');
+            const contact = useMemo(() => guessContact(chatFlow), [chatFlow]);
+
+            const handleNameSubmit = () => {
+                if(!playerName.trim()) return;
+                localStorage.setItem('periplo_student_name', playerName.trim());
+                
+                if(localStorage.getItem(`periplo-chat-played-${quizId}`) === 'yes') {
+                    goToGame(true);
+                } else {
+                    setScreen('askPlayed');
+                }
+            };
+
+            const goToGame = (played) => {
+                if(rememberChoice && played) localStorage.setItem(`periplo-chat-played-${quizId}`, 'yes');
+                setShowTutorial(!played);
+                setScreen('game');
+            };
+
+            const goBackToName = () => { setScreen('name'); setCurrentStep(0); setTotalScore(0); setScoreSaved(false); };
 
             const handleNext = () => {
                 if (currentStep < chatFlow.length - 1) {
@@ -343,6 +403,18 @@
                     setScreen('result');
                 }
             };
+
+            const isComplete = screen === 'result';
+
+            useEffect(() => {
+                if(isComplete && !scoreSaved && playerName) {
+                    addDoc(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), { playerName, score: totalScore, date: serverTimestamp() }).then(() => {
+                        setScoreSaved(true);
+                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score', 'desc'), limit(5));
+                        getDocs(q).then(s => setLeaderboard(s.docs.map(d => d.data())));
+                    });
+                }
+            }, [isComplete, scoreSaved]);
 
             if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-indigo-500" size={40}/></div>;
             if (error) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-400 font-bold p-6 text-center">{error}</div>;
@@ -356,12 +428,45 @@
                         <h1 className="text-2xl font-black text-white mb-2">{gameTitle}</h1>
                         <p className="text-zinc-500 text-sm font-bold mb-8">Roleplay con voz. Escucha el mensaje y responde en inglés.</p>
                         
+                        {leaderboard.length > 0 && (
+                            <div className="mb-6 space-y-2">
+                                <div className="flex items-center gap-2 justify-center mb-2"><Trophy size={16} className="text-amber-400"/><span className="text-amber-400 font-black text-xs uppercase tracking-widest">Top Scores</span></div>
+                                {leaderboard.map((l, i) => (
+                                    <div key={i} className="flex items-center justify-between bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5">
+                                        <div className="flex items-center gap-2"><span className={`font-black text-sm ${i===0?'text-amber-400':i===1?'text-zinc-400':'text-zinc-600'}`}>#{i+1}</span><span className="font-bold text-white text-sm uppercase">{l.playerName}</span></div>
+                                        <div className="flex items-center gap-1"><Star size={12} className="text-amber-400"/><span className="font-black text-amber-400 text-sm">{l.score}</span></div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
                         <input value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="TU NOMBRE" 
+                            onKeyDown={e => e.key === 'Enter' && handleNameSubmit()}
                             className="w-full bg-zinc-950 border-2 border-zinc-800 rounded-xl p-3 text-center text-lg font-bold text-white mb-4 outline-none focus:border-indigo-500 uppercase"/>
                         
-                        <button disabled={!playerName.trim()} onClick={startGame} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm flex justify-center items-center gap-2">
+                        <button disabled={!playerName.trim()} onClick={handleNameSubmit} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm flex justify-center items-center gap-2">
                             Iniciar Práctica <Play size={16}/>
                         </button>
+                    </div>
+                </div>
+            );
+
+            // ASK PLAYED SCREEN
+            if(screen === 'askPlayed') return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950 overflow-auto">
+                    <div className="max-w-sm w-full my-auto">
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] p-6 shadow-2xl text-center">
+                            <div className="text-5xl mb-4">🎮</div>
+                            <h2 className="text-xl font-black text-white mb-2">¿Ya has jugado antes?</h2>
+                            <p className="text-zinc-400 text-sm mb-6">Si es tu primera vez te mostramos cómo funciona.</p>
+                            <div className="space-y-3 mb-6">
+                                <button onClick={() => goToGame(true)} className="w-full bg-indigo-600 text-white font-black py-3.5 rounded-xl text-sm uppercase tracking-widest active:scale-95">Sí, ya sé cómo</button>
+                                <button onClick={() => goToGame(false)} className="w-full bg-zinc-800 text-zinc-200 font-black py-3.5 rounded-xl text-sm uppercase tracking-widest active:scale-95 border border-zinc-700">No, muéstrame</button>
+                            </div>
+                            <button onClick={() => setRememberChoice(!rememberChoice)} className="flex items-center gap-2 mx-auto text-zinc-500 text-xs font-bold hover:text-zinc-300">
+                                {rememberChoice ? <CheckSquare size={16} className="text-indigo-400"/> : <Square size={16}/>} Recordar mi respuesta
+                            </button>
+                        </div>
                     </div>
                 </div>
             );
@@ -439,9 +544,21 @@
                             </div>
                         </div>
 
+                        {leaderboard.length > 0 && (
+                            <div className="mb-6 space-y-1.5">
+                                {leaderboard.slice(0,3).map((l,i) => (
+                                    <div key={i} className="flex justify-between bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs">
+                                        <span className="font-bold text-zinc-300">{i===0?'🥇':i===1?'🥈':'🥉'} {l.playerName}</span>
+                                        <span className="font-black text-amber-400">{l.score}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
                         <button onClick={() => window.location.reload()} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm flex justify-center items-center gap-2 mb-3">
                             <RotateCcw size={16}/> Volver a Practicar
                         </button>
+                        <button onClick={goBackToName} className="w-full bg-zinc-800 text-zinc-400 font-bold py-2.5 rounded-xl text-sm">Volver</button>
                     </div>
                 </div>
             );
