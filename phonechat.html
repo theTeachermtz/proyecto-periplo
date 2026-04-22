@@ -35,28 +35,6 @@
         .voice-bar { animation: pulse-bar 1.2s ease-in-out infinite; }
         @keyframes pointUp { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
         .point-up { animation: pointUp 1s ease-in-out infinite; }
-        /* Word input styling */
-        .word-input {
-            background: transparent;
-            border: none;
-            border-bottom: 3px solid rgba(255,255,255,0.3);
-            outline: none;
-            color: white;
-            font-weight: 800;
-            font-size: 16px;
-            text-align: center;
-            padding: 4px 6px;
-            min-width: 60px;
-            max-width: 140px;
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            caret-color: #a78bfa;
-            -webkit-appearance: none;
-            border-radius: 0;
-        }
-        .word-input:focus { border-bottom-color: white; background: rgba(255,255,255,0.05); border-radius: 8px 8px 0 0; }
-        .word-input.error { border-bottom-color: #f87171; color: #fca5a5; background: rgba(239,68,68,0.1); border-radius: 8px 8px 0 0; }
-        .word-input.hinted { border-bottom-color: rgba(251,191,36,0.5); color: #fbbf24; opacity: 0.85; cursor: not-allowed; }
-        .word-input.correct { border-bottom-color: rgba(52,211,153,0.5); color: #6ee7b7; }
     </style>
 </head>
 <body class="text-zinc-100 h-[100dvh]">
@@ -104,7 +82,6 @@
             return{name:'Chat Partner',emoji:'💬'};
         };
 
-        // Voice note component
         const VoiceNote = ({text, onPlay, isPlaying}) => (
             <div className="flex items-center gap-2 bg-zinc-700/50 rounded-2xl px-3 py-2.5 max-w-[220px]">
                 <button onClick={onPlay} className="w-9 h-9 rounded-full bg-emerald-500 flex items-center justify-center text-white flex-shrink-0 active:scale-90 transition-transform">
@@ -117,29 +94,36 @@
             </div>
         );
 
-        // ====== ACTIVE BUBBLE — WORD BY WORD ======
+        // ====== ACTIVE BUBBLE — SENTENCE UNSCRAMBLE ======
         const ActiveBubble = ({data, onNext, setTotalScore, isTutorial, transcriptVisible, botPlayClicked}) => {
 
-            // Build word list from expectedAnswer
             const wordList = useMemo(() => {
                 return data.expectedAnswer.trim().split(/\s+/).filter(Boolean);
             }, [data.expectedAnswer]);
 
-            const totalWords = wordList.length;
-            const LISTEN_BONUS = Math.ceil(totalWords * 0.5); // 50% extra if no transcript peeked
+            // Create scrambled array with unique IDs
+            const [shuffledWords, setShuffledWords] = useState([]);
+            useEffect(() => {
+                const arr = wordList.map((w, i) => ({ id: i, word: w }));
+                for (let i = arr.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [arr[i], arr[j]] = [arr[j], arr[i]];
+                }
+                setShuffledWords(arr);
+            }, [wordList]);
 
-            // Per-word state
-            const [inputs, setInputs] = useState(() => Array(totalWords).fill(''));
-            const [wordStatus, setWordStatus] = useState(() => Array(totalWords).fill('idle'));
-            const [hintedWords, setHintedWords] = useState(() => Array(totalWords).fill(false));
-            const [phase, setPhase] = useState('waiting'); // waiting | typing | correct
-            const [showHintPicker, setShowHintPicker] = useState(false);
+            const LISTEN_BONUS = Math.ceil(wordList.length * 0.5);
+
+            const [selectedIds, setSelectedIds] = useState([]);
+            const [errorId, setErrorId] = useState(null);
+            const [failedAttempts, setFailedAttempts] = useState(0);
+            const [penalties, setPenalties] = useState(0);
+            
+            const [phase, setPhase] = useState('waiting');
             const [stepScore, setStepScore] = useState(0);
             const [tutStep, setTutStep] = useState(isTutorial ? 0 : -1);
             const [tutPlayClicked, setTutPlayClicked] = useState(false);
-            const [activeWord, setActiveWord] = useState(0);
 
-            const inputRefs = useRef([]);
             const userEmoji = useMemo(() => pickUserEmoji(data.expectedAnswer), [data.expectedAnswer]);
 
             useEffect(() => {
@@ -147,95 +131,64 @@
             }, [botPlayClicked, tutStep]);
 
             useEffect(() => {
-                if(tutStep === 1) startTyping();
+                if(tutStep === 1) startUnscramble();
             }, [tutStep]);
 
-            const startTyping = () => {
-                setPhase('typing');
-                setTimeout(() => { if(inputRefs.current[0]) inputRefs.current[0].focus(); }, 300);
-            };
-
+            const startUnscramble = () => setPhase('playing');
             const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9']/g, '');
 
-            const checkWord = (idx, value) => {
-                const typed = normalize(value);
-                const expected = normalize(wordList[idx]);
-                return typed === expected;
-            };
-
-            const handleInputChange = (idx, val) => {
-                const ni = [...inputs]; ni[idx] = val; setInputs(ni);
-                const ws = [...wordStatus]; ws[idx] = 'idle'; setWordStatus(ws);
-            };
-
-            const handleWordSubmit = (idx) => {
-                if(hintedWords[idx]) {
-                    focusNext(idx); return;
-                }
-                if(!inputs[idx].trim()) return;
+            const handleWordClick = (id, word) => {
+                if (selectedIds.includes(id)) return;
                 
-                if(checkWord(idx, inputs[idx])) {
-                    const ws = [...wordStatus]; ws[idx] = 'correct'; setWordStatus(ws);
-                    const allDone = ws.every((s, i) => s === 'correct' || hintedWords[i]);
-                    if(allDone) {
-                        finishAnswer(ws);
-                    } else {
-                        focusNext(idx);
+                const targetIdx = selectedIds.length;
+                const expectedWord = wordList[targetIdx];
+
+                if (normalize(word) === normalize(expectedWord)) {
+                    // Correct!
+                    const newSelected = [...selectedIds, id];
+                    setSelectedIds(newSelected);
+                    setFailedAttempts(0); // Reset hints
+                    
+                    if (newSelected.length === wordList.length) {
+                        finishAnswer(newSelected);
                     }
                 } else {
-                    // ARQUITECTURA: Se marca rojo y se borra el input para reintentar
-                    setWordStatus(prev => { const p = [...prev]; p[idx] = 'error'; return p; });
-                    setTimeout(() => {
-                        setWordStatus(prev => { const p = [...prev]; p[idx] = 'idle'; return p; });
-                        setInputs(prev => { const p = [...prev]; p[idx] = ''; return p; });
-                    }, 600);
+                    // Wrong!
+                    setErrorId(id);
+                    setFailedAttempts(prev => prev + 1);
+                    setPenalties(prev => prev + 1); // Deduct a point
+                    setTimeout(() => setErrorId(null), 500);
                 }
             };
 
-            const focusNext = (idx) => {
-                for(let i = idx + 1; i < totalWords; i++) {
-                    if(!hintedWords[i] && wordStatus[i] !== 'correct') {
-                        if(inputRefs.current[i]) { inputRefs.current[i].focus(); setActiveWord(i); return; }
+            const handleHint = () => {
+                const targetIdx = selectedIds.length;
+                const expectedWord = wordList[targetIdx];
+                const correctItem = shuffledWords.find(s => !selectedIds.includes(s.id) && normalize(s.word) === normalize(expectedWord));
+                
+                if(correctItem) {
+                    const newSelected = [...selectedIds, correctItem.id];
+                    setSelectedIds(newSelected);
+                    setFailedAttempts(0);
+                    setPenalties(prev => prev + 1); // Hint also deducts a point
+                    
+                    if (newSelected.length === wordList.length) {
+                        finishAnswer(newSelected);
                     }
                 }
-                for(let i = 0; i < totalWords; i++) {
-                    if(!hintedWords[i] && wordStatus[i] !== 'correct') {
-                        if(inputRefs.current[i]) { inputRefs.current[i].focus(); setActiveWord(i); return; }
-                    }
-                }
             };
 
-            const handleKeyDown = (idx, e) => {
-                if(e.key === 'Enter') { e.preventDefault(); handleWordSubmit(idx); }
-            };
-
-            const finishAnswer = (finalWordStatus) => {
-                const correctCount = finalWordStatus.filter((s, i) => s === 'correct' && !hintedWords[i]).length;
-                let earned = correctCount;
-                if(!transcriptVisible) earned += LISTEN_BONUS; // blind bonus
-                setStepScore(earned);
-                setTotalScore(prev => prev + earned);
+            const finishAnswer = () => {
+                const baseScore = wordList.length;
+                const earnedBase = Math.max(0, baseScore - penalties);
+                let totalEarned = earnedBase;
+                if(!transcriptVisible) totalEarned += LISTEN_BONUS;
+                
+                setStepScore(totalEarned);
+                setTotalScore(prev => prev + totalEarned);
                 setPhase('correct');
                 confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
                 setTimeout(() => speak(data.expectedAnswer, 'en-US', 0.85), 600);
-            };
-
-            useEffect(() => {
-                if(phase !== 'typing') return;
-                const allDone = wordStatus.every((s, i) => s === 'correct' || hintedWords[i]);
-                if(allDone && wordList.length > 0 && (wordStatus.some(s => s === 'correct') || hintedWords.some(Boolean))) {
-                    finishAnswer(wordStatus);
-                }
-            }, [hintedWords, wordStatus, phase]);
-
-            const handleHint = (idx) => {
-                const nh = [...hintedWords]; nh[idx] = true; setHintedWords(nh);
-                const ni = [...inputs]; ni[idx] = wordList[idx]; setInputs(ni);
-                const ws = [...wordStatus]; ws[idx] = 'correct'; setWordStatus(ws);
-                setShowHintPicker(false);
-                const allDone = ws.every((s, wi) => s === 'correct' || nh[wi]);
-                if(allDone) { setTimeout(() => finishAnswer(ws), 150); }
-                else focusNext(idx);
             };
 
             // ====== TUTORIAL TOOLTIPS ======
@@ -251,13 +204,13 @@
                             </>)}
                             {tutStep === 0 && tutPlayClicked && (<>
                                 <h3 className="text-base font-black text-white mb-1.5">🎧 ¡Bien! Ya escuchaste</h3>
-                                <p className="text-zinc-300 text-sm leading-relaxed mb-4">Ahora intenta responder. Escribe cada palabra en su casilla y presiona Enter (o toca ✓) para confirmarla.</p>
+                                <p className="text-zinc-300 text-sm leading-relaxed mb-4">Ahora lee la traducción y ordena las palabras para responder. ¡Intenta no ver la transcripción!</p>
                                 <button onClick={() => setTutStep(1)} className="w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-sm active:scale-95">Siguiente →</button>
                             </>)}
                             {tutStep === 1 && (<>
                                 <div className="text-center mb-2 point-up text-2xl">☝️</div>
-                                <h3 className="text-base font-black text-white mb-1.5">✍️ Palabra por palabra</h3>
-                                <p className="text-zinc-300 text-sm leading-relaxed mb-4">Escribe cada palabra y confirma con Enter. Si necesitas ayuda usa el botón 💡 (pero esa palabra no dará puntos).</p>
+                                <h3 className="text-base font-black text-white mb-1.5">🧩 Ordena las palabras</h3>
+                                <p className="text-zinc-300 text-sm leading-relaxed mb-4">Toca cada palabra en el orden correcto. Si te equivocas perderás puntos en esta ronda.</p>
                                 <button onClick={() => setTutStep(-1)} className="w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-sm active:scale-95">¡Entendido!</button>
                             </>)}
                         </div>
@@ -268,7 +221,7 @@
             if(phase === 'waiting') return (
                 <div className="flex flex-col items-end w-full space-y-2 animate-pop">
                     <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm">
-                        <button onClick={startTyping} className="w-full bg-white text-indigo-700 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-1.5 active:scale-95">
+                        <button onClick={startUnscramble} className="w-full bg-white text-indigo-700 font-black py-2.5 rounded-xl text-sm flex items-center justify-center gap-1.5 active:scale-95 shadow-md">
                             ✍️ Responder
                         </button>
                     </div>
@@ -294,17 +247,18 @@
                 </div>
             );
 
-            // ====== TYPING ======
+            // ====== PLAYING (UNSCRAMBLE) ======
             return (
                 <div className="flex flex-col items-end w-full space-y-2 animate-pop">
-                    {/* ARQUITECTURA: La instrucción en español ahora SIEMPRE está visible para que sepan qué traducir. */}
-                    <div className="flex items-center gap-2 mr-2 flex-wrap justify-end mb-1">
-                        <span className="text-sm font-black text-amber-400 bg-amber-500/10 px-4 py-2.5 rounded-xl border border-amber-500/20">
-                            🇲🇽 Traduce: {data.userHint}
-                        </span>
-                    </div>
+                    {/* El texto "Traduce" solo aparece después de haber reproducido el audio al menos una vez */}
+                    {botPlayClicked && (
+                        <div className="flex items-center gap-2 mr-2 flex-wrap justify-end mb-1 animate-slide-up">
+                            <span className="text-sm font-black text-amber-400 bg-amber-500/10 px-4 py-2.5 rounded-xl border border-amber-500/20">
+                                🇲🇽 Traduce: {data.userHint}
+                            </span>
+                        </div>
+                    )}
                     
-                    {/* Indicador de Bono */}
                     {!transcriptVisible && (
                         <div className="flex items-center gap-2 mr-2 mb-1">
                             <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 rounded-full border border-emerald-500/20">
@@ -313,70 +267,50 @@
                         </div>
                     )}
 
-                    <div className={`w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm`}>
-                        <div className="flex flex-wrap gap-x-3 gap-y-4 justify-start">
-                            {wordList.map((word, idx) => {
-                                const isHinted = hintedWords[idx];
-                                const status = wordStatus[idx];
-                                const approxWidth = Math.max(60, Math.min(140, word.replace(/[^a-zA-Z]/g,'').length * 14 + 20));
+                    <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm">
+                        
+                        {/* Construcción de la frase */}
+                        <div className="flex flex-wrap gap-2 mb-5 p-3 bg-indigo-900/40 rounded-xl min-h-[64px] items-center border border-indigo-500/30">
+                            {wordList.map((w, i) => {
+                                if (i < selectedIds.length) {
+                                    const wordObj = shuffledWords.find(s => s.id === selectedIds[i]);
+                                    return <span key={i} className="px-3 py-1.5 bg-white text-indigo-700 font-black rounded-lg shadow-sm animate-pop text-sm">{wordObj.word}</span>;
+                                }
+                                // Espacios vacíos
+                                return <span key={i} className="px-3 py-1.5 border-b-2 border-dashed border-indigo-300/50 text-transparent font-bold text-sm select-none">{w}</span>;
+                            })}
+                        </div>
+
+                        {/* Banco de palabras */}
+                        <div className="flex flex-wrap gap-2 justify-center min-h-[80px] content-start">
+                            {shuffledWords.map(({id, word}) => {
+                                if (selectedIds.includes(id)) return <div key={id} className="hidden"/>;
+                                const isError = errorId === id;
                                 return (
-                                    <div key={idx} className="flex flex-col items-center gap-1">
-                                        <div className="relative">
-                                            <input
-                                                ref={el => inputRefs.current[idx] = el}
-                                                type="text"
-                                                value={inputs[idx]}
-                                                disabled={isHinted || status === 'correct'}
-                                                autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck="false"
-                                                onChange={e => handleInputChange(idx, e.target.value)}
-                                                onKeyDown={e => handleKeyDown(idx, e)}
-                                                onFocus={() => setActiveWord(idx)}
-                                                className={`word-input ${isHinted ? 'hinted' : status === 'error' ? 'error animate-shake' : status === 'correct' ? 'correct' : ''}`}
-                                                style={{ width: approxWidth, fontSize: '16px' }}
-                                                placeholder={isHinted ? '' : '···'}
-                                            />
-                                            {!isHinted && status !== 'correct' && (
-                                                <button
-                                                    onClick={() => handleWordSubmit(idx)}
-                                                    className="absolute -right-7 top-1/2 -translate-y-1/2 text-white/40 hover:text-white active:scale-90 transition-all text-lg font-black"
-                                                    style={{lineHeight:1}}
-                                                >✓</button>
-                                            )}
-                                            {status === 'correct' && !isHinted && (
-                                                <span className="absolute -right-5 top-1/2 -translate-y-1/2 text-emerald-300 text-sm">✓</span>
-                                            )}
-                                        </div>
-                                        <span className="text-[10px] text-white/30 font-bold">
-                                            {word.replace(/[^a-zA-Z]/g,'').length} letras
-                                        </span>
-                                    </div>
+                                    <button
+                                        key={id}
+                                        onClick={() => handleWordClick(id, word)}
+                                        className={`px-4 py-2 font-black rounded-xl text-sm transition-all shadow-md ${
+                                            isError ? 'bg-rose-500 text-white animate-shake shadow-rose-500/50' : 'bg-white text-zinc-900 hover:bg-zinc-200 active:scale-95'
+                                        }`}
+                                    >
+                                        {word}
+                                    </button>
                                 );
                             })}
                         </div>
 
-                        <div className="mt-4 flex items-center gap-2 flex-wrap">
-                            <button
-                                onClick={() => setShowHintPicker(!showHintPicker)}
-                                className="bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-amber-500/20"
-                            >
-                                <Lightbulb size={13}/> Pista por palabra
-                            </button>
-                            <span className="text-indigo-300/40 text-[9px] font-bold">No suma pts</span>
+                        {/* Botón de pista dinámico (Aparece tras 2 errores) */}
+                        <div className="mt-4 flex justify-center h-8">
+                            {failedAttempts >= 2 && (
+                                <button
+                                    onClick={handleHint}
+                                    className="bg-amber-500 text-amber-950 px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-1.5 shadow-lg shadow-amber-500/20 animate-pop active:scale-95"
+                                >
+                                    <Lightbulb size={14}/> Dame una pista
+                                </button>
+                            )}
                         </div>
-
-                        {showHintPicker && (
-                            <div className="mt-2 flex flex-wrap gap-2 animate-slide-up">
-                                {wordList.map((word, idx) => {
-                                    const done = hintedWords[idx] || wordStatus[idx] === 'correct';
-                                    return (
-                                        <button key={idx} disabled={done} onClick={() => handleHint(idx)}
-                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold border ${done ? 'bg-zinc-700/50 text-zinc-500 border-zinc-700' : 'bg-amber-500/10 text-amber-300 border-amber-500/20 hover:bg-amber-500/20 active:scale-95'}`}>
-                                            {done ? word : `"${word.replace(/./g, '·')}" (${word.replace(/[^a-zA-Z]/g,'').length})`}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        )}
                     </div>
                     {renderTutorial()}
                 </div>
