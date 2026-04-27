@@ -5,10 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Word Cascade | Periplo Games</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>☄️</text></svg>">
-    
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
-    
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -18,6 +16,8 @@
                         'shake': 'shake 0.4s cubic-bezier(.36,.07,.19,.97) both',
                         'pop-in': 'popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards',
                         'reward-anim': 'rewardAnim 1.2s ease-in-out forwards',
+                        'slide-up': 'slideUp 0.4s ease-out forwards',
+                        'fade-in': 'fadeIn 0.3s ease-out forwards',
                     },
                     keyframes: {
                         shake: {
@@ -36,13 +36,20 @@
                             '25%': { transform: 'scale(1) translateY(0)', opacity: '1' },
                             '75%': { transform: 'scale(1) translateY(0)', opacity: '1' },
                             '100%': { transform: 'scale(1.1) translateY(-40px)', opacity: '0' }
+                        },
+                        slideUp: {
+                            '0%': { transform: 'translateY(30px)', opacity: '0' },
+                            '100%': { transform: 'translateY(0)', opacity: '1' }
+                        },
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' }
                         }
                     }
                 }
             }
         };
     </script>
-    
     <script type="importmap">
     {
       "imports": {
@@ -55,246 +62,262 @@
     }
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800;900&display=swap'); 
-        body { 
-            font-family: 'Plus Jakarta Sans', sans-serif; 
-            overflow: hidden; 
-            touch-action: none; 
-            user-select: none;
-            -webkit-user-select: none;
-        }
-        
-        @media (hover: hover) {
-            .hover-scale:hover { transform: scale(1.05); transition: transform 0.2s; }
-        }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+        @media (hover: hover) { .hover-scale:hover { transform: scale(1.05); transition: transform 0.2s; } }
         .active-scale:active { transform: scale(0.95); transition: transform 0.1s; }
-        
         .drag-active { cursor: grabbing !important; z-index: 50; }
         .word-card { touch-action: none; }
-        
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+
+        /* Progress bar animation */
+        .progress-fill { transition: width 0.4s ease-out; }
+
+        /* Tanda badge pulse */
+        @keyframes tandaPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.4); }
+            50% { box-shadow: 0 0 0 8px rgba(99,102,241,0); }
+        }
+        .tanda-badge { animation: tandaPulse 2s ease-in-out infinite; }
     </style>
 </head>
 <body class="bg-slate-900 text-white h-[100dvh] w-screen">
     <div id="root" class="h-full w-full"></div>
 
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useRef } from 'react';
+        import React, { useState, useEffect, useRef, useCallback } from 'react';
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Zap, Heart, Trophy, Play, AlertCircle, RefreshCcw, ArrowLeft, Pause, BookOpen, UserCircle2 } from 'lucide-react';
+        import { Zap, Heart, Trophy, Play, AlertCircle, RefreshCcw, ArrowLeft, Pause, BookOpen, UserCircle2, ChevronRight, Star, Lock, CheckCircle2 } from 'lucide-react';
 
-        const firebaseConfig = { 
-            apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", 
-            authDomain: "proyecto-periplo.firebaseapp.com", 
-            projectId: "proyecto-periplo", 
-            storageBucket: "proyecto-periplo.firebasestorage.app", 
-            messagingSenderId: "236795998392", 
-            appId: "1:236795998392:web:0da24b4f018611b55c844d" 
-        };
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        const WORDS_PER_TANDA = 5; // 5 palabras por categoría por tanda
+
         const CATEGORY_COLORS = [
-            { bg: 'bg-blue-500', border: 'border-blue-600', shadow: 'shadow-blue-500/50', text: 'text-white' },
-            { bg: 'bg-red-500', border: 'border-red-600', shadow: 'shadow-red-500/50', text: 'text-white' },
-            { bg: 'bg-amber-500', border: 'border-amber-600', shadow: 'shadow-amber-500/50', text: 'text-white' },
-            { bg: 'bg-green-500', border: 'border-green-600', shadow: 'shadow-green-500/50', text: 'text-white' }
+            { bg: 'bg-blue-500', border: 'border-blue-600', shadow: 'shadow-blue-500/50', text: 'text-white', light: 'bg-blue-500/20', accent: '#3b82f6' },
+            { bg: 'bg-rose-500', border: 'border-rose-600', shadow: 'shadow-rose-500/50', text: 'text-white', light: 'bg-rose-500/20', accent: '#f43f5e' },
+            { bg: 'bg-amber-500', border: 'border-amber-600', shadow: 'shadow-amber-500/50', text: 'text-white', light: 'bg-amber-500/20', accent: '#f59e0b' },
+            { bg: 'bg-emerald-500', border: 'border-emerald-600', shadow: 'shadow-emerald-500/50', text: 'text-white', light: 'bg-emerald-500/20', accent: '#10b981' }
         ];
 
-        // --- SISTEMA DE AUDIO NATIVO ---
+        // Audio helpers
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        
-        const playPopSound = () => {
+        const playSound = (type) => {
             if (audioCtx.state === 'suspended') audioCtx.resume();
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
             osc.connect(gain); gain.connect(audioCtx.destination);
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(400, audioCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.1);
-            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-            osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+            if (type === 'pop') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'success') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.15);
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+            } else if (type === 'error') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.2);
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+            } else if (type === 'fanfare') {
+                // Mini fanfare de victoria de tanda
+                [[523, 0], [659, 0.1], [784, 0.2], [1047, 0.3]].forEach(([freq, delay]) => {
+                    const o = audioCtx.createOscillator();
+                    const g = audioCtx.createGain();
+                    o.connect(g); g.connect(audioCtx.destination);
+                    o.type = 'triangle';
+                    o.frequency.value = freq;
+                    g.gain.setValueAtTime(0, audioCtx.currentTime + delay);
+                    g.gain.linearRampToValueAtTime(0.25, audioCtx.currentTime + delay + 0.05);
+                    g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + delay + 0.3);
+                    o.start(audioCtx.currentTime + delay);
+                    o.stop(audioCtx.currentTime + delay + 0.3);
+                });
+            }
         };
 
-        const playSuccessSound = () => {
-            if (audioCtx.state === 'suspended') audioCtx.resume();
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.connect(gain); gain.connect(audioCtx.destination);
-            osc.type = 'triangle';
-            osc.frequency.setValueAtTime(800, audioCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.15);
-            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
-            osc.start(); osc.stop(audioCtx.currentTime + 0.3);
-        };
-
-        const playErrorSound = () => {
-            if (audioCtx.state === 'suspended') audioCtx.resume();
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.connect(gain); gain.connect(audioCtx.destination);
-            osc.type = 'sawtooth';
-            osc.frequency.setValueAtTime(200, audioCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.2);
-            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
-            osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+        // ============================================================
+        // LÓGICA DE TANDAS
+        // Cada tanda = WORDS_PER_TANDA palabras de CADA categoría mezcladas
+        // ============================================================
+        const buildTandas = (categories) => {
+            const numCats = categories.length;
+            // Cuántas tandas puede haber basado en la categoría con menos palabras
+            const minItems = Math.min(...categories.map(c => (c.items || []).length));
+            const totalTandas = Math.ceil(minItems / WORDS_PER_TANDA);
+            
+            const tandas = [];
+            for (let t = 0; t < totalTandas; t++) {
+                let tandaWords = [];
+                categories.forEach((cat, catIdx) => {
+                    const start = t * WORDS_PER_TANDA;
+                    const slice = (cat.items || []).slice(start, start + WORDS_PER_TANDA);
+                    slice.forEach(item => {
+                        const englishWord = item.en || item.word || "";
+                        if (englishWord.trim()) {
+                            tandaWords.push({
+                                text: englishWord,
+                                es: item.es || "¡Correcto!",
+                                emoji: item.emoji || "❓",
+                                categoryId: catIdx,
+                                categoryName: cat.name
+                            });
+                        }
+                    });
+                });
+                // Mezclar las palabras de la tanda
+                for (let i = tandaWords.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [tandaWords[i], tandaWords[j]] = [tandaWords[j], tandaWords[i]];
+                }
+                if (tandaWords.length > 0) tandas.push(tandaWords);
+            }
+            return tandas;
         };
 
         const CascadeGame = () => {
             const [gameState, setGameState] = useState('loading');
             const [gameData, setGameData] = useState(null);
             const [errorMessage, setErrorMessage] = useState("");
-            const [playerName, setPlayerName] = useState("");
+            const [playerName, setPlayerName] = useState(() => localStorage.getItem('wc_playerName') || "");
+            const [quizId, setQuizId] = useState(null);
 
+            // Tandas
+            const [tandas, setTandas] = useState([]);
+            const [currentTanda, setCurrentTanda] = useState(0);
+            const [savedTanda, setSavedTanda] = useState(null);
+
+            // Estado del juego activo
             const [wordPool, setWordPool] = useState([]);
             const [currentWord, setCurrentWord] = useState(null);
             const [score, setScore] = useState(0);
             const [lives, setLives] = useState(3);
             const [combo, setCombo] = useState(0);
-            const [fallingY, setFallingY] = useState(0); 
-            
-            // ESTADO DE RECOMPENSA (Traducción al español)
+            const [fallingY, setFallingY] = useState(0);
+            const [tandaProgress, setTandaProgress] = useState(0); // cuántas palabras completadas en esta tanda
+            const [totalTandaWords, setTotalTandaWords] = useState(0);
+
             const [rewardText, setRewardText] = useState(null);
             const isRewardingRef = useRef(false);
-            
             const gameLoopRef = useRef(null);
-            const fallSpeedRef = useRef(0.15); 
+            const fallSpeedRef = useRef(0.15);
             const isDraggingRef = useRef(false);
             const wordRef = useRef(null);
-            
             const [dragPos, setDragPos] = useState({ x: 0, y: 0 });
             const [isWrong, setIsWrong] = useState(false);
 
+            // Cargar datos
             useEffect(() => {
                 const params = new URLSearchParams(window.location.search);
-                const gameId = params.get('id');
+                const id = params.get('id');
+                if (!id) { setErrorMessage("No se encontró ID."); setGameState('error'); return; }
+                setQuizId(id);
 
-                if (!gameId) {
-                    setErrorMessage("No se encontró ID de juego en la URL.");
-                    setGameState('error');
-                    return;
-                }
+                // Cargar progreso guardado
+                const saved = localStorage.getItem(`wc_prog_${id}`);
+                if (saved) setSavedTanda(JSON.parse(saved).tanda);
 
-                const loadGame = async () => {
-                    try {
-                        const docRef = doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', gameId);
-                        const docSnap = await getDoc(docRef);
-                        
-                        if (docSnap.exists()) {
-                            const data = docSnap.data();
-                            if(!data.content || !data.content.categories) throw new Error("Estructura de datos inválida");
-                            setGameData(data);
-                            setGameState('menu');
-                        } else {
-                            throw new Error("El juego no existe.");
-                        }
-                    } catch (error) {
-                        setErrorMessage(error.message);
-                        setGameState('error');
-                    }
-                };
-                loadGame();
+                getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', id)).then(snap => {
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        if (!data.content?.categories) { setErrorMessage("Estructura inválida."); setGameState('error'); return; }
+                        setGameData(data);
+                        const built = buildTandas(data.content.categories);
+                        setTandas(built);
+                        setGameState('menu');
+                    } else { setErrorMessage("Juego no encontrado."); setGameState('error'); }
+                }).catch(e => { setErrorMessage(e.message); setGameState('error'); });
             }, []);
 
-            const startGame = () => {
-                if(!playerName.trim()) {
-                    alert("Por favor, ingresa tu nombre para registrar tu puntaje.");
-                    return;
-                }
-                
+            const startTanda = (tandaIndex) => {
+                if (!tandas[tandaIndex]) return;
                 if (audioCtx.state === 'suspended') audioCtx.resume();
 
-                let allWords = [];
-                gameData.content.categories.forEach((cat, index) => {
-                    if(cat.items && Array.isArray(cat.items)) {
-                        cat.items.forEach(item => {
-                            // Soportamos tanto el formato nuevo (en/es) como el antiguo (word)
-                            const englishWord = item.en || item.word || "";
-                            if(englishWord.trim() !== "") {
-                                allWords.push({ 
-                                    text: englishWord, 
-                                    es: item.es || "¡Correcto!", // Traducción o fallback
-                                    emoji: item.emoji || "❓", 
-                                    categoryId: index, 
-                                    categoryName: cat.name 
-                                });
-                            }
-                        });
-                    }
-                });
-                
-                for (let i = allWords.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [allWords[i], allWords[j]] = [allWords[j], allWords[i]];
-                }
-
-                if(allWords.length === 0) {
-                    alert("No hay palabras válidas en este juego.");
-                    setGameState('menu');
-                    return;
-                }
-
-                setWordPool(allWords);
+                const words = [...tandas[tandaIndex]];
+                setCurrentTanda(tandaIndex);
+                setWordPool(words.slice(1));
+                setCurrentWord(words[0]);
                 setScore(0);
                 setLives(3);
                 setCombo(0);
+                setFallingY(0);
+                setIsWrong(false);
+                setRewardText(null);
+                setTandaProgress(0);
+                setTotalTandaWords(words.length);
                 fallSpeedRef.current = 0.15;
                 isRewardingRef.current = false;
-                setRewardText(null);
-                spawnNextWord(allWords);
+                isDraggingRef.current = false;
+                playSound('pop');
                 setGameState('playing');
             };
 
-            const spawnNextWord = (pool) => {
+            const spawnNextWord = useCallback((pool) => {
                 if (pool.length === 0) {
-                    setGameState('gameover');
-                    triggerVictoryConfetti();
+                    // ¡Tanda completada!
+                    playSound('fanfare');
+                    confetti({ particleCount: 150, spread: 100, origin: { y: 0.5 } });
+                    
+                    // Guardar progreso si hay más tandas
+                    if (currentTanda + 1 < tandas.length) {
+                        localStorage.setItem(`wc_prog_${quizId}`, JSON.stringify({ tanda: currentTanda + 1 }));
+                    } else {
+                        localStorage.removeItem(`wc_prog_${quizId}`);
+                    }
+                    setGameState('tanda_complete');
                     return;
                 }
                 const nextPool = [...pool];
                 const next = nextPool.pop();
-                
                 setWordPool(nextPool);
                 setCurrentWord(next);
                 setFallingY(0);
                 setIsWrong(false);
                 isDraggingRef.current = false;
                 isRewardingRef.current = false;
-                
-                playPopSound();
-            };
+                playSound('pop');
+            }, [currentTanda, tandas.length, quizId]);
 
+            // Game loop
             useEffect(() => {
                 if (gameState !== 'playing' || !currentWord) return;
-
                 const loop = () => {
-                    // Detenemos la caída si estamos arrastrando O si estamos mostrando la recompensa
                     if (!isDraggingRef.current && !isRewardingRef.current) {
                         setFallingY(prev => {
                             const nextY = prev + fallSpeedRef.current;
-                            if (nextY >= 90) { handleMiss(); return 0; }
+                            if (nextY >= 90) {
+                                handleMiss();
+                                return 0;
+                            }
                             return nextY;
                         });
                     }
                     gameLoopRef.current = requestAnimationFrame(loop);
                 };
-                
                 gameLoopRef.current = requestAnimationFrame(loop);
                 return () => cancelAnimationFrame(gameLoopRef.current);
             }, [gameState, currentWord]);
 
             const handleMiss = () => {
                 cancelAnimationFrame(gameLoopRef.current);
-                playErrorSound();
+                playSound('error');
                 setCombo(0);
+                setTandaProgress(p => p + 1);
                 setLives(prev => {
                     const next = prev - 1;
                     if (next <= 0) { setGameState('gameover'); return 0; }
@@ -303,95 +326,68 @@
                 spawnNextWord(wordPool);
             };
 
-            const togglePause = () => {
-                if (gameState === 'playing') setGameState('paused');
-                else if (gameState === 'paused') setGameState('playing');
-            };
-
             const handlePointerDown = (e) => {
                 if (gameState !== 'playing' || isWrong || isRewardingRef.current) return;
                 isDraggingRef.current = true;
                 e.target.setPointerCapture(e.pointerId);
                 setDragPos({ x: e.clientX, y: e.clientY });
             };
-
             const handlePointerMove = (e) => {
                 if (!isDraggingRef.current || gameState !== 'playing') return;
                 setDragPos({ x: e.clientX, y: e.clientY });
             };
-
             const handlePointerUp = (e) => {
                 if (!isDraggingRef.current || gameState !== 'playing') return;
                 isDraggingRef.current = false;
                 e.target.releasePointerCapture(e.pointerId);
-
                 const wordElement = wordRef.current;
-                if(wordElement) wordElement.style.display = 'none';
-                
+                if (wordElement) wordElement.style.display = 'none';
                 const elementBelow = document.elementFromPoint(e.clientX, e.clientY);
-                
-                if(wordElement) wordElement.style.display = 'flex'; 
-
+                if (wordElement) wordElement.style.display = 'flex';
                 const dropZone = elementBelow?.closest('[data-category]');
-                
-                if (dropZone) {
-                    const categoryId = parseInt(dropZone.getAttribute('data-category'), 10);
-                    evaluateMatch(categoryId, dropZone);
-                } else {
-                    setDragPos({ x: 0, y: 0 });
-                }
+                if (dropZone) evaluateMatch(parseInt(dropZone.getAttribute('data-category'), 10), dropZone);
+                else setDragPos({ x: 0, y: 0 });
             };
 
             const evaluateMatch = (selectedId, dropElement) => {
                 if (selectedId === currentWord.categoryId) {
-                    playSuccessSound();
+                    playSound('success');
                     const newCombo = combo + 1;
                     setCombo(newCombo);
                     setScore(prev => prev + (10 * newCombo));
-                    
-                    fallSpeedRef.current = Math.min(0.5, 0.15 + (score / 1000)); 
-                    
+                    setTandaProgress(p => p + 1);
+                    fallSpeedRef.current = Math.min(0.5, 0.15 + (score / 1000));
                     dropElement.classList.remove('animate-pop-in');
                     void dropElement.offsetWidth;
                     dropElement.classList.add('animate-pop-in');
-                    
                     confetti({ particleCount: 15, spread: 40, origin: { x: dropElement.getBoundingClientRect().left / window.innerWidth + 0.1, y: 0.9 }, colors: ['#ffffff', '#fde047'] });
-                    
-                    // --- INICIA FASE DE RECOMPENSA VISUAL ---
                     isRewardingRef.current = true;
                     setRewardText(currentWord.es);
-                    
-                    // Esperamos 1.2 segundos para mostrar la animación antes de la siguiente palabra
                     setTimeout(() => {
                         setRewardText(null);
                         spawnNextWord(wordPool);
                     }, 1200);
-
                 } else {
-                    playErrorSound();
+                    playSound('error');
                     setCombo(0);
                     setIsWrong(true);
-                    
-                    setTimeout(() => {
-                        setIsWrong(false);
-                        setDragPos({ x: 0, y: 0 });
-                    }, 400); 
+                    setTimeout(() => { setIsWrong(false); setDragPos({ x: 0, y: 0 }); }, 400);
                 }
             };
 
-            const triggerVictoryConfetti = () => {
-                const duration = 3000;
-                const end = Date.now() + duration;
-                const frame = () => {
-                    confetti({ particleCount: 5, angle: 60, spread: 55, origin: { x: 0 }, colors: ['#3b82f6', '#ef4444', '#eab308', '#22c55e'] });
-                    confetti({ particleCount: 5, angle: 120, spread: 55, origin: { x: 1 }, colors: ['#3b82f6', '#ef4444', '#eab308', '#22c55e'] });
-                    if (Date.now() < end) requestAnimationFrame(frame);
-                };
-                frame();
+            const togglePause = () => {
+                if (gameState === 'playing') setGameState('paused');
+                else if (gameState === 'paused') setGameState('playing');
             };
 
-            if (gameState === 'loading') return <div className="flex h-full items-center justify-center"><Zap className="animate-pulse text-indigo-500" size={48} /></div>;
-            
+            // ─── SCREENS ────────────────────────────────────────────
+
+            if (gameState === 'loading') return (
+                <div className="flex h-full items-center justify-center bg-slate-950">
+                    <Zap className="animate-pulse text-indigo-500" size={48} />
+                </div>
+            );
+
             if (gameState === 'error') return (
                 <div className="flex flex-col h-full items-center justify-center p-8 text-center bg-slate-950">
                     <AlertCircle className="text-red-500 mb-4" size={64}/>
@@ -403,210 +399,282 @@
 
             if (gameState === 'menu') return (
                 <div className="flex flex-col h-full bg-slate-900 overflow-hidden relative">
-                    <div className="absolute inset-0 bg-gradient-to-b from-indigo-900/20 to-slate-900 z-0"></div>
+                    <div className="absolute inset-0 bg-gradient-to-b from-indigo-900/20 to-slate-900 z-0 pointer-events-none"></div>
+
                     <div className="relative z-10 p-6 flex items-center justify-between border-b border-white/10">
                         <button onClick={() => window.history.back()} className="p-2 bg-white/5 hover:bg-white/10 rounded-xl transition active-scale"><ArrowLeft size={20}/></button>
                         <div className="flex items-center gap-2 text-indigo-400 font-bold"><Zap size={20}/> Word Cascade</div>
-                        <div className="w-10"></div>
+                        <div className="w-10"/>
                     </div>
-                    
-                    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center z-10">
-                        <h1 className="text-5xl font-black mb-4 text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400 animate-pop-in">{gameData.title}</h1>
-                        <p className="text-slate-400 mb-8 text-lg max-w-sm">Arrastra cada palabra a su categoría correcta antes de que toque el suelo.</p>
-                        
-                        <div className="bg-slate-800/50 p-4 rounded-2xl border border-white/10 mb-8 w-full max-w-xs flex items-center gap-3">
+
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 z-10 gap-6 overflow-y-auto">
+                        <h1 className="text-4xl font-black text-center text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">
+                            {gameData?.title}
+                        </h1>
+                        <p className="text-slate-400 text-center text-sm max-w-xs">Arrastra cada palabra a su categoría antes de que toque el suelo.</p>
+
+                        {/* Nombre */}
+                        <div className="bg-slate-800/50 p-4 rounded-2xl border border-white/10 w-full max-w-xs flex items-center gap-3">
                             <UserCircle2 className="text-indigo-400 shrink-0"/>
-                            <input 
-                                type="text" 
-                                value={playerName} 
-                                onChange={(e) => setPlayerName(e.target.value)} 
-                                placeholder="Escribe tu nombre..." 
-                                className="bg-transparent border-none outline-none text-white font-bold w-full placeholder-slate-500"
-                            />
+                            <input type="text" value={playerName}
+                                onChange={e => { setPlayerName(e.target.value); localStorage.setItem('wc_playerName', e.target.value); }}
+                                placeholder="Escribe tu nombre..."
+                                className="bg-transparent border-none outline-none text-white font-bold w-full placeholder-slate-500"/>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-4 mb-12 w-full max-w-md">
-                            {gameData.content.categories.map((cat, i) => (
-                                <div key={i} className={`${CATEGORY_COLORS[i].bg} bg-opacity-20 border border-white/10 rounded-2xl p-4 flex flex-col items-center justify-center backdrop-blur-sm`}>
-                                    <span className={`font-black text-sm uppercase text-center ${CATEGORY_COLORS[i].text} drop-shadow`}>{cat.name}</span>
-                                </div>
-                            ))}
-                        </div>
+                        {/* Tandas */}
+                        <div className="w-full max-w-xs space-y-2">
+                            <p className="text-xs font-black text-slate-500 uppercase tracking-widest text-center mb-3">
+                                {tandas.length} Tandas · {WORDS_PER_TANDA} palabras/cat
+                            </p>
+                            {tandas.map((tanda, i) => {
+                                const isSaved = savedTanda !== null && i === savedTanda;
+                                const isLocked = savedTanda !== null && i > savedTanda;
+                                const isCompleted = savedTanda !== null && i < savedTanda;
+                                const isPlayable = !isLocked;
 
-                        <button onClick={startGame} className="bg-emerald-500 hover:bg-emerald-400 text-slate-900 px-10 py-5 rounded-full font-black text-xl flex items-center gap-3 shadow-[0_10px_40px_rgba(16,185,129,0.4)] active-scale hover-scale transition-all">
-                            <Play fill="currentColor" size={24}/> JUGAR AHORA
-                        </button>
-                    </div>
-                </div>
-            );
-
-            if (gameState === 'gameover') return (
-                <div className="flex flex-col h-full bg-slate-900 items-center justify-center p-6 text-center relative">
-                    <div className="absolute top-6 right-6">
-                         <button onClick={() => setGameState('library')} className="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors border border-white/10 shadow-lg text-indigo-300">
-                             <BookOpen size={18}/> Biblioteca
-                         </button>
-                    </div>
-
-                    <Trophy className="text-yellow-400 mb-4 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]" size={80} />
-                    <h2 className="text-4xl font-black mb-1 animate-pop-in text-white">{lives > 0 ? '¡Dominación Total!' : '¡Juego Terminado!'}</h2>
-                    <p className="text-slate-400 mb-8 font-bold">Jugador: <span className="text-indigo-400">{playerName}</span></p>
-                    
-                    <p className="text-slate-400 text-xl">Tu puntuación final</p>
-                    <div className="text-7xl font-black text-transparent bg-clip-text bg-gradient-to-b from-yellow-300 to-amber-600 mb-12 animate-pop-in" style={{animationDelay: '0.2s'}}>
-                        {score}
-                    </div>
-
-                    <div className="flex gap-4">
-                        <button onClick={() => window.location.href='index.html'} className="bg-slate-800 px-6 py-4 rounded-2xl font-bold flex items-center gap-2 active-scale text-white border border-white/10"><ArrowLeft size={20}/> Salir</button>
-                        <button onClick={startGame} className="bg-indigo-600 px-8 py-4 rounded-2xl font-bold flex items-center gap-2 active-scale shadow-lg shadow-indigo-600/30 text-white"><RefreshCcw size={20}/> Jugar de Nuevo</button>
-                    </div>
-                </div>
-            );
-
-            if (gameState === 'library') return (
-                <div className="flex flex-col h-full bg-slate-950 p-6 overflow-hidden">
-                    <div className="flex items-center justify-between mb-6 shrink-0">
-                        <h2 className="text-2xl font-black text-white flex items-center gap-2"><BookOpen className="text-indigo-400"/> Biblioteca de Palabras</h2>
-                        <button onClick={() => setGameState('gameover')} className="p-2 bg-slate-800 text-slate-400 rounded-full hover:bg-slate-700 transition-colors">
-                            <ArrowLeft size={24} />
-                        </button>
-                    </div>
-                    <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6 pr-2">
-                        {gameData.content.categories.map((cat, i) => (
-                            <div key={i} className="bg-slate-900 rounded-2xl border border-white/5 overflow-hidden">
-                                <div className={`px-4 py-3 ${CATEGORY_COLORS[i].bg} bg-opacity-20 border-b border-white/5 font-black uppercase text-sm ${CATEGORY_COLORS[i].text} drop-shadow`}>
-                                    {cat.name}
-                                </div>
-                                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                    {(cat.items || []).filter(item => (item.en || item.word || "").trim() !== "").map((item, idx) => (
-                                        <div key={idx} className="flex flex-col gap-1 bg-slate-950 p-3 rounded-xl border border-white/5">
-                                            <div className="flex items-center gap-3">
-                                                <div className="text-2xl w-10 h-10 bg-slate-800 rounded-lg flex items-center justify-center shrink-0">{item.emoji}</div>
-                                                <span className="font-bold text-slate-200">{item.en || item.word}</span>
+                                return (
+                                    <button key={i}
+                                        disabled={isLocked || !playerName.trim()}
+                                        onClick={() => isPlayable && startTanda(i)}
+                                        className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all active-scale
+                                            ${isLocked ? 'border-slate-800 bg-slate-900/50 opacity-40 cursor-not-allowed' : 
+                                              isCompleted ? 'border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10' :
+                                              isSaved ? 'border-indigo-500/50 bg-indigo-500/10 tanda-badge hover:bg-indigo-500/20' :
+                                              'border-white/10 bg-white/5 hover:bg-white/10'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm
+                                                ${isCompleted ? 'bg-emerald-500 text-white' :
+                                                  isSaved ? 'bg-indigo-600 text-white' :
+                                                  isLocked ? 'bg-slate-800 text-slate-600' :
+                                                  'bg-slate-800 text-white'}`}>
+                                                {isCompleted ? <CheckCircle2 size={18}/> : isLocked ? <Lock size={16}/> : i + 1}
                                             </div>
-                                            {item.es && <div className="text-xs text-emerald-400 font-bold ml-14">{item.es}</div>}
+                                            <div className="text-left">
+                                                <p className="font-black text-sm text-white">Tanda {i + 1}</p>
+                                                <p className="text-xs text-slate-500">{tanda.length} palabras</p>
+                                            </div>
                                         </div>
-                                    ))}
+                                        <div className="flex items-center gap-2">
+                                            {isSaved && <span className="text-[10px] font-black text-indigo-400 bg-indigo-500/20 px-2 py-1 rounded-lg uppercase tracking-wider">Continuar</span>}
+                                            {isCompleted && <span className="text-[10px] font-black text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg uppercase">✓ Lista</span>}
+                                            {!isLocked && !isCompleted && !isSaved && <ChevronRight size={16} className="text-slate-500"/>}
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {savedTanda !== null && (
+                            <button onClick={() => {
+                                localStorage.removeItem(`wc_prog_${quizId}`);
+                                setSavedTanda(null);
+                            }} className="text-xs text-slate-600 hover:text-slate-400 transition-colors underline">
+                                Reiniciar progreso
+                            </button>
+                        )}
+                    </div>
+                </div>
+            );
+
+            // TANDA COMPLETADA
+            if (gameState === 'tanda_complete') {
+                const isLastTanda = currentTanda + 1 >= tandas.length;
+                return (
+                    <div className="flex flex-col h-full bg-slate-900 items-center justify-center p-6 text-center">
+                        <div className="animate-pop-in space-y-6 max-w-sm w-full">
+                            <div className={`w-20 h-20 mx-auto rounded-3xl flex items-center justify-center text-4xl shadow-2xl ${isLastTanda ? 'bg-yellow-500' : 'bg-emerald-500'}`}>
+                                {isLastTanda ? '🏆' : '⭐'}
+                            </div>
+                            <div>
+                                <h2 className="text-3xl font-black text-white">{isLastTanda ? '¡Completado!' : `Tanda ${currentTanda + 1} Lista`}</h2>
+                                <p className="text-slate-400 mt-1 font-bold">
+                                    {isLastTanda ? '¡Terminaste todas las tandas!' : `Siguiente: Tanda ${currentTanda + 2}`}
+                                </p>
+                            </div>
+
+                            <div className="bg-slate-800/50 rounded-2xl p-5 border border-white/10 grid grid-cols-2 gap-4">
+                                <div>
+                                    <Trophy size={20} className="text-yellow-400 mx-auto mb-1"/>
+                                    <p className="text-2xl font-black">{score}</p>
+                                    <p className="text-xs text-slate-500 uppercase tracking-wider">Puntos</p>
+                                </div>
+                                <div>
+                                    <Star size={20} className="text-indigo-400 mx-auto mb-1"/>
+                                    <p className="text-2xl font-black">{combo}x</p>
+                                    <p className="text-xs text-slate-500 uppercase tracking-wider">Combo máx</p>
                                 </div>
                             </div>
-                        ))}
+
+                            <div className="space-y-3">
+                                {!isLastTanda && (
+                                    <button onClick={() => startTanda(currentTanda + 1)}
+                                        className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-2 shadow-lg active-scale">
+                                        Tanda {currentTanda + 2} <ChevronRight size={20}/>
+                                    </button>
+                                )}
+                                <button onClick={() => setGameState('menu')}
+                                    className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 active-scale">
+                                    <ArrowLeft size={18}/> Ver Tandas
+                                </button>
+                                {isLastTanda && (
+                                    <button onClick={() => { localStorage.removeItem(`wc_prog_${quizId}`); setSavedTanda(null); setGameState('menu'); }}
+                                        className="w-full bg-yellow-500 hover:bg-yellow-400 text-slate-900 py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-2 shadow-lg active-scale">
+                                        <RefreshCcw size={18}/> Jugar de nuevo
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // GAME OVER
+            if (gameState === 'gameover') return (
+                <div className="flex flex-col h-full bg-slate-900 items-center justify-center p-6 text-center">
+                    <div className="animate-pop-in space-y-5 max-w-sm w-full">
+                        <div className="w-20 h-20 mx-auto bg-rose-500 rounded-3xl flex items-center justify-center text-4xl shadow-2xl">💥</div>
+                        <div>
+                            <h2 className="text-3xl font-black">¡Se acabaron las vidas!</h2>
+                            <p className="text-slate-400 mt-1">Tanda {currentTanda + 1}</p>
+                        </div>
+                        <div className="bg-slate-800/50 rounded-2xl p-4 border border-white/10">
+                            <p className="text-4xl font-black text-white">{score}</p>
+                            <p className="text-xs text-slate-500 uppercase tracking-wider mt-1">Puntos esta tanda</p>
+                        </div>
+                        <div className="space-y-3">
+                            <button onClick={() => startTanda(currentTanda)}
+                                className="w-full bg-rose-600 hover:bg-rose-500 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 active-scale">
+                                <RefreshCcw size={18}/> Reintentar Tanda {currentTanda + 1}
+                            </button>
+                            <button onClick={() => setGameState('menu')}
+                                className="w-full bg-slate-800 text-slate-400 py-3 rounded-2xl font-bold flex items-center justify-center gap-2 active-scale">
+                                <ArrowLeft size={18}/> Ver Tandas
+                            </button>
+                        </div>
                     </div>
                 </div>
             );
 
-            // RENDER JUEGO ACTIVO (O PAUSADO)
+            // JUEGO ACTIVO
             return (
                 <div className="h-full w-full bg-slate-900 flex flex-col relative overflow-hidden touch-none">
-                    
-                    {/* UI SUPERIOR */}
-                    <div className="absolute top-0 w-full p-4 flex justify-between items-start z-10 pointer-events-none">
-                        <div className="flex flex-col gap-1">
-                            <div className="bg-slate-800/80 backdrop-blur px-4 py-2 rounded-2xl border border-white/10 flex items-center gap-2 text-xl font-black pointer-events-auto">
-                                <Trophy size={20} className="text-yellow-400" /> {score}
+
+                    {/* HUD Superior */}
+                    <div className="absolute top-0 w-full p-4 flex justify-between items-start z-20 pointer-events-none">
+                        <div className="flex flex-col gap-1.5">
+                            {/* Tanda badge */}
+                            <div className="bg-slate-800/90 backdrop-blur px-3 py-2 rounded-xl border border-white/10 flex items-center gap-2">
+                                <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Tanda</span>
+                                <span className="font-black text-white">{currentTanda + 1}<span className="text-slate-500 text-xs">/{tandas.length}</span></span>
+                            </div>
+                            {/* Score */}
+                            <div className="bg-slate-800/90 backdrop-blur px-3 py-2 rounded-xl border border-white/10 flex items-center gap-2">
+                                <Trophy size={16} className="text-yellow-400"/>
+                                <span className="font-black text-white">{score}</span>
                             </div>
                             {combo > 1 && (
-                                <div className="text-emerald-400 font-black text-lg ml-2 animate-pop-in flex items-center gap-1 drop-shadow-md">
-                                    <Zap size={16} fill="currentColor"/> {combo}x Combo
+                                <div className="text-emerald-400 font-black text-base flex items-center gap-1 drop-shadow-md animate-pop-in ml-1">
+                                    <Zap size={14} fill="currentColor"/> {combo}x
                                 </div>
                             )}
                         </div>
-                        
+
                         <div className="flex gap-2 pointer-events-auto">
-                            <div className="flex gap-1 bg-slate-800/80 backdrop-blur px-3 py-2 rounded-2xl border border-white/10">
+                            {/* Vidas */}
+                            <div className="flex gap-1 bg-slate-800/90 backdrop-blur px-3 py-2 rounded-xl border border-white/10">
                                 {[...Array(3)].map((_, i) => (
-                                    <Heart key={i} size={24} className={`${i < lives ? 'text-rose-500 fill-rose-500' : 'text-slate-600'}`} />
+                                    <Heart key={i} size={20} className={`${i < lives ? 'text-rose-500 fill-rose-500' : 'text-slate-700'}`} />
                                 ))}
                             </div>
-                            <button onClick={togglePause} className="bg-slate-800/80 backdrop-blur px-3 py-2 rounded-2xl border border-white/10 hover:bg-slate-700 transition shadow-lg">
-                                <Pause size={24} className="text-white"/>
+                            <button onClick={togglePause} className="bg-slate-800/90 backdrop-blur px-3 py-2 rounded-xl border border-white/10 hover:bg-slate-700 transition">
+                                <Pause size={20} className="text-white"/>
                             </button>
                         </div>
                     </div>
 
+                    {/* Barra de progreso de tanda */}
+                    <div className="absolute top-0 left-0 right-0 h-1 z-30">
+                        <div className="progress-fill h-full bg-indigo-500" style={{ width: `${totalTandaWords > 0 ? (tandaProgress / totalTandaWords) * 100 : 0}%` }}/>
+                    </div>
+
+                    {/* Área de caída */}
                     <div className="flex-1 relative">
                         <div className="absolute top-20 right-4 text-white/20 font-black text-4xl pointer-events-none">{wordPool.length}</div>
 
-                        {/* RECOMPENSA VISUAL (Traducción en grande) */}
+                        {/* Recompensa */}
                         {rewardText && (
                             <div className="absolute inset-0 z-[60] flex items-center justify-center pointer-events-none">
-                                <div className="bg-emerald-400 text-slate-900 px-10 py-6 rounded-[2.5rem] font-black text-5xl md:text-6xl shadow-[0_20px_50px_rgba(52,211,153,0.5)] border-b-8 border-emerald-600 flex flex-col items-center gap-2 animate-reward-anim">
-                                    <span className="text-7xl drop-shadow-md">{currentWord?.emoji}</span>
+                                <div className="bg-emerald-400 text-slate-900 px-10 py-6 rounded-[2.5rem] font-black text-4xl shadow-[0_20px_50px_rgba(52,211,153,0.5)] border-b-8 border-emerald-600 flex flex-col items-center gap-2 animate-reward-anim">
+                                    <span className="text-6xl drop-shadow-md">{currentWord?.emoji}</span>
                                     <span>{rewardText}</span>
                                 </div>
                             </div>
                         )}
 
-                        {/* TARJETA CAYENDO */}
+                        {/* Palabra cayendo */}
                         {currentWord && gameState === 'playing' && !rewardText && (
-                            <div 
+                            <div
                                 ref={wordRef}
                                 onPointerDown={handlePointerDown}
                                 onPointerMove={handlePointerMove}
                                 onPointerUp={handlePointerUp}
                                 onPointerCancel={handlePointerUp}
-                                className={`word-card absolute left-1/2 -translate-x-1/2 p-6 rounded-3xl bg-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] border-b-[6px] border-slate-300 select-none flex flex-col items-center justify-center whitespace-nowrap z-50 transition-colors min-w-[140px] ${isDraggingRef.current ? 'drag-active scale-110 rotate-3 shadow-indigo-500/50' : ''} ${isWrong ? 'animate-shake bg-red-100 border-red-300' : ''}`}
-                                style={{ 
+                                className={`word-card absolute left-1/2 -translate-x-1/2 p-6 rounded-3xl bg-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] border-b-[6px] border-slate-300 select-none flex flex-col items-center justify-center whitespace-nowrap z-50 min-w-[140px]
+                                    ${isDraggingRef.current ? 'drag-active scale-110 rotate-3' : ''}
+                                    ${isWrong ? 'animate-shake bg-red-100 border-red-300' : ''}`}
+                                style={{
                                     top: isDraggingRef.current ? `${dragPos.y}px` : `${fallingY}%`,
                                     left: isDraggingRef.current ? `${dragPos.x}px` : '50%',
                                     transform: isDraggingRef.current ? 'translate(-50%, -50%) scale(1.1)' : 'translateX(-50%)',
                                     transition: isDraggingRef.current ? 'none' : (isWrong ? 'top 0.3s ease-out' : 'none')
-                                }}
-                            >
-                                <span className="text-6xl mb-3 drop-shadow-md">{currentWord.emoji}</span>
-                                <span className={`font-black text-2xl md:text-3xl ${isWrong ? 'text-red-600' : 'text-slate-900'}`}>{currentWord.text}</span>
+                                }}>
+                                <span className="text-5xl mb-2 drop-shadow-md">{currentWord.emoji}</span>
+                                <span className={`font-black text-xl md:text-2xl ${isWrong ? 'text-red-600' : 'text-slate-900'}`}>{currentWord.text}</span>
                             </div>
                         )}
-                        
+
                         {currentWord && gameState === 'paused' && (
-                            <div 
-                                className="absolute left-1/2 -translate-x-1/2 p-6 rounded-3xl bg-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] border-b-[6px] border-slate-300 select-none flex flex-col items-center justify-center whitespace-nowrap z-40 opacity-50 blur-sm"
-                                style={{ top: `${fallingY}%`, left: '50%', transform: 'translateX(-50%)' }}
-                            >
-                                <span className="text-6xl mb-3 drop-shadow-md">{currentWord.emoji}</span>
-                                <span className="font-black text-2xl md:text-3xl text-slate-900">{currentWord.text}</span>
+                            <div className="absolute left-1/2 p-6 rounded-3xl bg-white border-b-[6px] border-slate-300 flex flex-col items-center justify-center whitespace-nowrap z-40 opacity-30 blur-sm min-w-[140px]"
+                                style={{ top: `${fallingY}%`, transform: 'translateX(-50%)' }}>
+                                <span className="text-5xl mb-2">{currentWord.emoji}</span>
+                                <span className="font-black text-xl text-slate-900">{currentWord.text}</span>
                             </div>
                         )}
                     </div>
 
-                    {/* CAJAS DE CATEGORÍA */}
-                    <div className="h-48 md:h-56 grid grid-cols-4 gap-2 md:gap-4 p-2 md:p-4 bg-slate-950/50 backdrop-blur-md border-t border-white/5 z-20">
-                        {gameData.content.categories.map((cat, i) => {
+                    {/* Cajas de categoría */}
+                    <div className="h-44 md:h-52 grid grid-cols-4 gap-2 p-2 bg-slate-950/50 backdrop-blur-md border-t border-white/5 z-20">
+                        {gameData?.content?.categories?.map((cat, i) => {
                             const color = CATEGORY_COLORS[i];
                             return (
-                                <div 
-                                    key={i} 
-                                    data-category={i}
-                                    className={`relative flex items-center justify-center p-2 rounded-t-3xl rounded-b-xl border-t-4 ${color.bg} ${color.border} ${color.shadow} shadow-lg transition-transform`}
-                                >
-                                    <span className={`text-center font-black text-sm md:text-lg uppercase leading-tight ${color.text} drop-shadow-md pointer-events-none`}>
+                                <div key={i} data-category={i}
+                                    className={`relative flex items-center justify-center p-2 rounded-t-3xl rounded-b-xl border-t-4 ${color.bg} ${color.border} shadow-lg transition-transform active:scale-95`}>
+                                    <span className={`text-center font-black text-xs md:text-sm uppercase leading-tight ${color.text} drop-shadow-md pointer-events-none`}>
                                         {cat.name}
                                     </span>
-                                    <div className="absolute top-0 w-full h-4 bg-black/20 rounded-full blur-[2px] pointer-events-none"></div>
                                 </div>
                             );
                         })}
                     </div>
-                    
-                    {/* OVERLAY DE PAUSA */}
+
+                    {/* Pausa overlay */}
                     {gameState === 'paused' && (
-                        <div className="absolute inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-center text-white p-6 text-center animate-in fade-in">
-                            <Pause size={64} className="mb-6 text-indigo-500" />
-                            <h3 className="text-3xl font-black mb-8 tracking-tighter uppercase">Juego en Pausa</h3>
-                            <button onClick={togglePause} className="px-8 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-indigo-600/30 hover:scale-105 transition-transform mb-4 active-scale">
-                                Reanudar Partida
-                            </button>
-                            <button onClick={() => window.location.href='index.html'} className="px-8 py-4 bg-transparent text-slate-400 rounded-2xl font-bold uppercase tracking-widest hover:text-white transition-colors">
-                                Salir al Hub
-                            </button>
+                        <div className="absolute inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center text-white p-6 text-center">
+                            <Pause size={56} className="mb-5 text-indigo-500"/>
+                            <h3 className="text-2xl font-black mb-1 uppercase">Pausa</h3>
+                            <p className="text-slate-400 text-sm mb-8 font-bold">Tanda {currentTanda + 1} · {tandaProgress}/{totalTandaWords} completadas</p>
+                            <div className="space-y-3 w-full max-w-xs">
+                                <button onClick={togglePause} className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black uppercase tracking-widest active-scale">Reanudar</button>
+                                <button onClick={() => setGameState('menu')} className="w-full py-4 bg-transparent text-slate-500 rounded-2xl font-bold uppercase tracking-widest hover:text-white transition-colors">Ver Tandas</button>
+                            </div>
                         </div>
                     )}
                 </div>
             );
         };
 
-        const root = createRoot(document.getElementById('root'));
-        root.render(<CascadeGame />);
+        createRoot(document.getElementById('root')).render(<CascadeGame />);
     </script>
 </body>
 </html>
