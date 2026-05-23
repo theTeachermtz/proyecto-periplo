@@ -21,7 +21,6 @@
       }
     }
     </script>
-
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
@@ -31,9 +30,18 @@
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
         .btn-juicy { transition: transform 0.12s cubic-bezier(0.4,0,0.2,1); }
         .btn-juicy:active:not(:disabled) { transform: scale(0.94); }
-        .drop-active { border-color: #818cf8 !important; background: rgba(99,102,241,0.08) !important; }
-        @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        .drop-active  { border-color: #818cf8 !important; background: rgba(99,102,241,0.08) !important; }
+        .bulk-active  { border-color: #34d399 !important; background: rgba(52,211,153,0.06) !important; }
+        @keyframes fadeIn  { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes spin    { to { transform: rotate(360deg); } }
+        @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
         .fade-in { animation: fadeIn 0.25s ease; }
+        .ai-shimmer {
+            background: linear-gradient(90deg, #3f3f46 25%, #6366f1 50%, #3f3f46 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.4s infinite;
+            border-radius: 0.5rem;
+        }
     </style>
 </head>
 <body class="bg-zinc-950">
@@ -45,13 +53,13 @@ import { createRoot } from 'react-dom/client';
 import { initializeApp } from 'firebase/app';
 import {
     getFirestore, collection, addDoc, updateDoc, deleteDoc,
-    doc, onSnapshot, serverTimestamp, setDoc, query, orderBy
+    doc, onSnapshot, serverTimestamp, setDoc
 } from 'firebase/firestore';
 import { getStorage, ref as sRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
     ArrowLeft, Plus, Trash2, Save, Play, Copy, Check, Loader2,
     CheckCircle2, XCircle, Shuffle, Upload, Image as ImageIcon,
-    Layers, X, ChevronRight, Eye, EyeOff, RefreshCw, Zap
+    Layers, Sparkles, Zap, BrainCircuit, RefreshCw, Eye
 } from 'lucide-react';
 
 // ─── Firebase ────────────────────────────────────────────────
@@ -72,11 +80,12 @@ const SETS_COL  = 'artifacts/periplo-app-v1/users/teacher_builder_001/conditiona
 const SESS_BASE = 'artifacts/periplo-app-v1/sessions/conditionals';
 const COND_TYPES = ['First', 'Second', 'Third', 'Mixed'];
 const COND_STYLE = {
-    First:  { bg: 'bg-sky-600',    ring: 'ring-sky-500',    light: 'bg-sky-900/30 text-sky-300'    },
+    First:  { bg: 'bg-sky-600',    ring: 'ring-sky-500',    light: 'bg-sky-900/30 text-sky-300'       },
     Second: { bg: 'bg-violet-600', ring: 'ring-violet-500', light: 'bg-violet-900/30 text-violet-300' },
-    Third:  { bg: 'bg-amber-600',  ring: 'ring-amber-500',  light: 'bg-amber-900/30 text-amber-300'  },
-    Mixed:  { bg: 'bg-rose-600',   ring: 'ring-rose-500',   light: 'bg-rose-900/30 text-rose-300'    },
+    Third:  { bg: 'bg-amber-600',  ring: 'ring-amber-500',  light: 'bg-amber-900/30 text-amber-300'   },
+    Mixed:  { bg: 'bg-rose-600',   ring: 'ring-rose-500',   light: 'bg-rose-900/30 text-rose-300'     },
 };
+const GEMINI_MODEL = 'models/gemini-2.0-flash';
 
 const uid     = () => Math.random().toString(36).substring(2, 9);
 const genCode = () => {
@@ -84,27 +93,70 @@ const genCode = () => {
     return Array.from({ length: 5 }, () => C[Math.floor(Math.random() * C.length)]).join('');
 };
 const newCard = () => ({
-    id: uid(),
-    imageUrl: '', imageFile: null, imagePreview: '',
+    id: uid(), imageUrl: '', imageFile: null, imagePreview: '',
     wordbankLeft: [], wordbankRight: [],
-    exampleSentence: '',
-    conditionalTypes: [...COND_TYPES],
+    exampleSentence: '', conditionalTypes: [...COND_TYPES],
 });
+
+// ─── AI helpers ──────────────────────────────────────────────
+const toBase64 = (blob) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload  = e => res({ data: e.target.result.split(',')[1], mimeType: blob.type || 'image/jpeg' });
+    r.onerror = rej;
+    r.readAsDataURL(blob);
+});
+
+const analyzeImageWithAI = async (card, apiKey) => {
+    if (!apiKey) throw new Error('No API key — agrégala primero.');
+
+    let imgData;
+    if (card.imageFile) {
+        imgData = await toBase64(card.imageFile);
+    } else if (card.imageUrl) {
+        const blob = await fetch(card.imageUrl).then(r => r.blob());
+        imgData = await toBase64(blob);
+    } else {
+        throw new Error('Sin imagen para analizar.');
+    }
+
+    const prompt = `You are creating an English language learning activity. This is a comic-style image showing a cause-and-effect or hypothetical scenario.
+
+Analyze the image and return ONLY valid JSON with exactly these three keys:
+- "wordbankLeft": array of 3-5 short English words or verb phrases from the CAUSE side (the situation that led to what happened — actions, objects, behaviors). Simple B2/C1 vocabulary.
+- "wordbankRight": array of 3-5 short English words or verb phrases from the CONSEQUENCE side (outcomes, reactions, results).
+- "exampleSentence": one complete, natural conditional sentence (Second or Third conditional, whichever fits best) that accurately describes this image scenario.
+
+Output ONLY raw JSON — no markdown, no explanation.`;
+
+    const body = {
+        contents: [{ parts: [
+            { inline_data: { mime_type: imgData.mimeType, data: imgData.data } },
+            { text: prompt }
+        ]}],
+        generationConfig: { responseMimeType: 'application/json' }
+    };
+
+    const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    );
+    const json = await resp.json();
+    if (json.error) throw new Error(json.error.message);
+    const raw = json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    return JSON.parse(raw.replace(/```json|```/g, '').trim());
+};
 
 // ═══════════════════════════════════════════════════════════════
 //  HOME VIEW
 // ═══════════════════════════════════════════════════════════════
 const HomeView = ({ onNew, onEdit, onPlay }) => {
-    const [sets, setSets]       = useState([]);
+    const [sets,    setSets]    = useState([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         const unsub = onSnapshot(collection(db, SETS_COL), snap => {
-            setSets(
-                snap.docs
-                    .map(d => ({ id: d.id, ...d.data() }))
-                    .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
-            );
+            setSets(snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
             setLoading(false);
         });
         return unsub;
@@ -112,36 +164,31 @@ const HomeView = ({ onNew, onEdit, onPlay }) => {
 
     const handleDelete = async (setId, e) => {
         e.stopPropagation();
-        if (!confirm('¿Eliminar este set de imágenes?')) return;
+        if (!confirm('¿Eliminar este set?')) return;
         await deleteDoc(doc(db, SETS_COL, setId));
     };
 
     return (
         <div className="h-[100dvh] flex flex-col bg-zinc-950 text-zinc-100">
-            {/* Header */}
             <div className="bg-black px-4 py-3 flex justify-between items-center border-b border-zinc-800 shrink-0">
                 <div className="flex items-center gap-3">
-                    <button onClick={() => window.location.href = 'index.html'} className="btn-juicy p-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl">
-                        <ArrowLeft size={18} />
-                    </button>
+                    <button onClick={() => window.location.href = 'index.html'} className="btn-juicy p-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl"><ArrowLeft size={18}/></button>
                     <span className="text-xl">🎨</span>
                     <h1 className="text-base font-black">What If? — Builder</h1>
                 </div>
                 <button onClick={onNew} className="btn-juicy bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 text-sm">
-                    <Plus size={16} /> Nuevo Set
+                    <Plus size={16}/> Nuevo Set
                 </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                 {loading ? (
-                    <div className="flex items-center justify-center h-40 text-zinc-500">
-                        <Loader2 className="animate-spin mr-2" /> Cargando sets...
-                    </div>
+                    <div className="flex items-center justify-center h-40 text-zinc-500"><Loader2 className="animate-spin mr-2"/>Cargando...</div>
                 ) : sets.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-64 text-zinc-600 gap-3">
-                        <Layers size={48} className="opacity-20" />
+                        <Layers size={48} className="opacity-20"/>
                         <p className="font-black text-lg">No hay sets aún</p>
-                        <p className="text-sm">Crea uno con el botón "Nuevo Set"</p>
+                        <p className="text-sm">Crea uno con "Nuevo Set"</p>
                     </div>
                 ) : (
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -149,38 +196,19 @@ const HomeView = ({ onNew, onEdit, onPlay }) => {
                             <div key={s.id} className="fade-in bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-3 hover:border-zinc-600 transition-colors">
                                 <div className="flex justify-between items-start gap-2">
                                     <h2 className="font-black text-base leading-tight">{s.title || 'Sin título'}</h2>
-                                    <button onClick={e => handleDelete(s.id, e)} className="p-1.5 text-zinc-600 hover:text-rose-400 transition-colors shrink-0">
-                                        <Trash2 size={15} />
-                                    </button>
+                                    <button onClick={e => handleDelete(s.id, e)} className="p-1.5 text-zinc-600 hover:text-rose-400 transition-colors shrink-0"><Trash2 size={15}/></button>
                                 </div>
-
-                                <p className="text-xs text-zinc-500 font-bold">
-                                    {s.cards?.length || 0} imagen{s.cards?.length !== 1 ? 'es' : ''}
-                                </p>
-
-                                {/* Image thumbnails */}
+                                <p className="text-xs text-zinc-500 font-bold">{s.cards?.length || 0} imagen{s.cards?.length !== 1 ? 'es' : ''}</p>
                                 <div className="flex gap-1.5">
-                                    {(s.cards || []).slice(0, 5).map((c, i) => c.imageUrl ? (
-                                        <img key={i} src={c.imageUrl} className="w-12 h-12 rounded-lg object-cover border border-zinc-700 shrink-0" />
-                                    ) : (
-                                        <div key={i} className="w-12 h-12 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
-                                            <ImageIcon size={14} className="text-zinc-600" />
-                                        </div>
-                                    ))}
-                                    {(s.cards?.length || 0) > 5 && (
-                                        <div className="w-12 h-12 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 text-xs font-black text-zinc-500">
-                                            +{s.cards.length - 5}
-                                        </div>
+                                    {(s.cards || []).slice(0, 5).map((c, i) => c.imageUrl
+                                        ? <img key={i} src={c.imageUrl} className="w-12 h-12 rounded-lg object-cover border border-zinc-700 shrink-0"/>
+                                        : <div key={i} className="w-12 h-12 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0"><ImageIcon size={14} className="text-zinc-600"/></div>
                                     )}
+                                    {(s.cards?.length || 0) > 5 && <div className="w-12 h-12 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 text-xs font-black text-zinc-500">+{s.cards.length - 5}</div>}
                                 </div>
-
                                 <div className="flex gap-2 mt-auto pt-1">
-                                    <button onClick={() => onEdit(s)} className="btn-juicy flex-1 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-bold text-sm">
-                                        Editar
-                                    </button>
-                                    <button onClick={() => onPlay(s)} className="btn-juicy flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-1.5">
-                                        <Play size={14} /> Play
-                                    </button>
+                                    <button onClick={() => onEdit(s)} className="btn-juicy flex-1 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl font-bold text-sm">Editar</button>
+                                    <button onClick={() => onPlay(s)} className="btn-juicy flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-1.5"><Play size={14}/>Play</button>
                                 </div>
                             </div>
                         ))}
@@ -192,126 +220,122 @@ const HomeView = ({ onNew, onEdit, onPlay }) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
-//  CARD EDITOR (single card inside EditorView)
+//  CARD EDITOR
 // ═══════════════════════════════════════════════════════════════
-const CardEditor = ({ card, index, onChange, onDelete }) => {
-    const dropRef  = useRef();
-    const fileRef  = useRef();
+const CardEditor = ({ card, index, onChange, onDelete, onAnalyze, aiStatus }) => {
+    const dropRef = useRef();
+    const fileRef = useRef();
     const [dragging, setDragging] = useState(false);
 
-    const handleFile = file => {
-        if (!file || !file.type.startsWith('image/')) return;
-        onChange({ ...card, imageFile: file, imagePreview: URL.createObjectURL(file), imageUrl: '' });
+    const handleFile = f => {
+        if (!f || !f.type.startsWith('image/')) return;
+        onChange({ ...card, imageFile: f, imagePreview: URL.createObjectURL(f), imageUrl: '' });
     };
-
     const onDrop      = e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); };
     const onDragOver  = e => { e.preventDefault(); setDragging(true); };
     const onDragLeave = ()  => setDragging(false);
 
     const setLeft  = v => onChange({ ...card, wordbankLeft:  v.split(',').map(w => w.trim()).filter(Boolean) });
     const setRight = v => onChange({ ...card, wordbankRight: v.split(',').map(w => w.trim()).filter(Boolean) });
-
     const toggleType = t => {
-        const cur = card.conditionalTypes || [];
+        const cur  = card.conditionalTypes || [];
         const next = cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t];
         if (next.length === 0) return;
         onChange({ ...card, conditionalTypes: next });
     };
 
     const preview = card.imagePreview || card.imageUrl;
+    const hasImage = !!(card.imageFile || card.imageUrl);
+
+    // AI status badge helper
+    const AIBadge = () => {
+        if (aiStatus === 'loading') return <span className="text-[10px] font-black text-indigo-400 flex items-center gap-1"><Loader2 size={10} className="animate-spin"/>Analizando...</span>;
+        if (aiStatus === 'done')    return <span className="text-[10px] font-black text-emerald-400 flex items-center gap-1"><CheckCircle2 size={10}/>Listo</span>;
+        if (aiStatus === 'error')   return <span className="text-[10px] font-black text-rose-400 flex items-center gap-1"><XCircle size={10}/>Error — reintenta</span>;
+        return null;
+    };
 
     return (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-4 fade-in">
+        <div className={`bg-zinc-900 border rounded-2xl p-4 space-y-4 fade-in transition-colors ${aiStatus === 'loading' ? 'border-indigo-700' : aiStatus === 'done' ? 'border-emerald-800' : 'border-zinc-800'}`}>
             <div className="flex justify-between items-center">
-                <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Imagen #{index + 1}</span>
-                <button onClick={onDelete} className="p-1.5 text-zinc-600 hover:text-rose-400 transition-colors rounded-lg hover:bg-zinc-800">
-                    <Trash2 size={15} />
-                </button>
+                <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Imagen #{index + 1}</span>
+                    <AIBadge/>
+                </div>
+                <div className="flex items-center gap-1.5">
+                    {hasImage && (
+                        <button onClick={() => onAnalyze(card.id)} disabled={aiStatus === 'loading'}
+                            className="btn-juicy flex items-center gap-1.5 px-2.5 py-1 bg-indigo-900/40 hover:bg-indigo-800/60 border border-indigo-700/60 text-indigo-300 rounded-lg text-[10px] font-black transition-colors disabled:opacity-50">
+                            <BrainCircuit size={11}/> Auto-fill IA
+                        </button>
+                    )}
+                    <button onClick={onDelete} className="p-1.5 text-zinc-600 hover:text-rose-400 transition-colors rounded-lg hover:bg-zinc-800"><Trash2 size={15}/></button>
+                </div>
             </div>
 
+            {/* Shimmer overlay while analyzing */}
+            {aiStatus === 'loading' && <div className="h-1 ai-shimmer w-full"/>}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* ── Drop Zone ── */}
-                <div
-                    ref={dropRef}
-                    onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}
+                {/* Drop zone */}
+                <div ref={dropRef} onDrop={onDrop} onDragOver={onDragOver} onDragLeave={onDragLeave}
                     onClick={() => fileRef.current.click()}
-                    className={`relative cursor-pointer rounded-xl border-2 border-dashed overflow-hidden min-h-[180px] flex items-center justify-center transition-all ${dragging ? 'drop-active border-indigo-400' : 'border-zinc-700 hover:border-zinc-500 bg-zinc-950'}`}
-                >
-                    <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e => handleFile(e.target.files[0])} />
+                    className={`relative cursor-pointer rounded-xl border-2 border-dashed overflow-hidden min-h-[180px] flex items-center justify-center transition-all ${dragging ? 'drop-active border-indigo-400' : 'border-zinc-700 hover:border-zinc-500 bg-zinc-950'}`}>
+                    <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e => handleFile(e.target.files[0])}/>
                     {preview ? (
                         <>
-                            <img src={preview} className="w-full h-full object-contain max-h-[220px]" alt="" />
+                            <img src={preview} className="w-full h-full object-contain max-h-[220px]" alt=""/>
                             <div className="absolute inset-0 bg-black/0 hover:bg-black/50 transition-colors flex items-center justify-center opacity-0 hover:opacity-100">
-                                <span className="text-white text-xs font-bold bg-black/70 px-3 py-1.5 rounded-full flex items-center gap-1.5">
-                                    <Upload size={13} /> Cambiar
-                                </span>
+                                <span className="text-white text-xs font-bold bg-black/70 px-3 py-1.5 rounded-full flex items-center gap-1.5"><Upload size={13}/>Cambiar</span>
                             </div>
                         </>
                     ) : (
                         <div className="text-center p-6 text-zinc-500 pointer-events-none">
-                            <Upload size={30} className="mx-auto mb-2 opacity-40" />
+                            <Upload size={30} className="mx-auto mb-2 opacity-40"/>
                             <p className="font-bold text-sm">Arrastra imagen aquí</p>
                             <p className="text-xs mt-0.5 opacity-60">o clic para seleccionar</p>
                         </div>
                     )}
                 </div>
 
-                {/* ── Metadata ── */}
+                {/* Metadata */}
                 <div className="space-y-3">
                     {/* Left wordbank */}
                     <div>
                         <label className="text-[10px] font-black text-sky-400 uppercase tracking-widest block mb-1">
-                            Wordbank — Causa <span className="text-zinc-600">(lado izquierdo)</span>
+                            Wordbank — Causa <span className="text-zinc-600">(izquierdo)</span>
                         </label>
-                        <input
-                            value={(card.wordbankLeft || []).join(', ')}
-                            onChange={e => setLeft(e.target.value)}
-                            placeholder="crash, drive, ignore, speed, forget..."
-                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 font-medium placeholder-zinc-600"
-                        />
+                        <input value={(card.wordbankLeft || []).join(', ')} onChange={e => setLeft(e.target.value)}
+                            placeholder="crash, drive, ignore, speed..."
+                            className={`w-full bg-zinc-950 border rounded-xl p-2.5 text-sm outline-none font-medium placeholder-zinc-600 transition-colors ${aiStatus === 'done' && card.wordbankLeft?.length ? 'border-indigo-600 focus:border-indigo-500' : 'border-zinc-700 focus:border-sky-500'}`}/>
                         <p className="text-[9px] text-zinc-600 mt-1">Separa con comas</p>
                     </div>
-
                     {/* Right wordbank */}
                     <div>
                         <label className="text-[10px] font-black text-amber-400 uppercase tracking-widest block mb-1">
-                            Wordbank — Consecuencia <span className="text-zinc-600">(lado derecho)</span>
+                            Wordbank — Consecuencia <span className="text-zinc-600">(derecho)</span>
                         </label>
-                        <input
-                            value={(card.wordbankRight || []).join(', ')}
-                            onChange={e => setRight(e.target.value)}
-                            placeholder="hospital, argue, regret, fine, cry..."
-                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-2.5 text-sm outline-none focus:border-amber-500 font-medium placeholder-zinc-600"
-                        />
+                        <input value={(card.wordbankRight || []).join(', ')} onChange={e => setRight(e.target.value)}
+                            placeholder="hospital, argue, regret, fine..."
+                            className={`w-full bg-zinc-950 border rounded-xl p-2.5 text-sm outline-none font-medium placeholder-zinc-600 transition-colors ${aiStatus === 'done' && card.wordbankRight?.length ? 'border-indigo-600 focus:border-amber-500' : 'border-zinc-700 focus:border-amber-500'}`}/>
                     </div>
-
                     {/* Example sentence */}
                     <div>
                         <label className="text-[10px] font-black text-emerald-400 uppercase tracking-widest block mb-1">
-                            Oración ejemplo <span className="text-zinc-600">(se muestra blurreada)</span>
+                            Oración ejemplo <span className="text-zinc-600">(blurreada para alumnos)</span>
                         </label>
-                        <textarea
-                            value={card.exampleSentence || ''}
-                            onChange={e => onChange({ ...card, exampleSentence: e.target.value })}
+                        <textarea value={card.exampleSentence || ''} onChange={e => onChange({ ...card, exampleSentence: e.target.value })}
                             placeholder="If he hadn't been speeding, the accident wouldn't have happened."
-                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-2.5 text-sm outline-none focus:border-emerald-500 font-medium resize-none h-[4.5rem] placeholder-zinc-600"
-                        />
+                            className={`w-full bg-zinc-950 border rounded-xl p-2.5 text-sm outline-none font-medium resize-none h-[4.5rem] placeholder-zinc-600 transition-colors ${aiStatus === 'done' && card.exampleSentence ? 'border-indigo-600 focus:border-emerald-500' : 'border-zinc-700 focus:border-emerald-500'}`}/>
                     </div>
-
                     {/* Conditional types */}
                     <div>
-                        <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block mb-1.5">
-                            Tipos de conditional válidos
-                        </label>
+                        <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block mb-1.5">Tipos válidos</label>
                         <div className="flex gap-1.5 flex-wrap">
                             {COND_TYPES.map(t => {
                                 const on = (card.conditionalTypes || COND_TYPES).includes(t);
-                                return (
-                                    <button key={t} onClick={() => toggleType(t)}
-                                        className={`btn-juicy px-3 py-1 rounded-lg text-xs font-black transition-all border-2 ${on ? `${COND_STYLE[t].bg} border-transparent text-white` : 'border-zinc-700 text-zinc-500 bg-zinc-950 hover:border-zinc-500'}`}>
-                                        {t}
-                                    </button>
-                                );
+                                return <button key={t} onClick={() => toggleType(t)}
+                                    className={`btn-juicy px-3 py-1 rounded-lg text-xs font-black transition-all border-2 ${on ? `${COND_STYLE[t].bg} border-transparent text-white` : 'border-zinc-700 text-zinc-500 bg-zinc-950 hover:border-zinc-500'}`}>{t}</button>;
                             })}
                         </div>
                     </div>
@@ -325,23 +349,80 @@ const CardEditor = ({ card, index, onChange, onDelete }) => {
 //  EDITOR VIEW
 // ═══════════════════════════════════════════════════════════════
 const EditorView = ({ existing, onBack, onSaved }) => {
-    const [title,  setTitle]   = useState(existing?.title || '');
-    const [cards,  setCards]   = useState(
+    const [title,   setTitle]   = useState(existing?.title || '');
+    const [cards,   setCards]   = useState(
         existing?.cards?.map(c => ({ ...c, imageFile: null, imagePreview: '' })) || [newCard()]
     );
-    const [saving, setSaving]  = useState(false);
+    const [saving,   setSaving]  = useState(false);
+    const [apiKey,   setApiKey]  = useState(localStorage.getItem('periplo_google_key') || '');
+    const [aiStatus, setAiStatus] = useState({});     // { [cardId]: 'loading'|'done'|'error' }
+    const [aiProgress, setAiProg] = useState('');     // "Analizando 2/5..."
+    const [bulkDrag, setBulkDrag] = useState(false);
+    const bulkRef = useRef();
 
-    const updateCard = (i, updated) => { const a = [...cards]; a[i] = updated; setCards(a); };
+    // Persist API key
+    const saveApiKey = v => { setApiKey(v); localStorage.setItem('periplo_google_key', v); };
+
+    // ── Bulk drop zone handlers ───────────────────────────────
+    const addFiles = useCallback(files => {
+        const imgs = Array.from(files).filter(f => f.type.startsWith('image/'));
+        if (!imgs.length) return;
+        setCards(prev => [
+            ...prev,
+            ...imgs.map(f => ({ ...newCard(), imageFile: f, imagePreview: URL.createObjectURL(f) }))
+        ]);
+    }, []);
+
+    const onBulkDrop  = e => { e.preventDefault(); setBulkDrag(false); addFiles(e.dataTransfer.files); };
+    const onBulkOver  = e => { e.preventDefault(); setBulkDrag(true); };
+    const onBulkLeave = ()  => setBulkDrag(false);
+
+    // ── Card update / delete ──────────────────────────────────
+    const updateCard = (i, u) => { const a = [...cards]; a[i] = u; setCards(a); };
     const deleteCard = i => setCards(cards.filter((_, idx) => idx !== i));
     const addCard    = () => setCards([...cards, newCard()]);
 
+    // ── AI: analyze one card ──────────────────────────────────
+    const analyzeCard = async cardId => {
+        if (!apiKey) return alert('Agrega tu API Key de Gemini primero (campo arriba a la derecha).');
+        const card = cards.find(c => c.id === cardId);
+        if (!card || (!card.imageFile && !card.imageUrl)) return;
+
+        setAiStatus(p => ({ ...p, [cardId]: 'loading' }));
+        try {
+            const result = await analyzeImageWithAI(card, apiKey);
+            setCards(prev => prev.map(c => c.id !== cardId ? c : {
+                ...c,
+                wordbankLeft:    result.wordbankLeft    || c.wordbankLeft,
+                wordbankRight:   result.wordbankRight   || c.wordbankRight,
+                exampleSentence: result.exampleSentence || c.exampleSentence,
+            }));
+            setAiStatus(p => ({ ...p, [cardId]: 'done' }));
+        } catch (e) {
+            setAiStatus(p => ({ ...p, [cardId]: 'error' }));
+            console.error('AI error:', e.message);
+        }
+    };
+
+    // ── AI: analyze all ───────────────────────────────────────
+    const analyzeAll = async () => {
+        if (!apiKey) return alert('Agrega tu API Key de Gemini primero.');
+        const pool = cards.filter(c => c.imageFile || c.imageUrl);
+        if (!pool.length) return;
+        for (let i = 0; i < pool.length; i++) {
+            setAiProg(`Analizando imagen ${i + 1} / ${pool.length}...`);
+            await analyzeCard(pool[i].id);
+        }
+        setAiProg('');
+    };
+
+    // ── Save ─────────────────────────────────────────────────
     const save = async () => {
-        if (!title.trim())    return alert('Ponle un título al set.');
-        if (cards.length === 0) return alert('Agrega al menos una imagen.');
+        if (!title.trim())      return alert('Ponle un título al set.');
+        if (!cards.length)      return alert('Agrega al menos una imagen.');
         setSaving(true);
         try {
             const setId = existing?.id || uid();
-
             const processed = await Promise.all(cards.map(async c => {
                 let imageUrl = c.imageUrl;
                 if (c.imageFile) {
@@ -352,15 +433,14 @@ const EditorView = ({ existing, onBack, onSaved }) => {
                 }
                 return {
                     id: c.id, imageUrl,
-                    wordbankLeft:  c.wordbankLeft  || [],
-                    wordbankRight: c.wordbankRight || [],
-                    exampleSentence: c.exampleSentence || '',
+                    wordbankLeft:     c.wordbankLeft     || [],
+                    wordbankRight:    c.wordbankRight    || [],
+                    exampleSentence:  c.exampleSentence  || '',
                     conditionalTypes: c.conditionalTypes || [...COND_TYPES],
                 };
             }));
 
             const payload = { title: title.trim(), cards: processed, updatedAt: serverTimestamp() };
-
             if (existing?.id) {
                 await updateDoc(doc(db, SETS_COL, existing.id), payload);
             } else {
@@ -371,107 +451,146 @@ const EditorView = ({ existing, onBack, onSaved }) => {
         setSaving(false);
     };
 
+    const anyAnalyzing = Object.values(aiStatus).some(s => s === 'loading');
+    const cardsWithImages = cards.filter(c => c.imageFile || c.imageUrl).length;
+
     return (
         <div className="h-[100dvh] flex flex-col bg-zinc-950 text-zinc-100">
-            {/* Header */}
-            <div className="bg-black px-4 py-3 flex items-center gap-3 border-b border-zinc-800 shrink-0">
-                <button onClick={onBack} className="btn-juicy p-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl shrink-0">
-                    <ArrowLeft size={18} />
-                </button>
-                <input
-                    value={title}
-                    onChange={e => setTitle(e.target.value)}
+            {/* ── Header ── */}
+            <div className="bg-black px-4 py-3 flex items-center gap-2 border-b border-zinc-800 shrink-0 flex-wrap">
+                <button onClick={onBack} className="btn-juicy p-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl shrink-0"><ArrowLeft size={18}/></button>
+
+                <input value={title} onChange={e => setTitle(e.target.value)}
                     placeholder="Título del set (ej: Accidentes & Consecuencias)..."
-                    className="flex-1 bg-transparent text-base font-black outline-none placeholder-zinc-600 min-w-0"
+                    className="flex-1 bg-transparent text-base font-black outline-none placeholder-zinc-600 min-w-0 min-w-[120px]"/>
+
+                {/* API key */}
+                <input
+                    type="password" value={apiKey} onChange={e => saveApiKey(e.target.value)}
+                    placeholder="Gemini API Key..."
+                    className="bg-zinc-900 border border-zinc-700 text-white rounded-lg px-2.5 py-1.5 text-xs font-mono w-36 focus:border-indigo-500 outline-none placeholder-zinc-600 shrink-0"
                 />
+
+                {/* Analyze all */}
+                {cardsWithImages > 0 && (
+                    <button onClick={analyzeAll} disabled={anyAnalyzing || !apiKey}
+                        className="btn-juicy flex items-center gap-1.5 px-3 py-2 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white rounded-xl font-bold text-sm shrink-0">
+                        {anyAnalyzing
+                            ? <><Loader2 size={14} className="animate-spin"/>{aiProgress || 'Analizando...'}</>
+                            : <><Sparkles size={14}/> Analizar Todas ({cardsWithImages})</>
+                        }
+                    </button>
+                )}
+
                 <button onClick={save} disabled={saving} className="btn-juicy bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-5 py-2 rounded-xl font-bold flex items-center gap-2 text-sm shrink-0">
-                    {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                    {saving ? <Loader2 size={15} className="animate-spin"/> : <Save size={15}/>}
                     {saving ? 'Guardando...' : 'Guardar'}
                 </button>
             </div>
 
-            {/* Cards list */}
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-3">
+
+                {/* ── Bulk drop zone ── */}
+                <div
+                    onDrop={onBulkDrop} onDragOver={onBulkOver} onDragLeave={onBulkLeave}
+                    onClick={() => bulkRef.current.click()}
+                    className={`cursor-pointer rounded-2xl border-2 border-dashed p-5 flex flex-col sm:flex-row items-center gap-4 transition-all ${bulkDrag ? 'bulk-active border-emerald-400' : 'border-zinc-700 hover:border-zinc-500 bg-zinc-900/50'}`}
+                >
+                    <input ref={bulkRef} type="file" accept="image/*" multiple className="hidden" onChange={e => addFiles(e.target.files)}/>
+                    <div className="w-12 h-12 bg-zinc-800 rounded-xl flex items-center justify-center shrink-0">
+                        <ImageIcon size={22} className="text-zinc-400"/>
+                    </div>
+                    <div className="text-center sm:text-left">
+                        <p className="font-black text-zinc-300 text-sm">Subir varias imágenes de golpe</p>
+                        <p className="text-zinc-600 text-xs mt-0.5">Arrastra múltiples imágenes aquí o haz clic — crea una tarjeta por imagen automáticamente</p>
+                    </div>
+                    <div className="sm:ml-auto shrink-0">
+                        <span className="flex items-center gap-1.5 text-xs font-black text-emerald-400 bg-emerald-900/30 border border-emerald-800/50 px-3 py-1.5 rounded-xl">
+                            <Zap size={12}/> Bulk Upload
+                        </span>
+                    </div>
+                </div>
+
+                {/* AI progress bar (global) */}
+                {aiProgress && (
+                    <div className="flex items-center gap-3 bg-indigo-900/20 border border-indigo-800/40 rounded-xl px-4 py-2.5 fade-in">
+                        <Loader2 size={14} className="animate-spin text-indigo-400 shrink-0"/>
+                        <span className="text-sm font-bold text-indigo-300">{aiProgress}</span>
+                        <div className="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                            <div className="h-full ai-shimmer"/>
+                        </div>
+                    </div>
+                )}
+
+                {/* ── Cards ── */}
                 {cards.map((c, i) => (
-                    <CardEditor key={c.id} card={c} index={i} onChange={u => updateCard(i, u)} onDelete={() => deleteCard(i)} />
+                    <CardEditor key={c.id} card={c} index={i}
+                        onChange={u => updateCard(i, u)}
+                        onDelete={() => deleteCard(i)}
+                        onAnalyze={analyzeCard}
+                        aiStatus={aiStatus[c.id]}
+                    />
                 ))}
 
                 <button onClick={addCard}
                     className="btn-juicy w-full py-4 border-2 border-dashed border-zinc-700 hover:border-indigo-500 rounded-2xl text-zinc-500 hover:text-indigo-400 font-bold flex items-center justify-center gap-2 transition-all">
-                    <Plus size={18} /> Agregar imagen
+                    <Plus size={18}/> Agregar imagen manualmente
                 </button>
-                <div className="h-3" />
+                <div className="h-3"/>
             </div>
         </div>
     );
 };
 
 // ═══════════════════════════════════════════════════════════════
-//  SESSION VIEW  —  Teacher live panel
+//  SESSION VIEW  — Teacher live panel (unchanged)
 // ═══════════════════════════════════════════════════════════════
 const SessionView = ({ cardSet, onEnd }) => {
-    const [roomCode]              = useState(() => genCode());
-    const [session,  setSession]  = useState(null);
-    const [responses, setResponses] = useState([]);
-    const [loading,  setLoading]  = useState(true);
-    const [copied,   setCopied]   = useState(false);
-    const [corrections, setCorr]  = useState({});   // { id: text }
-    const [openCorr,  setOpenCorr] = useState({});  // { id: bool }
-    const sessionDocRef = useRef(null);
+    const [roomCode]             = useState(() => genCode());
+    const [session,  setSession] = useState(null);
+    const [responses,setResponses]=useState([]);
+    const [loading,  setLoading] = useState(true);
+    const [copied,   setCopied]  = useState(false);
+    const [corrections,setCorr]  = useState({});
+    const [openCorr, setOpenCorr]= useState({});
+    const sessRef = useRef(null);
 
-    // ── init session ──────────────────────────────────────────
     useEffect(() => {
-        let unsubSess, unsubResp;
+        let unsubS, unsubR;
         (async () => {
             const shuffled = [...cardSet.cards].sort(() => Math.random() - 0.5);
-            const sessRef  = doc(db, SESS_BASE, roomCode);
-            sessionDocRef.current = sessRef;
-
-            await setDoc(sessRef, {
-                setId: cardSet.id, setTitle: cardSet.title,
-                cards: shuffled,
+            const ref = doc(db, SESS_BASE, roomCode);
+            sessRef.current = ref;
+            await setDoc(ref, {
+                setId: cardSet.id, setTitle: cardSet.title, cards: shuffled,
                 currentCardIndex: -1, currentCardId: null, currentConditional: null,
-                shownCardIds: [], status: 'waiting', roomCode,
-                createdAt: serverTimestamp(),
+                shownCardIds: [], status: 'waiting', roomCode, createdAt: serverTimestamp(),
             });
-
-            unsubSess = onSnapshot(sessRef, snap => {
-                if (snap.exists()) setSession({ id: snap.id, ...snap.data() });
-                setLoading(false);
-            });
-
-            unsubResp = onSnapshot(
-                collection(db, SESS_BASE, roomCode, 'responses'),
-                snap => setResponses(snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            unsubS = onSnapshot(ref, snap => { if (snap.exists()) setSession({ id: snap.id, ...snap.data() }); setLoading(false); });
+            unsubR = onSnapshot(collection(db, SESS_BASE, roomCode, 'responses'), snap =>
+                setResponses(snap.docs.map(d => ({ id: d.id, ...d.data() }))
                     .sort((a, b) => (a.submittedAt?.seconds || 0) - (b.submittedAt?.seconds || 0)))
             );
         })();
-        return () => { unsubSess?.(); unsubResp?.(); };
+        return () => { unsubS?.(); unsubR?.(); };
     }, []);
 
-    // ── helpers ───────────────────────────────────────────────
     const nextCard = async () => {
         if (!session) return;
-        const shown   = session.shownCardIds || [];
-        const unused  = session.cards.filter(c => !shown.includes(c.id));
-        const pool    = unused.length > 0 ? unused : session.cards;
-        const picked  = pool[Math.floor(Math.random() * pool.length)];
-        const idx     = session.cards.findIndex(c => c.id === picked.id);
-        const types   = picked.conditionalTypes?.length ? picked.conditionalTypes : [...COND_TYPES];
-        const condType = types[Math.floor(Math.random() * types.length)];
-
-        await updateDoc(sessionDocRef.current, {
-            currentCardIndex: idx, currentCardId: picked.id,
-            currentConditional: condType,
-            shownCardIds: unused.length > 0 ? [...shown, picked.id] : [picked.id],
-            status: 'active',
+        const shown  = session.shownCardIds || [];
+        const unused = session.cards.filter(c => !shown.includes(c.id));
+        const pool   = unused.length ? unused : session.cards;
+        const picked = pool[Math.floor(Math.random() * pool.length)];
+        const idx    = session.cards.findIndex(c => c.id === picked.id);
+        const types  = picked.conditionalTypes?.length ? picked.conditionalTypes : [...COND_TYPES];
+        const cond   = types[Math.floor(Math.random() * types.length)];
+        await updateDoc(sessRef.current, {
+            currentCardIndex: idx, currentCardId: picked.id, currentConditional: cond,
+            shownCardIds: unused.length ? [...shown, picked.id] : [picked.id], status: 'active',
         });
     };
 
-    const overrideCond = async t => {
-        if (!sessionDocRef.current) return;
-        await updateDoc(sessionDocRef.current, { currentConditional: t });
-    };
+    const overrideCond = async t => { if (sessRef.current) await updateDoc(sessRef.current, { currentConditional: t }); };
 
     const grade = async (resp, status) => {
         const correction = status === 'incorrect' ? (corrections[resp.id] || '') : '';
@@ -479,224 +598,134 @@ const SessionView = ({ cardSet, onEnd }) => {
         setOpenCorr(p => ({ ...p, [resp.id]: false }));
     };
 
-    const endSession = async () => {
-        if (sessionDocRef.current) await updateDoc(sessionDocRef.current, { status: 'ended' });
-        onEnd();
-    };
+    const endSession = async () => { if (sessRef.current) await updateDoc(sessRef.current, { status: 'ended' }); onEnd(); };
 
-    const copyCode = () => {
-        navigator.clipboard.writeText(roomCode).catch(() => {});
-        setCopied(true); setTimeout(() => setCopied(false), 2000);
-    };
+    const copyCode = () => { navigator.clipboard.writeText(roomCode).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 2000); };
 
-    // ── derived ───────────────────────────────────────────────
-    const currentCard = session && session.currentCardIndex >= 0
-        ? session.cards?.[session.currentCardIndex]
-        : null;
-    const currentResponses = currentCard
-        ? responses.filter(r => r.cardId === currentCard.id)
-        : [];
+    const currentCard = session && session.currentCardIndex >= 0 ? session.cards?.[session.currentCardIndex] : null;
+    const currentResponses = currentCard ? responses.filter(r => r.cardId === currentCard.id) : [];
     const pendingCount = currentResponses.filter(r => r.status === 'pending').length;
 
-    if (loading) return (
-        <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-zinc-500">
-            <Loader2 className="animate-spin mr-2" /> Iniciando sesión...
-        </div>
-    );
+    if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-zinc-500"><Loader2 className="animate-spin mr-2"/>Iniciando sesión...</div>;
 
     return (
         <div className="h-[100dvh] flex flex-col bg-zinc-950 text-zinc-100">
-            {/* ── Header ── */}
             <div className="bg-black px-4 py-2.5 flex items-center gap-3 border-b border-zinc-800 shrink-0 flex-wrap">
                 <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Código sala:</span>
+                    <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Código:</span>
                     <button onClick={copyCode} className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 px-3 py-1.5 rounded-xl transition-colors">
                         <span className="text-lg font-black tracking-[0.15em] font-mono text-white">{roomCode}</span>
-                        {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} className="text-zinc-500" />}
+                        {copied ? <Check size={14} className="text-emerald-400"/> : <Copy size={14} className="text-zinc-500"/>}
                     </button>
                 </div>
-                <div className="flex-1 min-w-0">
-                    <span className="text-xs text-zinc-500 font-bold truncate">{cardSet.title}</span>
-                </div>
-                <button onClick={endSession} className="btn-juicy bg-rose-900/30 hover:bg-rose-800/50 border border-rose-800 text-rose-400 px-4 py-1.5 rounded-xl font-bold text-sm">
-                    Terminar
-                </button>
+                <div className="flex-1 min-w-0"><span className="text-xs text-zinc-500 font-bold truncate">{cardSet.title}</span></div>
+                <button onClick={endSession} className="btn-juicy bg-rose-900/30 hover:bg-rose-800/50 border border-rose-800 text-rose-400 px-4 py-1.5 rounded-xl font-bold text-sm">Terminar</button>
             </div>
 
             <div className="flex flex-1 overflow-hidden">
-                {/* ════════════════════════════════════
-                    LEFT — Current card + controls
-                    ════════════════════════════════════ */}
-                <div className="w-[42%] min-w-[300px] border-r border-zinc-800 flex flex-col overflow-hidden">
-
+                {/* LEFT — card */}
+                <div className="w-[42%] min-w-[280px] border-r border-zinc-800 flex flex-col overflow-hidden">
                     {!currentCard ? (
-                        /* ── Waiting state ── */
                         <div className="flex-1 flex flex-col items-center justify-center gap-5 p-6">
                             <div className="text-6xl">🎨</div>
                             <div className="text-center">
                                 <p className="font-black text-xl text-white">Sesión activa</p>
-                                <p className="text-sm text-zinc-400 mt-1">
-                                    Los alumnos se unen en <strong className="text-white">whatif.html</strong>
-                                </p>
-                                <p className="text-sm text-zinc-500 mt-1">
-                                    Código: <span className="font-mono font-black text-white">{roomCode}</span>
-                                </p>
+                                <p className="text-sm text-zinc-400 mt-1">Los alumnos se unen en <strong className="text-white">whatif.html</strong></p>
+                                <p className="text-sm text-zinc-500 mt-1">Código: <span className="font-mono font-black text-white">{roomCode}</span></p>
                             </div>
                             <button onClick={nextCard} className="btn-juicy bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-4 rounded-2xl font-black text-lg flex items-center gap-3 shadow-xl">
-                                <Zap size={22} /> Primera Imagen
+                                <Zap size={22}/> Primera Imagen
                             </button>
                         </div>
                     ) : (
                         <>
                             <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3">
-                                {/* Image */}
                                 <div className="rounded-xl overflow-hidden border border-zinc-700 bg-zinc-900">
-                                    <img src={currentCard.imageUrl} className="w-full object-contain max-h-52" alt="" />
+                                    <img src={currentCard.imageUrl} className="w-full object-contain max-h-52" alt=""/>
                                 </div>
-
-                                {/* Conditional type override */}
                                 <div>
                                     <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">Conditional activo</p>
                                     <div className="flex gap-1.5 flex-wrap">
                                         {COND_TYPES.map(t => (
                                             <button key={t} onClick={() => overrideCond(t)}
-                                                className={`btn-juicy px-3 py-1.5 rounded-xl text-xs font-black transition-all ${session.currentConditional === t ? `${COND_STYLE[t].bg} text-white shadow-lg ring-2 ${COND_STYLE[t].ring}` : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>
-                                                {t}
-                                            </button>
+                                                className={`btn-juicy px-3 py-1.5 rounded-xl text-xs font-black transition-all ${session.currentConditional === t ? `${COND_STYLE[t].bg} text-white shadow-lg ring-2 ${COND_STYLE[t].ring}` : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>{t}</button>
                                         ))}
                                     </div>
                                 </div>
-
-                                {/* Wordbanks */}
                                 <div className="grid grid-cols-2 gap-2">
                                     <div className="bg-zinc-900 rounded-xl p-2.5 border border-zinc-800">
                                         <p className="text-[9px] font-black text-sky-400 uppercase tracking-wider mb-1.5">Causa</p>
                                         <div className="flex flex-wrap gap-1">
-                                            {(currentCard.wordbankLeft || []).map((w, i) => (
-                                                <span key={i} className="text-[11px] bg-sky-900/30 text-sky-300 px-2 py-0.5 rounded-lg font-bold">{w}</span>
-                                            ))}
+                                            {(currentCard.wordbankLeft || []).map((w, i) => <span key={i} className="text-[11px] bg-sky-900/30 text-sky-300 px-2 py-0.5 rounded-lg font-bold">{w}</span>)}
                                             {!currentCard.wordbankLeft?.length && <span className="text-[11px] text-zinc-600 italic">—</span>}
                                         </div>
                                     </div>
                                     <div className="bg-zinc-900 rounded-xl p-2.5 border border-zinc-800">
                                         <p className="text-[9px] font-black text-amber-400 uppercase tracking-wider mb-1.5">Consecuencia</p>
                                         <div className="flex flex-wrap gap-1">
-                                            {(currentCard.wordbankRight || []).map((w, i) => (
-                                                <span key={i} className="text-[11px] bg-amber-900/30 text-amber-300 px-2 py-0.5 rounded-lg font-bold">{w}</span>
-                                            ))}
+                                            {(currentCard.wordbankRight || []).map((w, i) => <span key={i} className="text-[11px] bg-amber-900/30 text-amber-300 px-2 py-0.5 rounded-lg font-bold">{w}</span>)}
                                             {!currentCard.wordbankRight?.length && <span className="text-[11px] text-zinc-600 italic">—</span>}
                                         </div>
                                     </div>
                                 </div>
-
-                                {/* Example sentence (visible to teacher) */}
                                 {currentCard.exampleSentence && (
                                     <div className="bg-emerald-900/20 border border-emerald-800/40 rounded-xl p-3">
                                         <p className="text-[9px] font-black text-emerald-400 uppercase tracking-wider mb-1">Ejemplo modelo</p>
                                         <p className="text-sm text-emerald-200 italic">"{currentCard.exampleSentence}"</p>
                                     </div>
                                 )}
-
-                                {/* Progress */}
-                                <p className="text-[10px] text-zinc-600 font-bold text-center">
-                                    Mostradas {session.shownCardIds?.length || 0} / {session.cards?.length || 0}
-                                </p>
+                                <p className="text-[10px] text-zinc-600 font-bold text-center">Mostradas {session.shownCardIds?.length || 0} / {session.cards?.length || 0}</p>
                             </div>
-
-                            {/* Next button */}
                             <div className="p-3 border-t border-zinc-800 shrink-0">
                                 <button onClick={nextCard} className="btn-juicy w-full bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-black flex items-center justify-center gap-2">
-                                    <Shuffle size={18} /> Siguiente Imagen
+                                    <Shuffle size={18}/> Siguiente Imagen
                                 </button>
                             </div>
                         </>
                     )}
                 </div>
 
-                {/* ════════════════════════════════════
-                    RIGHT — Student responses
-                    ════════════════════════════════════ */}
+                {/* RIGHT — responses */}
                 <div className="flex-1 flex flex-col overflow-hidden">
                     <div className="px-4 py-2.5 border-b border-zinc-800 shrink-0 flex items-center gap-2">
                         <h2 className="font-black text-sm">Respuestas en tiempo real</h2>
-                        {pendingCount > 0 && (
-                            <span className="bg-amber-500 text-zinc-900 text-[10px] font-black px-2 py-0.5 rounded-full">
-                                {pendingCount} pendiente{pendingCount !== 1 ? 's' : ''}
-                            </span>
-                        )}
-                        {currentResponses.length > 0 && (
-                            <span className="bg-zinc-800 text-zinc-400 text-[10px] font-bold px-2 py-0.5 rounded-full ml-auto">
-                                {currentResponses.length} respuesta{currentResponses.length !== 1 ? 's' : ''}
-                            </span>
-                        )}
+                        {pendingCount > 0 && <span className="bg-amber-500 text-zinc-900 text-[10px] font-black px-2 py-0.5 rounded-full">{pendingCount} pendiente{pendingCount !== 1 ? 's' : ''}</span>}
+                        {currentResponses.length > 0 && <span className="bg-zinc-800 text-zinc-400 text-[10px] font-bold px-2 py-0.5 rounded-full ml-auto">{currentResponses.length}</span>}
                     </div>
-
                     <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2">
                         {!currentCard ? (
-                            <div className="text-center text-zinc-600 text-sm font-bold mt-12 px-6">
-                                Las respuestas aparecerán cuando<br />muestres la primera imagen
-                            </div>
+                            <div className="text-center text-zinc-600 text-sm font-bold mt-12 px-6">Las respuestas aparecerán<br/>cuando muestres la primera imagen</div>
                         ) : currentResponses.length === 0 ? (
-                            <div className="text-center text-zinc-600 text-sm font-bold mt-12">
-                                <div className="text-3xl mb-3">⏳</div>
-                                Esperando que los alumnos respondan...
-                            </div>
+                            <div className="text-center text-zinc-600 text-sm font-bold mt-12"><div className="text-3xl mb-3">⏳</div>Esperando respuestas...</div>
                         ) : (
                             currentResponses.map(r => (
-                                <div key={r.id} className={`fade-in p-3 rounded-xl border transition-colors ${
-                                    r.status === 'correct'   ? 'bg-emerald-900/20 border-emerald-800/50' :
-                                    r.status === 'incorrect' ? 'bg-rose-900/20 border-rose-800/50' :
-                                    'bg-zinc-900 border-zinc-800'
-                                }`}>
-                                    {/* Student name + conditional badge */}
+                                <div key={r.id} className={`fade-in p-3 rounded-xl border transition-colors ${r.status === 'correct' ? 'bg-emerald-900/20 border-emerald-800/50' : r.status === 'incorrect' ? 'bg-rose-900/20 border-rose-800/50' : 'bg-zinc-900 border-zinc-800'}`}>
                                     <div className="flex items-center gap-2 mb-1.5">
                                         <span className="font-black text-sm">{r.studentName}</span>
-                                        <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-md text-white ${COND_STYLE[r.conditionalType]?.bg || 'bg-zinc-600'}`}>
-                                            {r.conditionalType}
-                                        </span>
-                                        <div className="flex-1" />
-                                        {/* Grade buttons */}
+                                        <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-md text-white ${COND_STYLE[r.conditionalType]?.bg || 'bg-zinc-600'}`}>{r.conditionalType}</span>
+                                        <div className="flex-1"/>
                                         {r.status === 'pending' && (
                                             <div className="flex gap-1.5">
-                                                <button onClick={() => grade(r, 'correct')}
-                                                    className="btn-juicy p-1.5 bg-emerald-900/50 hover:bg-emerald-700 rounded-lg text-emerald-400 transition-colors">
-                                                    <CheckCircle2 size={16} />
-                                                </button>
-                                                <button onClick={() => setOpenCorr(p => ({ ...p, [r.id]: !p[r.id] }))}
-                                                    className={`btn-juicy p-1.5 rounded-lg text-rose-400 transition-colors ${openCorr[r.id] ? 'bg-rose-700' : 'bg-rose-900/50 hover:bg-rose-700'}`}>
-                                                    <XCircle size={16} />
-                                                </button>
+                                                <button onClick={() => grade(r, 'correct')} className="btn-juicy p-1.5 bg-emerald-900/50 hover:bg-emerald-700 rounded-lg text-emerald-400"><CheckCircle2 size={16}/></button>
+                                                <button onClick={() => setOpenCorr(p => ({ ...p, [r.id]: !p[r.id] }))} className={`btn-juicy p-1.5 rounded-lg text-rose-400 ${openCorr[r.id] ? 'bg-rose-700' : 'bg-rose-900/50 hover:bg-rose-700'}`}><XCircle size={16}/></button>
                                             </div>
                                         )}
-                                        {r.status === 'correct'   && <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />}
-                                        {r.status === 'incorrect' && <XCircle size={16} className="text-rose-400 shrink-0" />}
+                                        {r.status === 'correct'   && <CheckCircle2 size={16} className="text-emerald-400 shrink-0"/>}
+                                        {r.status === 'incorrect' && <XCircle size={16} className="text-rose-400 shrink-0"/>}
                                     </div>
-
-                                    {/* Student's sentence */}
                                     <p className="text-sm text-zinc-200 italic">"{r.response}"</p>
-
-                                    {/* Teacher correction (already sent) */}
                                     {r.status === 'incorrect' && r.correction && (
                                         <div className="mt-2 bg-emerald-900/20 border border-emerald-800/40 rounded-lg px-2.5 py-1.5">
                                             <p className="text-[10px] font-black text-emerald-400 uppercase tracking-wider mb-0.5">Corrección enviada</p>
                                             <p className="text-xs text-emerald-200">"{r.correction}"</p>
                                         </div>
                                     )}
-
-                                    {/* Correction input (expanded on ❌ click) */}
                                     {openCorr[r.id] && r.status === 'pending' && (
                                         <div className="mt-2 flex gap-2 fade-in">
-                                            <input
-                                                value={corrections[r.id] || ''}
-                                                onChange={e => setCorr(p => ({ ...p, [r.id]: e.target.value }))}
-                                                placeholder="Escribe la corrección..."
-                                                className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:border-rose-500 placeholder-zinc-600"
-                                                onKeyDown={e => { if (e.key === 'Enter') grade(r, 'incorrect'); }}
-                                            />
-                                            <button onClick={() => grade(r, 'incorrect')}
-                                                className="btn-juicy bg-rose-700 hover:bg-rose-600 text-white px-3 py-1.5 rounded-lg text-xs font-black">
-                                                Enviar
-                                            </button>
+                                            <input value={corrections[r.id] || ''} onChange={e => setCorr(p => ({ ...p, [r.id]: e.target.value }))}
+                                                placeholder="Escribe la corrección..." onKeyDown={e => { if (e.key === 'Enter') grade(r, 'incorrect'); }}
+                                                className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:border-rose-500 placeholder-zinc-600"/>
+                                            <button onClick={() => grade(r, 'incorrect')} className="btn-juicy bg-rose-700 hover:bg-rose-600 text-white px-3 py-1.5 rounded-lg text-xs font-black">Enviar</button>
                                         </div>
                                     )}
                                 </div>
@@ -718,21 +747,18 @@ const App = () => {
     const [playingSet, setPlayingSet] = useState(null);
 
     if (view === 'editor')
-        return <EditorView existing={editingSet} onBack={() => setView('home')} onSaved={() => setView('home')} />;
-
+        return <EditorView existing={editingSet} onBack={() => setView('home')} onSaved={() => setView('home')}/>;
     if (view === 'session' && playingSet)
-        return <SessionView cardSet={playingSet} onEnd={() => { setPlayingSet(null); setView('home'); }} />;
+        return <SessionView cardSet={playingSet} onEnd={() => { setPlayingSet(null); setView('home'); }}/>;
 
-    return (
-        <HomeView
-            onNew={() => { setEditingSet(null); setView('editor'); }}
-            onEdit={s  => { setEditingSet(s);   setView('editor'); }}
-            onPlay={s  => { setPlayingSet(s);   setView('session'); }}
-        />
-    );
+    return <HomeView
+        onNew={() => { setEditingSet(null); setView('editor'); }}
+        onEdit={s  => { setEditingSet(s);   setView('editor'); }}
+        onPlay={s  => { setPlayingSet(s);   setView('session'); }}
+    />;
 };
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
 </html>
