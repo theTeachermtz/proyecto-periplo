@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>What If? | Periplo</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎨</text></svg>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
+
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "lucide-react": "https://esm.sh/lucide-react@0.344.0",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
+
+        *, *::before, *::after { box-sizing: border-box; }
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            margin: 0; padding: 0;
+            background: #09090b;
+            color: #f4f4f5;
+            min-height: 100dvh;
+            overscroll-behavior-y: contain;
+            touch-action: manipulation;
+        }
+
+        .btn-juicy { transition: transform 0.1s cubic-bezier(0.4,0,0.2,1); }
+        .btn-juicy:active:not(:disabled) { transform: scale(0.93); }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+
+        /* Blurred example */
+        .blurred  { filter: blur(10px); user-select: none; transition: filter 0.4s ease; }
+        .revealed { filter: blur(0);    user-select: auto; transition: filter 0.4s ease; }
+
+        @keyframes slideUp   { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes pop       { 0%{transform:scale(0.8);opacity:0;} 100%{transform:scale(1);opacity:1;} }
+        @keyframes pulse-dot { 0%,100%{opacity:.4;} 50%{opacity:1;} }
+
+        .slide-up  { animation: slideUp 0.35s cubic-bezier(0.22,1,0.36,1); }
+        .pop-in    { animation: pop 0.3s cubic-bezier(0.34,1.56,0.64,1); }
+        .dot1      { animation: pulse-dot 1.2s infinite 0s; }
+        .dot2      { animation: pulse-dot 1.2s infinite 0.2s; }
+        .dot3      { animation: pulse-dot 1.2s infinite 0.4s; }
+
+        input:-webkit-autofill,
+        input:-webkit-autofill:focus {
+            -webkit-text-fill-color: #fff;
+            -webkit-box-shadow: 0 0 0 1000px #18181b inset;
+        }
+    </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-type="module">
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createRoot } from 'react-dom/client';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
+import { Send, Eye, CheckCircle2, XCircle, Clock, ArrowRight, Loader2 } from 'lucide-react';
+
+// ─── Firebase ────────────────────────────────────────────────
+const FB_CFG = {
+    apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+    authDomain: "proyecto-periplo.firebaseapp.com",
+    projectId: "proyecto-periplo",
+    storageBucket: "proyecto-periplo.firebasestorage.app",
+    messagingSenderId: "236795998392",
+    appId: "1:236795998392:web:0da24b4f018611b55c844d"
+};
+const fbApp = initializeApp(FB_CFG);
+const db    = getFirestore(fbApp);
+
+// ─── Constants ───────────────────────────────────────────────
+const SESS_BASE = 'artifacts/periplo-app-v1/sessions/conditionals';
+
+const COND_INFO = {
+    First:  { color: 'bg-sky-600',    hint: 'If + present simple → will + V'                    },
+    Second: { color: 'bg-violet-600', hint: 'If + past simple → would + V'                      },
+    Third:  { color: 'bg-amber-600',  hint: 'If + past perfect → would have + past participle'  },
+    Mixed:  { color: 'bg-rose-600',   hint: 'Mix: past perf. condition → would + V  (or vice versa)' },
+};
+
+const slug = name => name.toLowerCase().replace(/\W+/g, '_').substring(0, 20);
+
+// ═══════════════════════════════════════════════════════════════
+//  JOIN SCREEN
+// ═══════════════════════════════════════════════════════════════
+const JoinScreen = ({ onJoin }) => {
+    const [name, setName]         = useState('');
+    const [code, setCode]         = useState('');
+    const [loading, setLoading]   = useState(false);
+    const [error, setError]       = useState('');
+
+    const handleJoin = async () => {
+        const n = name.trim();
+        const c = code.trim().toUpperCase();
+        if (!n) return setError('¿Cómo te llamas?');
+        if (c.length < 5) return setError('El código tiene 5 caracteres.');
+        setLoading(true); setError('');
+        try {
+            const snap = await new Promise((resolve, reject) => {
+                const unsub = onSnapshot(doc(db, SESS_BASE, c), s => {
+                    unsub();
+                    resolve(s);
+                }, reject);
+            });
+            if (!snap.exists()) return setError('Código no encontrado. ¿Está bien escrito?');
+            if (snap.data().status === 'ended') return setError('Esta sesión ya terminó.');
+            onJoin(n, c);
+        } catch (e) { setError('Error de conexión. Intenta de nuevo.'); }
+        finally { setLoading(false); }
+    };
+
+    const handleCodeChange = e => {
+        setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 5));
+    };
+
+    return (
+        <div className="min-h-[100dvh] flex flex-col items-center justify-center px-6 pb-10">
+            <div className="w-full max-w-sm slide-up">
+                {/* Logo */}
+                <div className="text-center mb-8">
+                    <div className="text-6xl mb-3">🎨</div>
+                    <h1 className="text-3xl font-black">What If?</h1>
+                    <p className="text-zinc-500 text-sm mt-1 font-medium">Conditional Sentences Game</p>
+                </div>
+
+                {/* Form */}
+                <div className="space-y-3">
+                    <div>
+                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest block mb-1.5">Your name</label>
+                        <input
+                            value={name}
+                            onChange={e => setName(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && handleJoin()}
+                            placeholder="Ana, Marco..."
+                            className="w-full bg-zinc-900 border-2 border-zinc-800 focus:border-indigo-500 rounded-2xl px-4 py-3.5 text-base font-bold outline-none placeholder-zinc-600 transition-colors"
+                            autoComplete="given-name"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest block mb-1.5">Room code</label>
+                        <input
+                            value={code}
+                            onChange={handleCodeChange}
+                            onKeyDown={e => e.key === 'Enter' && handleJoin()}
+                            placeholder="K7XP2"
+                            maxLength={5}
+                            className="w-full bg-zinc-900 border-2 border-zinc-800 focus:border-indigo-500 rounded-2xl px-4 py-3.5 text-2xl font-black tracking-[0.2em] text-center outline-none placeholder-zinc-700 placeholder:text-xl uppercase font-mono transition-colors"
+                            autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck="false"
+                        />
+                    </div>
+
+                    {error && (
+                        <p className="text-rose-400 text-sm font-bold text-center pop-in">{error}</p>
+                    )}
+
+                    <button
+                        onClick={handleJoin}
+                        disabled={loading || !name.trim() || code.length < 5}
+                        className="btn-juicy w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white py-4 rounded-2xl font-black text-base flex items-center justify-center gap-2 mt-2 shadow-xl"
+                    >
+                        {loading
+                            ? <><Loader2 size={18} className="animate-spin" /> Connecting...</>
+                            : <><ArrowRight size={18} /> Join Game</>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  WAITING SCREEN
+// ═══════════════════════════════════════════════════════════════
+const WaitingScreen = ({ studentName }) => (
+    <div className="min-h-[100dvh] flex flex-col items-center justify-center px-6 gap-5">
+        <div className="text-5xl">⏳</div>
+        <div className="text-center">
+            <p className="font-black text-xl">Hey, {studentName}!</p>
+            <p className="text-zinc-400 mt-1 font-medium">Waiting for the teacher...</p>
+        </div>
+        <div className="flex gap-2 mt-2">
+            <span className="dot1 w-2.5 h-2.5 bg-indigo-400 rounded-full block" />
+            <span className="dot2 w-2.5 h-2.5 bg-indigo-400 rounded-full block" />
+            <span className="dot3 w-2.5 h-2.5 bg-indigo-400 rounded-full block" />
+        </div>
+    </div>
+);
+
+// ═══════════════════════════════════════════════════════════════
+//  ENDED SCREEN
+// ═══════════════════════════════════════════════════════════════
+const EndedScreen = () => (
+    <div className="min-h-[100dvh] flex flex-col items-center justify-center px-6 gap-4 text-center">
+        <div className="text-6xl">🎉</div>
+        <h2 className="text-2xl font-black">That's a wrap!</h2>
+        <p className="text-zinc-400 font-medium">The session has ended.<br />Great work today!</p>
+    </div>
+);
+
+// ═══════════════════════════════════════════════════════════════
+//  WORD CHIP — tappable, inserts word into textarea
+// ═══════════════════════════════════════════════════════════════
+const WordChip = ({ word, color, onTap }) => (
+    <button
+        onClick={() => onTap(word)}
+        className={`btn-juicy ${color} px-3 py-1.5 rounded-xl text-xs font-black text-white select-none`}
+    >
+        {word}
+    </button>
+);
+
+// ═══════════════════════════════════════════════════════════════
+//  GAME SCREEN
+// ═══════════════════════════════════════════════════════════════
+const GameScreen = ({ studentName, roomCode, session, onSessionEnd }) => {
+    const [sentence,      setSentence]      = useState('');
+    const [submitting,    setSubmitting]    = useState(false);
+    const [hasSubmitted,  setHasSubmitted]  = useState(false);
+    const [myResponse,    setMyResponse]    = useState(null);
+    const [showExample,   setShowExample]   = useState(false);
+    const textareaRef = useRef();
+
+    const currentCard = session?.currentCardIndex >= 0
+        ? session?.cards?.[session.currentCardIndex]
+        : null;
+
+    const condType = session?.currentConditional;
+    const condInfo = condType ? COND_INFO[condType] : null;
+
+    // ── Reset when card changes ───────────────────────────────
+    useEffect(() => {
+        setSentence('');
+        setSubmitting(false);
+        setHasSubmitted(false);
+        setMyResponse(null);
+        setShowExample(false);
+    }, [session?.currentCardId]);
+
+    // ── Subscribe to my response for current card ─────────────
+    useEffect(() => {
+        if (!session?.currentCardId || !studentName || !roomCode) return;
+        const responseId  = `${slug(studentName)}_${session.currentCardId}`;
+        const responseRef = doc(db, SESS_BASE, roomCode, 'responses', responseId);
+        const unsub = onSnapshot(responseRef, snap => {
+            setMyResponse(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+        });
+        return unsub;
+    }, [session?.currentCardId, studentName, roomCode]);
+
+    // ── Session ended ─────────────────────────────────────────
+    useEffect(() => {
+        if (session?.status === 'ended') onSessionEnd();
+    }, [session?.status]);
+
+    // ── Insert word from chip ─────────────────────────────────
+    const insertWord = useCallback(word => {
+        const ta  = textareaRef.current;
+        if (!ta) { setSentence(p => p + (p && !p.endsWith(' ') ? ' ' : '') + word + ' '); return; }
+
+        const start = ta.selectionStart;
+        const end   = ta.selectionEnd;
+        const cur   = ta.value;
+        const prefix = start > 0 && cur[start - 1] !== ' ' ? ' ' : '';
+        const suffix = end < cur.length && cur[end] !== ' ' ? ' ' : '';
+        const next   = cur.substring(0, start) + prefix + word + suffix + cur.substring(end);
+        setSentence(next);
+        const newPos = start + prefix.length + word.length + suffix.length;
+        setTimeout(() => { ta.focus(); ta.setSelectionRange(newPos, newPos); }, 0);
+    }, []);
+
+    // ── Submit ────────────────────────────────────────────────
+    const submit = async () => {
+        if (!sentence.trim() || hasSubmitted || submitting) return;
+        setSubmitting(true);
+        try {
+            const responseId  = `${slug(studentName)}_${session.currentCardId}`;
+            const responseRef = doc(db, SESS_BASE, roomCode, 'responses', responseId);
+            await setDoc(responseRef, {
+                studentName,
+                cardId: session.currentCardId,
+                conditionalType: condType || 'Mixed',
+                response: sentence.trim(),
+                submittedAt: serverTimestamp(),
+                status: 'pending',
+                correction: '',
+            });
+            setHasSubmitted(true);
+        } catch (e) { alert('Connection error. Try again.'); }
+        finally { setSubmitting(false); }
+    };
+
+    // ── Waiting for first card ────────────────────────────────
+    if (!currentCard || session?.status === 'waiting') {
+        return <WaitingScreen studentName={studentName} />;
+    }
+
+    return (
+        <div className="min-h-[100dvh] pb-10">
+            {/* ── Conditional badge ── */}
+            <div className={`${condInfo?.color || 'bg-zinc-700'} px-4 pt-safe-top pt-3 pb-3`}>
+                <div className="max-w-lg mx-auto">
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs font-black uppercase tracking-widest opacity-80">Conditional</span>
+                    </div>
+                    <p className="text-2xl font-black leading-tight">{condType} Conditional</p>
+                    {condInfo?.hint && (
+                        <p className="text-xs font-medium opacity-75 mt-0.5">{condInfo.hint}</p>
+                    )}
+                </div>
+            </div>
+
+            <div className="max-w-lg mx-auto px-4 pt-4 space-y-4 slide-up">
+
+                {/* ── Image ── */}
+                <div className="rounded-2xl overflow-hidden border border-zinc-800 bg-zinc-900">
+                    <img
+                        src={currentCard.imageUrl}
+                        className="w-full object-contain max-h-[50vw] min-h-[160px]"
+                        alt="What happened here?"
+                    />
+                </div>
+
+                {/* ── Word banks ── */}
+                {(currentCard.wordbankLeft?.length > 0 || currentCard.wordbankRight?.length > 0) && (
+                    <div className="grid grid-cols-2 gap-3">
+                        {/* Left — Cause */}
+                        {currentCard.wordbankLeft?.length > 0 && (
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-3">
+                                <p className="text-[9px] font-black text-sky-400 uppercase tracking-widest mb-2">
+                                    Cause ←
+                                </p>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {currentCard.wordbankLeft.map((w, i) => (
+                                        <WordChip key={i} word={w} color="bg-sky-700 hover:bg-sky-600" onTap={insertWord} />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                        {/* Right — Consequence */}
+                        {currentCard.wordbankRight?.length > 0 && (
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-3">
+                                <p className="text-[9px] font-black text-amber-400 uppercase tracking-widest mb-2">
+                                    → Effect
+                                </p>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {currentCard.wordbankRight.map((w, i) => (
+                                        <WordChip key={i} word={w} color="bg-amber-700 hover:bg-amber-600" onTap={insertWord} />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* ── Input / Feedback ── */}
+                {!hasSubmitted && !myResponse ? (
+                    /* WRITING STATE */
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                            Your {condType} conditional sentence
+                        </label>
+                        <textarea
+                            ref={textareaRef}
+                            value={sentence}
+                            onChange={e => setSentence(e.target.value)}
+                            placeholder={`If ${condType === 'Third' ? "he hadn't been speeding" : condType === 'Second' ? 'he drove carefully' : 'he drives carefully'}...`}
+                            className="w-full bg-zinc-900 border-2 border-zinc-800 focus:border-indigo-500 rounded-2xl p-4 text-base font-medium outline-none resize-none h-28 placeholder-zinc-600 transition-colors leading-relaxed"
+                        />
+                        <button
+                            onClick={submit}
+                            disabled={!sentence.trim() || submitting}
+                            className="btn-juicy w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white py-4 rounded-2xl font-black text-base flex items-center justify-center gap-2 shadow-lg"
+                        >
+                            {submitting
+                                ? <><Loader2 size={18} className="animate-spin" /> Sending...</>
+                                : <><Send size={17} /> Submit</>
+                            }
+                        </button>
+                    </div>
+
+                ) : myResponse?.status === 'correct' ? (
+                    /* ✅ CORRECT */
+                    <div className="bg-emerald-900/30 border-2 border-emerald-700/60 rounded-2xl p-4 pop-in">
+                        <div className="flex items-center gap-2 mb-2">
+                            <CheckCircle2 size={22} className="text-emerald-400" />
+                            <span className="font-black text-emerald-300 text-lg">Correct! ✨</span>
+                        </div>
+                        <p className="text-sm text-zinc-300 italic">"{myResponse.response}"</p>
+                    </div>
+
+                ) : myResponse?.status === 'incorrect' ? (
+                    /* ❌ INCORRECT + correction */
+                    <div className="space-y-2 pop-in">
+                        <div className="bg-rose-900/30 border-2 border-rose-700/60 rounded-2xl p-4">
+                            <div className="flex items-center gap-2 mb-2">
+                                <XCircle size={20} className="text-rose-400" />
+                                <span className="font-black text-rose-300">Not quite</span>
+                            </div>
+                            <p className="text-sm text-zinc-300 italic mb-3">"{myResponse.response}"</p>
+                            {myResponse.correction && (
+                                <div className="bg-emerald-900/30 border border-emerald-800/50 rounded-xl p-3">
+                                    <p className="text-[10px] font-black text-emerald-400 uppercase tracking-wider mb-1">Teacher's correction</p>
+                                    <p className="text-sm text-emerald-200 font-medium">"{myResponse.correction}"</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                ) : (
+                    /* ⏳ PENDING (submitted, waiting for teacher) */
+                    <div className="bg-zinc-900 border-2 border-zinc-700 rounded-2xl p-4 pop-in">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Clock size={18} className="text-zinc-400" />
+                            <span className="font-black text-zinc-300">Sent! Waiting for feedback...</span>
+                        </div>
+                        <p className="text-sm text-zinc-400 italic">"{myResponse?.response || sentence}"</p>
+                        <div className="flex gap-1.5 mt-3">
+                            <span className="dot1 w-2 h-2 bg-zinc-500 rounded-full block" />
+                            <span className="dot2 w-2 h-2 bg-zinc-500 rounded-full block" />
+                            <span className="dot3 w-2 h-2 bg-zinc-500 rounded-full block" />
+                        </div>
+                    </div>
+                )}
+
+                {/* ── Example sentence (blurred) ── */}
+                {currentCard.exampleSentence && (
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
+                        <div className="flex items-center justify-between mb-2">
+                            <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Example sentence</span>
+                            <button
+                                onClick={() => setShowExample(p => !p)}
+                                className="btn-juicy flex items-center gap-1.5 text-xs font-black text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 px-2.5 py-1 rounded-lg transition-colors"
+                            >
+                                <Eye size={13} />
+                                {showExample ? 'Hide' : 'Reveal'}
+                            </button>
+                        </div>
+                        <p className={`text-sm italic text-zinc-200 leading-relaxed select-none ${showExample ? 'revealed' : 'blurred'}`}>
+                            "{currentCard.exampleSentence}"
+                        </p>
+                    </div>
+                )}
+
+                {/* Bottom padding for safe area */}
+                <div className="h-4" />
+            </div>
+        </div>
+    );
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  APP ROOT
+// ═══════════════════════════════════════════════════════════════
+const App = () => {
+    const [screen,      setScreen]      = useState('join');   // 'join' | 'game' | 'ended'
+    const [studentName, setStudentName] = useState('');
+    const [roomCode,    setRoomCode]    = useState('');
+    const [session,     setSession]     = useState(null);
+
+    // Subscribe to session once joined
+    useEffect(() => {
+        if (screen !== 'game' || !roomCode) return;
+        const unsub = onSnapshot(doc(db, SESS_BASE, roomCode), snap => {
+            if (!snap.exists()) { setScreen('ended'); return; }
+            const data = snap.data();
+            setSession({ id: snap.id, ...data });
+            if (data.status === 'ended') setScreen('ended');
+        });
+        return unsub;
+    }, [screen, roomCode]);
+
+    const handleJoin = (name, code) => {
+        setStudentName(name);
+        setRoomCode(code);
+        setScreen('game');
+    };
+
+    if (screen === 'join')  return <JoinScreen onJoin={handleJoin} />;
+    if (screen === 'ended') return <EndedScreen />;
+
+    return (
+        <GameScreen
+            studentName={studentName}
+            roomCode={roomCode}
+            session={session}
+            onSessionEnd={() => setScreen('ended')}
+        />
+    );
+};
+
+createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
