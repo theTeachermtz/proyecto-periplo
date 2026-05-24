@@ -139,6 +139,14 @@
 
             const abortControllerRef = useRef(null);
 
+            // ── IMAGE GENERATION STATE ────────────────────────────────────────
+            const [showImageModal, setShowImageModal] = useState(false);
+            const [imgStep, setImgStep]               = useState('select'); // 'select' | 'generating' | 'preview'
+            const [imgSelectedIds, setImgSelectedIds] = useState([]);
+            const [imgProgress, setImgProgress]       = useState({ done: 0, total: 0 });
+            const [imgResults, setImgResults]         = useState({});
+            const [imgRegenerating, setImgRegenerating] = useState(null);
+
             // Utilidad: toggle multi-selección
             const toggleSelection = (arr, setArr, item) => {
                 if (arr.includes(item)) setArr(arr.filter(i => i !== item));
@@ -274,6 +282,11 @@
                 setLoading(true);
 
                 const cleanCards = cards.map(({ id, ...rest }) => rest);
+                cleanCards.forEach((c, i) => {
+                    if (c.imageBase64 && c.imageBase64.length > 600000) {
+                        console.warn(`⚠️ Tarjeta ${i+1} "${c.wordEn}": imageBase64 ~${Math.round(c.imageBase64.length/1024)}KB — riesgo de superar el límite de 1MB por documento en Firestore`);
+                    }
+                });
                 const tags = { levels: saveLevels, categories: saveCats, topics: saveTopics };
 
                 const data = {
@@ -312,6 +325,104 @@
                 const folderParam = params.get('folder');
                 const parentPath  = (folderParam && folderParam !== 'undefined' && folderParam !== 'null') ? decodeURIComponent(folderParam) : '';
                 window.location.href = parentPath ? `index.html?folder=${encodeURIComponent(parentPath)}` : 'index.html';
+            };
+
+            // ── IMAGE GENERATION FUNCTIONS ───────────────────────────────────
+            const openImageModal = () => {
+                const eligibleIds = cards.filter(c => c.wordEn?.trim()).map(c => c.id);
+                setImgSelectedIds(eligibleIds);
+                setImgStep('select');
+                setImgResults({});
+                setImgProgress({ done: 0, total: 0 });
+                setShowImageModal(true);
+            };
+
+            const toggleImgCard = (id) => {
+                setImgSelectedIds(prev =>
+                    prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+                );
+            };
+
+            const buildImagePrompt = (card) => {
+                const concept = card.exampleEn?.trim() || card.wordEn?.trim();
+                return `Flat design illustration, cartoon style, clean white background, colorful and friendly, educational flashcard art. Concept: "${concept}". No text, no letters, no words in the image.`;
+            };
+
+            const fetchImageForCard = async (card) => {
+                const response = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey.trim()}`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            instances: [{ prompt: buildImagePrompt(card) }],
+                            parameters: { sampleCount: 1, aspectRatio: "1:1" }
+                        })
+                    }
+                );
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.error?.message || `HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                const pred = data.predictions?.[0];
+                if (!pred?.bytesBase64Encoded) throw new Error("La API no devolvió imagen");
+                return { base64: pred.bytesBase64Encoded, mimeType: pred.mimeType || 'image/png' };
+            };
+
+            const generateImages = async () => {
+                if (!apiKey.trim()) return alert("⚠️ Necesitas ingresar tu API Key en el modal de IA Assist.");
+                const selected = cards.filter(c => imgSelectedIds.includes(c.id));
+                if (selected.length === 0) return alert("Selecciona al menos una tarjeta.");
+
+                setImgStep('generating');
+                setImgProgress({ done: 0, total: selected.length });
+
+                const results = {};
+                const promises = selected.map(card =>
+                    fetchImageForCard(card)
+                        .then(({ base64, mimeType }) => {
+                            results[card.id] = { base64, mimeType };
+                            setImgProgress(p => ({ ...p, done: p.done + 1 }));
+                        })
+                        .catch(err => {
+                            results[card.id] = { error: err.message };
+                            setImgProgress(p => ({ ...p, done: p.done + 1 }));
+                        })
+                );
+
+                await Promise.allSettled(promises);
+                setImgResults(results);
+                setImgStep('preview');
+            };
+
+            const regenerateImage = async (cardId) => {
+                const card = cards.find(c => c.id === cardId);
+                if (!card) return;
+                setImgRegenerating(cardId);
+                try {
+                    const { base64, mimeType } = await fetchImageForCard(card);
+                    setImgResults(prev => ({ ...prev, [cardId]: { base64, mimeType } }));
+                } catch (err) {
+                    setImgResults(prev => ({ ...prev, [cardId]: { error: err.message } }));
+                } finally {
+                    setImgRegenerating(null);
+                }
+            };
+
+            const applyImages = () => {
+                setCards(prev => prev.map(c => {
+                    const r = imgResults[c.id];
+                    if (r && r.base64) return { ...c, imageBase64: r.base64, imageMimeType: r.mimeType };
+                    return c;
+                }));
+                setShowImageModal(false);
+            };
+
+            const removeCardImage = (id) => {
+                setCards(prev => prev.map(c =>
+                    c.id === id ? { ...c, imageBase64: undefined, imageMimeType: undefined } : c
+                ));
             };
 
             return (
@@ -469,6 +580,133 @@
                     )}
 
                     {/* ================================================================ */}
+                    {/* MODAL GENERAR IMÁGENES                                          */}
+                    {/* ================================================================ */}
+                    {showImageModal && (
+                        <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+
+                            {/* ── PASO 1: SELECCIÓN ─────────────────────────────── */}
+                            {imgStep === 'select' && (
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-2xl p-6 shadow-2xl max-h-[90vh] flex flex-col">
+                                    <div className="flex justify-between items-center mb-4 shrink-0">
+                                        <h2 className="text-xl font-black flex items-center gap-2 text-white">
+                                            🎨 Generar Imágenes
+                                        </h2>
+                                        <button onClick={() => setShowImageModal(false)} className="text-zinc-500 hover:text-white p-2 rounded-full hover:bg-zinc-800 transition">
+                                            <X size={20}/>
+                                        </button>
+                                    </div>
+
+                                    <div className="mb-4 shrink-0">
+                                        <span className="text-xs text-zinc-500 bg-zinc-800 px-3 py-1.5 rounded-full font-bold">
+                                            💡 Seleccionar todas las concretas — selección manual
+                                        </span>
+                                    </div>
+
+                                    <div className="overflow-y-auto custom-scrollbar flex-1 space-y-2 pr-1">
+                                        {cards.filter(c => c.wordEn?.trim()).map(c => (
+                                            <label key={c.id} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${imgSelectedIds.includes(c.id) ? 'border-violet-500 bg-violet-500/10' : 'border-zinc-800 hover:border-zinc-700'}`}>
+                                                <input type="checkbox" checked={imgSelectedIds.includes(c.id)}
+                                                    onChange={() => toggleImgCard(c.id)}
+                                                    className="accent-violet-500 w-4 h-4 shrink-0"/>
+                                                <div className="flex-1 min-w-0">
+                                                    <span className="font-bold text-white text-sm">{c.wordEn}</span>
+                                                    {c.exampleEn && <p className="text-xs text-zinc-500 italic truncate mt-0.5">{c.exampleEn}</p>}
+                                                </div>
+                                                {c.imageBase64
+                                                    ? <span className="text-[10px] text-emerald-400 font-bold shrink-0">✓ imagen</span>
+                                                    : null
+                                                }
+                                            </label>
+                                        ))}
+                                    </div>
+
+                                    <button onClick={generateImages} disabled={imgSelectedIds.length === 0}
+                                        className="w-full mt-6 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:bg-zinc-800 disabled:cursor-not-allowed text-white py-4 rounded-xl font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 shrink-0">
+                                        🎨 Generar {imgSelectedIds.length} imagen{imgSelectedIds.length !== 1 ? 'es' : ''}
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* ── PASO 2: GENERANDO ─────────────────────────────── */}
+                            {imgStep === 'generating' && (
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm p-8 shadow-2xl text-center">
+                                    <div className="text-6xl mb-6">🎨</div>
+                                    <h2 className="text-xl font-black text-white mb-2">Generando imágenes...</h2>
+                                    <p className="text-zinc-400 text-sm mb-6">Llamadas en paralelo con Promise.allSettled</p>
+                                    <div className="bg-zinc-950 rounded-2xl p-6 mb-4">
+                                        <div className="text-4xl font-black text-violet-400">{imgProgress.done} / {imgProgress.total}</div>
+                                        <div className="text-xs text-zinc-500 mt-1 uppercase tracking-widest">completadas</div>
+                                    </div>
+                                    <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
+                                        <div className="h-full bg-violet-500 transition-all duration-300 rounded-full"
+                                             style={{ width: imgProgress.total ? `${(imgProgress.done / imgProgress.total) * 100}%` : '0%' }}/>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* ── PASO 3: PREVIEW ───────────────────────────────── */}
+                            {imgStep === 'preview' && (
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-3xl p-6 shadow-2xl max-h-[90vh] flex flex-col">
+                                    <div className="flex justify-between items-center mb-6 shrink-0">
+                                        <h2 className="text-xl font-black text-white">Vista previa</h2>
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-xs text-zinc-500">
+                                                <span className="text-emerald-400 font-black">{Object.values(imgResults).filter(r => r.base64).length}</span>
+                                                {' '}/ {Object.keys(imgResults).length} generadas
+                                            </span>
+                                            <button onClick={() => setShowImageModal(false)} className="text-zinc-500 hover:text-white p-2 rounded-full hover:bg-zinc-800 transition">
+                                                <X size={20}/>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <p className="text-xs text-zinc-500 mb-4 shrink-0">Haz clic en una imagen para regenerarla individualmente.</p>
+
+                                    <div className="overflow-y-auto custom-scrollbar flex-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 pr-1">
+                                        {cards.filter(c => imgResults[c.id] !== undefined).map(c => {
+                                            const r = imgResults[c.id];
+                                            const isRegen = imgRegenerating === c.id;
+                                            return (
+                                                <div key={c.id} className="flex flex-col gap-1">
+                                                    <div onClick={() => !isRegen && regenerateImage(c.id)}
+                                                         className="relative aspect-square rounded-xl overflow-hidden bg-zinc-800 border border-zinc-700 cursor-pointer hover:border-violet-500 transition-colors group">
+                                                        {isRegen ? (
+                                                            <div className="absolute inset-0 flex items-center justify-center bg-zinc-800">
+                                                                <Loader2 className="animate-spin text-violet-400" size={28}/>
+                                                            </div>
+                                                        ) : r.base64 ? (
+                                                            <>
+                                                                <img src={`data:${r.mimeType || 'image/png'};base64,${r.base64}`}
+                                                                     className="w-full h-full object-cover"/>
+                                                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                                    <span className="text-white text-xs font-black">🔄 Regenerar</span>
+                                                                </div>
+                                                            </>
+                                                        ) : (
+                                                            <div className="absolute inset-0 flex flex-col items-center justify-center p-2 gap-1">
+                                                                <span className="text-2xl">⚠️</span>
+                                                                <span className="text-[10px] text-rose-400 text-center leading-tight line-clamp-3">{r.error}</span>
+                                                                <span className="text-[10px] text-zinc-500 mt-1">clic para reintentar</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <p className="text-[10px] text-zinc-400 text-center truncate px-1 font-medium">{c.wordEn}</p>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+
+                                    <button onClick={applyImages}
+                                        className="w-full mt-6 bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-xl font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 shrink-0">
+                                        ✅ Aceptar y continuar
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* ================================================================ */}
                     {/* HEADER                                                          */}
                     {/* ================================================================ */}
                     <header className="flex justify-between items-center mb-8">
@@ -485,6 +723,9 @@
                         <div className="flex gap-2">
                             <button onClick={() => setMagiaModal(true)} className="bg-sky-500 hover:bg-sky-400 text-black px-4 sm:px-6 py-2 rounded-xl font-bold flex gap-2 items-center transition-colors">
                                 <Sparkles size={18}/> <span className="hidden sm:inline">IA Assist</span>
+                            </button>
+                            <button onClick={openImageModal} className="bg-violet-600 hover:bg-violet-500 text-white px-4 sm:px-6 py-2 rounded-xl font-bold flex gap-2 items-center transition-colors">
+                                <span>🎨</span> <span className="hidden sm:inline">Generar Imágenes</span>
                             </button>
                             <button onClick={handlePreSave} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 sm:px-6 py-2 rounded-xl font-bold flex gap-2 items-center transition-colors">
                                 <Save size={18}/> <span className="hidden sm:inline">Guardar</span>
@@ -557,6 +798,19 @@
                                         </div>
                                     </div>
                                 </div>
+
+                                {c.imageBase64 && (
+                                    <div className="absolute bottom-3 right-3 z-10">
+                                        <div className="relative">
+                                            <img src={`data:${c.imageMimeType || 'image/png'};base64,${c.imageBase64}`}
+                                                 className="w-10 h-10 rounded-lg object-cover border border-zinc-700"/>
+                                            <button onClick={() => removeCardImage(c.id)}
+                                                    className="absolute -top-1.5 -right-1.5 bg-zinc-950 hover:bg-rose-500 text-zinc-400 hover:text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold border border-zinc-700 transition-colors">
+                                                ✕
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>
