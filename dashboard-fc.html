@@ -12,7 +12,8 @@
         "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
         "lucide-react": "https://esm.sh/lucide-react@0.263.1",
         "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
-        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js",
+        "firebase/storage": "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js"
       }
     }
     </script>
@@ -30,11 +31,13 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+        import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
         import { Save, ArrowLeft, Sparkles, Plus, Trash2, Loader2, X, Settings2, Key, Search, Layers, Tags } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
+        const storage = getStorage(app);
 
         // ============================================================
         // TAXONOMÍA MAESTRA
@@ -291,12 +294,7 @@
                 setShowSaveModal(false);
                 setLoading(true);
 
-                const cleanCards = cards.map(({ id, ...rest }) => rest);
-                cleanCards.forEach((c, i) => {
-                    if (c.imageBase64 && c.imageBase64.length > 600000) {
-                        console.warn(`⚠️ Tarjeta ${i+1} "${c.wordEn}": imageBase64 ~${Math.round(c.imageBase64.length/1024)}KB — riesgo de superar el límite de 1MB por documento en Firestore`);
-                    }
-                });
+                const cleanCards = cards.map(({ id, imageBase64, imageMimeType, ...rest }) => rest);
                 const tags = { levels: saveLevels, categories: saveCats, topics: saveTopics };
 
                 const data = {
@@ -441,10 +439,34 @@
                 }
             };
 
-            const applyImages = () => {
+            const applyImages = async () => {
+                setImgStep('uploading');
+                setImgProgress({ done: 0, total: Object.values(imgResults).filter(r => r.base64).length });
+
+                const urlMap = {};
+                const toUpload = cards.filter(c => imgResults[c.id]?.base64);
+
+                for (const card of toUpload) {
+                    const r = imgResults[card.id];
+                    try {
+                        const byteStr = atob(r.base64);
+                        const ab = new ArrayBuffer(byteStr.length);
+                        const ia = new Uint8Array(ab);
+                        for (let i = 0; i < byteStr.length; i++) ia[i] = byteStr.charCodeAt(i);
+                        const blob = new Blob([ab], { type: r.mimeType || 'image/png' });
+                        const safeName = card.wordEn.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+                        const path = `wordpack-images/teacher_builder_001/${Date.now()}_${safeName}`;
+                        const sRef = storageRef(storage, path);
+                        await uploadBytes(sRef, blob, { contentType: r.mimeType || 'image/png' });
+                        urlMap[card.id] = await getDownloadURL(sRef);
+                    } catch (e) {
+                        console.error(`Error subiendo imagen "${card.wordEn}":`, e);
+                    }
+                    setImgProgress(p => ({ ...p, done: p.done + 1 }));
+                }
+
                 setCards(prev => prev.map(c => {
-                    const r = imgResults[c.id];
-                    if (r && r.base64) return { ...c, imageBase64: r.base64, imageMimeType: r.mimeType };
+                    if (urlMap[c.id]) return { ...c, imageUrl: urlMap[c.id], imageBase64: undefined, imageMimeType: undefined };
                     return c;
                 }));
                 setShowImageModal(false);
@@ -452,7 +474,7 @@
 
             const removeCardImage = (id) => {
                 setCards(prev => prev.map(c =>
-                    c.id === id ? { ...c, imageBase64: undefined, imageMimeType: undefined } : c
+                    c.id === id ? { ...c, imageUrl: undefined, imageBase64: undefined, imageMimeType: undefined } : c
                 ));
             };
 
@@ -711,7 +733,26 @@
                                 );
                             })()}
 
-                            {/* ── PASO 3: PREVIEW ───────────────────────────────── */}
+                            {/* ── PASO 3.5: SUBIENDO A STORAGE ─────────────────── */}
+                            {imgStep === 'uploading' && (
+                                <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm p-8 shadow-2xl text-center">
+                                    <div className="text-5xl mb-5">☁️</div>
+                                    <h2 className="text-xl font-black text-white mb-1">Subiendo imágenes...</h2>
+                                    <p className="text-zinc-500 text-sm mb-6">Guardando en Firebase Storage, ya casi.</p>
+                                    <div className="bg-zinc-950 rounded-2xl p-5 mb-4">
+                                        <div className="text-3xl font-black text-sky-400 tabular-nums">
+                                            {imgProgress.done} <span className="text-zinc-600 text-xl font-bold">/ {imgProgress.total}</span>
+                                        </div>
+                                        <div className="text-[10px] text-zinc-600 mt-0.5 uppercase tracking-widest">subidas</div>
+                                    </div>
+                                    <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
+                                        <div className="h-full bg-sky-500 transition-all duration-500 rounded-full"
+                                             style={{ width: imgProgress.total ? `${(imgProgress.done / imgProgress.total) * 100}%` : '0%' }}/>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* ── PASO 4: PREVIEW ───────────────────────────────── */}
                             {imgStep === 'preview' && (
                                 <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-3xl p-6 shadow-2xl max-h-[90vh] flex flex-col">
                                     <div className="flex justify-between items-center mb-6 shrink-0">
@@ -865,10 +906,10 @@
                                     </div>
                                 </div>
 
-                                {c.imageBase64 && (
+                                {(c.imageUrl || c.imageBase64) && (
                                     <div className="absolute bottom-3 right-3 z-10">
                                         <div className="relative">
-                                            <img src={`data:${c.imageMimeType || 'image/png'};base64,${c.imageBase64}`}
+                                            <img src={c.imageUrl || `data:${c.imageMimeType || 'image/png'};base64,${c.imageBase64}`}
                                                  className="w-10 h-10 rounded-lg object-cover border border-zinc-700"/>
                                             <button onClick={() => removeCardImage(c.id)}
                                                     className="absolute -top-1.5 -right-1.5 bg-zinc-950 hover:bg-rose-500 text-zinc-400 hover:text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold border border-zinc-700 transition-colors">
