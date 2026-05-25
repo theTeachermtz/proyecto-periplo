@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Periplo Party | Tablero Builder 5.0 (Checkpoint & Ghost Paths)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
+    
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "lucide-react": "https://esm.sh/lucide-react@0.344.0",
+        "canvas-confetti": "https://esm.sh/canvas-confetti@1.6.0"
+      }
+    }
+    </script>
+    
+    <script type="module" src="https://esm.sh/run"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800;900&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; height: 100dvh; overflow: hidden; overscroll-behavior-y: contain; touch-action: manipulation; }
+        .btn-juicy { transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1); }
+        @media (hover: hover) { .btn-juicy:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-2px); } }
+        .btn-juicy:active:not(:disabled) { transform: scale(0.95); }
+        @media (hover: hover) { .hex-build-hover:hover { fill: #3f3f46; cursor: pointer; } }
+        
+        /* Animación del Ghost Path */
+        .ghost-path { animation: ghost-flow 1s linear infinite; }
+        @keyframes ghost-flow { to { stroke-dashoffset: -20; } }
+        .pulse-landing { animation: pulse-glow 1.5s ease-in-out infinite; }
+        @keyframes pulse-glow { 0%, 100% { filter: drop-shadow(0 0 5px rgba(255,255,255,0.5)); } 50% { filter: drop-shadow(0 0 15px rgba(255,255,255,1)); transform: scale(1.05); } }
+    </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 select-none">
+    <div id="root" class="h-full w-full"></div>
+
+<script type="text/babel" data-type="module">
+import React, { useState, useEffect } from 'react';
+import { createRoot } from 'react-dom/client';
+import { 
+    Dices, Pencil, Eraser, Play, MapPin, ArrowRight, 
+    Skull, Ghost, Star, Zap, LogIn, AlertTriangle, Trophy, 
+    GitBranch, XCircle, Trash2, MousePointerClick, Save, Download, Upload, CheckCircle2
+} from 'lucide-react';
+import confetti from 'canvas-confetti';
+
+// ==========================================
+// MOTOR GEOMÉTRICO
+// ==========================================
+const S = 30; 
+const W = Math.sqrt(3) * S;
+const H = 2 * S;
+const getXY = (q, r) => ({ x: W * (q + r / 2), y: 1.5 * S * r });
+const getHexPoints = (cx, cy) => `
+    ${cx},${cy - S} ${cx + W/2},${cy - S/2} ${cx + W/2},${cy + S/2} 
+    ${cx},${cy + S} ${cx - W/2},${cy + S/2} ${cx - W/2},${cy - S/2}
+`.trim();
+
+const HEX_DIRS = [
+    {q: 1, r: 0, label: "Derecha"},   
+    {q: 0, r: 1, label: "Abajo Der."},   
+    {q: -1, r: 1, label: "Abajo Izq."},  
+    {q: -1, r: 0, label: "Izquierda"},  
+    {q: 0, r: -1, label: "Arriba Izq."},  
+    {q: 1, r: -1, label: "Arriba Der."}   
+];
+
+const generateWideGrid = () => {
+    const grid = [];
+    for (let r = -12; r <= 12; r++) {
+        const rOffset = Math.floor(r / 2);
+        for (let q = -20 - rOffset; q <= 20 - rOffset; q++) {
+            grid.push({ id: `${q},${r}`, q, r, ...getXY(q, r) });
+        }
+    }
+    return grid;
+};
+const BASE_GRID = generateWideGrid();
+
+const SPACE_TYPES = {
+    raw:    { id: 'raw', name: 'Esqueleto', fill: '#27272a', stroke: '#52525b', icon: null },
+    start:  { id: 'start', name: 'Plat. Inicio', fill: '#14532d', stroke: '#22c55e', icon: <LogIn size={18} className="text-emerald-300"/> },
+    blue:   { id: 'blue', name: 'Azul (+3)', fill: '#1e3a8a', stroke: '#3b82f6', icon: null },
+    red:    { id: 'red', name: 'Roja (-3)', fill: '#7f1d1d', stroke: '#ef4444', icon: null },
+    event:  { id: 'event', name: 'Evento (?)', fill: '#064e3b', stroke: '#10b981', icon: <Zap size={18} className="text-emerald-300"/> },
+    bowser: { id: 'bowser', name: 'Bowser', fill: '#450a0a', stroke: '#f87171', icon: <Skull size={18} className="text-rose-300"/> },
+    thwomp: { id: 'thwomp', name: 'Thwomp', fill: '#4b5563', stroke: '#9ca3af', icon: <AlertTriangle size={18} className="text-zinc-300"/> },
+    koopa:  { id: 'koopa', name: 'Koopa', fill: '#0f766e', stroke: '#2dd4bf', icon: <Trophy size={18} className="text-teal-300"/> },
+    boo:    { id: 'boo', name: 'Boo', fill: '#3b0764', stroke: '#d8b4fe', icon: <Ghost size={18} className="text-purple-300"/> },
+    star:   { id: 'star', name: 'Estrella', fill: '#78350f', stroke: '#f59e0b', icon: <Star size={18} className="text-amber-300 fill-amber-300"/> }
+};
+
+const App = () => {
+    const [appPhase, setAppPhase] = useState('layout'); 
+    const [layoutTool, setLayoutTool] = useState('pencil'); 
+    const [activeCursor, setActiveCursor] = useState(null);
+    const [tiles, setTiles] = useState({});
+    const [paintBrush, setPaintBrush] = useState('blue');
+
+    const [playerPos, setPlayerPos] = useState(null);
+    const [gamePhase, setGamePhase] = useState('IDLE'); 
+    const [diceVal, setDiceVal] = useState(0);
+    const [movesLeft, setMovesLeft] = useState(0);
+    
+    // GHOST PATH STATES
+    const [selectedForkDir, setSelectedForkDir] = useState(null); // Qué dirección de la bifurcación pre-seleccionó
+    const [ghostPathCoords, setGhostPathCoords] = useState([]); // Coordenadas para dibujar el preview
+    const [ghostLandingNode, setGhostLandingNode] = useState(null); // Casilla final predicha
+
+    const [toastMsg, setToastMsg] = useState(null);
+
+    // ==========================================
+    // SISTEMA DE GUARDADO (PERSISTENCIA)
+    // ==========================================
+    useEffect(() => {
+        // Auto-cargar si hay datos guardados al iniciar
+        const saved = localStorage.getItem('periplo_map_v5');
+        if (saved) {
+            try { setTiles(JSON.parse(saved)); } catch(e) {}
+        }
+    }, []);
+
+    const saveMap = () => {
+        localStorage.setItem('periplo_map_v5', JSON.stringify(tiles));
+        showToast("💾 Mapa guardado localmente");
+    };
+
+    const exportMap = () => {
+        navigator.clipboard.writeText(JSON.stringify(tiles));
+        showToast("📋 JSON copiado al portapapeles");
+    };
+
+    const importMap = () => {
+        const json = prompt("Pega el JSON de tu mapa exportado:");
+        if (json) {
+            try { setTiles(JSON.parse(json)); saveMap(); showToast("📂 Mapa cargado con éxito"); }
+            catch(e) { showToast("❌ Error: JSON inválido"); }
+        }
+    };
+
+    const showToast = (msg) => {
+        setToastMsg(msg);
+        setTimeout(() => setToastMsg(null), 2500);
+    };
+
+    const getSmartDefaultDir = (node, tilesMap, currentDirs = []) => {
+        for (let i = 0; i < 6; i++) {
+            if (currentDirs.includes(i)) continue;
+            const neighborId = `${node.q + HEX_DIRS[i].q},${node.r + HEX_DIRS[i].r}`;
+            if (tilesMap[neighborId]) return i;
+        }
+        for (let i = 0; i < 6; i++) {
+            if (!currentDirs.includes(i)) return i;
+        }
+        return 0;
+    };
+
+    const handleHexClick = (hex) => {
+        const id = hex.id;
+
+        if (appPhase === 'layout') {
+            if (layoutTool === 'pencil') {
+                if (!tiles[id]) setTiles(prev => ({ ...prev, [id]: { ...hex, type: 'raw', dirs: [], dirLabels: {} } }));
+            } else if (layoutTool === 'eraser') {
+                if (tiles[id]) setTiles(prev => { const n = {...prev}; delete n[id]; return n; });
+            }
+        }
+        
+        else if (appPhase === 'flow') {
+            if (!tiles[id]) return; 
+
+            setTiles(prev => {
+                const newT = { ...prev };
+                const node = newT[id];
+                const currentDirs = node.dirs || [];
+                
+                if (activeCursor === id) {
+                    if (currentDirs.length === 0) {
+                        newT[id] = { ...node, dirs: [getSmartDefaultDir(node, prev, [])] };
+                    } else {
+                        const newDirs = [...currentDirs];
+                        newDirs[newDirs.length - 1] = (newDirs[newDirs.length - 1] + 1) % 6;
+                        newT[id] = { ...node, dirs: newDirs };
+                    }
+                } else {
+                    if (currentDirs.length === 0) {
+                        newT[id] = { ...node, dirs: [getSmartDefaultDir(node, prev, [])] };
+                    }
+                }
+                return newT;
+            });
+            setActiveCursor(id);
+        }
+
+        else if (appPhase === 'paint') {
+            if (paintBrush === 'start') {
+                if (!tiles[id]) {
+                    const touching = Object.values(tiles).filter(p => p.type !== 'start' && Math.abs(p.q - hex.q) + Math.abs(p.q+p.r - hex.q-hex.r) + Math.abs(p.r - hex.r) === 2);
+                    if (touching.length > 0) {
+                        const target = touching[0];
+                        const dq = target.q - hex.q; const dr = target.r - hex.r;
+                        const dirIdx = HEX_DIRS.findIndex(d => d.q === dq && d.r === dr);
+                        
+                        setTiles(prev => ({
+                            ...prev,
+                            [id]: { ...hex, type: 'start', dirs: [dirIdx !== -1 ? dirIdx : 0] }
+                        }));
+                        showToast("🟢 Plataforma conectada");
+                    } else {
+                        showToast("⚠️ Debe tocar el camino.");
+                    }
+                }
+                return;
+            }
+
+            if (tiles[id] && tiles[id].type !== 'start') {
+                setTiles(prev => ({ ...prev, [id]: { ...prev[id], type: paintBrush } }));
+            }
+        }
+    };
+
+    const handleLabelChange = (nodeId, dirIndex, value) => {
+        setTiles(prev => ({
+            ...prev,
+            [nodeId]: {
+                ...prev[nodeId],
+                dirLabels: { ...(prev[nodeId].dirLabels || {}), [dirIndex]: value }
+            }
+        }));
+    };
+
+    const addFork = () => {
+        if (!activeCursor || !tiles[activeCursor]) return;
+        setTiles(prev => {
+            const newT = { ...prev };
+            const node = newT[activeCursor];
+            const currentDirs = node.dirs || [];
+            if (currentDirs.length < 6) {
+                const newDir = getSmartDefaultDir(node, prev, currentDirs);
+                newT[activeCursor] = { ...node, dirs: [...currentDirs, newDir] };
+            }
+            return newT;
+        });
+    };
+
+    const getValidOuts = (node) => {
+        if (!node || !node.dirs) return [];
+        // Retorna un array de objetos con la dirección y el ID destino
+        return node.dirs.map(dir => ({
+            dir: dir,
+            id: `${node.q + HEX_DIRS[dir].q},${node.r + HEX_DIRS[dir].r}`
+        })).filter(out => tiles[out.id]);
+    };
+
+    // ==========================================
+    // MOTOR DE JUEGO Y GHOST PATHS
+    // ==========================================
+    const startGame = () => {
+        const startNodes = Object.values(tiles).filter(n => n.type === 'start');
+        if (startNodes.length === 0) return alert("¡Pinta una 'Plataforma Inicio' antes de jugar!");
+        
+        setPlayerPos(startNodes[0].id);
+        setGamePhase('IDLE');
+        setAppPhase('play');
+        setSelectedForkDir(null);
+        setGhostPathCoords([]);
+    };
+
+    // Calcula el camino predicho a partir de una dirección elegida
+    const calculateGhostPath = (startNodeId, chosenDirIdx) => {
+        let path = [];
+        let currentId = startNodeId;
+        let steps = movesLeft;
+
+        path.push({x: tiles[currentId].x, y: tiles[currentId].y});
+
+        // Primer paso manual según la dirección elegida
+        let nextId = `${tiles[currentId].q + HEX_DIRS[chosenDirIdx].q},${tiles[currentId].r + HEX_DIRS[chosenDirIdx].r}`;
+        if (!tiles[nextId]) return { path, landingNode: null };
+        
+        currentId = nextId;
+        path.push({x: tiles[currentId].x, y: tiles[currentId].y});
+        steps--;
+
+        // Seguir el camino automáticamente hasta que se acaben los pasos o haya otro fork
+        while (steps > 0) {
+            let node = tiles[currentId];
+            let outs = getValidOuts(node);
+            
+            if (outs.length === 0) break; // Callejón sin salida
+            if (outs.length > 1) break; // Otro Fork: el preview se detiene aquí
+
+            currentId = outs[0].id;
+            path.push({x: tiles[currentId].x, y: tiles[currentId].y});
+            steps--;
+        }
+
+        return { path, landingNode: tiles[currentId] };
+    };
+
+    // Pre-seleccionar una ruta para ver el Ghost Path
+    const previewChoice = (dirIdx) => {
+        setSelectedForkDir(dirIdx);
+        const ghostData = calculateGhostPath(playerPos, dirIdx);
+        setGhostPathCoords(ghostData.path);
+        setGhostLandingNode(ghostData.landingNode);
+    };
+
+    // Confirmar y moverse
+    const confirmChoice = () => {
+        if (selectedForkDir === null) return;
+        const nextId = `${tiles[playerPos].q + HEX_DIRS[selectedForkDir].q},${tiles[playerPos].r + HEX_DIRS[selectedForkDir].r}`;
+        
+        setPlayerPos(nextId);
+        setMovesLeft(movesLeft - 1);
+        setSelectedForkDir(null);
+        setGhostPathCoords([]);
+        setGhostLandingNode(null);
+        
+        if (movesLeft - 1 === 0) setGamePhase('IDLE');
+        else setGamePhase('MOVING');
+    };
+
+    // Lógica de Movimiento Automático
+    useEffect(() => {
+        if (appPhase === 'play' && gamePhase === 'MOVING' && movesLeft > 0) {
+            const timer = setTimeout(() => {
+                const currentNode = tiles[playerPos];
+                const validOuts = getValidOuts(currentNode);
+
+                if (currentNode.type === 'bowser') showToast("💀 ¡Bowser te roba monedas!");
+                if (currentNode.type === 'thwomp') showToast("🪨 Thwomp: ¡Paga Peaje!");
+                if (currentNode.type === 'koopa') showToast("🏆 Koopa: Toma +10 Monedas");
+
+                if (validOuts.length === 0) {
+                    setGamePhase('IDLE'); setMovesLeft(0); return;
+                }
+                
+                // Si hay Fork, pausamos y esperamos decisión del jugador
+                if (validOuts.length > 1) {
+                    setGamePhase('CHOICE'); return;
+                }
+
+                // Movimiento automático de 1 camino
+                const nextNodeId = validOuts[0].id;
+                setPlayerPos(nextNodeId);
+                setMovesLeft(movesLeft - 1);
+                
+                if (movesLeft - 1 === 0) {
+                    const finalNode = tiles[nextNodeId];
+                    if (finalNode.type === 'star') { showToast("⭐ ¡Llegaste a la Estrella! ¿La compras?"); confetti(); }
+                    if (finalNode.type === 'event') { showToast("⚡ ¡Evento Misterioso!"); }
+                    if (finalNode.type === 'blue') { showToast("🔵 +3 Monedas"); }
+                    if (finalNode.type === 'red') { showToast("🔴 -3 Monedas"); }
+                    setGamePhase('IDLE');
+                }
+            }, 350);
+            return () => clearTimeout(timer);
+        }
+    }, [gamePhase, movesLeft, playerPos, appPhase, tiles]);
+
+    const rollDice = () => {
+        if (gamePhase !== 'IDLE') return;
+        const roll = Math.floor(Math.random() * 6) + 1;
+        setDiceVal(roll); setMovesLeft(roll); setGamePhase('MOVING');
+    };
+
+    return (
+        <div className="h-full flex flex-col bg-zinc-950">
+            {/* TOP BAR & MENÚ DE GUARDADO */}
+            <div className="bg-zinc-900 border-b border-zinc-800 p-3 shrink-0 flex justify-between items-center z-10 shadow-lg">
+                <div className="font-black text-white text-lg flex items-center gap-2">
+                    Periplo Builder <span className="bg-indigo-600 text-[10px] px-2 py-0.5 rounded-full">v5.0</span>
+                </div>
+                <div className="flex gap-2">
+                    <button onClick={saveMap} className="p-2 bg-zinc-800 text-emerald-400 hover:bg-emerald-900/30 rounded-xl transition" title="Guardar Progreso"><Save size={18}/></button>
+                    <button onClick={exportMap} className="p-2 bg-zinc-800 text-blue-400 hover:bg-blue-900/30 rounded-xl transition" title="Exportar JSON"><Download size={18}/></button>
+                    <button onClick={importMap} className="p-2 bg-zinc-800 text-amber-400 hover:bg-amber-900/30 rounded-xl transition" title="Importar JSON"><Upload size={18}/></button>
+                </div>
+            </div>
+
+            {/* FASES */}
+            <div className="bg-zinc-900 border-b border-zinc-800 shrink-0 flex">
+                <button onClick={() => {setAppPhase('layout'); setActiveCursor(null);}} className={`flex-1 py-3 font-black text-xs md:text-sm transition-colors border-b-4 ${appPhase === 'layout' ? 'border-indigo-500 text-indigo-400 bg-zinc-900' : 'border-transparent text-zinc-600 hover:text-zinc-400 bg-black'}`}>1. Esqueleto</button>
+                <button onClick={() => {setAppPhase('flow'); setActiveCursor(null);}} className={`flex-1 py-3 font-black text-xs md:text-sm transition-colors border-b-4 ${appPhase === 'flow' ? 'border-cyan-500 text-cyan-400 bg-zinc-900' : 'border-transparent text-zinc-600 hover:text-zinc-400 bg-black'}`}>2. Flujo</button>
+                <button onClick={() => {setAppPhase('paint'); setActiveCursor(null);}} className={`flex-1 py-3 font-black text-xs md:text-sm transition-colors border-b-4 ${appPhase === 'paint' ? 'border-amber-500 text-amber-400 bg-zinc-900' : 'border-transparent text-zinc-600 hover:text-zinc-400 bg-black'}`}>3. Eventos</button>
+                <button onClick={startGame} className={`flex-1 py-3 font-black text-xs md:text-sm transition-colors border-b-4 ${appPhase === 'play' ? 'border-emerald-500 text-emerald-400 bg-zinc-900' : 'border-transparent text-zinc-600 hover:text-zinc-400 bg-black'}`}>4. Jugar</button>
+            </div>
+
+            {/* TOOLBAR FASE 1: LAYOUT */}
+            {appPhase === 'layout' && (
+                <div className="bg-zinc-950 border-b border-zinc-800 p-3 shrink-0 flex justify-center gap-4">
+                    <button onClick={() => setLayoutTool('pencil')} className={`btn-juicy px-6 py-2.5 rounded-xl font-bold text-sm border-2 flex items-center gap-2 ${layoutTool === 'pencil' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-zinc-900 border-zinc-700 text-zinc-400'}`}><Pencil size={18}/> Dibujar</button>
+                    <button onClick={() => setLayoutTool('eraser')} className={`btn-juicy px-6 py-2.5 rounded-xl font-bold text-sm border-2 flex items-center gap-2 ${layoutTool === 'eraser' ? 'bg-rose-600 border-rose-500 text-white' : 'bg-zinc-900 border-zinc-700 text-zinc-400'}`}><Eraser size={18}/> Borrar</button>
+                    <button onClick={() => {if(confirm("¿Limpiar todo?")) setTiles({});}} className="btn-juicy p-2.5 rounded-xl bg-zinc-900 border-2 border-zinc-800 text-zinc-500 hover:text-rose-500"><Trash2 size={18}/></button>
+                </div>
+            )}
+
+            {/* TOOLBAR FASE 2: FLUJO (NOMBRAMIENTO DE RUTAS) */}
+            {appPhase === 'flow' && (
+                <div className="bg-zinc-950 border-b border-zinc-800 p-3 shrink-0 flex flex-col items-center gap-3">
+                    <div className="flex gap-4">
+                        <div className="bg-cyan-900/30 text-cyan-400 px-4 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 border border-cyan-800/50">
+                            <MousePointerClick size={18}/> Clic en hex para añadir/rotar
+                        </div>
+                        <button onClick={addFork} disabled={!activeCursor} className={`btn-juicy px-6 py-2.5 rounded-xl font-bold text-sm border-2 flex items-center gap-2 ${activeCursor ? 'bg-purple-600 border-purple-500 text-white shadow-[0_0_15px_rgba(147,51,234,0.4)]' : 'bg-zinc-900 border-zinc-800 text-zinc-600'}`}>
+                            <GitBranch size={18}/> + Bifurcación
+                        </button>
+                    </div>
+                    {/* BAUTIZAR RUTAS SI HAY FORK */}
+                    {activeCursor && tiles[activeCursor] && (tiles[activeCursor].dirs || []).length > 1 && (
+                        <div className="bg-zinc-900 border border-zinc-700 p-3 rounded-xl w-full max-w-lg flex flex-wrap gap-2 justify-center">
+                            <span className="w-full text-center text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1">Nombrar Rutas:</span>
+                            {(tiles[activeCursor].dirs || []).map((dir, idx) => (
+                                <input 
+                                    key={idx}
+                                    type="text" 
+                                    value={tiles[activeCursor].dirLabels?.[dir] || ''}
+                                    onChange={(e) => handleLabelChange(activeCursor, dir, e.target.value)}
+                                    placeholder={`Ruta ${idx + 1} (${HEX_DIRS[dir].label})`}
+                                    className="bg-zinc-800 text-white text-xs px-3 py-2 rounded-lg border border-zinc-700 outline-none focus:border-cyan-500 w-32"
+                                />
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* TOOLBAR FASE 3: PINTAR */}
+            {appPhase === 'paint' && (
+                <div className="bg-zinc-950 border-b border-zinc-800 p-3 shrink-0 overflow-x-auto whitespace-nowrap custom-scrollbar flex gap-2">
+                    {Object.values(SPACE_TYPES).filter(t => t.id !== 'raw').map(t => (
+                        <button key={t.id} onClick={() => setPaintBrush(t.id)} className={`btn-juicy flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs border-2`} style={{ backgroundColor: paintBrush === t.id ? t.fill : '#18181b', borderColor: paintBrush === t.id ? t.stroke : '#27272a', color: paintBrush === t.id ? '#fff' : t.stroke }}>
+                            {t.icon} {t.name}
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {/* TABLERO INTERACTIVO */}
+            <div className="flex-1 relative overflow-hidden flex items-center justify-center bg-[#09090b]">
+                {toastMsg && (
+                    <div className="absolute top-10 z-50 pointer-events-none"><div className="bg-white text-black px-6 py-3 rounded-full font-black text-lg shadow-xl animate-bounce">{toastMsg}</div></div>
+                )}
+
+                <svg viewBox="-500 -350 1000 700" className="w-full h-full">
+                    {/* GRID DE FONDO */}
+                    <g opacity={appPhase === 'layout' || appPhase === 'paint' ? 0.3 : 0.05}>
+                        {BASE_GRID.map((t) => {
+                            const isDrawn = !!tiles[t.id];
+                            if (isDrawn && appPhase !== 'layout' && appPhase !== 'paint') return null;
+                            return (
+                                <polygon key={`base-${t.id}`} points={getHexPoints(t.x, t.y)} fill={isDrawn ? 'transparent' : '#18181b'} stroke="#27272a" strokeWidth="2" 
+                                         className={!isDrawn && (appPhase === 'layout' || paintBrush === 'start') ? 'hex-build-hover' : ''} onClick={() => handleHexClick(t)} />
+                            )
+                        })}
+                    </g>
+
+                    {/* CASILLAS */}
+                    <g pointerEvents={appPhase !== 'play' ? 'auto' : 'none'}>
+                        {Object.values(tiles).map((tile) => {
+                            const style = SPACE_TYPES[tile.type];
+                            const isHoverable = appPhase !== 'play';
+                            // Destacar el nodo predicho por el Ghost Path
+                            const isGhostLanding = ghostLandingNode && ghostLandingNode.id === tile.id;
+
+                            return (
+                                <g key={`drawn-${tile.id}`} onClick={() => handleHexClick(tile)}>
+                                    <polygon points={getHexPoints(tile.x, tile.y)} 
+                                             fill={style.fill} 
+                                             stroke={isGhostLanding ? '#ffffff' : style.stroke} 
+                                             strokeWidth={isGhostLanding ? "6" : "3"} 
+                                             className={`${isHoverable ? "cursor-pointer hover:brightness-125 transition-all" : ""} ${isGhostLanding ? "pulse-landing" : ""}`} />
+                                    
+                                    {activeCursor === tile.id && appPhase === 'flow' && <circle cx={tile.x} cy={tile.y} r="22" fill="none" stroke="#06b6d4" strokeWidth="3" strokeDasharray="4 4" className="animate-spin" style={{transformOrigin: `${tile.x}px ${tile.y}px`}}/>}
+                                    {activeCursor === tile.id && appPhase === 'layout' && <circle cx={tile.x} cy={tile.y} r="18" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" className="animate-spin" style={{transformOrigin: `${tile.x}px ${tile.y}px`}}/>}
+                                    
+                                    {style.icon && <g opacity={appPhase === 'flow' ? 0.2 : 1} transform={`translate(${tile.x - 9}, ${tile.y - 9})`}>{style.icon}</g>}
+
+                                    {(appPhase !== 'play' && tile.dirs) && tile.dirs.map((dir, idx) => {
+                                        const targetId = `${tile.q + HEX_DIRS[dir].q},${tile.r + HEX_DIRS[dir].r}`;
+                                        const isValid = !!tiles[targetId];
+                                        const arrowColor = isValid ? '#06b6d4' : '#ef4444';
+                                        
+                                        return (
+                                            <g key={`arrow-${tile.id}-${idx}`} transform={`translate(${tile.x}, ${tile.y}) rotate(${dir * 60})`}>
+                                                <line x1="0" y1="0" x2="22" y2="0" stroke={arrowColor} strokeWidth="4" strokeLinecap="round" />
+                                                <path d="M 14 -6 L 22 0 L 14 6" stroke={arrowColor} strokeWidth="4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                                            </g>
+                                        );
+                                    })}
+                                </g>
+                            );
+                        })}
+                    </g>
+
+                    {/* DIBUJO DEL GHOST PATH (LÍNEA PUNTEADA) */}
+                    {appPhase === 'play' && ghostPathCoords.length > 1 && (
+                        <polyline 
+                            points={ghostPathCoords.map(p => `${p.x},${p.y}`).join(' ')} 
+                            fill="none" 
+                            stroke="#ffffff" 
+                            strokeWidth="6" 
+                            strokeLinecap="round" 
+                            strokeLinejoin="round"
+                            strokeDasharray="8 12"
+                            className="ghost-path drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]"
+                        />
+                    )}
+
+                    {/* FICHA DEL JUGADOR */}
+                    {appPhase === 'play' && playerPos && (
+                        <g className="transition-all duration-300 ease-in-out z-50" style={{ transform: `translate(${tiles[playerPos].x}px, ${tiles[playerPos].y}px)` }}>
+                            <circle cx="0" cy="0" r="14" fill="#6366f1" className="shadow-2xl" />
+                            <circle cx="0" cy="0" r="10" fill="#4338ca" />
+                            <circle cx="0" cy="0" r="22" fill="none" stroke="#ffffff" strokeWidth="4" className={gamePhase === 'IDLE' ? 'animate-pulse' : ''} />
+                            {gamePhase === 'MOVING' && <text x="0" y="38" fill="white" fontSize="20" fontWeight="black" textAnchor="middle">{movesLeft}</text>}
+                        </g>
+                    )}
+                </svg>
+
+                {/* MENÚ FLOTANTE DE BIFURCACIÓN (BOTTOM SHEET) */}
+                {appPhase === 'play' && gamePhase === 'CHOICE' && (
+                    <div className="absolute bottom-6 left-0 right-0 flex justify-center px-4 z-40">
+                        <div className="bg-zinc-900 border-2 border-indigo-500 p-6 rounded-3xl w-full max-w-lg shadow-2xl flex flex-col gap-4 animate-in slide-in-from-bottom-10">
+                            <div className="text-center">
+                                <h2 className="text-xl font-black text-white flex justify-center items-center gap-2"><MapPin className="text-indigo-400"/> ¡Intersección!</h2>
+                                <p className="text-zinc-400 text-sm mt-1">Te quedan <span className="text-white font-bold">{movesLeft} pasos</span>. Toca una ruta para previsualizar.</p>
+                            </div>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {getValidOuts(tiles[playerPos]).map((out, idx) => {
+                                    const isSelected = selectedForkDir === out.dir;
+                                    // Buscar si el creador le puso nombre a esta ruta, si no, usar el nombre por defecto de la dirección
+                                    const customName = tiles[playerPos].dirLabels?.[out.dir];
+                                    const defaultName = `Ruta ${HEX_DIRS[out.dir].label}`;
+                                    const nextType = SPACE_TYPES[tiles[out.id].type];
+
+                                    return (
+                                        <button key={out.id} 
+                                            onClick={() => previewChoice(out.dir)} 
+                                            className={`btn-juicy p-4 rounded-2xl font-bold flex flex-col items-center justify-center border-2 transition-all ${isSelected ? 'bg-indigo-600 border-indigo-400 text-white shadow-[0_0_15px_rgba(99,102,241,0.5)] scale-105' : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'}`}>
+                                            <span className="text-sm opacity-70 mb-1">{customName || defaultName}</span>
+                                            <span className="flex items-center gap-2">{nextType.icon} Hacia {nextType.name}</span> 
+                                        </button>
+                                    )
+                                })}
+                            </div>
+
+                            {/* BOTÓN CONFIRMAR (Solo aparece cuando has seleccionado una ruta) */}
+                            {selectedForkDir !== null && (
+                                <button onClick={confirmChoice} className="btn-juicy mt-2 w-full bg-emerald-500 hover:bg-emerald-400 text-emerald-950 py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-2 shadow-[0_6px_0_theme(colors.emerald.700)]">
+                                    <CheckCircle2 size={24}/> Confirmar y Avanzar
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* CONTROLES DE JUEGO (DADO) */}
+            {appPhase === 'play' && gamePhase !== 'CHOICE' && (
+                <div className="bg-zinc-900 border-t border-zinc-800 p-6 shrink-0 flex items-center justify-center gap-4 relative z-10 min-h-[100px]">
+                    <button onClick={rollDice} disabled={gamePhase !== 'IDLE'} className="btn-juicy w-full max-w-sm bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white px-8 py-5 rounded-3xl font-black text-2xl flex items-center justify-center gap-3 shadow-[0_8px_0_theme(colors.indigo.700)] disabled:shadow-none">
+                        <Dices size={32} className={gamePhase === 'MOVING' ? "animate-spin" : ""} /> 
+                        {gamePhase === 'MOVING' ? `Moviendo...` : (diceVal > 0 ? `Sacaste un ${diceVal}` : `TIRAR DADO`)}
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+};
+
+createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

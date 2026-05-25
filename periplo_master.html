@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌋 Periplo Master Suite</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body { background-color: #0f172a; color: white; }
+        .animate-spin-slow { animation: spin 3s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useRef } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { initializeApp } from 'firebase/app';
+    import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc, addDoc, query, orderBy, serverTimestamp, getDoc } from 'firebase/firestore';
+    import { getAuth, signInAnonymously } from 'firebase/auth';
+    import { Play, Users, Skull, Trophy, Flame, Plus, Edit, Trash2, Save, ArrowLeft, Sparkles, Image as ImageIcon, Loader2, List, Brain } from 'lucide-react';
+
+    // --- 1. CONFIGURACIÓN DE TU PROYECTO PERIPLO (YA CONECTADO) ---
+    const firebaseConfig = {
+        apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+        authDomain: "proyecto-periplo.firebaseapp.com",
+        projectId: "proyecto-periplo",
+        storageBucket: "proyecto-periplo.firebasestorage.app",
+        messagingSenderId: "236795998392",
+        appId: "1:236795998392:web:0da24b4f018611b55c844d"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+    const appId = 'volcan-del-saber'; // ID interno para el juego
+
+    // --- DATOS FIJOS (Tus Paquetes) ---
+    const VERB_PACKS = [
+        { id: 1, name: "Pack 1: Daily Basics", words: "wake up, shower, prepare, take, pick up..." },
+        { id: 2, name: "Pack 2: Comms & Home", words: "get in, agree, dance, arrive, practice..." },
+        { id: 3, name: "Pack 3: Movement", words: "open, confirm, continue, improve..." }
+    ];
+
+    const GAME_MODES = [
+        { id: 'COMPLETE', label: 'Complete the Sentence', desc: 'Rellenar el hueco.' },
+        { id: 'CORRECT', label: 'Correct or Incorrect', desc: 'Identificar errores.' },
+        { id: 'QUIZ', label: 'Logic Quiz', desc: 'Pregunta y respuesta lógica.' }
+    ];
+
+    // --- SIMULADOR DE IA (Para que no falle sin API Key extra) ---
+    const simularIA = async (config) => {
+        return new Promise(resolve => {
+            setTimeout(() => {
+                resolve([
+                    { q: "She ___ (debería ir) to the doctor.", options: ["should go", "must go", "going", "goes"], correct: "A" },
+                    { q: "___ they happy yesterday?", options: ["Were", "Was", "Are", "Did"], correct: "A" },
+                    { q: "I ___ (desayunar) at 8 AM.", options: ["have breakfast", "breakfast", "eating", "do breakfast"], correct: "A" },
+                    { q: "He ___ speak Spanish.", options: ["doesn't", "don't", "no", "not"], correct: "A" },
+                    { q: "Where ___ you from?", options: ["are", "is", "do", "have"], correct: "A" }
+                ]);
+            }, 1500);
+        });
+    };
+
+    // --- COMPONENTES DE LA APP ---
+
+    function App() {
+        const [user, setUser] = useState(null);
+        const [mode, setMode] = useState('MENU');
+        const [currentQuiz, setCurrentQuiz] = useState(null);
+        const [gameCode, setGameCode] = useState('');
+
+        useEffect(() => {
+            signInAnonymously(auth).then((cred) => setUser(cred.user)).catch(console.error);
+        }, []);
+
+        const createGame = async (quiz) => {
+            const code = Math.random().toString(36).substring(2, 6).toUpperCase();
+            await setDoc(doc(db, 'partidas', code), {
+                hostId: user.uid,
+                status: 'LOBBY',
+                currentQuestion: null,
+                createdAt: serverTimestamp(),
+                quizData: quiz, 
+                playersAlive: 0
+            });
+            setGameCode(code);
+            setMode('HOST');
+        };
+
+        if (!user) return <div className="h-screen flex items-center justify-center text-2xl text-orange-500 font-bold">Conectando a Periplo... 🌋</div>;
+
+        return (
+            <div className="min-h-screen bg-slate-900 text-slate-100 font-sans">
+                {mode === 'MENU' && (
+                    <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-slate-800 to-slate-900">
+                        <div className="text-center">
+                            <h1 className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-red-600 mb-2">PERIPLO</h1>
+                            <p className="text-xl text-slate-400">Sistema Operativo Docente</p>
+                        </div>
+                        
+                        <div className="grid md:grid-cols-2 gap-8 w-full max-w-4xl">
+                            {/* Tarjeta Profesor */}
+                            <div className="bg-slate-800 p-8 rounded-2xl border border-slate-700 hover:border-orange-500 transition-all shadow-2xl flex flex-col items-center text-center group cursor-pointer" onClick={() => setMode('DASHBOARD')}>
+                                <div className="p-4 bg-orange-600 rounded-full mb-4 group-hover:scale-110 transition-transform">
+                                    <Flame size={40} className="text-white" />
+                                </div>
+                                <h2 className="text-2xl font-bold mb-2">Soy el Teacher</h2>
+                                <p className="text-slate-400">Crear actividades, gestionar juegos y dashboard.</p>
+                            </div>
+
+                             {/* Tarjeta Alumno (Simulación) */}
+                             <div className="bg-slate-800 p-8 rounded-2xl border border-slate-700 hover:border-blue-500 transition-all shadow-2xl flex flex-col items-center text-center group opacity-50">
+                                <div className="p-4 bg-blue-600 rounded-full mb-4">
+                                    <Users size={40} className="text-white" />
+                                </div>
+                                <h2 className="text-2xl font-bold mb-2">Soy Alumno</h2>
+                                <p className="text-slate-400">Para jugar, abre el archivo "Volcán" en otro dispositivo.</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {mode === 'DASHBOARD' && (
+                    <Dashboard 
+                        user={user} 
+                        onBack={() => setMode('MENU')} 
+                        onNew={() => { setCurrentQuiz(null); setMode('EDITOR'); }}
+                        onEdit={(quiz) => { setCurrentQuiz(quiz); setMode('EDITOR'); }}
+                        onLaunch={(quiz) => createGame(quiz)}
+                    />
+                )}
+
+                {mode === 'EDITOR' && (
+                    <QuizEditor 
+                        user={user} 
+                        initialData={currentQuiz} 
+                        onCancel={() => setMode('DASHBOARD')}
+                        onSave={() => setMode('DASHBOARD')}
+                    />
+                )}
+
+                {mode === 'HOST' && (
+                    <HostView gameCode={gameCode} onExit={() => setMode('DASHBOARD')} />
+                )}
+            </div>
+        );
+    }
+
+    // --- DASHBOARD ---
+    function Dashboard({ user, onBack, onNew, onEdit, onLaunch }) {
+        const [quizzes, setQuizzes] = useState([]);
+        
+        useEffect(() => {
+            const q = query(collection(db, 'usuarios', user.uid, 'quizzes'), orderBy('createdAt', 'desc'));
+            return onSnapshot(q, (snap) => {
+                setQuizzes(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+            });
+        }, [user]);
+
+        const deleteQuiz = async (id) => {
+            if(confirm("¿Borrar actividad?")) await deleteDoc(doc(db, 'usuarios', user.uid, 'quizzes', id));
+        };
+
+        return (
+            <div className="max-w-6xl mx-auto p-6">
+                <div className="flex justify-between items-center mb-8">
+                    <button onClick={onBack} className="flex items-center gap-2 text-slate-400 hover:text-white"><ArrowLeft /> Menú</button>
+                    <h2 className="text-3xl font-bold text-orange-500">Mis Actividades</h2>
+                    <button onClick={onNew} className="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-lg font-bold flex gap-2"><Plus /> Nueva</button>
+                </div>
+
+                <div className="grid md:grid-cols-3 gap-6">
+                    {quizzes.map(q => (
+                        <div key={q.id} className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden hover:border-orange-500 transition-all">
+                            <div className="h-24 bg-gradient-to-r from-slate-700 to-slate-600 flex items-center justify-center">
+                                <Flame className="text-slate-500" size={32} />
+                            </div>
+                            <div className="p-4">
+                                <h3 className="font-bold text-lg mb-1">{q.title}</h3>
+                                <p className="text-sm text-slate-400 mb-4">{q.questions?.length || 0} preguntas</p>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button onClick={() => onLaunch(q)} className="col-span-2 bg-orange-600 hover:bg-orange-500 py-2 rounded font-bold flex justify-center gap-2"><Play size={18}/> Jugar</button>
+                                    <button onClick={() => onEdit(q)} className="bg-slate-700 hover:bg-slate-600 py-1 rounded text-sm">Editar</button>
+                                    <button onClick={() => deleteQuiz(q.id)} className="bg-red-900/50 hover:bg-red-900 text-red-200 py-1 rounded text-sm">Borrar</button>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                    {quizzes.length === 0 && (
+                        <div className="col-span-3 text-center py-20 text-slate-500 border-2 border-dashed border-slate-800 rounded-xl">
+                            <p>No tienes actividades. ¡Crea la primera!</p>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    // --- EDITOR ---
+    function QuizEditor({ user, initialData, onCancel, onSave }) {
+        const [title, setTitle] = useState(initialData?.title || '');
+        const [questions, setQuestions] = useState(initialData?.questions || []);
+        const [loadingAI, setLoadingAI] = useState(false);
+
+        const handleSave = async () => {
+            if(!title) return alert("Ponle título");
+            const data = { title, questions, createdAt: serverTimestamp() };
+            
+            if(initialData?.id) {
+                await updateDoc(doc(db, 'usuarios', user.uid, 'quizzes', initialData.id), data);
+            } else {
+                await addDoc(collection(db, 'usuarios', user.uid, 'quizzes'), data);
+            }
+            onSave();
+        };
+
+        const generarConIA = async () => {
+            setLoadingAI(true);
+            const nuevas = await simularIA(); // Usamos la simulación por ahora
+            setQuestions([...questions, ...nuevas]);
+            setLoadingAI(false);
+        };
+
+        return (
+            <div className="max-w-6xl mx-auto p-4 grid lg:grid-cols-3 gap-6 h-screen">
+                <div className="lg:col-span-1 bg-slate-800 p-6 rounded-xl border border-slate-700 h-fit">
+                    <button onClick={onCancel} className="mb-4 text-slate-400 hover:text-white flex gap-2"><ArrowLeft size={16}/> Cancelar</button>
+                    <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Título de la actividad" className="w-full bg-slate-900 p-3 rounded border border-slate-600 mb-6 text-lg font-bold" />
+                    
+                    <div className="bg-indigo-900/30 p-4 rounded-xl border border-indigo-500/30 mb-6">
+                        <h3 className="font-bold text-indigo-300 mb-2 flex gap-2"><Brain size={18}/> IA Generator</h3>
+                        <p className="text-xs text-indigo-200 mb-4">Genera preguntas basadas en tus paquetes.</p>
+                        <button onClick={generarConIA} disabled={loadingAI} className="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded font-bold flex justify-center gap-2">
+                            {loadingAI ? <Loader2 className="animate-spin"/> : <Sparkles />} Generar Preguntas
+                        </button>
+                    </div>
+
+                    <button onClick={handleSave} className="w-full bg-green-600 hover:bg-green-500 py-3 rounded-xl font-bold flex justify-center gap-2">
+                        <Save /> Guardar Actividad
+                    </button>
+                </div>
+
+                <div className="lg:col-span-2 space-y-4 overflow-y-auto pb-20">
+                    <h3 className="font-bold text-xl">Preguntas ({questions.length})</h3>
+                    {questions.map((q, idx) => (
+                        <div key={idx} className="bg-slate-800 p-4 rounded-xl border border-slate-700 relative">
+                            <button onClick={()=>{const n=[...questions]; n.splice(idx,1); setQuestions(n)}} className="absolute top-2 right-2 text-red-400 hover:text-red-300"><Trash2 size={16}/></button>
+                            <input value={q.q} onChange={(e)=>{const n=[...questions]; n[idx].q=e.target.value; setQuestions(n)}} className="w-full bg-slate-900 p-2 rounded mb-2 font-bold" />
+                            <div className="grid grid-cols-2 gap-2">
+                                {q.options.map((opt, oid) => (
+                                    <div key={oid} className={`p-2 rounded border ${q.correct === ['A','B','C','D'][oid] ? 'border-green-500 bg-green-900/20' : 'border-slate-600'}`}>
+                                        <span className="font-bold mr-2 text-slate-400">{['A','B','C','D'][oid]}</span>
+                                        {opt}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                    <button onClick={()=>setQuestions([...questions, {q:'', options:['','','',''], correct:'A'}])} className="w-full py-4 border-2 border-dashed border-slate-700 text-slate-500 hover:border-orange-500 hover:text-orange-500 rounded-xl font-bold">+ Agregar Manualmente</button>
+                </div>
+            </div>
+        );
+    }
+
+    // --- HOST VIEW (Juego en Vivo) ---
+    function HostView({ gameCode, onExit }) {
+        const [gameData, setGameData] = useState(null);
+        const [players, setPlayers] = useState([]);
+
+        useEffect(() => {
+            const unsubGame = onSnapshot(doc(db, 'partidas', gameCode), (d) => setGameData(d.data()));
+            const q = query(collection(db, 'jugadores_partida'), orderBy('name')); // Simplificado para demo
+            // Nota: En producción real necesitamos filtrar por gameCode en la query o en cliente
+            return unsubGame;
+        }, [gameCode]);
+
+        const lanzarPregunta = async (q) => {
+            await updateDoc(doc(db, 'partidas', gameCode), {
+                status: 'QUESTION',
+                currentQuestion: q,
+                endTime: new Date(Date.now() + 20000) // 20 segundos
+            });
+        };
+
+        const reset = async () => {
+            await updateDoc(doc(db, 'partidas', gameCode), { status: 'LOBBY', currentQuestion: null });
+        }
+
+        if(!gameData) return <div>Cargando sala...</div>;
+
+        return (
+            <div className="h-screen flex flex-col">
+                <div className="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700">
+                    <div className="flex items-center gap-4">
+                        <button onClick={onExit} className="bg-slate-700 px-4 py-2 rounded font-bold">Salir</button>
+                        <div className="text-right">
+                            <p className="text-xs text-slate-400 uppercase font-bold">Código de Sala</p>
+                            <p className="text-4xl font-black text-orange-500 tracking-widest">{gameCode}</p>
+                        </div>
+                    </div>
+                    <div className="text-xl font-bold">
+                        {gameData.status === 'LOBBY' ? 'ESPERANDO JUGADORES...' : '🔥 JUEGO EN CURSO 🔥'}
+                    </div>
+                </div>
+
+                <div className="flex-1 flex">
+                    <div className="w-1/3 bg-slate-900 border-r border-slate-800 p-4 overflow-y-auto">
+                        <h3 className="font-bold text-slate-400 mb-4">PANEL DE CONTROL</h3>
+                        {gameData.status !== 'QUESTION' && (
+                            <div className="space-y-2">
+                                {gameData.quizData?.questions.map((q, i) => (
+                                    <button key={i} onClick={() => lanzarPregunta(q)} className="w-full text-left p-3 bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 hover:border-orange-500 transition-all">
+                                        <div className="font-bold truncate">{q.q}</div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        {gameData.status === 'QUESTION' && (
+                            <button onClick={reset} className="w-full py-6 bg-red-600 font-bold text-xl rounded shadow-lg animate-pulse">
+                                DETENER PREGUNTA
+                            </button>
+                        )}
+                    </div>
+                    <div className="w-2/3 bg-black flex items-center justify-center relative">
+                        {/* Aquí iría el Canvas del Volcán, simplificado por ahora */}
+                        <div className="text-center">
+                            <div className="text-9xl mb-4">🌋</div>
+                            <p className="text-2xl text-slate-500">Vista del Volcán (Proyección)</p>
+                            {gameData.currentQuestion && (
+                                <div className="mt-8 bg-slate-800 p-6 rounded-xl border border-orange-500">
+                                    <h2 className="text-3xl font-bold mb-4">{gameData.currentQuestion.q}</h2>
+                                    <p className="text-green-400 font-bold text-xl">Correcta: {gameData.currentQuestion.correct}</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+</script>
+
+</body>
+</html>

@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Volcán del Saber PRO 🌋</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script type="module" src="https://esm.sh/run"></script>
+    
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Personalización extra para scrollbars */
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #1e293b; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        body { background-color: #0f172a; color: white; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useMemo } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { 
+            getFirestore, collection, doc, setDoc, onSnapshot, 
+            updateDoc, serverTimestamp, getDoc, deleteDoc, addDoc, query, orderBy 
+        } from 'firebase/firestore';
+        import { 
+            Play, Users, Skull, Trophy, Flame, Plus, Edit, Trash2, 
+            Save, ArrowLeft, Sparkles, Image as ImageIcon, Loader2, 
+            List, Brain 
+        } from 'lucide-react';
+
+        // --- 1. CONFIGURACIÓN (TUS LLAVES REALES) ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+            authDomain: "proyecto-periplo.firebaseapp.com",
+            projectId: "proyecto-periplo",
+            storageBucket: "proyecto-periplo.firebasestorage.app",
+            messagingSenderId: "236795998392",
+            appId: "1:236795998392:web:0da24b4f018611b55c844d"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = 'volcano-quiz'; // Identificador interno
+
+        // --- DATOS ESL (Tus paquetes) ---
+        const GAME_MODES = [
+            { id: 'COMPLETE', label: 'Complete the Sentence', desc: 'Frase en inglés con hueco.' },
+            { id: 'CORRECT', label: 'Correct or Incorrect', desc: 'Identificar errores gramaticales.' },
+            { id: 'QUIZ', label: 'Logic Quiz', desc: 'Pregunta y respuesta lógica.' }
+        ];
+
+        const PLATFORMS = {
+            A: { x: 0.25, y: 0.35, color: '#ef4444' },
+            B: { x: 0.75, y: 0.35, color: '#3b82f6' },
+            C: { x: 0.25, y: 0.75, color: '#eab308' },
+            D: { x: 0.75, y: 0.75, color: '#22c55e' },
+        };
+        const SAFE_ZONE = { x: 0.5, y: 0.15 };
+
+        // --- COMPONENTE PRINCIPAL ---
+        function VolcanoApp() {
+            const [user, setUser] = useState(null);
+            const [gameCode, setGameCode] = useState('');
+            const [mode, setMode] = useState('MENU'); // MENU, HOST, PLAYER, DASHBOARD, EDITOR
+            const [playerName, setPlayerName] = useState('');
+            const [currentQuiz, setCurrentQuiz] = useState(null);
+
+            useEffect(() => {
+                signInAnonymously(auth).catch(console.error);
+                return onAuthStateChanged(auth, setUser);
+            }, []);
+
+            // Crear una partida (Host)
+            const createGame = async (quiz) => {
+                if (!user) return;
+                const code = Math.random().toString(36).substring(2, 6).toUpperCase();
+                // Guardamos en la colección pública para que los alumnos lo encuentren
+                await setDoc(doc(db, 'games', `game_${code}`), {
+                    hostId: user.uid,
+                    status: 'LOBBY',
+                    currentQuestion: null,
+                    createdAt: serverTimestamp(),
+                    quizData: quiz, 
+                    playersAlive: 0
+                });
+                setGameCode(code);
+                setMode('HOST');
+            };
+
+            // Unirse a una partida (Alumno)
+            const joinGame = async () => {
+                if (!user || !gameCode || !playerName) return;
+                const code = gameCode.toUpperCase();
+                const gameRef = doc(db, 'games', `game_${code}`);
+                const gameSnap = await getDoc(gameRef);
+                
+                if (!gameSnap.exists()) {
+                    alert("¡Juego no encontrado! Revisa el código.");
+                    return;
+                }
+
+                // Registrar jugador
+                await setDoc(doc(db, 'game_players', `${code}_${user.uid}`), {
+                    name: playerName,
+                    gameCode: code,
+                    uid: user.uid,
+                    alive: true,
+                    position: 'SAFE',
+                    avatarColor: `hsl(${Math.random() * 360}, 70%, 50%)`,
+                    updatedAt: serverTimestamp()
+                });
+
+                setGameCode(code);
+                setMode('PLAYER');
+            };
+
+            if (!user) return <div className="h-screen flex items-center justify-center text-orange-500 font-bold text-xl">Cargando Motores de Periplo... 🌋</div>;
+
+            return (
+                <div className="min-h-screen bg-slate-900 text-slate-100 font-sans selection:bg-orange-500">
+                    {mode === 'MENU' && (
+                        <div className="flex flex-col items-center justify-center min-h-screen p-4 space-y-8 bg-gradient-to-b from-slate-900 to-red-900/20">
+                            <h1 className="text-5xl md:text-7xl font-black text-transparent bg-clip-text bg-gradient-to-b from-yellow-400 to-red-600 drop-shadow-lg text-center">
+                                VOLCÁN DEL SABER
+                            </h1>
+                            <p className="text-xl text-orange-200">Proyecto Periplo v2.0</p>
+
+                            <div className="grid md:grid-cols-2 gap-8 w-full max-w-2xl mt-8">
+                                {/* Tarjeta Profesor */}
+                                <div className="bg-slate-800/80 p-8 rounded-3xl border border-orange-500/30 hover:border-orange-500 shadow-2xl flex flex-col items-center gap-4 transition-all hover:scale-105">
+                                    <div className="p-4 bg-orange-600 rounded-2xl mb-2"><Play className="w-8 h-8 text-white" /></div>
+                                    <h2 className="text-2xl font-bold">Soy el Teacher</h2>
+                                    <button onClick={() => setMode('DASHBOARD')} className="w-full py-3 bg-gradient-to-r from-orange-500 to-red-600 rounded-xl font-bold text-lg shadow-lg">
+                                        Entrar al Panel
+                                    </button>
+                                </div>
+
+                                {/* Tarjeta Alumno */}
+                                <div className="bg-slate-800/80 p-8 rounded-3xl border border-blue-500/30 hover:border-blue-500 shadow-2xl flex flex-col items-center gap-4 transition-all hover:scale-105">
+                                    <div className="p-4 bg-blue-600 rounded-2xl mb-2"><Users className="w-8 h-8 text-white" /></div>
+                                    <h2 className="text-2xl font-bold">Soy Alumno</h2>
+                                    <input type="text" placeholder="Tu Nombre" className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-center text-lg" value={playerName} onChange={e => setPlayerName(e.target.value)} />
+                                    <input type="text" placeholder="CÓDIGO (Ej: A1B2)" className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-center text-lg uppercase" value={gameCode} onChange={e => setGameCode(e.target.value)} />
+                                    <button onClick={joinGame} disabled={!playerName || !gameCode} className="w-full py-3 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl font-bold text-lg shadow-lg disabled:opacity-50">
+                                        Unirse
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {mode === 'DASHBOARD' && <Dashboard user={user} onLaunch={createGame} onBack={() => setMode('MENU')} />}
+                    {mode === 'HOST' && <HostView user={user} gameCode={gameCode} onExit={() => setMode('DASHBOARD')} />}
+                    {mode === 'PLAYER' && <PlayerView user={user} gameCode={gameCode} playerName={playerName} />}
+                </div>
+            );
+        }
+
+        // --- DASHBOARD (PANEL DEL PROFESOR) ---
+        function Dashboard({ user, onLaunch, onBack }) {
+            // Actividad de ejemplo para que no empiece vacío
+            const demoQuiz = {
+                id: 'demo',
+                title: 'Demo Rápida: Verbos',
+                questions: [
+                    { q: "She ___ (comer) tacos yesterday.", options: ["ate", "eats", "eaten", "eating"], correct: "A" },
+                    { q: "We are ___ (aprender) English.", options: ["learning", "learn", "learns", "learned"], correct: "A" },
+                    { q: "___ you happy?", options: ["Is", "Are", "Do", "Does"], correct: "B" }
+                ]
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto p-6">
+                    <div className="flex items-center gap-4 mb-8">
+                        <button onClick={onBack} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700"><ArrowLeft /></button>
+                        <h2 className="text-3xl font-bold">Centro de Comando Periplo</h2>
+                    </div>
+
+                    <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+                        <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Flame className="text-orange-500"/> Actividades Listas</h3>
+                        <div className="bg-slate-700 p-4 rounded-lg flex justify-between items-center">
+                            <div>
+                                <h4 className="font-bold text-lg">{demoQuiz.title}</h4>
+                                <p className="text-sm text-slate-400">3 preguntas de prueba</p>
+                            </div>
+                            <button onClick={() => onLaunch(demoQuiz)} className="px-6 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-bold shadow-lg flex items-center gap-2">
+                                <Play size={16}/> Jugar Ahora
+                            </button>
+                        </div>
+                        <p className="mt-4 text-slate-400 text-sm italic">*Pronto podrás crear más actividades aquí con el editor completo.</p>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- VISTA DEL HOST (PROFESOR EN CLASE) ---
+        function HostView({ user, gameCode, onExit }) {
+            const [gameData, setGameData] = useState(null);
+            const [players, setPlayers] = useState([]);
+            const [timeLeft, setTimeLeft] = useState(0);
+
+            // Escuchar cambios en el juego y jugadores
+            useEffect(() => {
+                const unsubGame = onSnapshot(doc(db, 'games', `game_${gameCode}`), (doc) => setGameData(doc.data()));
+                const q = query(collection(db, 'game_players')); // En prod filtrar mejor
+                const unsubPlayers = onSnapshot(q, (snapshot) => {
+                    const pList = [];
+                    snapshot.forEach(d => {
+                        const data = d.data();
+                        if (data.gameCode === gameCode) pList.push({ id: d.id, ...data });
+                    });
+                    setPlayers(pList);
+                });
+                return () => { unsubGame(); unsubPlayers(); };
+            }, [gameCode]);
+
+            // Cronómetro
+            useEffect(() => {
+                if (gameData?.endTime) {
+                    const interval = setInterval(() => {
+                        const remaining = Math.max(0, Math.ceil((gameData.endTime.toMillis() - Date.now()) / 1000));
+                        setTimeLeft(remaining);
+                    }, 1000);
+                    return () => clearInterval(interval);
+                }
+            }, [gameData]);
+
+            const startGame = async (qData) => {
+                const endTime = new Date();
+                endTime.setSeconds(endTime.getSeconds() + 15); // 15 segundos por pregunta
+                await updateDoc(doc(db, 'games', `game_${gameCode}`), {
+                    status: 'QUESTION',
+                    currentQuestion: qData,
+                    endTime: endTime
+                });
+            };
+
+            const revealAnswer = async () => {
+                if (!gameData?.currentQuestion) return;
+                const correct = gameData.currentQuestion.correct;
+                // Lógica de muerte
+                players.forEach(p => {
+                    if (p.alive && p.position !== 'SAFE') {
+                        if (p.position !== correct) {
+                            updateDoc(doc(db, 'game_players', p.id), { alive: false });
+                        }
+                    }
+                });
+                await updateDoc(doc(db, 'games', `game_${gameCode}`), { status: 'REVEAL' });
+            };
+
+            const resetRound = async () => {
+                await updateDoc(doc(db, 'games', `game_${gameCode}`), { status: 'LOBBY', currentQuestion: null, endTime: null });
+            };
+
+            const reviveAll = async () => {
+                players.forEach(p => updateDoc(doc(db, 'game_players', p.id), { alive: true, position: 'SAFE' }));
+            };
+
+            const quizQuestions = gameData?.quizData?.questions || [];
+
+            return (
+                <div className="flex flex-col h-screen bg-slate-900">
+                    {/* Header */}
+                    <div className="bg-slate-800 p-4 shadow-lg flex justify-between items-center border-b border-slate-700">
+                        <div className="flex items-center gap-6">
+                            <button onClick={onExit} className="bg-slate-700 px-3 py-2 rounded font-bold">Salir</button>
+                            <div className="text-center">
+                                <div className="text-xs text-slate-400 font-bold">CÓDIGO</div>
+                                <div className="text-3xl font-black text-orange-500 tracking-widest">{gameCode}</div>
+                            </div>
+                            <div className="flex items-center gap-2 text-green-400 bg-green-900/20 px-3 py-1 rounded-lg">
+                                <Users size={20} /> <span className="font-bold">{players.filter(p => p.alive).length} Vivos</span>
+                            </div>
+                        </div>
+                        <button onClick={reviveAll} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-bold text-sm">Revivir Todos 😇</button>
+                    </div>
+
+                    <div className="flex flex-1 overflow-hidden">
+                        {/* Sidebar de Preguntas */}
+                        <div className="w-1/3 bg-slate-800/50 p-6 overflow-y-auto border-r border-slate-700">
+                            {gameData?.status === 'QUESTION' ? (
+                                <div className="flex flex-col items-center justify-center h-full space-y-6">
+                                    <div className="text-8xl font-black text-white">{timeLeft}</div>
+                                    <button onClick={revealAnswer} className="w-full py-4 bg-red-600 hover:bg-red-500 text-white font-black text-xl rounded-xl shadow-xl">
+                                        ¡QUEMAR! 🔥
+                                    </button>
+                                </div>
+                            ) : gameData?.status === 'REVEAL' ? (
+                                <div className="text-center py-10">
+                                    <h3 className="text-4xl font-black text-green-400 mb-6">Correcta: {gameData.currentQuestion.correct}</h3>
+                                    <button onClick={resetRound} className="px-8 py-3 bg-blue-600 rounded-xl font-bold text-xl">Siguiente Ronda</button>
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    <h3 className="font-bold text-slate-400 uppercase">Preguntas Disponibles</h3>
+                                    {quizQuestions.map((q, i) => (
+                                        <button key={i} onClick={() => startGame(q)} className="w-full text-left p-4 bg-slate-700 hover:bg-slate-600 rounded-xl border border-slate-600 transition-all">
+                                            <div className="font-bold text-white">{q.q}</div>
+                                            <div className="text-xs text-green-400 mt-1">Respuesta: {q.correct}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Área Visual (Canvas Simplificado por ahora) */}
+                        <div className="w-2/3 bg-black flex items-center justify-center relative overflow-hidden">
+                             {/* Fondo de Lava */}
+                             <div className="absolute inset-0 bg-gradient-to-t from-red-900 via-orange-900 to-black opacity-50"></div>
+                             
+                             {/* Plataformas Visuales */}
+                             <div className="relative z-10 grid grid-cols-2 gap-20 w-3/4">
+                                {['A','B','C','D'].map(p => {
+                                    const count = players.filter(pl => pl.position === p && pl.alive).length;
+                                    return (
+                                        <div key={p} className="h-32 rounded-full border-4 border-white/20 bg-white/10 flex flex-col items-center justify-center relative">
+                                            <span className="text-4xl font-black text-white">{p}</span>
+                                            {count > 0 && <span className="absolute -top-4 bg-orange-500 text-white px-3 py-1 rounded-full font-bold">{count}</span>}
+                                        </div>
+                                    )
+                                })}
+                             </div>
+                             
+                             {/* Zona Segura */}
+                             <div className="absolute top-10 bg-slate-800 px-6 py-2 rounded-full border border-slate-600">
+                                <span className="text-slate-400 font-bold">ZONA SEGURA: </span>
+                                <span className="text-white font-bold">{players.filter(p => p.position === 'SAFE' && p.alive).length}</span>
+                             </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- VISTA DEL ALUMNO ---
+        function PlayerView({ user, gameCode, playerName }) {
+            const [gameData, setGameData] = useState(null);
+            const [myPlayer, setMyPlayer] = useState(null);
+
+            useEffect(() => {
+                const unsubGame = onSnapshot(doc(db, 'games', `game_${gameCode}`), (doc) => {
+                    if(doc.exists()) setGameData(doc.data());
+                });
+                const unsubPlayer = onSnapshot(doc(db, 'game_players', `${gameCode}_${user.uid}`), (doc) => {
+                    if(doc.exists()) setMyPlayer(doc.data());
+                });
+                return () => { unsubGame(); unsubPlayer(); };
+            }, [gameCode, user.uid]);
+
+            const move = async (pos) => {
+                if (gameData?.status === 'REVEAL' || !myPlayer?.alive) return;
+                await updateDoc(doc(db, 'game_players', `${gameCode}_${user.uid}`), { position: pos });
+            };
+
+            if (!gameData || !myPlayer) return <div className="h-screen flex items-center justify-center text-white">Conectando...</div>;
+
+            if (!myPlayer.alive) return (
+                <div className="h-screen bg-red-900 flex flex-col items-center justify-center text-white animate-pulse">
+                    <Skull size={80} className="mb-4"/>
+                    <h1 className="text-5xl font-black">¡QUEMADO!</h1>
+                    <p className="mt-4">Espera a la siguiente ronda...</p>
+                </div>
+            );
+
+            return (
+                <div className="h-screen bg-slate-900 p-4 flex flex-col">
+                    <div className="bg-slate-800 p-4 rounded-xl mb-4 flex justify-between items-center border border-slate-700">
+                        <div className="font-bold text-orange-400 flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full" style={{backgroundColor: myPlayer.avatarColor}}></div>
+                            {playerName}
+                        </div>
+                        <div className="text-xs bg-green-900/50 text-green-400 px-2 py-1 rounded border border-green-500/30">VIVO</div>
+                    </div>
+
+                    {gameData.status !== 'LOBBY' && (
+                        <div className="bg-black/50 p-4 rounded-xl border border-slate-600 mb-4 text-center">
+                            <h2 className="text-xl font-bold">{gameData.currentQuestion?.q}</h2>
+                            {gameData.status === 'REVEAL' && (
+                                <div className="mt-2 text-green-400 font-bold text-lg animate-bounce">
+                                    Respuesta Correcta: {gameData.currentQuestion.correct}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {gameData.status === 'LOBBY' ? (
+                        <div className="flex-1 flex items-center justify-center text-slate-500 italic">Esperando al teacher...</div>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-4 flex-1">
+                            {['A','B','C','D'].map((opt, i) => (
+                                <button 
+                                    key={opt} 
+                                    onClick={() => move(opt)}
+                                    className={`rounded-2xl text-4xl font-black transition-all border-b-8 active:border-b-0 active:translate-y-2
+                                        ${myPlayer.position === opt ? 'ring-4 ring-white translate-y-2 border-b-0' : ''}
+                                        ${opt === 'A' ? 'bg-red-500 border-red-700' : 
+                                          opt === 'B' ? 'bg-blue-500 border-blue-700' :
+                                          opt === 'C' ? 'bg-yellow-500 border-yellow-600 text-black' : 
+                                          'bg-green-500 border-green-700'}
+                                    `}
+                                >
+                                    {opt}
+                                    <span className="block text-sm font-normal mt-2 opacity-80">{gameData.currentQuestion?.options[i]}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<VolcanoApp />);
+    </script>
+</body>
+</html>
