@@ -1,0 +1,1238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Periplo Presentations</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: { dark: '#09090b', brand: '#3b82f6' },
+                    keyframes: {
+                        shake: {
+                            '0%, 100%': { transform: 'translateX(0)' },
+                            '10%, 30%, 50%, 70%, 90%': { transform: 'translateX(-5px)' },
+                            '20%, 40%, 60%, 80%': { transform: 'translateX(5px)' },
+                        },
+                        popIn: {
+                            '0%': { transform: 'scale(0.9)', opacity: '0' },
+                            '100%': { transform: 'scale(1)', opacity: '1' },
+                        },
+                        fadeIn: {
+                            '0%': { opacity: '0', transform: 'translateY(8px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        }
+                    },
+                    animation: {
+                        shake: 'shake 0.4s ease-in-out',
+                        popIn: 'popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards',
+                        fadeIn: 'fadeIn 0.4s ease forwards'
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* CRÍTICO: Elimina el recuadro azul/gris al tocar en móviles */
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
+        button:focus {
+            outline: none;
+        }
+
+        body { background-color: #09090b; color: white; overflow: hidden; font-family: system-ui, -apple-system, sans-serif; }
+        .touch-safe { touch-action: manipulation; }
+        .custom-scrollbar::-webkit-scrollbar { height: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        .slide-scroll::-webkit-scrollbar { width: 4px; }
+        .slide-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+        
+        @media (hover: hover) {
+            .hover-scale:hover { transform: scale(1.05); }
+            .hover-bg:hover { background-color: rgba(255, 255, 255, 0.1); }
+        }
+        .nav-arrows { transition: opacity 0.4s ease; }
+        .nav-arrows.hidden-arrows { opacity: 0; pointer-events: none; }
+        .nav-arrows.visible-arrows { opacity: 1; pointer-events: auto; }
+        
+        .nav-arrow-btn {
+            pointer-events: auto;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+        .emoji-glow {
+            filter: drop-shadow(0 0 25px rgba(255, 255, 255, 0.15));
+        }
+
+        .modal-overlay {
+            position: fixed; inset: 0; z-index: 9999;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(8px);
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        .theme-swatch {
+            width: 32px; height: 32px; border-radius: 50%;
+            border: 3px solid transparent;
+            cursor: pointer;
+            transition: transform 0.15s, border-color 0.15s;
+        }
+        .theme-swatch:hover { transform: scale(1.15); }
+        .theme-swatch.active { border-color: white; transform: scale(1.2); }
+    </style>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "canvas-confetti": "https://esm.sh/canvas-confetti@1.6.0",
+                "lucide-react": "https://esm.sh/lucide-react@0.292.0?deps=react@18.2.0",
+                "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+                "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
+                "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+            }
+        }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="stylesheet" href="periplo.css">
+    <script src="periplo-config.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useCallback } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import confetti from 'canvas-confetti';
+        import { ChevronLeft, ChevronRight, Play, X, ArrowLeft, LayoutTemplate, Palette, LogOut } from 'lucide-react';
+        
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously } from 'firebase/auth';
+        import { getFirestore, doc, getDoc } from 'firebase/firestore';
+
+        const app = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${new URLSearchParams(window.location.search).get('uid') || 'teacher_anita_001'}/quizzes`;
+
+        const triggerConfetti = () => {
+            confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: ['#3b82f6', '#10b981', '#f59e0b'] });
+        };
+
+        const VIEWER_THEMES = [
+            { id: 'original',  label: 'Original',  bg: null,      accent: null },      
+            { id: 'midnight',  label: 'Midnight',  bg: '#09090b', accent: '#3b82f6' },
+            { id: 'slate',     label: 'Slate',     bg: '#0f172a', accent: '#818cf8' },
+            { id: 'forest',    label: 'Forest',    bg: '#0a1f0a', accent: '#4ade80' },
+            { id: 'rose',      label: 'Rose',      bg: '#1a0a0f', accent: '#fb7185' },
+            { id: 'amber',     label: 'Amber',     bg: '#1a1200', accent: '#fbbf24' },
+            { id: 'teal',      label: 'Teal',      bg: '#001a1a', accent: '#2dd4bf' },
+        ];
+
+        const FALLBACK_THEME = { bg: '#09090b', text: 'white', accent: '#3b82f6', subtle: 'rgba(255,255,255,0.08)' };
+
+        const resolveTheme = (docThemeObj, viewerOverride) => {
+            let base;
+            if (docThemeObj && typeof docThemeObj === 'object') {
+                base = {
+                    bg: docThemeObj.preview || FALLBACK_THEME.bg,
+                    text: 'white',
+                    accent: docThemeObj.accent || FALLBACK_THEME.accent,
+                    subtle: 'rgba(255,255,255,0.08)' 
+                };
+            } else {
+                base = { ...FALLBACK_THEME };
+            }
+            if (viewerOverride && viewerOverride.id !== 'original') {
+                return { ...base, bg: viewerOverride.bg, accent: viewerOverride.accent };
+            }
+            return base;
+        };
+
+        const getSlideBackground = (slide, docThemeObj, viewerOverride) => {
+            if (viewerOverride && viewerOverride.id !== 'original') return viewerOverride.bg;
+            if (slide.bgColor) return slide.bgColor;
+            if (slide.background) return slide.background;
+            return resolveTheme(docThemeObj, viewerOverride).bg;
+        };
+
+        const makeWrapStyle = (slide, docThemeObj, viewerOverride) => {
+            const bg = getSlideBackground(slide, docThemeObj, viewerOverride);
+            if (typeof bg === 'string' && (bg.includes('gradient') || bg.includes('linear') || bg.includes('radial'))) {
+                return { background: bg };
+            }
+            return { 
+                background: `radial-gradient(circle at 50% -20%, rgba(255,255,255,0.1) 0%, transparent 70%), ${bg}`
+            };
+        };
+
+        const parseMiniMarkdown = (text) => {
+            if (!text) return null;
+            const strText = String(text);
+            const parts = [];
+            const regex = /(\*\*(.+?)\*\*|__(.+?)__|(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*))/g;
+            let lastIndex = 0;
+            let match;
+            while ((match = regex.exec(strText)) !== null) {
+                if (match.index > lastIndex) parts.push(strText.slice(lastIndex, match.index));
+                if (match[2]) parts.push(<strong key={match.index} className="font-black drop-shadow-md">{match[2]}</strong>);
+                else if (match[3]) parts.push(<span key={match.index} className="underline decoration-2 underline-offset-4">{match[3]}</span>);
+                else if (match[4]) parts.push(<em key={match.index} className="italic opacity-80">{match[4]}</em>);
+                lastIndex = match.index + match[0].length;
+            }
+            if (lastIndex < strText.length) parts.push(strText.slice(lastIndex));
+            return parts.length > 0 ? parts : strText;
+        };
+
+        const parseTextWithLists = (text) => {
+            if (!text) return { type: 'plain', text: '' };
+            const strText = String(text);
+            const listPattern = /(?:^|\n)\s*\d+\.\s+/g;
+            const matches = strText.match(listPattern);
+            if (matches && matches.length >= 2) {
+                const items = strText.split(/(?:^|\n)\s*\d+\.\s+/).filter(s => s.trim());
+                const firstNumIdx = strText.search(/\d+\.\s+/);
+                const heading = firstNumIdx > 0 ? strText.slice(0, firstNumIdx).trim() : null;
+                return { type: 'numbered-list', heading, items };
+            }
+            return { type: 'plain', text: strText };
+        };
+
+        // ============================================================
+        // WRAPPER PRINCIPAL (SOLUCIONA RESPONSIVE Y SCROLL DE FORMA GLOBAL)
+        // ============================================================
+        const SlideContainer = ({ children, style, overlay = false }) => (
+            <div className="w-full h-full relative overflow-hidden" style={style}>
+                {overlay && <div className="absolute inset-0 bg-black/20 pointer-events-none z-0"></div>}
+                <div className="absolute inset-0 overflow-y-auto slide-scroll z-10">
+                    <div className="min-h-full w-full flex flex-col px-4 md:px-8 py-8 md:py-12">
+                        <div className="m-auto w-full flex flex-col items-center justify-center">
+                            {children}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+
+        // ============================================================
+        // THEORY SLIDE
+        // ============================================================
+        const TheorySlide = ({ slide, theme, viewerOverride }) => {
+            const t = resolveTheme(theme, viewerOverride);
+            const wrapStyle = makeWrapStyle(slide, theme, viewerOverride);
+            const getText = () => slide.text || slide.heading || slide.centerLabel || slide.quote || '';
+            const safeEmojis = Array.isArray(slide.emojis) ? slide.emojis.join(' ') : String(slide.emojis || '📝');
+
+            if (slide.layout === 'cover') {
+                const hasCoverImage = slide.imageUrl && slide.imageUrl.length > 0;
+                return (
+                    <SlideContainer style={wrapStyle} overlay>
+                        {hasCoverImage ? (
+                            <div className="max-w-5xl w-full flex flex-col md:flex-row items-center gap-6 md:gap-10 animate-popIn px-2">
+                                <div className="flex-1 glass-panel p-8 md:p-12 rounded-[3rem] shadow-2xl text-center md:text-left">
+                                    <h1 className="text-4xl md:text-6xl font-black leading-tight mb-4 drop-shadow-2xl">
+                                        {parseMiniMarkdown(slide.heading || slide.text || '')}
+                                    </h1>
+                                    {slide.subtitle && <p className="text-lg md:text-2xl opacity-80 font-medium mb-6 drop-shadow-md">{parseMiniMarkdown(slide.subtitle)}</p>}
+                                    {slide.branding && (
+                                        <div className="inline-block bg-white/10 px-6 py-2 rounded-full border border-white/20">
+                                            <p className="text-xs md:text-sm opacity-80 font-bold uppercase tracking-widest">{slide.branding}</p>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="w-56 md:w-72 shrink-0">
+                                    <img src={slide.imageUrl} alt="" className="w-full rounded-[2rem] object-cover shadow-2xl border border-white/10" />
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="max-w-4xl w-full glass-panel p-8 md:p-16 rounded-[3rem] shadow-2xl flex flex-col items-center justify-center text-center animate-popIn">
+                                <h1 className="text-4xl md:text-6xl lg:text-8xl font-black leading-tight mb-6 drop-shadow-2xl">
+                                    {parseMiniMarkdown(slide.heading || slide.text || '')}
+                                </h1>
+                                {slide.subtitle && <p className="text-lg md:text-3xl opacity-80 font-medium max-w-2xl mx-auto drop-shadow-md">{parseMiniMarkdown(slide.subtitle)}</p>}
+                                {slide.branding && (
+                                    <div className="mt-8 md:mt-12 inline-block bg-white/10 px-6 py-2 rounded-full border border-white/20">
+                                        <p className="text-xs md:text-sm opacity-80 font-bold uppercase tracking-widest">{slide.branding}</p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </SlideContainer>
+                );
+            }
+
+            if (slide.layout === 'title-bullets') {
+                return (
+                    <SlideContainer style={wrapStyle}>
+                        <div className="max-w-4xl w-full text-center glass-panel p-6 md:p-12 rounded-[2rem] animate-popIn">
+                            <h2 className="text-3xl md:text-5xl font-black mb-8 md:mb-10 leading-tight drop-shadow-lg">{parseMiniMarkdown(slide.heading || '')}</h2>
+                            {slide.bullets && (
+                                <ul className="space-y-4 text-left mx-auto max-w-3xl">
+                                    {slide.bullets.map((b, i) => (
+                                        <li key={i} className="flex items-start gap-3 md:gap-4 animate-fadeIn bg-black/10 p-4 rounded-xl border border-white/5" style={{ animationDelay: `${i * 0.1}s`, opacity: 0 }}>
+                                            <span className="font-black text-xl md:text-2xl mt-0.5 shrink-0" style={{ color: t.accent }}>{i + 1}.</span>
+                                            <span className="text-lg md:text-2xl font-semibold leading-snug opacity-90">{parseMiniMarkdown(b)}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            if (slide.layout === 'two-columns') {
+                return (
+                    <SlideContainer style={wrapStyle}>
+                        <div className="max-w-5xl w-full animate-popIn">
+                            <h2 className="text-3xl md:text-5xl font-black mb-8 text-center drop-shadow-lg">{parseMiniMarkdown(slide.heading || '')}</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
+                                {[slide.leftColumn, slide.rightColumn].map((col, ci) => col && (
+                                    <div key={ci} className="rounded-[2rem] p-6 glass-panel">
+                                        <h3 className="text-lg md:text-xl font-black mb-4 uppercase tracking-wider text-center" style={{ color: t.accent }}>{col.title}</h3>
+                                        <ul className="space-y-3">
+                                            {col.items?.map((item, i) => (
+                                                <li key={i} className="font-medium text-base md:text-lg flex items-start gap-3 opacity-90 bg-black/20 p-3 rounded-xl">
+                                                    <span style={{ color: t.accent }} className="mt-1 font-bold shrink-0">•</span>
+                                                    <span>{parseMiniMarkdown(item)}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            if (slide.layout === 'table-notes') {
+                return (
+                    <SlideContainer style={wrapStyle}>
+                        <div className="max-w-5xl w-full glass-panel p-6 md:p-10 rounded-[2rem] animate-popIn">
+                            <h2 className="text-2xl md:text-4xl font-black mb-6 md:mb-10 text-center drop-shadow-lg">{parseMiniMarkdown(slide.heading || '')}</h2>
+                            {slide.table && (
+                                <div className="overflow-x-auto rounded-2xl border border-white/10 mb-6 shadow-2xl">
+                                    <table className="w-full text-left min-w-[400px]">
+                                        <thead>
+                                            <tr style={{ background: 'rgba(0,0,0,0.3)' }}>
+                                                {slide.table.headers?.map((h, i) => <th key={i} className="px-4 py-3 text-xs md:text-sm font-black uppercase tracking-wider border-b border-white/10 whitespace-nowrap" style={{ color: t.accent }}>{h}</th>)}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {slide.table.rows?.map((row, ri) => (
+                                                <tr key={ri} style={ri % 2 === 0 ? { background: 'rgba(255,255,255,0.03)' } : {}}>
+                                                    {(Array.isArray(row) ? row : Object.values(row)).map((cell, ci) => (
+                                                        <td key={ci} className="px-4 py-3 font-medium text-sm md:text-base opacity-90 border-b border-white/5">{parseMiniMarkdown(String(cell || ''))}</td>
+                                                    ))}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                            {slide.notes && slide.notes.map((n, i) => (
+                                <p key={i} className="text-sm md:text-base font-medium opacity-70 bg-black/20 p-3 rounded-lg text-center mb-2">💡 {parseMiniMarkdown(n)}</p>
+                            ))}
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            if (slide.layout === 'mind-map') {
+                return (
+                    <SlideContainer style={wrapStyle}>
+                        <div className="w-full flex flex-col items-center justify-center animate-popIn">
+                            <div className="rounded-full px-6 md:px-8 py-3 md:py-4 mb-8 border-2 shadow-[0_0_40px_rgba(255,255,255,0.1)] glass-panel text-center" style={{ borderColor: t.accent }}>
+                                <h2 className="text-xl md:text-4xl font-black">{slide.centerLabel || ''}</h2>
+                            </div>
+                            <div className="flex flex-wrap justify-center gap-4 relative w-full max-w-5xl">
+                                {slide.branches?.map((b, i) => (
+                                    <div key={i} className="rounded-2xl px-5 py-3 border-l-4 animate-fadeIn flex flex-col items-center text-center glass-panel shadow-xl" style={{ borderColor: b.color || t.accent, animationDelay: `${i * 0.08}s`, opacity: 0 }}>
+                                        <span className="text-base md:text-lg font-black">{b.term}</span>
+                                        {b.translation && <span className="text-xs opacity-60 mt-1">{b.translation}</span>}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            if (slide.layout === 'quote') {
+                return (
+                    <SlideContainer style={wrapStyle}>
+                        <div className="max-w-4xl w-full glass-panel p-8 md:p-12 rounded-[3rem] relative text-center animate-popIn">
+                            <span className="absolute -top-6 left-6 md:-top-8 md:left-8 text-7xl md:text-9xl font-black leading-none" style={{ color: t.accent, opacity: 0.3 }}>"</span>
+                            <p className="text-xl md:text-4xl font-bold leading-relaxed relative z-10 drop-shadow-md mt-4">{parseMiniMarkdown(slide.quote || slide.text || '')}</p>
+                            {slide.attribution && <p className="opacity-50 font-bold mt-6 md:mt-8 text-base md:text-lg">— {slide.attribution}</p>}
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            if (slide.layout === 'split-text-image-left' || slide.layout === 'split-text-left') {
+                return (
+                    <SlideContainer style={wrapStyle}>
+                        <div className="max-w-6xl w-full grid grid-cols-1 md:grid-cols-3 items-center gap-8 animate-popIn">
+                            <div className="md:col-span-2 flex flex-col justify-center glass-panel p-6 md:p-10 rounded-[2rem]">
+                                {slide.heading && <h2 className="text-2xl md:text-4xl font-black mb-4 leading-tight drop-shadow-md">{parseMiniMarkdown(slide.heading)}</h2>}
+                                {slide.text && <p className="text-base md:text-2xl font-medium mb-4 leading-relaxed opacity-85">{parseMiniMarkdown(slide.text)}</p>}
+                                {slide.bullets && (
+                                    <ul className="space-y-3 mt-2">
+                                        {slide.bullets.map((b, i) => (
+                                            <li key={i} className="font-medium text-sm md:text-lg flex items-start gap-3 opacity-90 bg-black/20 p-3 rounded-xl">
+                                                <span style={{ color: t.accent }} className="mt-1 shrink-0 font-bold">•</span>
+                                                <span>{parseMiniMarkdown(b)}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                            <div className="md:col-span-1 flex justify-center items-center py-4">
+                                {slide.imageUrl ? (
+                                    <img src={slide.imageUrl} alt="" className="w-full rounded-2xl object-cover shadow-2xl border border-white/10 animate-popIn" />
+                                ) : (
+                                    <span className="text-7xl md:text-9xl animate-popIn emoji-glow">{safeEmojis}</span>
+                                )}
+                            </div>
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            if (slide.layout === 'split-text-image-right' || slide.layout === 'split-text-right') {
+                return (
+                    <SlideContainer style={wrapStyle}>
+                        <div className="max-w-6xl w-full grid grid-cols-1 md:grid-cols-3 items-center gap-8 animate-popIn">
+                            <div className="md:col-span-1 flex justify-center items-center py-4 order-last md:order-first">
+                                {slide.imageUrl ? (
+                                    <img src={slide.imageUrl} alt="" className="w-full rounded-2xl object-cover shadow-2xl border border-white/10 animate-popIn" />
+                                ) : (
+                                    <span className="text-7xl md:text-9xl animate-popIn emoji-glow">{safeEmojis}</span>
+                                )}
+                            </div>
+                            <div className="md:col-span-2 flex flex-col justify-center glass-panel p-6 md:p-10 rounded-[2rem]">
+                                {slide.heading && <h2 className="text-2xl md:text-4xl font-black mb-4 leading-tight drop-shadow-md">{parseMiniMarkdown(slide.heading)}</h2>}
+                                {slide.text && <p className="text-base md:text-2xl font-medium mb-4 leading-relaxed opacity-85">{parseMiniMarkdown(slide.text)}</p>}
+                                {slide.bullets && (
+                                    <ul className="space-y-3 mt-2">
+                                        {slide.bullets.map((b, i) => (
+                                            <li key={i} className="font-medium text-sm md:text-lg flex items-start gap-3 opacity-90 bg-black/20 p-3 rounded-xl">
+                                                <span style={{ color: t.accent }} className="mt-1 shrink-0 font-bold">•</span>
+                                                <span>{parseMiniMarkdown(b)}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            if (slide.layout === 'horizontal-emoji-band') {
+                if (slide.imageUrl) {
+                    return (
+                        <SlideContainer style={wrapStyle}>
+                            <div className="w-full max-w-5xl flex flex-col items-center justify-center animate-popIn gap-4">
+                                {slide.text && (
+                                    <h2 className="text-2xl md:text-4xl font-black text-center leading-tight drop-shadow-lg">
+                                        {parseMiniMarkdown(slide.text)}
+                                    </h2>
+                                )}
+                                <div className="w-full rounded-[2rem] overflow-hidden shadow-2xl border border-white/10 flex items-center justify-center" style={{ maxHeight: '52vh' }}>
+                                    <img src={slide.imageUrl} alt="" style={{ maxWidth: '100%', maxHeight: '52vh', objectFit: 'contain', display: 'block' }} />
+                                </div>
+                            </div>
+                        </SlideContainer>
+                    );
+                }
+                return (
+                    <SlideContainer style={wrapStyle}>
+                        <div className="w-full flex flex-col items-center justify-center animate-popIn">
+                            <h2 className="text-3xl md:text-6xl font-black text-center leading-tight max-w-4xl drop-shadow-lg mb-8">{parseMiniMarkdown(slide.text || '')}</h2>
+                            <div className="flex flex-wrap justify-center gap-4 md:gap-8 text-5xl md:text-8xl glass-panel px-6 md:px-10 py-5 rounded-[3rem] w-full max-w-5xl">
+                                {safeEmojis.split(' ').filter(Boolean).map((e, i) => <span key={i} className="animate-popIn emoji-glow" style={{ animationDelay: `${i * 0.1}s` }}>{e}</span>)}
+                            </div>
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            // Hero / Text Default
+            const textContent = getText();
+            const parsed = parseTextWithLists(textContent);
+            const emojiBlock = (size = 'text-6xl md:text-9xl') => <div className={`${size} animate-popIn emoji-glow mb-6 text-center`}>{safeEmojis}</div>;
+
+            return (
+                <SlideContainer style={wrapStyle}>
+                    <div className="w-full max-w-4xl flex flex-col items-center justify-center text-center animate-popIn">
+                        {emojiBlock()}
+                        
+                        {parsed.type === 'numbered-list' ? (
+                            <div className="w-full glass-panel p-6 md:p-10 rounded-[2rem] text-left">
+                                {parsed.heading && <h2 className="text-2xl md:text-5xl font-black leading-tight mb-6 md:mb-8 drop-shadow-lg text-center">{parseMiniMarkdown(parsed.heading)}</h2>}
+                                <ol className="space-y-4 mx-auto max-w-3xl">
+                                    {parsed.items.map((item, i) => (
+                                        <li key={i} className="flex items-start gap-4 animate-fadeIn bg-black/20 p-4 rounded-xl border border-white/5" style={{ animationDelay: `${(i + 1) * 0.12}s`, opacity: 0 }}>
+                                            <span className="font-black text-xl md:text-2xl mt-0.5 shrink-0" style={{ color: t.accent }}>{i + 1}.</span>
+                                            <span className="text-base md:text-2xl font-semibold leading-snug opacity-90">{parseMiniMarkdown(item.trim())}</span>
+                                        </li>
+                                    ))}
+                                </ol>
+                            </div>
+                        ) : (
+                            <div className="w-full glass-panel p-6 md:p-10 rounded-[2rem]">
+                                <h2 className="text-2xl md:text-6xl font-black leading-tight drop-shadow-xl text-center">{parseMiniMarkdown(textContent)}</h2>
+                            </div>
+                        )}
+                        
+                        {slide.subtext && <p className="text-base md:text-2xl opacity-70 max-w-2xl font-medium drop-shadow-md mt-6 md:mt-10">{parseMiniMarkdown(slide.subtext)}</p>}
+                    </div>
+                </SlideContainer>
+            );
+        };
+
+        // ============================================================
+        // INTERACTIVE SLIDES (MINIGAMES)
+        // ============================================================
+        const MultipleChoiceSlide = ({ slide, onComplete }) => {
+            const questions = slide.questions || slide.data?.questions || [slide]; 
+            const [qIndex, setQIndex] = useState(slide.savedQIndex || 0);
+            const [isFinished, setIsFinished] = useState(slide.isFinished || false);
+            
+            const [errorIdx, setErrorIdx] = useState(null);
+            const [successIdx, setSuccessIdx] = useState(null);
+            const [revealed, setRevealed] = useState(false);
+
+            const q = questions[qIndex];
+
+            useEffect(() => {
+                setErrorIdx(null);
+                setSuccessIdx(null);
+                setRevealed(false);
+            }, [qIndex]);
+
+            if (isFinished) {
+                return (
+                    <SlideContainer>
+                        <div className="flex flex-col items-center justify-center text-center animate-popIn">
+                            <span className="text-7xl md:text-9xl mb-6 emoji-glow">🎉</span>
+                            <h2 className="text-3xl md:text-6xl font-black text-white mb-4 drop-shadow-lg">¡Quiz Completado!</h2>
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            if (!q || !q.options) return <SlideContainer><div className="text-center text-white">Error loading question data</div></SlideContainer>;
+
+            const correctIdx = q.correctIndex !== undefined ? q.correctIndex : q.options.indexOf(q.correct);
+
+            const advance = () => {
+                if (qIndex < questions.length - 1) {
+                    const nextIdx = qIndex + 1;
+                    setQIndex(nextIdx);
+                    slide.savedQIndex = nextIdx;
+                } else {
+                    setIsFinished(true);
+                    slide.isFinished = true;
+                    onComplete();
+                }
+            };
+
+            const handleAnswer = (idx) => {
+                if (successIdx !== null || revealed) return;
+                if (idx === correctIdx) {
+                    setSuccessIdx(idx);
+                    triggerConfetti();
+                    setTimeout(advance, 1500);
+                } else {
+                    setErrorIdx(idx);
+                    setRevealed(true); 
+                }
+            };
+
+            return (
+                <SlideContainer>
+                    <div className="w-full max-w-4xl animate-fadeIn">
+                        <div className="mb-6 text-center flex flex-col items-center">
+                            <h3 className="text-sm md:text-xl font-bold text-zinc-400 mb-2 uppercase tracking-widest">
+                                Pregunta {qIndex + 1} de {questions.length}
+                            </h3>
+                            <p className="text-xs md:text-lg text-zinc-200 font-bold bg-white/10 backdrop-blur-md inline-block px-6 py-2 rounded-full border border-white/10 shadow-xl break-words text-center">
+                                {q.instruction || slide.instruction || "Elige la opción correcta"}
+                            </p>
+                        </div>
+
+                        <div className="glass-panel rounded-[2rem] p-6 md:p-12 w-full relative animate-popIn">
+                            <h2 className="text-xl md:text-4xl font-black mb-8 text-center text-white leading-tight drop-shadow-md">
+                                {q.question}
+                            </h2>
+                            
+                            <div className="flex flex-col items-center gap-3 md:gap-4 w-full mx-auto">
+                                {q.options.map((opt, idx) => {
+                                    let buttonClasses = 'border-white/10 bg-black/20 hover:border-brand hover:bg-white/10 text-white';
+                                    if (successIdx === idx) buttonClasses = 'border-green-500 bg-green-500/20 text-green-100 scale-[1.02] shadow-[0_0_30px_rgba(34,197,94,0.3)]';
+                                    else if (errorIdx === idx) buttonClasses = 'border-red-500 bg-red-500/20 text-red-100 opacity-50';
+                                    else if (revealed && idx === correctIdx) buttonClasses = 'border-green-500 bg-green-500/20 text-green-100 shadow-[0_0_30px_rgba(34,197,94,0.3)]';
+                                    else if (revealed) buttonClasses = 'border-white/5 bg-black/10 text-white/30 opacity-30';
+
+                                    return (
+                                        <button 
+                                            key={idx} 
+                                            onClick={() => handleAnswer(idx)}
+                                            disabled={successIdx !== null || revealed}
+                                            className={`touch-safe w-full text-base md:text-2xl font-bold py-4 md:py-5 px-6 rounded-2xl transition-all duration-300 border-2 cursor-pointer flex items-center justify-center text-center min-h-[64px] disabled:cursor-default ${buttonClasses}`}
+                                            style={{ position: 'relative', zIndex: 40 }}
+                                        >
+                                            <span className="pointer-events-none">{opt}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            
+                            {revealed && (
+                                <div className="mt-8 flex flex-col items-center animate-popIn">
+                                    <p className="text-red-400 font-bold mb-4 uppercase tracking-widest text-xs md:text-sm">¡Respuesta Incorrecta!</p>
+                                    <button onClick={advance} className="touch-safe bg-white text-black font-black px-10 py-3 md:py-4 rounded-full hover-scale shadow-xl text-sm md:text-lg cursor-pointer" style={{ zIndex: 40, position: 'relative' }}>
+                                        CONTINUAR
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </SlideContainer>
+            );
+        };
+
+        const FillBlankSlide = ({ slide, onComplete }) => {
+            const [isFinished, setIsFinished] = useState(slide.isFinished || false);
+            const [revealed, setRevealed] = useState(false);
+            
+            const { segments, blanks } = React.useMemo(() => {
+                const text = slide.text || '';
+                const regex = /\[(.*?)\]/g;
+                const segs = [];
+                const bks = [];
+                let lastIdx = 0;
+                let match;
+                while ((match = regex.exec(text)) !== null) {
+                    segs.push(text.slice(lastIdx, match.index));
+                    bks.push(match[1]);
+                    lastIdx = regex.lastIndex;
+                }
+                segs.push(text.slice(lastIdx));
+                return { segments: segs, blanks: bks };
+            }, [slide.text]);
+
+            const [userAnswers, setUserAnswers] = useState(slide.savedUserAnswers || Array(blanks.length).fill(null));
+            const [availableWords, setAvailableWords] = useState(() => {
+                if (slide.savedAvailable) return slide.savedAvailable;
+                const words = [...(slide.wordBank || blanks)];
+                return words.sort(() => Math.random() - 0.5);
+            });
+
+            if (isFinished) {
+                return (
+                    <SlideContainer>
+                        <div className="flex flex-col items-center justify-center text-center animate-popIn">
+                            <span className="text-7xl md:text-9xl mb-6 emoji-glow">🎉</span>
+                            <h2 className="text-3xl md:text-6xl font-black text-white mb-4 drop-shadow-lg">¡Texto Completado!</h2>
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            const handleWordClick = (word, index) => {
+                if (revealed) setRevealed(false); 
+                const firstEmpty = userAnswers.findIndex(a => a === null);
+                if (firstEmpty !== -1) {
+                    const newAnswers = [...userAnswers];
+                    newAnswers[firstEmpty] = word;
+                    setUserAnswers(newAnswers);
+                    slide.savedUserAnswers = newAnswers;
+
+                    const newAvailable = [...availableWords];
+                    newAvailable.splice(index, 1);
+                    setAvailableWords(newAvailable);
+                    slide.savedAvailable = newAvailable;
+                }
+            };
+
+            const handleRemoveAnswer = (word, index) => {
+                if (revealed) setRevealed(false);
+                const newAnswers = [...userAnswers];
+                newAnswers[index] = null;
+                setUserAnswers(newAnswers);
+                slide.savedUserAnswers = newAnswers;
+
+                const newAvailable = [...availableWords, word];
+                setAvailableWords(newAvailable);
+                slide.savedAvailable = newAvailable;
+            };
+
+            const checkAnswers = () => {
+                if (userAnswers.join(',') === blanks.join(',')) {
+                    triggerConfetti();
+                    slide.isFinished = true;
+                    setTimeout(() => { setIsFinished(true); onComplete(); }, 1500);
+                } else {
+                    setRevealed(true);
+                }
+            };
+
+            const forceAdvance = () => { slide.isFinished = true; setIsFinished(true); onComplete(); };
+            const isFull = !userAnswers.includes(null);
+
+            return (
+                <SlideContainer>
+                    <div className="w-full max-w-5xl glass-panel rounded-[2rem] p-6 md:p-12 shadow-2xl animate-popIn">
+                        <h3 className="text-sm font-bold text-zinc-400 mb-6 uppercase tracking-widest text-center">Fill in the Blanks</h3>
+                        
+                        <div className="text-lg md:text-3xl font-medium leading-relaxed text-zinc-200 mb-8 text-center flex flex-wrap justify-center items-center gap-y-3">
+                            {segments.map((seg, i) => (
+                                <React.Fragment key={i}>
+                                    <span>{seg}</span>
+                                    {i < blanks.length && (
+                                        <button 
+                                            onClick={() => userAnswers[i] && handleRemoveAnswer(userAnswers[i], i)}
+                                            className={`touch-safe inline-block mx-1.5 md:mx-2 px-3 py-1 border-b-4 rounded-lg min-w-[80px] md:min-w-[100px] text-center transition-colors font-bold
+                                                ${!userAnswers[i] ? 'bg-black/30 border-white/20 text-transparent' :
+                                                  revealed ? (userAnswers[i] === blanks[i] ? 'bg-green-500/20 border-green-500 text-green-400' : 'bg-red-500/20 border-red-500 text-red-400 animate-shake') :
+                                                  'bg-white/10 border-brand text-brand shadow-lg cursor-pointer hover:bg-white/20'}`}
+                                            style={{ zIndex: 40, position: 'relative' }}
+                                        >
+                                            <span className="pointer-events-none">{userAnswers[i] || '___'}</span>
+                                        </button>
+                                    )}
+                                </React.Fragment>
+                            ))}
+                        </div>
+
+                        <div className="flex flex-wrap justify-center gap-3 mb-8">
+                            {availableWords.map((word, i) => (
+                                <button 
+                                    key={`a-${i}-${word}`} 
+                                    onClick={() => handleWordClick(word, i)}
+                                    className="touch-safe cursor-pointer bg-black/40 hover:bg-white/10 border border-white/10 text-white font-bold py-2.5 md:py-3 px-4 md:px-5 rounded-xl transition-all shadow-lg text-sm md:text-base"
+                                    style={{ zIndex: 40, position: 'relative' }}
+                                >
+                                    <span className="pointer-events-none">{word}</span>
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="flex flex-col items-center justify-center gap-4">
+                            {revealed && (
+                                <p className="text-red-400 font-bold uppercase tracking-widest text-xs md:text-sm animate-fadeIn">
+                                    ¡Tienes errores! Corrige los rojos o salta el ejercicio.
+                                </p>
+                            )}
+                            <div className="flex gap-4 flex-wrap justify-center">
+                                {revealed && (
+                                    <button onClick={forceAdvance} className="touch-safe cursor-pointer bg-white/10 hover:bg-white/20 text-white font-black py-3 px-6 md:py-4 md:px-8 rounded-full transition-all shadow-lg text-xs md:text-sm" style={{ zIndex: 40, position: 'relative' }}>
+                                        SALTAR
+                                    </button>
+                                )}
+                                <button 
+                                    onClick={checkAnswers}
+                                    disabled={!isFull}
+                                    className="touch-safe cursor-pointer bg-brand hover:bg-blue-600 disabled:bg-white/5 disabled:text-white/20 text-white font-black py-3 px-8 md:py-4 md:px-12 rounded-full transition-all shadow-lg text-sm md:text-lg"
+                                    style={{ zIndex: 40, position: 'relative' }}
+                                >
+                                    VERIFICAR
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </SlideContainer>
+            );
+        };
+
+        const SentenceScrambleSlide = ({ slide, onComplete }) => {
+            const sentences = slide.sentences || [];
+            const [sIndex, setSIndex] = useState(slide.savedSIndex || 0);
+            const [isFinished, setIsFinished] = useState(slide.isFinished || false);
+            const [revealed, setRevealed] = useState(false);
+
+            const currentS = sentences[sIndex];
+            const cleanText = currentS ? currentS.text.replace(/\//g, '').replace(/\s+/g, ' ').trim() : '';
+
+            const [userWords, setUserWords] = useState(slide.savedUserWords || []);
+            const [availableWords, setAvailableWords] = useState(() => {
+                if (slide.savedAvailableWords) return slide.savedAvailableWords;
+                if (!currentS) return [];
+                return cleanText.split(' ').sort(() => Math.random() - 0.5);
+            });
+
+            if (isFinished || !currentS) {
+                return (
+                    <SlideContainer>
+                        <div className="flex flex-col items-center justify-center text-center animate-popIn">
+                            <span className="text-7xl md:text-9xl mb-6 emoji-glow">🎉</span>
+                            <h2 className="text-3xl md:text-6xl font-black text-white mb-4 drop-shadow-lg">¡Frases Completadas!</h2>
+                        </div>
+                    </SlideContainer>
+                );
+            }
+
+            const handleAdd = (e, word, idx) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (revealed) return;
+                const newU = [...userWords, word];
+                const newA = [...availableWords];
+                newA.splice(idx, 1);
+                setUserWords(newU);
+                setAvailableWords(newA);
+                slide.savedUserWords = newU;
+                slide.savedAvailableWords = newA;
+            };
+
+            const handleRemove = (e, word, idx) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (revealed) return;
+                const newU = [...userWords];
+                newU.splice(idx, 1);
+                const newA = [...availableWords, word];
+                setUserWords(newU);
+                setAvailableWords(newA);
+                slide.savedUserWords = newU;
+                slide.savedAvailableWords = newA;
+            };
+
+            const advance = () => {
+                if (sIndex < sentences.length - 1) {
+                    const nextIdx = sIndex + 1;
+                    setSIndex(nextIdx);
+                    slide.savedSIndex = nextIdx;
+                    
+                    const nextCleanText = sentences[nextIdx].text.replace(/\//g, '').replace(/\s+/g, ' ').trim();
+                    setUserWords([]);
+                    setAvailableWords(nextCleanText.split(' ').sort(() => Math.random() - 0.5));
+                    setRevealed(false);
+                    
+                    slide.savedUserWords = null;
+                    slide.savedAvailableWords = null;
+                } else {
+                    setIsFinished(true);
+                    slide.isFinished = true;
+                    onComplete();
+                }
+            };
+
+            const checkAnswer = () => {
+                if (userWords.join(' ') === cleanText) {
+                    triggerConfetti();
+                    setTimeout(advance, 1500);
+                } else {
+                    setRevealed(true);
+                }
+            };
+
+            const isFull = availableWords.length === 0;
+
+            return (
+                <SlideContainer>
+                    <div className="w-full max-w-5xl glass-panel rounded-[3rem] p-6 md:p-12 shadow-2xl animate-popIn flex flex-col items-center">
+                        <h3 className="text-sm font-bold text-zinc-400 mb-1 uppercase tracking-widest text-center">
+                            Frase {sIndex + 1} de {sentences.length}
+                        </h3>
+                        <p className="text-xs md:text-sm text-zinc-400 mb-6 text-center font-medium">Ordena las palabras para formar la frase correcta.</p>
+                        
+                        <div className="text-xl md:text-4xl font-black text-brand mb-8 text-center drop-shadow-md px-2">
+                            "{currentS.translation}"
+                        </div>
+
+                        {revealed ? (
+                            <div className="text-center w-full animate-fadeIn mb-6">
+                                <p className="text-red-400 font-bold mb-3 uppercase tracking-widest text-xs md:text-sm">¡Incorrecto! La frase es:</p>
+                                <div className="text-lg md:text-3xl font-black text-green-400 bg-green-500/10 border border-green-500/30 rounded-2xl p-4 md:p-5 shadow-lg inline-block">
+                                    {cleanText}
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                <div className="flex flex-wrap justify-center gap-2 md:gap-3 w-full min-h-[90px] p-4 bg-black/30 rounded-3xl border-2 border-dashed border-white/20 mb-6 shadow-inner items-center">
+                                    {userWords.length === 0 && <span className="text-zinc-500 font-medium italic text-sm md:text-base">Toca las palabras abajo...</span>}
+                                    {userWords.map((word, i) => (
+                                        <button 
+                                            key={`u-${i}-${word}`}
+                                            onMouseDown={(e) => handleRemove(e, word, i)}
+                                            onTouchEnd={(e) => handleRemove(e, word, i)}
+                                            className="touch-safe cursor-pointer bg-brand text-white font-bold py-2 px-4 md:py-2.5 md:px-5 rounded-xl shadow-[0_4px_12px_rgba(59,130,246,0.4)] hover:bg-blue-600 transition-colors animate-popIn text-sm md:text-base select-none"
+                                            style={{ zIndex: 40, position: 'relative', userSelect: 'none', WebkitUserSelect: 'none' }}
+                                        >
+                                            <span className="pointer-events-none">{word}</span>
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div className="flex flex-wrap justify-center gap-2 md:gap-3 mb-8 min-h-[50px]">
+                                    {availableWords.map((word, i) => (
+                                        <button 
+                                            key={`a-${i}-${word}`}
+                                            onMouseDown={(e) => handleAdd(e, word, i)}
+                                            onTouchEnd={(e) => handleAdd(e, word, i)}
+                                            className="touch-safe cursor-pointer bg-black/50 border border-white/10 text-white font-bold py-2 px-4 md:py-2.5 md:px-5 rounded-xl hover:bg-white/10 transition-colors shadow-lg text-sm md:text-base select-none"
+                                            style={{ zIndex: 40, position: 'relative', userSelect: 'none', WebkitUserSelect: 'none' }}
+                                        >
+                                            <span className="pointer-events-none">{word}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
+
+                        <div className="flex justify-center">
+                            {revealed ? (
+                                <button onClick={advance} className="touch-safe cursor-pointer bg-white text-black font-black px-8 md:px-12 py-3 md:py-4 rounded-full hover-scale shadow-xl text-sm md:text-lg" style={{ zIndex: 40, position: 'relative' }}>
+                                    CONTINUAR
+                                </button>
+                            ) : (
+                                <button 
+                                    onClick={checkAnswer}
+                                    disabled={!isFull}
+                                    className="touch-safe cursor-pointer bg-emerald-500 hover:bg-emerald-600 disabled:bg-white/5 disabled:text-white/20 text-white font-black py-3 md:py-4 px-8 md:px-12 rounded-full transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] disabled:shadow-none text-sm md:text-lg"
+                                    style={{ zIndex: 40, position: 'relative' }}
+                                >
+                                    VERIFICAR
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </SlideContainer>
+            );
+        };
+
+        const ThemePickerModal = ({ current, onSelect, onClose }) => (
+            <div className="modal-overlay" onClick={onClose}>
+                <div className="glass-panel rounded-[2rem] p-8 max-w-sm w-full mx-4 animate-popIn" onClick={e => e.stopPropagation()}>
+                    <h3 className="text-xl font-black text-center mb-2">Elige tu tema</h3>
+                    <p className="text-sm text-zinc-400 text-center mb-6">Personaliza cómo ves la presentación</p>
+                    <div className="flex flex-wrap justify-center gap-4 mb-6">
+                        {VIEWER_THEMES.map(vt => (
+                            <button
+                                key={vt.id}
+                                onClick={() => { onSelect(vt); onClose(); }}
+                                className="flex flex-col items-center gap-2 group touch-safe"
+                            >
+                                <div
+                                    className={`theme-swatch ${current.id === vt.id ? 'active' : ''}`}
+                                    style={{ background: vt.bg || 'linear-gradient(135deg, #09090b 0%, #3b82f6 100%)' }}
+                                />
+                                <span className="text-xs font-bold opacity-60 group-hover:opacity-100 transition-opacity">{vt.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                    <button onClick={onClose} className="w-full touch-safe bg-white/10 hover:bg-white/20 font-bold py-3 rounded-2xl transition-colors text-sm">
+                        Cerrar
+                    </button>
+                </div>
+            </div>
+        );
+
+        const ExitModal = ({ onClose, portalUrl, isTeacher }) => (
+            <div className="modal-overlay" onClick={onClose}>
+                <div className="glass-panel rounded-[2rem] p-8 max-w-sm w-full mx-4 animate-popIn text-center" onClick={e => e.stopPropagation()}>
+                    <div className="w-16 h-16 rounded-2xl bg-brand flex items-center justify-center mx-auto mb-4 shadow-[0_0_30px_rgba(59,130,246,0.4)]">
+                        <span className="text-3xl font-black text-white">P</span>
+                    </div>
+                    <h3 className="text-2xl font-black mb-2">Periplo</h3>
+                    <p className="text-zinc-400 text-sm mb-8">
+                        {isTeacher ? '¿Regresar al builder?' : '¿Regresar a tu portal?'}
+                    </p>
+                    <div className="flex flex-col gap-3">
+                        <a
+                            href={portalUrl}
+                            className="touch-safe w-full bg-brand hover:bg-blue-600 text-white font-black py-4 rounded-2xl transition-colors flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(59,130,246,0.3)]"
+                        >
+                            <LogOut size={18} /> {isTeacher ? 'Volver al Builder' : 'Ir a mi portal'}
+                        </a>
+                        <button onClick={onClose} className="touch-safe w-full bg-white/10 hover:bg-white/20 font-bold py-3 rounded-2xl transition-colors text-sm">
+                            Seguir viendo
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const App = () => {
+            const [presentation, setPresentation] = useState(null);
+            const [currentIdx, setCurrentIdx] = useState(0);
+            const [loading, setLoading] = useState(true);
+            const [isPresenting, setIsPresenting] = useState(false);
+            const [errorMsg, setErrorMsg] = useState(null);
+            const [viewerTheme, setViewerTheme] = useState(VIEWER_THEMES[0]);
+            const [showThemePicker, setShowThemePicker] = useState(false);
+            const [showExitModal, setShowExitModal] = useState(false);
+
+            const [arrowsVisible, setArrowsVisible] = useState(true);
+            const hideTimer = useRef(null);
+
+            const showArrows = useCallback(() => {
+                setArrowsVisible(true);
+                clearTimeout(hideTimer.current);
+                hideTimer.current = setTimeout(() => setArrowsVisible(false), 2500);
+            }, []);
+
+            useEffect(() => {
+                showArrows();
+                return () => clearTimeout(hideTimer.current);
+            }, [currentIdx, isPresenting, showArrows]);
+
+            useEffect(() => {
+                const handler = () => showArrows();
+                document.addEventListener('touchstart', handler, { passive: true });
+                document.addEventListener('mousemove', handler, { passive: true });
+                return () => {
+                    document.removeEventListener('touchstart', handler);
+                    document.removeEventListener('mousemove', handler);
+                };
+            }, [showArrows]);
+
+            useEffect(() => {
+                const initAndFetch = async () => {
+                    const params = new URLSearchParams(window.location.search);
+                    const id = params.get('id');
+                    if (!id) { setErrorMsg("No ID provided in URL."); setLoading(false); return; }
+                    try {
+                        await signInAnonymously(auth);
+                        const docSnap = await getDoc(doc(db, QUIZZES_PATH, id));
+                        if (docSnap.exists()) {
+                            setPresentation(docSnap.data());
+                        } else {
+                            setErrorMsg("Presentation not found.");
+                        }
+                    } catch (error) {
+                        console.error("Error fetching presentation:", error);
+                        setErrorMsg(error.message);
+                    } finally {
+                        setLoading(false);
+                    }
+                };
+                initAndFetch();
+            }, []);
+
+            if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><div className="animate-spin h-12 w-12 border-t-4 border-brand rounded-full"></div></div>;
+            if (errorMsg) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-red-500 font-bold text-xl p-8 text-center">{errorMsg}</div>;
+            if (!presentation || !presentation.content) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-white">Invalid presentation data.</div>;
+
+            // Portal navigation: detect who opened this
+            const uid = new URLSearchParams(window.location.search).get('uid') || '';
+            const isTeacher = !uid || uid === 'teacher_anita_001';
+            const portalUrl = isTeacher ? 'index-es.html' : `students_portal.html?uid=${uid}`;
+
+            const docTheme = presentation.theme;
+            const t = resolveTheme(docTheme, viewerTheme);
+            const stageBg = t.bg;
+            const slides = presentation.content.slides || presentation.content;
+            
+            const allSlides = [...slides];
+            if (presentation.miniGame && presentation.miniGame.type !== 'none') {
+                allSlides.push({ id: "minigame-final", type: presentation.miniGame.type, ...presentation.miniGame.data });
+            }
+
+            const currentSlide = allSlides[currentIdx];
+            if (!currentSlide) return null;
+
+            const nextSlide = () => { if (currentIdx < allSlides.length - 1) setCurrentIdx(currentIdx + 1); };
+            const prevSlide = () => { if (currentIdx > 0) setCurrentIdx(currentIdx - 1); };
+
+            const renderSlide = () => {
+                const quizTypes = ['multipleChoice', 'fillBlank', 'sentenceScramble'];
+                if (quizTypes.includes(currentSlide.type)) {
+                    switch(currentSlide.type) {
+                        case 'multipleChoice': return <MultipleChoiceSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id || currentIdx} />;
+                        case 'fillBlank': return <FillBlankSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id || currentIdx} />;
+                        case 'sentenceScramble': return <SentenceScrambleSlide slide={currentSlide} onComplete={nextSlide} key={currentSlide.id || currentIdx} />;
+                    }
+                }
+                if (currentSlide.layout || currentSlide.type === 'theory' || !currentSlide.type) {
+                    return <TheorySlide slide={currentSlide} theme={docTheme} viewerOverride={viewerTheme} key={currentSlide.id || currentIdx} />;
+                }
+                return <div className="p-8 text-center text-xl text-white">Unknown slide type: {currentSlide.type}</div>;
+            };
+
+            const NavArrows = () => (
+                <div
+                    className={`nav-arrows ${arrowsVisible ? 'visible-arrows' : 'hidden-arrows'} absolute top-1/2 -translate-y-1/2 w-full flex justify-between px-2 md:px-6`}
+                    style={{ zIndex: 50, pointerEvents: 'none' }}  
+                >
+                    <button
+                        onClick={prevSlide}
+                        disabled={currentIdx === 0}
+                        className={`nav-arrow-btn touch-safe p-3 md:p-5 rounded-full backdrop-blur-md transition-all border border-white/10 shadow-2xl
+                            ${currentIdx === 0 ? 'opacity-0 pointer-events-none' : 'bg-black/50 hover:bg-white/20 text-white hover-scale'}`}
+                    >
+                        <ChevronLeft size={28} />
+                    </button>
+                    <button
+                        onClick={nextSlide}
+                        disabled={currentIdx === allSlides.length - 1}
+                        className={`nav-arrow-btn touch-safe p-3 md:p-5 rounded-full backdrop-blur-md transition-all border border-white/10 shadow-2xl
+                            ${currentIdx === allSlides.length - 1 ? 'opacity-0 pointer-events-none' : 'bg-black/50 hover:bg-white/20 text-white hover-scale'}`}
+                    >
+                        <ChevronRight size={28} />
+                    </button>
+                </div>
+            );
+
+            return (
+                <div className="h-[100dvh] w-full flex flex-col text-white overflow-hidden font-sans" style={{ backgroundColor: stageBg }}>
+                    
+                    {showThemePicker && (
+                        <ThemePickerModal
+                            current={viewerTheme}
+                            onSelect={setViewerTheme}
+                            onClose={() => setShowThemePicker(false)}
+                        />
+                    )}
+                    {showExitModal && (
+                        <ExitModal
+                            onClose={() => setShowExitModal(false)}
+                            portalUrl={portalUrl}
+                            isTeacher={isTeacher}
+                        />
+                    )}
+
+                    {!isPresenting && (
+                        <header className="px-4 md:px-6 py-3 flex items-center justify-between shrink-0 sticky top-0 z-20 backdrop-blur-xl border-b border-white/10" style={{ background: 'rgba(0,0,0,0.55)' }}>
+                            <div className="flex items-center gap-3">
+                                <button
+                                    onClick={() => setShowExitModal(true)}
+                                    className="touch-safe w-9 h-9 rounded-xl flex items-center justify-center font-black text-lg text-white transition-all hover:scale-105 shadow-lg"
+                                    style={{ background: t.accent, boxShadow: `0 0 18px ${t.accent}55` }}
+                                    title="Periplo — Volver al portal"
+                                >
+                                    P
+                                </button>
+                                <div className="flex flex-col">
+                                    <h1 className="text-sm md:text-base font-black leading-tight line-clamp-1">
+                                        {presentation.title || "Presentación"}
+                                    </h1>
+                                    <span className="text-[9px] font-bold uppercase tracking-widest opacity-40">
+                                        Periplo · Presentations
+                                    </span>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => setShowThemePicker(true)}
+                                    className="touch-safe p-2.5 rounded-full bg-white/10 hover:bg-white/20 transition-colors border border-white/10"
+                                    title="Cambiar tema"
+                                >
+                                    <Palette size={16} />
+                                </button>
+                                <button
+                                    onClick={() => setIsPresenting(true)}
+                                    className="touch-safe text-white font-bold py-2 px-4 md:px-5 rounded-full flex items-center gap-2 transition-transform hover-scale shadow-lg text-xs md:text-sm"
+                                    style={{ background: t.accent, boxShadow: `0 0 15px ${t.accent}55` }}
+                                >
+                                    <Play size={14} fill="currentColor" />
+                                    <span className="hidden md:inline">Presentar</span>
+                                </button>
+                            </div>
+                        </header>
+                    )}
+
+                    {/* El main flex-1 min-h-0 asegura que el contenedor hijo tome exactamente el espacio restante y pueda scrollear internamente */}
+                    <main className={`flex-1 relative flex flex-col min-h-0 transition-all duration-500 ${isPresenting ? 'fixed inset-0 z-50' : ''}`} style={isPresenting ? { backgroundColor: stageBg } : {}}>
+                        
+                        {isPresenting && (
+                            <div className="absolute top-4 right-4 flex gap-2 z-50">
+                                <button
+                                    onClick={() => setShowThemePicker(true)}
+                                    className="touch-safe p-3 bg-black/30 hover:bg-white/20 rounded-full text-white backdrop-blur-md transition-colors border border-white/10 shadow-xl"
+                                >
+                                    <Palette size={20} />
+                                </button>
+                                <button
+                                    onClick={() => setIsPresenting(false)}
+                                    className="touch-safe p-3 bg-black/30 hover:bg-white/20 rounded-full text-white backdrop-blur-md transition-colors border border-white/10 shadow-xl"
+                                >
+                                    <X size={20} />
+                                </button>
+                            </div>
+                        )}
+
+                        <div className="flex-1 w-full relative z-0 overflow-hidden">
+                            {renderSlide()}
+                        </div>
+
+                        <NavArrows />
+
+                        {isPresenting && (
+                            <div className="absolute bottom-0 left-0 w-full h-1.5 bg-white/10" style={{ zIndex: 60 }}>
+                                <div
+                                    className="h-full transition-all duration-300"
+                                    style={{
+                                        width: `${((currentIdx + 1) / allSlides.length) * 100}%`,
+                                        background: t.accent,
+                                        boxShadow: `0 0 10px ${t.accent}`
+                                    }}
+                                ></div>
+                            </div>
+                        )}
+                    </main>
+
+                    {!isPresenting && (
+                        <footer className="h-32 md:h-44 shrink-0 border-t border-white/10 relative z-20 backdrop-blur-md" style={{ background: 'rgba(0,0,0,0.5)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+                            <button
+                                onClick={() => { const el = document.getElementById('slide-strip'); if (el) el.scrollBy({ left: -280, behavior: 'smooth' }); }}
+                                className="touch-safe absolute left-0 top-0 h-full w-10 md:w-14 z-30 flex items-center justify-center bg-gradient-to-r from-black/80 via-black/50 to-transparent text-white/50 hover:text-white transition-colors"
+                            >
+                                <ChevronLeft size={28} />
+                            </button>
+                            <button
+                                onClick={() => { const el = document.getElementById('slide-strip'); if (el) el.scrollBy({ left: 280, behavior: 'smooth' }); }}
+                                className="touch-safe absolute right-0 top-0 h-full w-10 md:w-14 z-30 flex items-center justify-center bg-gradient-to-l from-black/80 via-black/50 to-transparent text-white/50 hover:text-white transition-colors"
+                            >
+                                <ChevronRight size={28} />
+                            </button>
+                            <div id="slide-strip" className="h-full flex items-center px-12 md:px-16 overflow-x-auto gap-4 custom-scrollbar py-3">
+                                {allSlides.map((slide, idx) => (
+                                    <button 
+                                        key={slide.id || idx} 
+                                        onClick={() => setCurrentIdx(idx)}
+                                        className={`touch-safe shrink-0 h-24 w-36 md:h-32 md:w-48 rounded-2xl border-2 flex flex-col items-center justify-center p-3 relative overflow-hidden transition-all hover-scale shadow-lg
+                                            ${idx === currentIdx ? 'border-brand ring-4 ring-brand/30 bg-white/10' : 'border-white/10 bg-black/40 hover:border-white/30 hover:bg-white/5'}`}
+                                        style={ idx === currentIdx ? { borderColor: t.accent } : {} }
+                                    >
+                                        <span className="text-[10px] font-black opacity-40 absolute top-2 left-3">{idx + 1}</span>
+                                        {(slide.type === 'theory' || !slide.type) ? (
+                                            <span className="text-4xl mt-2 drop-shadow-md">{(Array.isArray(slide.emojis) ? slide.emojis[0] : String(slide.emojis || "📝")).split(' ')[0]}</span>
+                                        ) : (
+                                            <LayoutTemplate size={32} className="opacity-40 mt-2" style={{ color: t.accent }} />
+                                        )}
+                                        <p className="text-[9px] md:text-[11px] font-bold mt-2 truncate w-full px-2 opacity-60 text-center">
+                                            {(slide.type === 'theory' || !slide.type) ? (slide.heading || slide.text || slide.centerLabel || '') : `${slide.type} Quiz`}
+                                        </p>
+                                    </button>
+                                ))}
+                            </div>
+                        </footer>
+                    )}
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
