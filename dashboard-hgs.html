@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard · Holy Guacamole Game Show</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌶️</text></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
+  <script type="importmap">
+  {
+    "imports": {
+      "react":            "https://esm.sh/react@18.2.0",
+      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+      "firebase/app":     "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+      "firebase/firestore":"https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: 'Plus Jakarta Sans', sans-serif; height: 100dvh; overflow: hidden; }
+    .btn { transition: transform 0.1s, filter 0.1s; }
+    .btn:active:not(:disabled) { transform: scale(0.94); }
+    .btn:hover:not(:disabled) { filter: brightness(1.1); }
+    .custom-scroll::-webkit-scrollbar { width: 4px; }
+    .custom-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-zinc-950 text-white">
+<div id="root" class="h-full"></div>
+
+<script type="text/babel" data-type="module">
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createRoot } from 'react-dom/client';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, doc, onSnapshot, updateDoc, setDoc } from 'firebase/firestore';
+
+// ─── Firebase ────────────────────────────────────────────────
+const fbApp = initializeApp({
+  apiKey:"AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+  authDomain:"proyecto-periplo.firebaseapp.com",
+  projectId:"proyecto-periplo",
+  storageBucket:"proyecto-periplo.firebasestorage.app",
+  messagingSenderId:"236795998392",
+  appId:"1:236795998392:web:0da24b4f018611b55c844d"
+}, 'hgs-dash');
+const db = getFirestore(fbApp);
+const SESSION_REF = doc(db, 'artifacts/periplo-app-v1/sessions/holy-guac-live');
+
+// ─── Constants ───────────────────────────────────────────────
+const MINIGAMES = [
+  { id:'taquero',  label:'El Taquero Sordo',        emoji:'🌮', color:'#ef4444', format:'2v2' },
+  { id:'twister',  label:'Tongue Twister',           emoji:'👅', color:'#f97316', format:'2v2' },
+  { id:'acentos',  label:'Aguda, Grave o Esdrújula', emoji:'👏', color:'#eab308', format:'equipo' },
+  { id:'silabas',  label:'How Many Syllables?',      emoji:'🔢', color:'#22c55e', format:'individual' },
+  { id:'tilde',    label:'This or That',             emoji:'↔️', color:'#06b6d4', format:'TvT' },
+  { id:'anagrama', label:'Group Anagram',            emoji:'🔤', color:'#3b82f6', format:'TvT' },
+  { id:'piramide', label:'Alphabet Pyramid',         emoji:'🔺', color:'#8b5cf6', format:'individual' },
+  { id:'vocab',    label:'Vocab Multiple Choice',    emoji:'📝', color:'#ec4899', format:'individual' },
+];
+
+const TEAM_DEFAULTS = [
+  { key:'t0', name:'Los Tacos',      emoji:'🌮', hex:'#f59e0b' },
+  { key:'t1', name:'Los Chiles',     emoji:'🌶️', hex:'#22c55e' },
+  { key:'t2', name:'Los Limones',    emoji:'🍋',  hex:'#ca8a04' },
+  { key:'t3', name:'Los Aguacates',  emoji:'🥑',  hex:'#14b8a6' },
+];
+
+const mkDefaultSession = (count=4) => ({
+  status: 'lobby',
+  teamCount: count,
+  teams: TEAM_DEFAULTS.slice(0,count).map(t=>({...t,score:0,players:[]})),
+  activeTeamIdx: 0,
+  strikes: 0,
+  accumulatedPts: 0,
+  spinCount: 0,
+  spinTarget: null,
+  minigame: null,
+  stealActive: false,
+  stealQuestion: '',
+  stealAnswered: false,
+  stealWinnerIdx: null,
+  players: {},
+});
+
+// ─── Small helpers ───────────────────────────────────────────
+const upd = (obj) => updateDoc(SESSION_REF, obj);
+
+function Tag({ label, color }) {
+  return (
+    <span className="text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
+      style={{background:`${color}30`, color}}>
+      {label}
+    </span>
+  );
+}
+
+// ─── Tab: Config ─────────────────────────────────────────────
+function TabConfig({ session, onReset }) {
+  const [names, setNames] = useState(
+    TEAM_DEFAULTS.map(t=>t.name)
+  );
+  const tc = session?.teamCount || 4;
+  const players = Object.entries(session?.players||{});
+  const unassigned = players.filter(([,p])=>p.teamIdx===-1||p.teamIdx===undefined);
+
+  const applyTeamNames = async () => {
+    const newTeams = (session.teams||[]).map((t,i)=>({...t, name: names[i]||t.name}));
+    await upd({ teams: newTeams });
+  };
+
+  const assignPlayer = async (pid, playerData, teamIdx) => {
+    const newTeams = (session.teams||[]).map((t, i) => {
+      // Remove from all teams first
+      const filtered = (t.players||[]).filter(n => n !== playerData.name);
+      if (i === teamIdx) return { ...t, players: [...filtered, playerData.name] };
+      return { ...t, players: filtered };
+    });
+    await upd({
+      [`players.${pid}.teamIdx`]: teamIdx,
+      teams: newTeams,
+    });
+  };
+
+  const setTeamCount = async (count) => {
+    if (window.confirm(`¿Cambiar a ${count} equipos? Esto reiniciará la sesión.`)) onReset(count);
+  };
+
+  return (
+    <div className="space-y-6 pb-8">
+
+      {/* Team count */}
+      <div>
+        <div className="text-xs text-zinc-500 uppercase tracking-widest mb-2">Número de equipos</div>
+        <div className="flex gap-2">
+          {[2,4].map(n=>(
+            <button key={n} onClick={()=>tc!==n&&setTeamCount(n)}
+              className={`btn flex-1 py-2 rounded-xl font-bold transition-all ${
+                tc===n ? 'bg-lime-500 text-black' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+              }`}>
+              {n} equipos
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Team names */}
+      <div>
+        <div className="text-xs text-zinc-500 uppercase tracking-widest mb-2">Nombres de equipos</div>
+        <div className="space-y-2">
+          {TEAM_DEFAULTS.slice(0,tc).map((t,i)=>(
+            <div key={t.key} className="flex items-center gap-2">
+              <span className="text-lg w-7">{t.emoji}</span>
+              <input
+                className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-zinc-500"
+                value={names[i]}
+                onChange={e=>{ const n=[...names]; n[i]=e.target.value; setNames(n); }}
+              />
+              <div className="w-3 h-3 rounded-full" style={{background:t.hex}}/>
+            </div>
+          ))}
+        </div>
+        <button onClick={applyTeamNames}
+          className="btn mt-3 w-full bg-zinc-700 hover:bg-zinc-600 text-white font-bold py-2 rounded-xl text-sm">
+          Aplicar nombres
+        </button>
+      </div>
+
+      {/* Players joined */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs text-zinc-500 uppercase tracking-widest">
+            Jugadores conectados ({players.length})
+          </div>
+          {unassigned.length>0 && (
+            <span className="text-xs text-amber-400 font-bold">{unassigned.length} sin equipo</span>
+          )}
+        </div>
+
+        {players.length === 0 ? (
+          <div className="text-zinc-600 text-sm text-center py-4 bg-zinc-900 rounded-xl">
+            Nadie ha entrado aún.<br/>
+            <span className="text-xs">Comparte: <code className="text-lime-400">holy-guac-show.html?player=true</code></span>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {players.map(([pid, p])=>{
+              const assignedTeam = p.teamIdx>=0 ? (session.teams||[])[p.teamIdx] : null;
+              return (
+                <div key={pid} className="bg-zinc-900 rounded-xl px-3 py-2">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="font-semibold text-sm text-white">{p.name}</span>
+                    {assignedTeam
+                      ? <span className="text-xs font-bold" style={{color:assignedTeam.hex}}>{assignedTeam.emoji} {assignedTeam.name}</span>
+                      : <span className="text-xs text-zinc-600">sin equipo</span>
+                    }
+                  </div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {(session.teams||[]).slice(0,tc).map((t,ti)=>(
+                      <button key={t.key} onClick={()=>assignPlayer(pid,p,ti)}
+                        className="btn text-xs px-2 py-1 rounded-lg font-bold transition-all"
+                        style={{
+                          background: p.teamIdx===ti ? `${t.hex}40` : '#27272a',
+                          color: p.teamIdx===ti ? t.hex : '#71717a',
+                          border: `1px solid ${p.teamIdx===ti ? t.hex : '#3f3f46'}`
+                        }}>
+                        {t.emoji} {t.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Start / Reset */}
+      <div className="flex gap-2 pt-2">
+        <button
+          onClick={()=>upd({status:'active'})}
+          disabled={session?.status==='active'}
+          className="btn flex-1 bg-lime-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-black py-3 rounded-xl">
+          {session?.status==='active' ? '▶ En curso' : '▶ Comenzar Show'}
+        </button>
+        <button
+          onClick={()=>upd({status:'podium'})}
+          className="btn px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold rounded-xl text-sm">
+          🏆 Podio
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab: Juego ───────────────────────────────────────────────
+function TabJuego({ session }) {
+  const teams     = (session?.teams||[]).slice(0, session?.teamCount||4);
+  const active    = teams[session?.activeTeamIdx||0] || teams[0];
+  const mg        = session?.minigame ? MINIGAMES.find(m=>m.id===session.minigame) : null;
+  const strikes   = session?.strikes  || 0;
+  const accPts    = session?.accumulatedPts || 0;
+  const [spinning, setSpinning] = useState(false);
+
+  const spin = async () => {
+    if (spinning) return;
+    setSpinning(true);
+    const target = Math.floor(Math.random() * 8);
+    await upd({
+      spinCount: (session?.spinCount||0) + 1,
+      spinTarget: target,
+      minigame: MINIGAMES[target].id,
+    });
+    setTimeout(()=>setSpinning(false), 4800);
+  };
+
+  const addPts = async (pts) => {
+    await upd({ accumulatedPts: accPts + pts });
+  };
+
+  const addStrike = async () => {
+    const next = strikes + 1;
+    if (next >= 3) {
+      await upd({ strikes: 3, stealActive: true });
+    } else {
+      await upd({ strikes: next });
+    }
+  };
+
+  const removeStrike = async () => {
+    await upd({ strikes: Math.max(0, strikes-1) });
+  };
+
+  const awardPts = async () => {
+    if (!active || accPts <= 0) return;
+    const newTeams = teams.map((t,i)=>
+      i===session.activeTeamIdx ? {...t, score:(t.score||0)+accPts} : t
+    );
+    await upd({ teams:newTeams, accumulatedPts:0, strikes:0, minigame:null });
+  };
+
+  const resetRound = async () => {
+    await upd({ accumulatedPts:0, strikes:0, minigame:null, stealActive:false });
+  };
+
+  const nextTeam = async () => {
+    const next = ((session?.activeTeamIdx||0) + 1) % teams.length;
+    await upd({
+      activeTeamIdx: next,
+      strikes: 0,
+      accumulatedPts: 0,
+      minigame: null,
+      stealActive: false,
+      stealQuestion: '',
+      stealAnswered: false,
+      stealWinnerIdx: null,
+    });
+  };
+
+  return (
+    <div className="space-y-4 pb-8">
+
+      {/* Active team */}
+      {active && (
+        <div className="rounded-2xl p-4 flex items-center justify-between"
+          style={{background:`${active.hex}1a`, border:`2px solid ${active.hex}55`}}>
+          <div>
+            <div className="text-xs text-zinc-500 uppercase tracking-widest">Equipo activo</div>
+            <div className="text-xl font-black text-white">{active.emoji} {active.name}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-xs text-zinc-500">puntos totales</div>
+            <div className="text-2xl font-black" style={{color:active.hex}}>{active.score}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Spin */}
+      <button
+        onClick={spin}
+        disabled={spinning || session?.status !== 'active'}
+        className="btn w-full py-4 rounded-2xl font-black text-xl text-black transition-all disabled:opacity-40"
+        style={{background: spinning ? '#6b7280' : 'linear-gradient(135deg,#fbbf24,#84cc16)'}}>
+        {spinning ? '🌀 Girando...' : '🎡 GIRAR RULETA'}
+      </button>
+
+      {/* Current minigame */}
+      {mg ? (
+        <div className="rounded-2xl p-4 text-center"
+          style={{background:`${mg.color}18`, border:`2px solid ${mg.color}66`}}>
+          <div className="text-3xl">{mg.emoji}</div>
+          <div className="font-black text-white">{mg.label}</div>
+          <Tag label={mg.format} color={mg.color}/>
+        </div>
+      ) : (
+        <div className="rounded-2xl p-4 text-center bg-zinc-900 border border-zinc-800">
+          <div className="text-zinc-600 text-sm">Gira para elegir mini-juego</div>
+        </div>
+      )}
+
+      {/* Points buttons */}
+      <div>
+        <div className="text-xs text-zinc-500 uppercase tracking-widest mb-2">Añadir al pozo</div>
+        <div className="grid grid-cols-4 gap-2">
+          {[10,25,50,100].map(pts=>(
+            <button key={pts} onClick={()=>addPts(pts)}
+              className="btn bg-emerald-900/60 hover:bg-emerald-800 border border-emerald-700 text-emerald-300 font-black py-3 rounded-xl text-sm">
+              +{pts}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Accumulated pts + strikes */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-zinc-900 rounded-2xl p-4 text-center border border-zinc-800">
+          <div className="text-xs text-zinc-500 uppercase tracking-widest">Pozo actual</div>
+          <div className="text-4xl font-black text-amber-400">{accPts}</div>
+          <div className="text-xs text-zinc-500">puntos</div>
+        </div>
+        <div className="bg-zinc-900 rounded-2xl p-4 text-center border border-zinc-800">
+          <div className="text-xs text-zinc-500 uppercase tracking-widest mb-2">Strikes</div>
+          <div className="flex justify-center gap-2">
+            {[0,1,2].map(i=>(
+              <div key={i} className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs border-2 ${
+                i<strikes ? 'bg-red-500 border-red-400 text-white' : 'bg-zinc-800 border-zinc-700 text-zinc-600'
+              }`}>{i<strikes?'✕':'○'}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Strike controls */}
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={addStrike} disabled={strikes>=3}
+          className="btn bg-red-900/60 hover:bg-red-800 border border-red-700 text-red-300 font-bold py-2.5 rounded-xl text-sm disabled:opacity-30">
+          ✕ Strike (+1)
+        </button>
+        <button onClick={removeStrike} disabled={strikes<=0}
+          className="btn bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold py-2.5 rounded-xl text-sm disabled:opacity-30">
+          ← Quitar strike
+        </button>
+      </div>
+
+      {/* Award / Reset / Next */}
+      <div className="space-y-2 pt-1">
+        <button onClick={awardPts} disabled={accPts<=0}
+          className="btn w-full bg-lime-600 hover:bg-lime-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-black py-3 rounded-xl">
+          🏆 Otorgar {accPts} pts a {active?.name}
+        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={resetRound}
+            className="btn bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold py-2.5 rounded-xl text-sm">
+            🔄 Resetear ronda
+          </button>
+          <button onClick={nextTeam}
+            className="btn bg-zinc-700 hover:bg-zinc-600 text-white font-bold py-2.5 rounded-xl text-sm">
+            Siguiente equipo →
+          </button>
+        </div>
+      </div>
+
+      {/* Team scores summary */}
+      <div className="border-t border-zinc-800 pt-4 space-y-1.5">
+        {teams.map((t,i)=>(
+          <div key={t.key}
+            className="flex items-center justify-between rounded-xl px-3 py-2 cursor-pointer transition-all"
+            style={{
+              background: i===session?.activeTeamIdx ? `${t.hex}1a` : '#18181b',
+              border:`${i===session?.activeTeamIdx?2:1}px solid ${i===session?.activeTeamIdx?t.hex:'#3f3f46'}`
+            }}
+            onClick={()=>upd({activeTeamIdx:i})}>
+            <span className="text-sm">{t.emoji} <span className="font-semibold">{t.name}</span></span>
+            <span className="font-black text-lg" style={{color:t.hex}}>{t.score}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab: Robo ────────────────────────────────────────────────
+function TabRobo({ session }) {
+  const teams     = (session?.teams||[]).slice(0, session?.teamCount||4);
+  const [q, setQ] = useState('');
+  const accPts    = session?.accumulatedPts||0;
+
+  const showQuestion = async () => {
+    await upd({ stealActive:true, stealQuestion:q, stealAnswered:false, stealWinnerIdx:null });
+  };
+
+  const awardToTeam = async (teamIdx) => {
+    const newTeams = teams.map((t,i)=>
+      i===teamIdx ? {...t, score:(t.score||0)+accPts} : t
+    );
+    await upd({
+      teams: newTeams,
+      stealActive: false,
+      stealAnswered: true,
+      stealWinnerIdx: teamIdx,
+      accumulatedPts: 0,
+      strikes: 0,
+      minigame: null,
+    });
+    setTimeout(()=>upd({stealAnswered:false, stealWinnerIdx:null, stealQuestion:''}), 3000);
+  };
+
+  const cancelSteal = async () => {
+    await upd({ stealActive:false, stealQuestion:'', stealAnswered:false, stealWinnerIdx:null });
+  };
+
+  return (
+    <div className="space-y-4 pb-8">
+
+      <div className="rounded-2xl p-4 bg-amber-500/10 border border-amber-500/40">
+        <div className="text-sm text-amber-300 font-bold mb-1">⚡ Puntos en juego</div>
+        <div className="text-3xl font-black text-amber-400">{accPts} pts</div>
+        <div className="text-xs text-zinc-400 mt-0.5">Al equipo que gane el reto se le transfieren</div>
+      </div>
+
+      {/* Question input */}
+      <div>
+        <div className="text-xs text-zinc-500 uppercase tracking-widest mb-2">Pregunta flash para robo</div>
+        <textarea
+          rows={3}
+          className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-amber-500 resize-none"
+          placeholder="Escribe la pregunta que verán todos los equipos en pantalla..."
+          value={q}
+          onChange={e=>setQ(e.target.value)}
+        />
+        <div className="flex gap-2 mt-2">
+          <button onClick={showQuestion} disabled={!q.trim()||accPts<=0}
+            className="btn flex-1 bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-black py-2.5 rounded-xl text-sm">
+            ⚡ Mostrar en pantalla
+          </button>
+          {session?.stealActive && (
+            <button onClick={cancelSteal}
+              className="btn px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold rounded-xl text-sm">
+              Cancelar
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Pregunta activa indicator */}
+      {session?.stealActive && (
+        <div className="rounded-xl p-3 bg-amber-500/10 border border-amber-500 text-center">
+          <div className="text-amber-400 font-bold text-sm animate-pulse">⚡ Pregunta visible en pantalla</div>
+          <div className="text-white text-sm mt-1">{session.stealQuestion}</div>
+        </div>
+      )}
+
+      {/* Winner selector */}
+      <div>
+        <div className="text-xs text-zinc-500 uppercase tracking-widest mb-2">¿Quién respondió primero?</div>
+        <div className="space-y-2">
+          {teams.map((t,i)=>(
+            <button key={t.key} onClick={()=>awardToTeam(i)}
+              disabled={accPts<=0}
+              className="btn w-full flex items-center justify-between rounded-xl px-4 py-3 transition-all disabled:opacity-30"
+              style={{background:`${t.hex}18`, border:`2px solid ${t.hex}55`}}>
+              <span className="font-bold">{t.emoji} {t.name}</span>
+              <span className="font-black text-sm" style={{color:t.hex}}>+{accPts} pts →</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Manual pts adjustment */}
+      <div className="border-t border-zinc-800 pt-4">
+        <div className="text-xs text-zinc-500 uppercase tracking-widest mb-2">Ajuste manual de puntos</div>
+        <div className="grid grid-cols-2 gap-2">
+          {teams.map((t,i)=>(
+            <div key={t.key} className="bg-zinc-900 rounded-xl p-2 border border-zinc-800">
+              <div className="text-xs mb-1.5" style={{color:t.hex}}>{t.emoji} {t.name}</div>
+              <div className="flex gap-1">
+                {[-10,+10].map(d=>(
+                  <button key={d} onClick={()=>{
+                    const nt=teams.map((tt,ii)=>ii===i?{...tt,score:Math.max(0,(tt.score||0)+d)}:tt);
+                    upd({teams:nt});
+                  }}
+                  className="btn flex-1 text-xs font-bold py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300">
+                    {d>0?'+':''}{d}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── App Root ─────────────────────────────────────────────────
+function App() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [tab,     setTab]     = useState('config');
+
+  useEffect(()=>{
+    const unsub = onSnapshot(SESSION_REF, snap=>{
+      setSession(snap.exists() ? snap.data() : null);
+      setLoading(false);
+    });
+    return ()=>unsub();
+  },[]);
+
+  const resetSession = useCallback(async (count=4) => {
+    await setDoc(SESSION_REF, mkDefaultSession(count));
+  }, []);
+
+  const TABS = [
+    { id:'config', label:'⚙️ Config' },
+    { id:'juego',  label:'🎡 Juego' },
+    { id:'robo',   label:'⚡ Robo' },
+  ];
+
+  if (loading) return (
+    <div className="h-full flex items-center justify-center bg-zinc-950">
+      <div className="text-4xl animate-spin">🌶️</div>
+    </div>
+  );
+
+  const s = session || mkDefaultSession();
+
+  return (
+    <div className="h-full flex flex-col bg-zinc-950">
+
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-900/80 shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="text-xl">🌶️</span>
+          <span className="font-black text-white text-sm">Holy Guacamole</span>
+          <span className="text-zinc-600 text-xs">Dashboard</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${s.status==='active'?'bg-lime-500 animate-pulse':'bg-zinc-600'}`}/>
+          <span className="text-xs text-zinc-500 capitalize">{s.status}</span>
+          <button
+            onClick={()=>window.confirm('¿Resetear toda la sesión?')&&resetSession(s.teamCount||4)}
+            className="btn text-xs text-zinc-600 hover:text-red-400 px-2 py-1 rounded bg-zinc-800 font-bold ml-2">
+            Reset
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-zinc-800 shrink-0">
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            className={`flex-1 py-2.5 text-sm font-bold transition-all ${
+              tab===t.id
+                ? 'text-white border-b-2 border-lime-500'
+                : 'text-zinc-500 hover:text-zinc-300'
+            }`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      <div className="flex-1 overflow-y-auto custom-scroll px-4 pt-4">
+        {tab==='config' && <TabConfig session={s} onReset={resetSession}/>}
+        {tab==='juego'  && <TabJuego  session={s}/>}
+        {tab==='robo'   && <TabRobo   session={s}/>}
+      </div>
+
+      {/* Footer: Student URL */}
+      <div className="border-t border-zinc-800 px-4 py-2 bg-zinc-900/60 shrink-0">
+        <div className="text-xs text-zinc-600 text-center">
+          Alumnos → <code className="text-lime-500 text-xs">holy-guac-show.html?player=true</code>
+          {' · '}
+          Pantalla → <code className="text-lime-500 text-xs">holy-guac-show.html</code>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
