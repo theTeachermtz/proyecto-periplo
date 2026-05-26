@@ -516,17 +516,28 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
         </div>
       )}
 
+      {/* Player identity chip — only for players (not MOD_ONLY) */}
+      {me&&myTeam&&(
+        <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{background:`${myTeam.color}18`,borderBottom:`1px solid ${myTeam.color}35`}}>
+          <span className="text-base">{me.emoji}</span>
+          <span className="font-black text-white text-sm">Tú: {me.name}</span>
+          <div className="w-1.5 h-1.5 rounded-full mx-1" style={{background:myTeam.color}}/>
+          <span className="text-xs font-bold" style={{color:myTeam.color}}>{myTeam.name}</span>
+        </div>
+      )}
+
       {/* Team scores */}
       {teams.length>0&&(
         <div className="flex border-b border-zinc-800 shrink-0">
           {teams.map(t=>{
-            const tPlayers=players.filter(p=>p.teamId===t.id);
+            const isWinner=game?.winnerTeamId===t.id&&(phase==='SPIN_ASSIGN'||phase==='MINIGAME');
             const score=game?.teamScores?.[t.id]||0;
             const strikes=game?.teamStrikes?.[t.id]||0;
             return(
-              <div key={t.id} className="flex-1 flex flex-col items-center py-2 px-1">
+              <div key={t.id} className="flex-1 flex flex-col items-center py-2 px-1 transition-all"
+                style={isWinner?{background:`${t.color}25`,borderBottom:`2px solid ${t.color}`}:{}}>
                 <div className="w-2.5 h-2.5 rounded-full mb-1" style={{background:t.color}}/>
-                <div className="text-xs font-bold truncate max-w-full px-1" style={{color:t.color}}>{t.name}</div>
+                <div className="text-xs font-bold truncate max-w-full px-1" style={{color:t.color}}>{t.name}{isWinner?' 🏆':''}</div>
                 <div className="text-xl font-black text-white">{score}</div>
                 <div className="flex gap-1">
                   {[0,1,2].map(i=><div key={i} className={`w-2 h-2 rounded-full ${i<strikes?'bg-red-500':'bg-zinc-700'}`}/>)}
@@ -536,6 +547,16 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
           })}
         </div>
       )}
+
+      {/* Winner team banner */}
+      {(phase==='SPIN_ASSIGN'||phase==='MINIGAME')&&game?.winnerTeamId!=null&&(()=>{
+        const wt=teams.find(t=>t.id===game.winnerTeamId);
+        return wt&&(
+          <div className="px-4 py-2.5 font-black text-center text-sm shrink-0 anim-up" style={{background:`${wt.color}30`,color:wt.color,borderBottom:`1px solid ${wt.color}50`}}>
+            🏆 {wt.name} — ¡turno de girar la ruleta!
+          </div>
+        );
+      })()}
 
       {/* Main phase content */}
       <div className="flex-1 flex flex-col items-center justify-center p-4 gap-4 overflow-hidden">
@@ -665,14 +686,49 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
   };
 
   const activateBuzzers=async()=>{
-    await updateDoc(rRef(roomId),{buzzQuestion:buzzQ,phase:'BUZZER',buzzLog:[]});
+    // Step 1: activate buzzers — players see red button, question hidden yet
+    await updateDoc(rRef(roomId),{phase:'BUZZER',buzzLog:[],buzzQuestion:''});
   };
 
-  const declareWinner=async(teamId)=>{
+  const revealQuestion=async()=>{
+    if(!buzzQ.trim())return;
+    // Step 2: show question on all screens simultaneously
+    await updateDoc(rRef(roomId),{buzzQuestion:buzzQ});
+  };
+
+  const assignSpinner=(teamId)=>{
     const teamPlayers=players.filter(p=>p.teamId===teamId);
     const cursor=(game?.spinCursors||{})[teamId]||0;
     const spinner=teamPlayers[cursor%teamPlayers.length];
-    await updateDoc(rRef(roomId),{winnerTeamId:teamId,spinnerPlayerId:spinner?.id||null,phase:'SPIN_ASSIGN'});
+    return {teamId, spinnerId: spinner?.id||null};
+  };
+
+  const declareCorrect=async()=>{
+    // First buzzer's team wins → go to spin
+    const first=buzzLog[0];
+    if(!first)return;
+    const {teamId,spinnerId}=assignSpinner(first.teamId);
+    await updateDoc(rRef(roomId),{winnerTeamId:teamId,spinnerPlayerId:spinnerId,phase:'SPIN_ASSIGN'});
+  };
+
+  const declareIncorrect=async()=>{
+    // Give the win to the second buzzer's team if they're from a different team
+    const first=buzzLog[0];
+    const alt=buzzLog.find(b=>b.teamId!==first?.teamId);
+    if(alt){
+      const {teamId,spinnerId}=assignSpinner(alt.teamId);
+      await updateDoc(rRef(roomId),{winnerTeamId:teamId,spinnerPlayerId:spinnerId,phase:'SPIN_ASSIGN'});
+    } else {
+      // Nobody else buzzed — strike for first team
+      const tid=first?.teamId;
+      if(tid==null)return;
+      const newStrikes={...(game?.teamStrikes||{}),[tid]:((game?.teamStrikes||{})[tid]||0)+1};
+      if(newStrikes[tid]>=3){
+        await updateDoc(rRef(roomId),{teamStrikes:newStrikes,accPts:0,roundIdx:roundIdx+1,phase:'CURTAIN'});
+      } else {
+        await updateDoc(rRef(roomId),{teamStrikes:newStrikes,roundIdx:roundIdx+1,phase:'CURTAIN'});
+      }
+    }
   };
 
   const markResult=async(won)=>{
@@ -731,7 +787,7 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
           {(phase==='CURTAIN'||phase==='CALL_UP')&&(
             <div className="space-y-2">
               <div className="text-xs text-zinc-500 uppercase tracking-widest">Jugadores a llamar (Ronda {roundIdx+1})</div>
-              {getCalledPair().map((p,i)=>{
+              {getCalledPair().map((p)=>{
                 const t=teams.find(t2=>t2.id===p.teamId);
                 return(<div key={p.id} className="flex items-center gap-2 bg-zinc-800 rounded-xl px-3 py-2">
                   <span>{p.emoji}</span><span className="font-bold text-sm flex-1">{p.name}</span>
@@ -744,43 +800,56 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
             </div>
           )}
 
-          {/* CALL_UP → Buzzer question */}
+          {/* CALL_UP → activate buzzers (no question yet) */}
           {phase==='CALL_UP'&&(
+            <button onClick={activateBuzzers}
+              className="btn-j w-full bg-red-600 hover:bg-red-500 text-white font-black py-3 rounded-xl text-sm flex items-center justify-center gap-2">
+              🔴 Activar Buzzers
+            </button>
+          )}
+
+          {/* BUZZER — sub-step 1: pregunta no revelada → textarea + botón mostrar */}
+          {phase==='BUZZER'&&!game?.buzzQuestion&&(
             <div className="space-y-2">
-              <div className="text-xs text-zinc-500 uppercase tracking-widest">Pregunta de buzzer</div>
+              <div className="text-xs text-zinc-500 uppercase tracking-widest">Paso 2 — Mostrar pregunta</div>
               <textarea rows={3} value={buzzQ} onChange={e=>setBuzzQ(e.target.value)}
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 resize-none"
-                placeholder="Escribe la pregunta aquí..."/>
-              <button onClick={activateBuzzers} disabled={!buzzQ.trim()}
-                className="btn-j w-full bg-red-600 hover:bg-red-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-black py-2.5 rounded-xl text-sm">
-                🔴 Activar Buzzers
+                placeholder="Escribe la pregunta y muéstrala en pantalla..."/>
+              <button onClick={revealQuestion} disabled={!buzzQ.trim()}
+                className="btn-j w-full bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-black py-2.5 rounded-xl text-sm">
+                👁 Mostrar pregunta a todos
               </button>
             </div>
           )}
 
-          {/* BUZZER → declare winner */}
-          {phase==='BUZZER'&&(
+          {/* BUZZER — sub-step 2: pregunta revelada → buzz order + correcto/incorrecto */}
+          {phase==='BUZZER'&&game?.buzzQuestion&&(
             <div className="space-y-2">
+              <div className="text-xs text-zinc-400 bg-zinc-800 rounded-xl px-3 py-2 italic">"{game.buzzQuestion}"</div>
               <div className="text-xs text-zinc-500 uppercase tracking-widest">Orden de buzzers</div>
-              {buzzLog.length===0&&<div className="text-zinc-600 text-sm italic">Esperando buzzers...</div>}
+              {buzzLog.length===0&&<div className="text-zinc-600 text-sm italic animate-pulse">Esperando buzzers...</div>}
               {buzzLog.map((b,i)=>{
                 const p=players.find(pl=>pl.id===b.playerId);
                 const t=teams.find(t2=>t2.id===b.teamId);
-                return(<div key={i} className="flex items-center gap-2 bg-zinc-800 rounded-xl px-3 py-2">
-                  <span className="text-amber-400 font-black w-4">{i+1}</span>
+                const isFirst=i===0;
+                return(<div key={i} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{background:isFirst?`${t?.color}25`:'#27272a',border:isFirst?`1px solid ${t?.color}55`:'none'}}>
+                  <span className="font-black w-4" style={{color:isFirst?'#fbbf24':'#71717a'}}>{i+1}°</span>
                   <span>{p?.emoji}</span><span className="font-bold text-sm flex-1">{p?.name}</span>
                   <span className="text-xs font-bold" style={{color:t?.color}}>{t?.name}</span>
                 </div>);
               })}
-              <div className="text-xs text-zinc-500 uppercase tracking-widest mt-3">¿Quién contestó bien?</div>
-              {teams.slice(0,game?.teamCount||2).map(t=>(
-                <button key={t.id} onClick={()=>declareWinner(t.id)}
-                  className="btn-j w-full flex items-center justify-between rounded-xl px-4 py-3 font-bold text-sm"
-                  style={{background:`${t.color}18`,border:`2px solid ${t.color}55`}}>
-                  <span style={{color:t.color}}>✅ {t.name}</span>
-                  <span className="text-zinc-400 text-xs">→ ir a girar</span>
-                </button>
-              ))}
+              {buzzLog.length>0&&(
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button onClick={declareCorrect}
+                    className="btn-j bg-lime-600 hover:bg-lime-500 text-white font-black py-3 rounded-xl text-sm">
+                    ✅ Correcto
+                  </button>
+                  <button onClick={declareIncorrect}
+                    className="btn-j bg-red-700 hover:bg-red-600 text-white font-black py-3 rounded-xl text-sm">
+                    ❌ Incorrecto
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
