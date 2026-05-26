@@ -119,7 +119,7 @@ Los de `phonechat` / `voicereply` / `audiotranslator` son async (práctica del a
 | `speeddate.html` | dashboard-sd.html | 4 rondas de conversación con timer + constraint de grammar (Speed Dating) | ⚙️ |
 | `welcomecommittee.html` | dashboard-wlc.html | 2 turistas vs 2 locales — navegación con preposiciones y estructuras B | ⚙️ |
 | `contrasena.html` | dashboard-cnt.html | Grid de vocab — spy da pista de una palabra que conecta 2–3 del grid (Codenames) | ⚙️ |
-| `loteria.html` | dashboard-lot.html | Lotería (port desde React pendiente) | ⚙️ |
+| `loteria.html` | dashboard-lot.html | Lotería Mexicana bilingüe — baraja + tabla 4×4 | ✅ |
 | `adivina-quien.html` | dashboard-aq.html | Guess Who con preguntas en Past Simple + adjetivos (port desde React pendiente) | ⚙️ |
 | `personallyincorrecto.html` | dashboard-pi.html | Elegir tarjeta que representa reacción de un compañero + justificación oral (Personally Incorrect) | ⚙️ |
 | `applestoapples.html` | dashboard-ata.html | AP card + NP hand — judge elige mejor colocación + argumentación (Apples to Apples) | ⚙️ |
