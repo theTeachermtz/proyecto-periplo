@@ -38,9 +38,9 @@
     .anim-up     {animation:slide-up  .3s ease both}
     .anim-float  {animation:float 3s ease-in-out infinite}
     .anim-drawer {animation:drawer-in .25s ease both}
-    .curtain-l   {animation:curtain-l 1.6s cubic-bezier(.4,0,.2,1) .4s both}
-    .curtain-r   {animation:curtain-r 1.6s cubic-bezier(.4,0,.2,1) .4s both}
-    .round-show  {animation:round-pop  .6s cubic-bezier(.34,1.56,.64,1) 1.8s both}
+    .curtain-l   {animation:curtain-l .85s cubic-bezier(.4,0,.2,1) .2s both}
+    .curtain-r   {animation:curtain-r .85s cubic-bezier(.4,0,.2,1) .2s both}
+    .round-show  {animation:round-pop  .5s cubic-bezier(.34,1.56,.64,1) .85s both}
     .round-hide  {animation:round-out  .4s ease forwards}
     .buzz-btn    {animation:buzz-pulse 1.4s ease-in-out infinite}
     .scroll-y    {overflow-y:auto;scrollbar-width:thin;scrollbar-color:#3f3f46 transparent}
@@ -437,9 +437,9 @@ function ScreenLobby({game,roomId,isHost,localId,onStart,onLeave}){
 function CurtainScene({round,onDone}){
   const [stage,setStage]=useState(0); // 0=curtains, 1=round text, 2=done
   useEffect(()=>{
-    const t1=setTimeout(()=>setStage(1),2200);
-    const t2=setTimeout(()=>setStage(2),4000);
-    const t3=setTimeout(()=>onDone&&onDone(),4400);
+    const t1=setTimeout(()=>setStage(1),900);
+    const t2=setTimeout(()=>setStage(2),2000);
+    const t3=setTimeout(()=>onDone&&onDone(),2300);
     return()=>{clearTimeout(t1);clearTimeout(t2);clearTimeout(t3);};
   },[]);
   return(
@@ -710,7 +710,8 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   const [showPanel,setShowPanel]=useState(false);
   const [spinning,setSpinning]=useState(false);
   const [showCurtain,setShowCurtain]=useState(game?.phase==='CURTAIN');
-  const [cdLeft,setCdLeft]=useState(null); // countdown seconds
+  const [cdLeft,setCdLeft]=useState(null); // countdown display (seconds)
+  const [buzzOpen,setBuzzOpen]=useState(false); // true when buzzUnlockedAt has truly expired
   const [fetchingQ,setFetchingQ]=useState(false);
   const [fetchStep,setFetchStep]=useState(0);
 
@@ -727,16 +728,21 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
 
   useEffect(()=>{if(game?.phase==='CURTAIN')setShowCurtain(true);},[game?.phase]);
 
-  // Countdown timer display (5→0 before buzz unlocks)
+  // Countdown display (5→0) + buzzOpen precise unlock
   useEffect(()=>{
+    setBuzzOpen(false);
+    setCdLeft(null);
     if(!game?.buzzUnlockedAt)return;
-    const update=()=>{
-      const left=Math.max(0,Math.round((game.buzzUnlockedAt-Date.now())/1000));
+    // Countdown display — updates every 100ms
+    const iv=setInterval(()=>{
+      const left=Math.max(0,Math.ceil((game.buzzUnlockedAt-Date.now())/1000));
       setCdLeft(left>0?left:null);
-    };
-    update();
-    const iv=setInterval(update,100);
-    return()=>clearInterval(iv);
+    },100);
+    // Precise unlock — fires at the exact ms buzzUnlockedAt expires
+    const delay=game.buzzUnlockedAt-Date.now();
+    const tid=delay>0?setTimeout(()=>setBuzzOpen(true),delay):null;
+    if(delay<=0)setBuzzOpen(true); // already past (late join, etc.)
+    return()=>{clearInterval(iv);if(tid)clearTimeout(tid);};
   },[game?.buzzUnlockedAt]);
 
   // Confetti on ALL devices when wheel lands
@@ -765,8 +771,8 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   };
 
   const buzzLog=([...(game?.buzzLog||[])]).sort((a,b)=>a.ts-b.ts);
-  // buzzUnlocked only fires in BUZZER/HEIST phase AND after countdown expires
-  const buzzUnlocked=(phase==='BUZZER'||phase==='HEIST')&&(!game?.buzzUnlockedAt||Date.now()>=game.buzzUnlockedAt);
+  // buzzUnlocked: BUZZER/HEIST phase + precise timer fired (buzzOpen)
+  const buzzUnlocked=(phase==='BUZZER'||phase==='HEIST')&&(!game?.buzzUnlockedAt||buzzOpen);
   const alreadyBuzzed=buzzLog.findIndex(b=>b.playerId===localId)>=0;
   const roundIdx=game?.roundIdx||0;
   const cPs=calledIds.map(id=>players.find(p=>p.id===id)).filter(Boolean);
@@ -1067,7 +1073,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
           {phase==='HEIST'&&(()=>{
             const grayTeam=teams.find(t=>t.id===game?.winnerTeamId);
             const heistLog=([...(game?.buzzLog||[])]).sort((a,b)=>a.ts-b.ts);
-            const heistUnlocked=!game?.buzzUnlockedAt||Date.now()>=game.buzzUnlockedAt;
+            const heistUnlocked=buzzUnlocked; // uses buzzOpen state — same precise timer
             const iHeistActive=me&&me.teamId!==game?.winnerTeamId;
             const alreadyHeistBuzzed=heistLog.findIndex(b=>b.playerId===localId)>=0;
             return(
@@ -1077,8 +1083,8 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                   <span style={{color:grayTeam.color}}>{grayTeam.name}</span> acumula 3 strikes — el pozo de <span className="text-amber-400 font-black">{game?.accPts||0} pts</span> está en juego
                 </div>}
                 {game?.buzzQuestion&&<div className="bg-zinc-800 rounded-2xl px-5 py-3 text-white font-bold text-base w-full">{game.buzzQuestion}</div>}
-                {game?.buzzQuestion&&game?.buzzUnlockedAt&&Date.now()<game.buzzUnlockedAt&&(
-                  <div className="text-6xl font-black text-amber-400 animate-pulse">{Math.max(0,Math.round((game.buzzUnlockedAt-Date.now())/1000))}</div>
+                {cdLeft!=null&&(
+                  <div className="text-6xl font-black text-amber-400 animate-pulse">{cdLeft}</div>
                 )}
                 {iHeistActive&&!alreadyHeistBuzzed&&game?.buzzQuestion&&(
                   <button onClick={handleBuzz} disabled={!heistUnlocked}
