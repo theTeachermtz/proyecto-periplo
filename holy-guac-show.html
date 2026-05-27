@@ -370,6 +370,19 @@ function ScreenLobby({game,roomId,isHost,localId,onStart,onLeave}){
   const isModOnly=game?.hostRole==='MOD_ONLY';
   const copyCode=()=>navigator.clipboard.writeText(roomId).then(()=>{setCC(true);setTimeout(()=>setCC(false),2000);});
   const copyStudentLink_=()=>navigator.clipboard.writeText(studentUrl(roomId)).then(()=>{setCC(true);setTimeout(()=>setCC(false),2000);});
+  const removePlayer=async(teamId,playerId,playerName)=>{
+    if(!confirm(`¿Eliminar a ${playerName}?`))return;
+    try{
+      await runTransaction(db,async txn=>{
+        const snap=await txn.get(rRef(roomId));
+        if(!snap.exists())return;
+        const d=snap.data();
+        const newPs=d.players.filter(p=>p.id!==playerId);
+        const newTeams=d.teams.map(t=>t.id===teamId?{...t,players:t.players.filter(n=>n!==playerName)}:t);
+        txn.update(rRef(roomId),{players:newPs,teams:newTeams});
+      });
+    }catch(e){console.error('removePlayer',e);}
+  };
   return(
     <div className="h-full flex flex-col items-center justify-center bg-zinc-950 p-5 relative">
       {showQr&&<QrModal url={studentUrl(roomId)} onClose={()=>setShowQr(false)}/>}
@@ -410,8 +423,11 @@ function ScreenLobby({game,roomId,isHost,localId,onStart,onLeave}){
                 </div>
                 <div className="flex flex-wrap gap-1">
                   {tPlayers.map(p=>(
-                    <span key={p.id} className={`text-xs bg-zinc-800 rounded-full px-2 py-0.5 font-semibold ${p.id===localId?'ring-1 ring-white/40 text-white':'text-zinc-300'}`}>
+                    <span key={p.id} className={`inline-flex items-center gap-1 text-xs bg-zinc-800 rounded-full px-2 py-0.5 font-semibold ${p.id===localId?'ring-1 ring-white/40 text-white':'text-zinc-300'}`}>
                       {p.emoji} {p.name}
+                      {isHost&&p.id!==localId&&(
+                        <button onClick={()=>removePlayer(t.id,p.id,p.name)} className="btn-j text-zinc-600 hover:text-red-400 ml-0.5 leading-none text-xs">✕</button>
+                      )}
                     </span>
                   ))}
                   {tPlayers.length===0&&<span className="text-xs text-zinc-700 italic">vacío...</span>}
@@ -500,7 +516,7 @@ function MgSyllables({game,roomId,iAmSpinner,localId}){
   const [tLeft,setTLeft]=useState(45);
   const locked=!!(s.locked||(s.timerEnd&&Date.now()>s.timerEnd));
   const revealed=!!s.revealed;
-  const myFinal=(s.playerAnswers||{})[localId];
+  const spinnerFinal=(s.playerAnswers||{})[game?.spinnerPlayerId];
 
   useEffect(()=>{
     if(!s.timerEnd||revealed)return;
@@ -525,10 +541,10 @@ function MgSyllables({game,roomId,iAmSpinner,localId}){
 
   if(revealed) return(
     <div className="w-full p-4 space-y-2 max-w-sm mx-auto">
-      {words.map((w,i)=>{const ok=(myFinal||[])[i]===w.answer;return(
+      {words.map((w,i)=>{const ok=(spinnerFinal||[])[i]===w.answer;return(
         <div key={i} className={`flex justify-between items-center rounded-xl px-4 py-2.5 border ${ok?'bg-lime-900/30 border-lime-500':'bg-red-900/30 border-red-500'}`}>
           <span className="font-bold text-white">{w.word}</span>
-          <span className="font-black text-sm" style={{color:ok?'#a3e635':'#f87171'}}>{(myFinal||[])[i]??'?'} / {w.answer} {ok?'✅':'❌'}</span>
+          <span className="font-black text-sm" style={{color:ok?'#a3e635':'#f87171'}}>{(spinnerFinal||[])[i]??'?'} / {w.answer} {ok?'✅':'❌'}</span>
         </div>);})}
     </div>
   );
@@ -545,7 +561,7 @@ function MgSyllables({game,roomId,iAmSpinner,localId}){
               <span className="w-6 text-center font-black text-white">{ans[i]}</span>
               <button onClick={()=>setAns(a=>a.map((v,j)=>j===i?Math.min(8,v+1):v))} className="btn-j w-8 h-8 bg-zinc-700 rounded-lg font-black text-white">+</button>
             </div>
-          ):<span className="text-zinc-600 text-sm">{iAmSpinner&&myFinal?myFinal[i]+' ✓':'—'}</span>}
+          ):<span className="text-zinc-600 text-sm">{iAmSpinner&&spinnerFinal?spinnerFinal[i]+' ✓':'—'}</span>}
         </div>
       ))}
       {iAmSpinner&&!locked&&<button onClick={submit} className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-3 rounded-xl">✅ Confirmar respuestas</button>}
@@ -562,7 +578,9 @@ function MgThisOrThat({game,roomId,iAmSpinner,localId}){
   const [tLeft,setTLeft]=useState(45);
   const locked=!!(s.locked||(s.timerEnd&&Date.now()>s.timerEnd));
   const revealed=!!s.revealed;
-  const myFinal=(s.playerAnswers||{})[localId];
+  const spinnerFinal=(s.playerAnswers||{})[game?.spinnerPlayerId];
+  // Live selections — written by spinner to Firestore so observers see in real-time
+  const liveAns=s.liveAnswers||[];
 
   useEffect(()=>{
     if(!s.timerEnd||revealed)return;
@@ -587,7 +605,7 @@ function MgThisOrThat({game,roomId,iAmSpinner,localId}){
 
   if(revealed) return(
     <div className="w-full p-4 space-y-2 max-w-sm mx-auto">
-      {items.map((item,i)=>{const chose=(myFinal||[])[i];const ok=chose===item.answer;return(
+      {items.map((item,i)=>{const chose=(spinnerFinal||[])[i];const ok=chose===item.answer;return(
         <div key={i} className={`rounded-xl px-4 py-2.5 border ${ok?'bg-lime-900/30 border-lime-500':'bg-red-900/30 border-red-500'}`}>
           <p className="text-white text-sm font-bold mb-1">{item.sentence.replace('_',`【${chose||'?'}】`)}</p>
           <p className="text-xs font-bold" style={{color:ok?'#a3e635':'#f87171'}}>{ok?'✅ Correcto':'❌ Era: '+item.answer}</p>
@@ -604,21 +622,32 @@ function MgThisOrThat({game,roomId,iAmSpinner,localId}){
           {iAmSpinner&&!locked?(
             <div className="flex gap-2">
               {[item.a,item.b].map(opt=>(
-                <button key={opt} onClick={()=>setSel(s=>s.map((v,j)=>j===i?opt:v))}
+                <button key={opt} onClick={()=>{
+                    const newSel=sel.map((v,j)=>j===i?opt:v);
+                    setSel(newSel);
+                    updateDoc(rRef(roomId),{'mgState.liveAnswers':newSel});
+                  }}
                   className={`btn-j flex-1 py-2 rounded-xl font-black text-sm ${sel[i]===opt?'bg-amber-500 text-black':'bg-zinc-700 text-zinc-300'}`}>{opt}</button>
               ))}
             </div>
           ):(
             <div className="flex gap-2">
-              {[item.a,item.b].map(opt=>(
-                <div key={opt} className={`flex-1 py-2 rounded-xl font-black text-sm text-center ${iAmSpinner&&(myFinal||[])[i]===opt?'bg-amber-500/30 text-amber-400':'bg-zinc-700/40 text-zinc-500'}`}>{opt}</div>
-              ))}
+              {[item.a,item.b].map(opt=>{
+                // Observers: liveAns from Firestore; locked spinner: their submitted answer
+                const highlight=(liveAns[i]===opt)||(iAmSpinner&&(spinnerFinal||[])[i]===opt);
+                return(<div key={opt} className={`flex-1 py-2 rounded-xl font-black text-sm text-center transition-all ${highlight?'bg-amber-500/40 text-amber-300 ring-1 ring-amber-500/60':'bg-zinc-700/40 text-zinc-500'}`}>{opt}</div>);
+              })}
             </div>
           )}
         </div>
       ))}
       {iAmSpinner&&!locked&&<button onClick={submit} disabled={sel.some(v=>v===null)} className="btn-j w-full bg-amber-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-black font-black py-3 rounded-xl">✅ Confirmar respuestas</button>}
       {iAmSpinner&&locked&&<div className="text-center text-zinc-400 font-bold text-sm">Enviando...</div>}
+      {!iAmSpinner&&!revealed&&(
+        <div className="text-center text-xs font-bold py-1" style={{color:liveAns.some(v=>v!=null)?'#fbbf24':'#52525b'}}>
+          {liveAns.some(v=>v!=null)?'🔴 En vivo — eligiendo...':'Esperando que empiece...'}
+        </div>
+      )}
     </div>
   );
 }
@@ -696,7 +725,7 @@ function MgVocab({game,roomId,iAmSpinner,localId}){
       <div className="grid grid-cols-2 gap-2">
         {q?.opts.map((opt,i)=>{
           const isCorrect=i===q?.ans;
-          const isChosen=revealed?(s.playerAnswers||{})[localId]===i:localSel===i;
+          const isChosen=revealed?(s.playerAnswers||{})[game?.spinnerPlayerId]===i:localSel===i;
           const cls=revealed
             ?(isCorrect?'bg-lime-900/50 border-lime-500 text-lime-300':isChosen&&!isCorrect?'bg-red-900/50 border-red-500 text-red-300':'bg-zinc-800 border-zinc-700 text-zinc-500')
             :(iAmSpinner?isChosen?'bg-amber-500 border-amber-400 text-black ring-2 ring-amber-200':'bg-zinc-800 border-zinc-700 text-white hover:bg-zinc-700':'bg-zinc-800 border-zinc-700 text-zinc-400');
@@ -936,12 +965,9 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
     }
   };
 
-  // Rotation list for the winning team in SPIN_ASSIGN
+  // Rotation list for the winning team in SPIN_ASSIGN — fixed join order, spinner highlighted
   const rotationList=(teamId)=>{
-    const tPs=players.filter(p=>p.teamId===teamId);
-    if(!tPs.length)return[];
-    const cursor=(game?.spinCursors||{})[teamId]||0;
-    return tPs.map((_,i)=>tPs[(cursor+i)%tPs.length]);
+    return players.filter(p=>p.teamId===teamId);
   };
 
   // Minigame component dispatch
@@ -1005,7 +1031,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
         </div>
 
         {/* Phase content — scrollable if needed */}
-        <div className="flex-1 overflow-y-auto scroll-y flex flex-col items-center justify-center">
+        <div className={`flex-1 overflow-y-auto scroll-y flex flex-col items-center ${phase==='MINIGAME'?'justify-start py-2':'justify-center'}`}>
 
           {/* ── WELCOME (CALL_UP, nadie llamado aún) ─────────── */}
           {phase==='CALL_UP'&&cPs.length===0&&(
@@ -1221,7 +1247,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                       return(
                         <div key={p.id} className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 transition-all"
                           style={isNow?{background:`${wt?.color}30`,border:`1px solid ${wt?.color}`}:{background:'#18181b',border:'1px solid transparent'}}>
-                          <span className="text-xs font-black w-7 shrink-0" style={{color:isNow?wt?.color:'#52525b'}}>{i===0?'HOY':i===1?'2°':i===2?'3°':`${i+1}°`}</span>
+                          <span className="text-xs font-black w-5 shrink-0" style={{color:isNow?wt?.color:'#52525b'}}>{i+1}.</span>
                           <span className="text-sm">{p.emoji}</span>
                           <span className="font-bold text-xs flex-1 truncate" style={{color:isNow?'#fff':'#71717a'}}>{p.name}</span>
                           {isNow&&<span className="text-xs">🌀</span>}
@@ -1388,7 +1414,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
       </div>
 
       {/* ── EL FLOOR (bottom ~42%) ─────────────────────────── */}
-      <div className="flex-1 overflow-y-auto scroll-y">
+      <div className="flex-1 overflow-y-auto scroll-y" style={{paddingBottom:'env(safe-area-inset-bottom)'}}>
         <TheFloor game={game} teams={teams} players={players} localId={localId}/>
       </div>
 
@@ -1680,6 +1706,17 @@ function App(){
   },[screen]);
 
   useEffect(()=>()=>unsub.current?.(),[]);
+
+  // Re-subscribe on tab visibility restore (fixes screen-lock tab freeze on mobile)
+  useEffect(()=>{
+    const onVisible=()=>{
+      if(document.visibilityState==='visible'&&roomId&&(screen==='LOBBY'||screen==='PLAYING')){
+        subscribeRoom(roomId);
+      }
+    };
+    document.addEventListener('visibilitychange',onVisible);
+    return()=>document.removeEventListener('visibilitychange',onVisible);
+  },[roomId,screen,subscribeRoom]);
 
   const resetState=()=>{setScreen(IS_JOIN?'JOIN':'HOME');setRoomId('');setGame(null);setLocalId(null);setIsHost(false);};
 
