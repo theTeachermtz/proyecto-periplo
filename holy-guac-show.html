@@ -38,9 +38,9 @@
     .anim-up     {animation:slide-up  .3s ease both}
     .anim-float  {animation:float 3s ease-in-out infinite}
     .anim-drawer {animation:drawer-in .25s ease both}
-    .curtain-l   {animation:curtain-l .85s cubic-bezier(.4,0,.2,1) .2s both}
-    .curtain-r   {animation:curtain-r .85s cubic-bezier(.4,0,.2,1) .2s both}
-    .round-show  {animation:round-pop  .5s cubic-bezier(.34,1.56,.64,1) .85s both}
+    .curtain-l   {animation:curtain-l 1.6s cubic-bezier(.4,0,.2,1) .25s both}
+    .curtain-r   {animation:curtain-r 1.6s cubic-bezier(.4,0,.2,1) .25s both}
+    .round-show  {animation:round-pop  .6s cubic-bezier(.34,1.56,.64,1) 1.7s both}
     .round-hide  {animation:round-out  .4s ease forwards}
     .buzz-btn    {animation:buzz-pulse 1.4s ease-in-out infinite}
     .scroll-y    {overflow-y:auto;scrollbar-width:thin;scrollbar-color:#3f3f46 transparent}
@@ -142,6 +142,8 @@ const mkRoom = (hostName,hostEmoji,hostRole,tc=2) => ({
   buzzCalled:[],          // [playerId, ...]  — one per team
   buzzLog:[],             // [{playerId,teamId,ts}]
   buzzUnlockedAt:null,    // ms timestamp — null=locked, past=open
+  activeBuzzerIdx:0,      // which buzzLog entry is being evaluated
+  buzzShowOptions:false,  // show MC options when retrying
   winnerTeamId:null,
   spinnerPlayerId:null,
   spinCursors:{},         // {teamId:idx}
@@ -437,9 +439,9 @@ function ScreenLobby({game,roomId,isHost,localId,onStart,onLeave}){
 function CurtainScene({round,onDone}){
   const [stage,setStage]=useState(0); // 0=curtains, 1=round text, 2=done
   useEffect(()=>{
-    const t1=setTimeout(()=>setStage(1),900);
-    const t2=setTimeout(()=>setStage(2),2000);
-    const t3=setTimeout(()=>onDone&&onDone(),2300);
+    const t1=setTimeout(()=>setStage(1),400);
+    const t2=setTimeout(()=>setStage(2),3600);
+    const t3=setTimeout(()=>onDone&&onDone(),3800);
     return()=>{clearTimeout(t1);clearTimeout(t2);clearTimeout(t3);};
   },[]);
   return(
@@ -709,6 +711,7 @@ function TheFloor({game,teams,players,localId}){
 function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   const [showPanel,setShowPanel]=useState(false);
   const [spinning,setSpinning]=useState(false);
+  const [wheelSettled,setWheelSettled]=useState(false);
   const [showCurtain,setShowCurtain]=useState(game?.phase==='CURTAIN');
   const [cdLeft,setCdLeft]=useState(null); // countdown display (seconds)
   const [buzzOpen,setBuzzOpen]=useState(false); // true when buzzUnlockedAt has truly expired
@@ -745,10 +748,14 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
     return()=>{clearInterval(iv);if(tid)clearTimeout(tid);};
   },[game?.buzzUnlockedAt]);
 
-  // Confetti on ALL devices when wheel lands
+  // Confetti + wheelSettled on ALL devices when wheel lands
   useEffect(()=>{
     if(!game?.spinCount)return;
-    const tid=setTimeout(()=>confetti({particleCount:200,spread:70,origin:{y:.5},colors:['#a3e635','#fbbf24','#ef4444','#3b82f6','#8b5cf6']}),4700);
+    setWheelSettled(false); // reset when a new spin fires
+    const tid=setTimeout(()=>{
+      confetti({particleCount:200,spread:70,origin:{y:.5},colors:['#a3e635','#fbbf24','#ef4444','#3b82f6','#8b5cf6']});
+      setWheelSettled(true);
+    },4700);
     return()=>clearTimeout(tid);
   },[game?.spinCount]);
 
@@ -766,7 +773,8 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
     if(!iAmSpinner||spinning)return;
     setSpinning(true);
     const t=Math.floor(Math.random()*8);
-    await updateDoc(rRef(roomId),{spinCount:(game.spinCount||0)+1,spinTarget:t,minigame:MINIGAMES[t].id,phase:'MINIGAME',mgPhase:null,mgState:{}});
+    // Stay in SPIN_ASSIGN — host manually navigates to challenge after wheel lands
+    await updateDoc(rRef(roomId),{spinCount:(game.spinCount||0)+1,spinTarget:t,minigame:MINIGAMES[t].id});
     setTimeout(()=>setSpinning(false),4700);
   };
 
@@ -785,7 +793,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
       const tPs=players.filter(p=>p.teamId===t.id);if(!tPs.length)return null;
       return tPs[roundIdx%tPs.length];
     }).filter(Boolean);
-    await updateDoc(rRef(roomId),{buzzCalled:pair.map(p=>p.id),buzzLog:[],winnerTeamId:null,spinnerPlayerId:null,buzzQuestion:'',buzzUnlockedAt:null});
+    await updateDoc(rRef(roomId),{buzzCalled:pair.map(p=>p.id),buzzLog:[],winnerTeamId:null,spinnerPlayerId:null,buzzQuestion:'',buzzUnlockedAt:null,activeBuzzerIdx:0,buzzShowOptions:false});
   };
 
   const handleFetchQuestion=()=>{
@@ -801,7 +809,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   };
 
   const startCountdown=async()=>{
-    await updateDoc(rRef(roomId),{phase:'BUZZER',buzzUnlockedAt:Date.now()+5500,buzzLog:[]});
+    await updateDoc(rRef(roomId),{phase:'BUZZER',buzzUnlockedAt:Date.now()+5500,buzzLog:[],activeBuzzerIdx:0});
   };
 
   const assignSpinner=teamId=>{
@@ -810,27 +818,40 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
     return{teamId,spinnerId:tPs[cursor%tPs.length]?.id||null};
   };
 
+  // ── Sequential buzz evaluation ───────────────────────────────
   const declareCorrect=async()=>{
-    const first=buzzLog[0];if(!first)return;
-    const{teamId,spinnerId}=assignSpinner(first.teamId);
-    await updateDoc(rRef(roomId),{winnerTeamId:teamId,spinnerPlayerId:spinnerId,phase:'SPIN_ASSIGN',buzzQuestion:'',buzzUnlockedAt:null});
+    const evalIdx=game?.activeBuzzerIdx||0;
+    const winner=buzzLog[evalIdx];
+    if(!winner)return;
+    // Spinner = NEXT player after the FFA winner (they already played)
+    const tPs=players.filter(p=>p.teamId===winner.teamId);
+    const winnerLocalIdx=tPs.findIndex(p=>p.id===winner.playerId);
+    const nextIdx=tPs.length>1?(winnerLocalIdx+1)%tPs.length:winnerLocalIdx;
+    const spinnerId=tPs[nextIdx]?.id||null;
+    await updateDoc(rRef(roomId),{
+      winnerTeamId:winner.teamId,spinnerPlayerId:spinnerId,
+      phase:'SPIN_ASSIGN',buzzQuestion:'',buzzUnlockedAt:null,activeBuzzerIdx:0,
+      spinCount:0,spinTarget:null,minigame:null,
+    });
   };
 
-  const declareIncorrect=async()=>{
-    const first=buzzLog[0];
-    const alt=buzzLog.find(b=>b.teamId!==first?.teamId);
-    if(alt){
-      const{teamId,spinnerId}=assignSpinner(alt.teamId);
-      await updateDoc(rRef(roomId),{winnerTeamId:teamId,spinnerPlayerId:spinnerId,phase:'SPIN_ASSIGN',buzzQuestion:'',buzzUnlockedAt:null});
-    }else{
-      const tid=first?.teamId;if(tid==null)return;
-      const newStrikes={...(game?.teamStrikes||{}),[tid]:((game?.teamStrikes||{})[tid]||0)+1};
-      if(newStrikes[tid]>=3){
-        await updateDoc(rRef(roomId),{teamStrikes:newStrikes,accPts:0,roundIdx:roundIdx+1,phase:'CURTAIN',buzzQuestion:'',buzzUnlockedAt:null,buzzCalled:[]});
-      }else{
-        await updateDoc(rRef(roomId),{teamStrikes:newStrikes,roundIdx:roundIdx+1,phase:'CURTAIN',buzzQuestion:'',buzzUnlockedAt:null,buzzCalled:[]});
-      }
-    }
+  const markWrong=async()=>{
+    const evalIdx=game?.activeBuzzerIdx||0;
+    await updateDoc(rRef(roomId),{activeBuzzerIdx:evalIdx+1});
+  };
+
+  const retryWithOptions=async()=>{
+    await updateDoc(rRef(roomId),{
+      buzzLog:[],activeBuzzerIdx:0,buzzShowOptions:true,
+      phase:'CALL_UP',buzzUnlockedAt:null,
+    });
+  };
+
+  const noAnswerReset=async()=>{
+    await updateDoc(rRef(roomId),{
+      buzzLog:[],activeBuzzerIdx:0,buzzShowOptions:false,
+      phase:'CALL_UP',buzzQuestion:'',buzzUnlockedAt:null,
+    });
   };
 
   // Rotation list for the winning team in SPIN_ASSIGN
@@ -919,7 +940,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
               </div>
               {isHost?(
                 <button onClick={callUpPlayers} className="btn-j mt-3 w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-3 rounded-2xl text-base shadow-[0_5px_0_#92400e] flex items-center justify-center gap-2 anim-up">
-                  ➡️ Empezar ronda
+                  ➡️ Empezar Ronda {roundIdx + 1}
                 </button>
               ):(
                 <div className="text-zinc-600 text-xs animate-pulse mt-1">Preparando la ronda...</div>
@@ -983,13 +1004,22 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
               {/* Buzz order */}
               {buzzLog.length>0&&(
                 <div className="w-full space-y-1.5 anim-up">
-                  {buzzLog.map((b,i)=>{const bp=players.find(p=>p.id===b.playerId);const bt=teams.find(t=>t.id===b.teamId);return(
-                    <div key={i} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{background:i===0?`${bt?.color}25`:'#18181b',border:`1px solid ${i===0?bt?.color+'55':'#3f3f46'}`}}>
-                      <span className="font-black w-5 text-sm" style={{color:i===0?'#fbbf24':'#71717a'}}>{i+1}°</span>
-                      <span>{bp?.emoji}</span><span className="font-bold text-sm flex-1 text-white">{bp?.name}</span>
-                      <span className="text-xs font-bold" style={{color:bt?.color}}>{bt?.name}</span>
-                    </div>
-                  );})}
+                  {buzzLog.map((b,i)=>{
+                    const bp=players.find(p=>p.id===b.playerId);
+                    const bt=teams.find(t=>t.id===b.teamId);
+                    const evalIdx=game?.activeBuzzerIdx||0;
+                    const isEval=i===evalIdx&&phase==='BUZZER';
+                    return(
+                      <div key={i} className="flex items-center gap-2 rounded-xl px-3 py-2"
+                        style={{background:isEval?`${bt?.color}25`:'#18181b',border:`1px solid ${isEval?bt?.color+'77':'#3f3f46'}`}}>
+                        <span className="font-black w-5 text-sm" style={{color:isEval?'#fbbf24':'#71717a'}}>{i+1}°</span>
+                        <span>{bp?.emoji}</span>
+                        <span className="font-bold text-sm flex-1 text-white">{bp?.name}</span>
+                        <span className="text-xs font-bold" style={{color:bt?.color}}>{bt?.name}</span>
+                        {isEval&&<span className="text-xs text-amber-400 font-black animate-pulse">◄</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -1023,13 +1053,40 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                     </button>
                   )}
 
-                  {/* BUZZER: correcto / incorrecto */}
-                  {phase==='BUZZER'&&buzzLog.length>0&&(
-                    <div className="grid grid-cols-2 gap-2">
-                      <button onClick={declareCorrect} className="btn-j bg-lime-600 hover:bg-lime-500 text-white font-black py-3 rounded-xl text-sm">✅ Correcto</button>
-                      <button onClick={declareIncorrect} className="btn-j bg-red-700 hover:bg-red-600 text-white font-black py-3 rounded-xl text-sm">❌ Incorrecto</button>
-                    </div>
-                  )}
+                  {/* BUZZER: sequential evaluation */}
+                  {phase==='BUZZER'&&buzzLog.length>0&&(()=>{
+                    const evalIdx=game?.activeBuzzerIdx||0;
+                    const current=buzzLog[evalIdx];
+                    const allWrong=evalIdx>=buzzLog.length;
+                    const cp=current?players.find(p=>p.id===current.playerId):null;
+                    const ct=current?teams.find(t=>t.id===current.teamId):null;
+                    return(
+                      <div className="space-y-2">
+                        {!allWrong&&(
+                          <>
+                            <div className="flex items-center gap-2 rounded-xl px-3 py-2"
+                              style={{background:`${ct?.color}25`,border:`1.5px solid ${ct?.color}`}}>
+                              <span className="text-xs font-black text-amber-400 shrink-0">{evalIdx+1}°</span>
+                              <span>{cp?.emoji}</span>
+                              <span className="font-bold text-white text-sm flex-1">{cp?.name}</span>
+                              <span className="text-xs font-black" style={{color:ct?.color}}>{ct?.name}</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button onClick={declareCorrect} className="btn-j bg-lime-600 hover:bg-lime-500 text-white font-black py-3 rounded-xl text-sm">✅ Correcto</button>
+                              <button onClick={markWrong} className="btn-j bg-red-700 hover:bg-red-600 text-white font-black py-3 rounded-xl text-sm">❌ Incorrecto</button>
+                            </div>
+                          </>
+                        )}
+                        {allWrong&&(
+                          <div className="space-y-1.5">
+                            <div className="text-xs text-zinc-400 text-center font-bold py-1">Nadie supo — ¿qué hacemos?</div>
+                            <button onClick={retryWithOptions} className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-2.5 rounded-xl text-sm">👀 Opciones + nueva cuenta</button>
+                            <button onClick={noAnswerReset} className="btn-j w-full bg-zinc-700 hover:bg-zinc-600 text-zinc-300 font-bold py-2.5 rounded-xl text-sm">⏭ Nadie supo — siguiente</button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                 </div>
               )}
@@ -1037,34 +1094,93 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
             </div>
           )}
 
-          {/* SPIN_ASSIGN */}
+          {/* SPIN_ASSIGN — split screen */}
           {phase==='SPIN_ASSIGN'&&(()=>{
             const wt=teams.find(t=>t.id===game?.winnerTeamId);
             const rot=wt?rotationList(wt.id):[];
+            const challenges=game?.challengesWon?.[wt?.id]||0;
+            const strikes=game?.teamStrikes?.[wt?.id]||0;
+            const spun=game?.spinTarget!=null;
+            const goToChallenge=async()=>{
+              await updateDoc(rRef(roomId),{phase:'MINIGAME',mgPhase:null,mgState:{}});
+            };
             return(
-              <div className="w-full p-4 space-y-3 max-w-sm mx-auto anim-pop">
-                {wt&&<div className="text-center font-black text-xl" style={{color:wt.color}}>🏆 {wt.name} — ¡giran la ruleta!</div>}
-                {/* Rotation list with names */}
-                <div className="space-y-1.5">
-                  {rot.map((p,i)=>{
-                    const isNow=p.id===spinnerPid;
-                    return(<div key={p.id} className={`flex items-center gap-3 rounded-xl px-3 py-2 transition-all ${isNow?'border-2':'border border-zinc-800'}`}
-                      style={isNow?{background:`${wt?.color}30`,borderColor:wt?.color}:{background:'#18181b'}}>
-                      <span className="text-xs font-black w-12 shrink-0" style={{color:isNow?wt?.color:'#52525b'}}>{i===0?'AHORA':i===1?'2DO':i===2?'3RO':`${i+1}TO`}</span>
-                      <span className="text-base">{p.emoji}</span>
-                      <span className={`font-bold flex-1 ${isNow?'text-white':'text-zinc-500'}`}>{p.name}</span>
-                      {isNow&&<span className="text-xs font-black" style={{color:wt?.color}}>🌀 GIRA</span>}
-                    </div>);
-                  })}
+              <div className="flex w-full h-full" style={{minHeight:0}}>
+                {/* LEFT: team info */}
+                <div className="flex flex-col p-3 gap-2 border-r border-zinc-800 overflow-y-auto" style={{width:'46%'}}>
+                  {wt&&<div className="text-xs font-black text-center truncate" style={{color:wt.color}}>🏆 {wt.name}</div>}
+                  {/* Progress row */}
+                  <div className="flex items-start justify-between px-1 gap-2">
+                    <div>
+                      <div className="text-xs text-zinc-600 uppercase tracking-wide mb-1">Desafíos</div>
+                      <div className="flex gap-0.5">{Array.from({length:5},(_,i)=>(
+                        <div key={i} className="w-2.5 h-2.5 rounded-full" style={{background:i<challenges?wt?.color:'#3f3f46'}}/>
+                      ))}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-zinc-600 uppercase tracking-wide mb-1">Strikes</div>
+                      <div className="flex gap-0.5">{[0,1,2].map(i=>(
+                        <div key={i} className={`w-2.5 h-2.5 rounded-full ${i<strikes?'bg-red-500':'bg-zinc-700'}`}/>
+                      ))}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-zinc-600 uppercase tracking-wide mb-0.5">Pozo</div>
+                      <div className="text-amber-400 font-black text-sm">{game?.accPts||0}pts</div>
+                    </div>
+                  </div>
+                  {/* Rotation list */}
+                  <div className="space-y-1 flex-1 min-h-0">
+                    {rot.map((p,i)=>{
+                      const isNow=p.id===spinnerPid;
+                      return(
+                        <div key={p.id} className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 transition-all"
+                          style={isNow?{background:`${wt?.color}30`,border:`1px solid ${wt?.color}`}:{background:'#18181b',border:'1px solid transparent'}}>
+                          <span className="text-xs font-black w-7 shrink-0" style={{color:isNow?wt?.color:'#52525b'}}>{i===0?'HOY':i===1?'2°':i===2?'3°':`${i+1}°`}</span>
+                          <span className="text-sm">{p.emoji}</span>
+                          <span className="font-bold text-xs flex-1 truncate" style={{color:isNow?'#fff':'#71717a'}}>{p.name}</span>
+                          {isNow&&<span className="text-xs">🌀</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                {iAmSpinner&&(
-                  <button onClick={doSpin} disabled={spinning}
-                    className="btn-j w-full py-5 rounded-2xl font-black text-xl text-black disabled:opacity-40 mt-2"
-                    style={{background:spinning?'#6b7280':'linear-gradient(135deg,#a3e635,#fbbf24)',boxShadow:spinning?'none':'0 6px 0 #4d7c0f'}}>
-                    {spinning?'🌀 Girando...':'🎡 ¡GIRAR LA RULETA!'}
-                  </button>
-                )}
-                {!iAmSpinner&&<div className="text-center text-zinc-500 text-sm animate-pulse">Esperando que {players.find(p=>p.id===spinnerPid)?.name||'el jugador'} gire...</div>}
+                {/* RIGHT: roulette + controls */}
+                <div className="flex flex-col items-center justify-center p-2 gap-2 flex-1">
+                  <RouletteWheel spinCount={game?.spinCount||0} spinTarget={game?.spinTarget??null} size={160}/>
+                  {/* Not yet spun */}
+                  {!spun&&iAmSpinner&&(
+                    <button onClick={doSpin} disabled={spinning}
+                      className="btn-j w-full py-2.5 rounded-xl font-black text-sm text-black disabled:opacity-40"
+                      style={{background:spinning?'#6b7280':'linear-gradient(135deg,#a3e635,#fbbf24)',boxShadow:spinning?'none':'0 4px 0 #4d7c0f'}}>
+                      {spinning?'🌀':'🎡 GIRAR'}
+                    </button>
+                  )}
+                  {!spun&&!iAmSpinner&&(
+                    <div className="text-zinc-500 text-xs text-center animate-pulse leading-snug">
+                      Esperando que<br/>
+                      <span className="text-white font-bold">{players.find(p=>p.id===spinnerPid)?.name||'el jugador'}</span> gire...
+                    </div>
+                  )}
+                  {/* Spinning */}
+                  {spun&&!wheelSettled&&(
+                    <div className="text-zinc-500 text-xs text-center animate-pulse">🌀 Girando...</div>
+                  )}
+                  {/* Wheel settled */}
+                  {spun&&wheelSettled&&mg&&(
+                    <div className="flex flex-col items-center gap-1.5 w-full anim-pop">
+                      <div className="rounded-xl px-2 py-1 text-center w-full" style={{background:`${mg.color}25`,border:`1px solid ${mg.color}77`}}>
+                        <span className="text-lg">{mg.emoji}</span>
+                        <span className="text-white font-black text-xs ml-1 leading-tight">{mg.label}</span>
+                      </div>
+                      {isHost&&(
+                        <button onClick={goToChallenge}
+                          className="btn-j w-full bg-lime-600 hover:bg-lime-500 text-white font-black py-2 rounded-xl text-xs shadow-[0_3px_0_#166534]">
+                          ¡Al desafío! →
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })()}
@@ -1109,16 +1225,14 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
             );
           })()}
 
-          {/* MINIGAME — roulette intro then actual game */}
+          {/* MINIGAME — game name intro then actual game */}
           {phase==='MINIGAME'&&(
             <>
-              {(!game?.mgPhase)&&(
-                <div className="flex flex-col items-center gap-3 p-4">
-                  <RouletteWheel spinCount={game?.spinCount||0} spinTarget={game?.spinTarget} size={220}/>
-                  {mg&&<div className="rounded-2xl px-5 py-2 text-center anim-pop" style={{background:`${mg.color}25`,border:`2px solid ${mg.color}99`}}>
-                    <span className="text-xl">{mg.emoji}</span>
-                    <span className="text-white font-black text-lg ml-2">{mg.label}</span>
-                  </div>}
+              {(!game?.mgPhase)&&mg&&(
+                <div className="flex flex-col items-center gap-3 p-6 text-center anim-pop">
+                  <div className="text-6xl">{mg.emoji}</div>
+                  <div className="font-black text-white text-xl leading-tight">{mg.label}</div>
+                  <div className="text-zinc-500 text-xs animate-pulse">Esperando al moderador...</div>
                 </div>
               )}
               {game?.mgPhase&&renderMinigame()}
@@ -1157,8 +1271,10 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
         newScores[wt]=(newScores[wt]||0)+(game?.accPts||0);
         await updateDoc(rRef(roomId),{...clearMg,teamScores:newScores,accPts:0,challengesWon:{...(game?.challengesWon||{}),[wt]:0},teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,roundIdx:roundIdx+1,phase:'CURTAIN'});
       } else {
-        // ✅ Challenge ganado, sigue el mismo equipo
-        await updateDoc(rRef(roomId),{...clearMg,challengesWon:newCW,teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,roundIdx:roundIdx+1,phase:'CURTAIN'});
+        // ✅ Challenge ganado, sigue el mismo equipo (siguiente jugador gira)
+        const tPlayers=players.filter(p=>p.teamId===wt);
+        const nextSpinner=tPlayers[(newCursors[wt]||0)%tPlayers.length];
+        await updateDoc(rRef(roomId),{...clearMg,challengesWon:newCW,teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,spinnerPlayerId:nextSpinner?.id||null,spinCount:0,spinTarget:null,phase:'SPIN_ASSIGN'});
       }
     } else {
       const newStrikes={...(game?.teamStrikes||{}),[wt]:((game?.teamStrikes||{})[wt]||0)+1};
@@ -1169,7 +1285,7 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
         // ❌ Strike pero sigue — mismo equipo gira de nuevo (siguiente jugador)
         const teamPlayers=players.filter(p=>p.teamId===wt);
         const spinner=teamPlayers[newCursors[wt]%teamPlayers.length];
-        await updateDoc(rRef(roomId),{...clearMg,teamStrikes:newStrikes,spinCursors:newCursors,spinnerPlayerId:spinner?.id||null,roundIdx:roundIdx+1,phase:'SPIN_ASSIGN'});
+        await updateDoc(rRef(roomId),{...clearMg,teamStrikes:newStrikes,spinCursors:newCursors,spinnerPlayerId:spinner?.id||null,spinCount:0,spinTarget:null,phase:'SPIN_ASSIGN'});
       }
     }
   };
