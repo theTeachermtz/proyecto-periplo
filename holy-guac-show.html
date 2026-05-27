@@ -770,7 +770,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   };
 
   const doSpin=async()=>{
-    if(!iAmSpinner||spinning)return;
+    if((!iAmSpinner&&!isHost)||spinning)return;
     setSpinning(true);
     const t=Math.floor(Math.random()*8);
     // Stay in SPIN_ASSIGN — host manually navigates to challenge after wheel lands
@@ -784,6 +784,12 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   const alreadyBuzzed=buzzLog.findIndex(b=>b.playerId===localId)>=0;
   const roundIdx=game?.roundIdx||0;
   const cPs=calledIds.map(id=>players.find(p=>p.id===id)).filter(Boolean);
+  // Evaluation queue: buzzers in timestamp order, then called-but-didn't-buzz
+  const evalQueue=[
+    ...buzzLog,
+    ...cPs.filter(p=>!buzzLog.find(b=>b.playerId===p.id))
+           .map(p=>({playerId:p.id,teamId:p.teamId,ts:null,name:p.name})),
+  ];
 
   // ── Mod inline functions (no panel needed for buzzer flow) ───────
   const callUpPlayers=async()=>{
@@ -821,7 +827,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   // ── Sequential buzz evaluation ───────────────────────────────
   const declareCorrect=async()=>{
     const evalIdx=game?.activeBuzzerIdx||0;
-    const winner=buzzLog[evalIdx];
+    const winner=evalQueue[evalIdx];
     if(!winner)return;
     // Spinner = NEXT player after the FFA winner (they already played)
     const tPs=players.filter(p=>p.teamId===winner.teamId);
@@ -852,6 +858,33 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
       buzzLog:[],activeBuzzerIdx:0,buzzShowOptions:false,
       phase:'CALL_UP',buzzQuestion:'',buzzUnlockedAt:null,
     });
+  };
+
+  // ── Quick test result (testing shortcut — simulates win/strike without playing) ─
+  const quickResult=async(won)=>{
+    const wt=game?.winnerTeamId;if(wt==null)return;
+    const newCursors={...(game?.spinCursors||{}),[wt]:((game?.spinCursors||{})[wt]||0)+1};
+    const clearMg={minigame:null,mgPhase:null,mgState:{},buzzCalled:[],buzzLog:[],buzzQuestion:'',buzzUnlockedAt:null};
+    const tPlayers=players.filter(p=>p.teamId===wt);
+    if(won){
+      const newCW={...(game?.challengesWon||{}),[wt]:((game?.challengesWon||{})[wt]||0)+1};
+      if(newCW[wt]>=5){
+        const newScores={...(game?.teamScores||{})};
+        newScores[wt]=(newScores[wt]||0)+(game?.accPts||0);
+        await updateDoc(rRef(roomId),{...clearMg,teamScores:newScores,accPts:0,challengesWon:{...(game?.challengesWon||{}),[wt]:0},teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,roundIdx:roundIdx+1,phase:'CURTAIN'});
+      }else{
+        const nextSpinner=tPlayers[(newCursors[wt]||0)%tPlayers.length];
+        await updateDoc(rRef(roomId),{...clearMg,challengesWon:newCW,teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,spinnerPlayerId:nextSpinner?.id||null,spinCount:0,spinTarget:null,phase:'SPIN_ASSIGN'});
+      }
+    }else{
+      const newStrikes={...(game?.teamStrikes||{}),[wt]:((game?.teamStrikes||{})[wt]||0)+1};
+      if(newStrikes[wt]>=3){
+        await updateDoc(rRef(roomId),{...clearMg,teamStrikes:newStrikes,phase:'HEIST'});
+      }else{
+        const spinner=tPlayers[(newCursors[wt]||0)%tPlayers.length];
+        await updateDoc(rRef(roomId),{...clearMg,teamStrikes:newStrikes,spinCursors:newCursors,spinnerPlayerId:spinner?.id||null,spinCount:0,spinTarget:null,phase:'SPIN_ASSIGN'});
+      }
+    }
   };
 
   // Rotation list for the winning team in SPIN_ASSIGN
@@ -913,12 +946,10 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
             const isWinner=game?.winnerTeamId===t.id&&(phase==='SPIN_ASSIGN'||phase==='MINIGAME');
             const score=game?.teamScores?.[t.id]||0;
             const strikes=game?.teamStrikes?.[t.id]||0;
-            const cw=game?.challengesWon?.[t.id]||0;
             return(
               <div key={t.id} className="flex-1 flex flex-col items-center py-1.5 px-1 transition-all" style={isWinner?{background:`${t.color}22`,borderBottom:`2px solid ${t.color}`}:{}}>
-                <div className="text-xs font-black" style={{color:t.color}}>{score}pt</div>
+                <div className="text-xs font-black" style={{color:t.color}}>{score}pts</div>
                 <div className="flex gap-0.5 mt-0.5">{[0,1,2].map(i=><div key={i} className={`w-1.5 h-1.5 rounded-full ${i<strikes?'bg-red-500':'bg-zinc-700'}`}/>)}</div>
-                <div className="flex gap-0.5 mt-0.5">{Array.from({length:5},(_,i)=><div key={i} className="w-1.5 h-1.5 rounded-full" style={{background:i<cw?t.color:'#3f3f46'}}/>)}</div>
               </div>
             );
           })}
@@ -1054,10 +1085,10 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                   )}
 
                   {/* BUZZER: sequential evaluation */}
-                  {phase==='BUZZER'&&buzzLog.length>0&&(()=>{
+                  {phase==='BUZZER'&&evalQueue.length>0&&(()=>{
                     const evalIdx=game?.activeBuzzerIdx||0;
-                    const current=buzzLog[evalIdx];
-                    const allWrong=evalIdx>=buzzLog.length;
+                    const current=evalQueue[evalIdx];
+                    const allWrong=evalIdx>=evalQueue.length;
                     const cp=current?players.find(p=>p.id===current.playerId):null;
                     const ct=current?teams.find(t=>t.id===current.teamId):null;
                     return(
@@ -1147,15 +1178,15 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                 {/* RIGHT: roulette + controls */}
                 <div className="flex flex-col items-center justify-center p-2 gap-2 flex-1">
                   <RouletteWheel spinCount={game?.spinCount||0} spinTarget={game?.spinTarget??null} size={160}/>
-                  {/* Not yet spun */}
-                  {!spun&&iAmSpinner&&(
+                  {/* Not yet spun — spinner OR host can trigger */}
+                  {!spun&&(iAmSpinner||isHost)&&(
                     <button onClick={doSpin} disabled={spinning}
                       className="btn-j w-full py-2.5 rounded-xl font-black text-sm text-black disabled:opacity-40"
                       style={{background:spinning?'#6b7280':'linear-gradient(135deg,#a3e635,#fbbf24)',boxShadow:spinning?'none':'0 4px 0 #4d7c0f'}}>
-                      {spinning?'🌀':'🎡 GIRAR'}
+                      {spinning?'🌀 Girando':'🎡 GIRAR'}
                     </button>
                   )}
-                  {!spun&&!iAmSpinner&&(
+                  {!spun&&!iAmSpinner&&!isHost&&(
                     <div className="text-zinc-500 text-xs text-center animate-pulse leading-snug">
                       Esperando que<br/>
                       <span className="text-white font-bold">{players.find(p=>p.id===spinnerPid)?.name||'el jugador'}</span> gire...
@@ -1173,10 +1204,23 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                         <span className="text-white font-black text-xs ml-1 leading-tight">{mg.label}</span>
                       </div>
                       {isHost&&(
-                        <button onClick={goToChallenge}
-                          className="btn-j w-full bg-lime-600 hover:bg-lime-500 text-white font-black py-2 rounded-xl text-xs shadow-[0_3px_0_#166534]">
-                          ¡Al desafío! →
-                        </button>
+                        <>
+                          <button onClick={goToChallenge}
+                            className="btn-j w-full bg-lime-600 hover:bg-lime-500 text-white font-black py-2 rounded-xl text-xs shadow-[0_3px_0_#166534]">
+                            ¡Al desafío! →
+                          </button>
+                          {/* Quick test shortcuts */}
+                          <div className="flex gap-1 w-full mt-0.5">
+                            <button onClick={()=>quickResult(true)}
+                              className="btn-j flex-1 bg-lime-900/60 hover:bg-lime-800 border border-lime-700 text-lime-300 font-black py-1.5 rounded-lg text-xs">
+                              ✅ Acierto
+                            </button>
+                            <button onClick={()=>quickResult(false)}
+                              className="btn-j flex-1 bg-red-900/60 hover:bg-red-800 border border-red-700 text-red-300 font-black py-1.5 rounded-lg text-xs">
+                              ❌ Strike
+                            </button>
+                          </div>
+                        </>
                       )}
                     </div>
                   )}
@@ -1554,7 +1598,7 @@ function App(){
   const handleProfile=async(name,emoji,role,teamIdx=0)=>{
     if(isHost){
       const id=Math.random().toString(36).slice(2,6).toUpperCase();
-      const r=mkRoom(name,emoji,role,2);
+      const r=mkRoom(name,emoji,role,4);
       await setDoc(rRef(id),r);
       setRoomId(id); setLocalId(role==='PLAYER_MOD'?1:'HOST'); setGame(r);
       subscribeRoom(id); setScreen('LOBBY');
