@@ -194,7 +194,7 @@ const mkRoom = (hostName,hostEmoji,hostRole,tc=2) => ({
   teams: TEAM_CATALOG.slice(0,tc).map(t=>({...t,players:[]})),
   players: hostRole==='PLAYER_MOD'?[{id:1,name:hostName,emoji:hostEmoji,teamId:0,score:0}]:[],
   round:0,
-  phase:'CURTAIN',        // CURTAIN|CALL_UP|BUZZER|SPIN_ASSIGN|SPINNING|MINIGAME|HEIST
+  phase:'CURTAIN',        // CURTAIN|CALL_UP|BUZZER|SPIN_ASSIGN|MINIGAME|HEIST|VICTORY
   roundIdx:0,
   buzzQuestion:'',
   buzzCalled:[],          // [playerId, ...]  — one per team
@@ -211,6 +211,9 @@ const mkRoom = (hostName,hostEmoji,hostRole,tc=2) => ({
   teamStrikes:{0:0,1:0,2:0,3:0},
   challengesWon:{0:0,1:0,2:0,3:0}, // need 5 to cash accumulated points
   accPts:0,
+  lastScoredPts:0,    // pts earned last time a team hit 5 challenges (for VICTORY screen)
+  heistScores:{},     // {teamId: N} — correct answers in current heist (need 2 to win)
+  heistVolunteering:false, // true when host opens heist rep volunteer window
   mgPhase:null,           // null|'ACTIVE'|'LOCKED'|'REVEAL'
   mgState:{},             // flexible per-minigame state
   createdAt:Date.now(),
@@ -864,31 +867,372 @@ function MgAcentos({game,roomId,iAmSpinner}){
   );
 }
 
-// ── Minigame: Group Anagram ───────────────────────────────────
+// ── Minigame: Group Anagram (3 rounds × 1 word per player) ───
+// ── El Taquero Sordo ──────────────────────────────────────────
+function MgTaquero({game,roomId,localId,iAmSpinner,players,teams,isHost}){
+  const s=game?.mgState||{};
+  const taqSub=s.taqSubPhase||'PICK_PARTNER';
+  const taqItems=s.taqItems||[];
+  const scoreA=s.scoreA||0;
+  const scoreB=s.scoreB||0;
+  const idxA=s.idxA||0;
+  const idxB=s.idxB||0;
+  const taqPartnerA=s.taqPartnerA??null;
+  const taqRivalTeam=s.taqRivalTeam??null;
+  const taqRivalRep=s.taqRivalRep??null;
+  const timerEnd=s.timerEnd||null;
+  const result=s.result||null;
+
+  const spinnerPlayer=players.find(p=>p.id===game?.spinnerPlayerId);
+  const spinnerTeam=spinnerPlayer?teams.find(t=>t.id===spinnerPlayer.teamId):null;
+  const me=players.find(p=>p.id===localId);
+  const myTeam=me?teams.find(t=>t.id===me.teamId):null;
+  const partnerPlayer=players.find(p=>p.id===taqPartnerA);
+  const rivalTeamObj=teams.find(t=>t.id===taqRivalTeam);
+  const rivalRepPlayer=players.find(p=>p.id===taqRivalRep);
+  const rivalListener=players.find(p=>p.teamId===taqRivalTeam&&p.id!==taqRivalRep);
+  const iAmWhispererA=localId===taqPartnerA;
+  const iAmWhispererB=localId===taqRivalRep;
+  const totalItems=taqItems.length;
+  const tc=game?.teamCount||2;
+
+  const [timerLeft,setTimerLeft]=useState(null);
+  useEffect(()=>{
+    if(!timerEnd){setTimerLeft(null);return;}
+    const update=()=>setTimerLeft(Math.max(0,Math.ceil((timerEnd-Date.now())/1000)));
+    update();
+    const iv=setInterval(update,500);
+    return()=>clearInterval(iv);
+  },[timerEnd]);
+
+  const markCorrect=async(team)=>{
+    if(team==='A'){await updateDoc(rRef(roomId),{'mgState.idxA':idxA+1,'mgState.scoreA':scoreA+1});}
+    else{await updateDoc(rRef(roomId),{'mgState.idxB':idxB+1,'mgState.scoreB':scoreB+1});}
+  };
+  const finishGame=async()=>{
+    const res=scoreA>scoreB?'win':'strike';
+    await updateDoc(rRef(roomId),{'mgState.result':res,'mgState.taqSubPhase':'DONE'});
+  };
+  const volunteerAsRival=async()=>{
+    await runTransaction(db,async txn=>{
+      const snap=await txn.get(rRef(roomId));
+      const d=snap.data();
+      if((d.mgState||{}).taqRivalRep)return;
+      txn.update(rRef(roomId),{'mgState.taqRivalRep':localId,'mgState.taqSubPhase':'READY'});
+    });
+  };
+
+  // ── Result screen ──────────────────────────────────────────────
+  if(result){
+    return(
+      <div className="flex flex-col gap-4 p-4 w-full max-w-sm mx-auto text-center anim-pop">
+        <div className="text-5xl">{result==='win'?'🏆':'💀'}</div>
+        <div className="font-black text-lg text-white">
+          {result==='win'
+            ?<><span style={{color:spinnerTeam?.color}}>{spinnerTeam?.name}</span> ganaron el reto!</>
+            :scoreA===scoreB
+              ?<>Empate — gana el retado (<span style={{color:rivalTeamObj?.color}}>{rivalTeamObj?.name}</span>). Strike ❌</>
+              :<><span style={{color:rivalTeamObj?.color}}>{rivalTeamObj?.name}</span> ganó el reto. Strike ❌</>}
+        </div>
+        <div className="flex gap-4 justify-center">
+          <div className="text-center"><div className="text-3xl font-black" style={{color:spinnerTeam?.color}}>{scoreA}</div><div className="text-xs text-zinc-500">{spinnerTeam?.name}</div></div>
+          <div className="text-zinc-600 font-black self-center text-lg">vs</div>
+          <div className="text-center"><div className="text-3xl font-black" style={{color:rivalTeamObj?.color}}>{scoreB}</div><div className="text-xs text-zinc-500">{rivalTeamObj?.name}</div></div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── PICK_PARTNER ───────────────────────────────────────────────
+  if(taqSub==='PICK_PARTNER'){
+    const teammates=players.filter(p=>p.teamId===spinnerPlayer?.teamId&&p.id!==game?.spinnerPlayerId);
+    return(
+      <div className="flex flex-col gap-3 p-4 w-full max-w-sm mx-auto">
+        <div className="text-center font-black text-xl text-white">🌮 El Taquero Sordo</div>
+        {iAmSpinner?(
+          <>
+            <div className="text-zinc-400 text-sm text-center">¿Con quién quieres jugar?</div>
+            {teammates.length===0&&<div className="text-zinc-600 text-xs text-center">No hay más compañeros de equipo.</div>}
+            {teammates.map(p=>(
+              <button key={p.id} onClick={()=>updateDoc(rRef(roomId),{'mgState.taqPartnerA':p.id,'mgState.taqSubPhase':'PICK_RIVAL_TEAM'})}
+                className="btn-j w-full flex items-center gap-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-500 rounded-2xl px-4 py-3 text-left">
+                <span className="text-2xl">{p.emoji}</span>
+                <span className="font-black text-white text-base">{p.name}</span>
+              </button>
+            ))}
+          </>
+        ):(
+          <div className="text-zinc-500 text-sm text-center animate-pulse py-2">
+            <span className="text-white font-bold">{spinnerPlayer?.emoji} {spinnerPlayer?.name}</span> está eligiendo pareja...
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── PICK_RIVAL_TEAM ────────────────────────────────────────────
+  if(taqSub==='PICK_RIVAL_TEAM'){
+    const rivalTeams=TEAM_CATALOG.slice(0,tc).filter(t=>t.id!==spinnerPlayer?.teamId);
+    return(
+      <div className="flex flex-col gap-3 p-4 w-full max-w-sm mx-auto">
+        <div className="text-center font-black text-xl text-white">🌮 El Taquero Sordo</div>
+        <div className="text-xs text-zinc-500 text-center">Con: {partnerPlayer?.emoji} <span className="text-white">{partnerPlayer?.name}</span></div>
+        {iAmSpinner?(
+          <>
+            <div className="text-zinc-400 text-sm text-center">¿A qué equipo retas?</div>
+            {rivalTeams.map(t=>(
+              <button key={t.id} onClick={()=>updateDoc(rRef(roomId),{'mgState.taqRivalTeam':t.id,'mgState.taqSubPhase':'RIVAL_VOLUNTEER'})}
+                className="btn-j w-full flex items-center justify-center gap-2 rounded-2xl px-4 py-3 font-black text-white text-base"
+                style={{background:`${t.color}25`,border:`2px solid ${t.color}`}}>
+                <span style={{color:t.color}}>{t.name}</span>
+              </button>
+            ))}
+          </>
+        ):(
+          <div className="text-zinc-500 text-sm text-center animate-pulse py-2">
+            <span className="text-white font-bold">{spinnerPlayer?.emoji} {spinnerPlayer?.name}</span> está eligiendo rival...
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── RIVAL_VOLUNTEER ────────────────────────────────────────────
+  if(taqSub==='RIVAL_VOLUNTEER'){
+    const isRivalPlayer=me?.teamId===taqRivalTeam;
+    const someoneVolunteered=!!taqRivalRep;
+    return(
+      <div className="flex flex-col gap-3 p-4 w-full max-w-sm mx-auto">
+        <div className="text-center font-black text-xl text-white">🌮 El Taquero Sordo</div>
+        <div className="text-sm text-zinc-400 text-center">
+          Reto a <span className="font-black" style={{color:rivalTeamObj?.color}}>{rivalTeamObj?.name}</span> — ¿Quién se apunta?
+        </div>
+        {isRivalPlayer&&!someoneVolunteered&&(
+          <button onClick={volunteerAsRival}
+            className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-4 rounded-2xl text-xl shadow-[0_5px_0_#92400e] anim-pop">
+            🙋 Yo voy
+          </button>
+        )}
+        {someoneVolunteered&&(
+          <div className="bg-lime-500/15 border border-lime-500/40 rounded-2xl px-4 py-3 text-center anim-pop">
+            <div className="text-xs text-zinc-400 mb-1">¡Voluntario confirmado!</div>
+            <div className="font-black text-white text-base">{rivalRepPlayer?.emoji} {rivalRepPlayer?.name}</div>
+            <div className="text-xs mt-0.5" style={{color:rivalTeamObj?.color}}>{rivalTeamObj?.name}</div>
+          </div>
+        )}
+        {!isRivalPlayer&&!isHost&&!someoneVolunteered&&(
+          <div className="text-zinc-500 text-xs text-center animate-pulse">
+            Esperando voluntario de <span className="font-bold" style={{color:rivalTeamObj?.color}}>{rivalTeamObj?.name}</span>...
+          </div>
+        )}
+        {isHost&&(
+          <div className="border-t border-zinc-800 pt-3">
+            {someoneVolunteered?(
+              <button onClick={()=>updateDoc(rRef(roomId),{'mgState.taqSubPhase':'READY'})}
+                className="btn-j w-full bg-lime-600 hover:bg-lime-500 text-white font-black py-2.5 rounded-xl text-sm">
+                ✅ Continuar →
+              </button>
+            ):(
+              <div className="text-zinc-600 text-xs text-center animate-pulse">Esperando voluntario...</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── READY ──────────────────────────────────────────────────────
+  if(taqSub==='READY'){
+    return(
+      <div className="flex flex-col gap-3 p-4 w-full max-w-sm mx-auto">
+        <div className="text-center font-black text-2xl text-white">🌮 El Taquero Sordo</div>
+        <div className="text-zinc-500 text-xs text-center uppercase tracking-widest">¡Prepárense!</div>
+        {/* Team A */}
+        <div className="rounded-2xl p-3" style={{background:`${spinnerTeam?.color}18`,border:`2px solid ${spinnerTeam?.color}`}}>
+          <div className="text-xs font-black text-center mb-2.5" style={{color:spinnerTeam?.color}}>{spinnerTeam?.name}</div>
+          <div className="flex justify-around items-center gap-2">
+            <div className="text-center flex-1">
+              <div className="text-2xl">{partnerPlayer?.emoji}</div>
+              <div className="text-xs font-bold text-white mt-0.5 truncate">{partnerPlayer?.name}</div>
+              <div className="text-xs text-amber-400 font-bold mt-0.5">📱 Lee</div>
+            </div>
+            <div className="text-zinc-600 font-black text-lg shrink-0">↔️</div>
+            <div className="text-center flex-1">
+              <div className="text-2xl">{spinnerPlayer?.emoji}</div>
+              <div className="text-xs font-bold text-white mt-0.5 truncate">{spinnerPlayer?.name}</div>
+              <div className="text-xs text-zinc-400 font-bold mt-0.5">🎧 Adivina</div>
+            </div>
+          </div>
+        </div>
+        <div className="text-center text-zinc-600 font-black text-sm">VS</div>
+        {/* Team B */}
+        <div className="rounded-2xl p-3" style={{background:`${rivalTeamObj?.color}18`,border:`2px solid ${rivalTeamObj?.color}`}}>
+          <div className="text-xs font-black text-center mb-2.5" style={{color:rivalTeamObj?.color}}>{rivalTeamObj?.name}</div>
+          <div className="flex justify-around items-center gap-2">
+            <div className="text-center flex-1">
+              <div className="text-2xl">{rivalRepPlayer?.emoji}</div>
+              <div className="text-xs font-bold text-white mt-0.5 truncate">{rivalRepPlayer?.name}</div>
+              <div className="text-xs text-amber-400 font-bold mt-0.5">📱 Lee</div>
+            </div>
+            <div className="text-zinc-600 font-black text-lg shrink-0">↔️</div>
+            <div className="text-center flex-1">
+              <div className="text-2xl">{rivalListener?.emoji||'❓'}</div>
+              <div className="text-xs font-bold text-white mt-0.5 truncate">{rivalListener?.name||'siguiente'}</div>
+              <div className="text-xs text-zinc-400 font-bold mt-0.5">🎧 Adivina</div>
+            </div>
+          </div>
+        </div>
+        <div className="text-center text-zinc-600 text-xs">{totalItems} ítems · 2 minutos</div>
+        {(isHost||iAmSpinner)&&(
+          <button onClick={()=>updateDoc(rRef(roomId),{'mgState.taqSubPhase':'PLAYING','mgState.timerEnd':Date.now()+122000})}
+            className="btn-j w-full bg-lime-600 hover:bg-lime-500 text-white font-black py-3 rounded-2xl text-base shadow-[0_5px_0_#166534]">
+            ¡A jugar! 🌮
+          </button>
+        )}
+        {!isHost&&!iAmSpinner&&(
+          <div className="text-zinc-500 text-xs text-center animate-pulse">Esperando al girador...</div>
+        )}
+      </div>
+    );
+  }
+
+  // ── PLAYING ────────────────────────────────────────────────────
+  return(
+    <div className="flex flex-col gap-2 p-3 w-full max-w-sm mx-auto">
+      {/* Header + timer */}
+      <div className="flex items-center justify-between shrink-0">
+        <div className="text-xs text-zinc-500 font-bold uppercase tracking-widest">🌮 El Taquero</div>
+        {timerLeft!=null&&(
+          <div className={`text-xl font-black tabular-nums ${timerLeft<=10?'text-red-400 animate-pulse':timerLeft<=30?'text-amber-400':'text-white'}`}>
+            ⏱ {timerLeft}s
+          </div>
+        )}
+      </div>
+      {/* Scoreboard */}
+      <div className="grid grid-cols-2 gap-2 shrink-0">
+        <div className="rounded-xl p-2 text-center" style={{background:`${spinnerTeam?.color}18`,border:`1.5px solid ${spinnerTeam?.color}55`}}>
+          <div className="text-xs font-black truncate" style={{color:spinnerTeam?.color}}>{spinnerTeam?.name}</div>
+          <div className="text-2xl font-black text-white leading-none mt-0.5">{scoreA}</div>
+          <div className="text-xs text-zinc-500">{idxA}/{totalItems}</div>
+        </div>
+        <div className="rounded-xl p-2 text-center" style={{background:`${rivalTeamObj?.color}18`,border:`1.5px solid ${rivalTeamObj?.color}55`}}>
+          <div className="text-xs font-black truncate" style={{color:rivalTeamObj?.color}}>{rivalTeamObj?.name}</div>
+          <div className="text-2xl font-black text-white leading-none mt-0.5">{scoreB}</div>
+          <div className="text-xs text-zinc-500">{idxB}/{totalItems}</div>
+        </div>
+      </div>
+      {/* Whisperer A — sees their item */}
+      {iAmWhispererA&&(
+        idxA<totalItems?(
+          <div className="bg-amber-500/20 border-2 border-amber-500 rounded-2xl px-4 py-4 text-center anim-pop">
+            <div className="text-xs text-amber-400 font-bold uppercase tracking-widest mb-1">📱 Tú dices...</div>
+            <div className="text-white font-black text-2xl leading-tight">{taqItems[idxA]?.item}</div>
+          </div>
+        ):(
+          <div className="bg-lime-500/15 border border-lime-500/50 rounded-2xl px-4 py-3 text-center text-lime-400 font-black">
+            ✅ ¡Terminaste todos!
+          </div>
+        )
+      )}
+      {/* Whisperer B — sees their item */}
+      {iAmWhispererB&&(
+        idxB<totalItems?(
+          <div className="bg-amber-500/20 border-2 border-amber-500 rounded-2xl px-4 py-4 text-center anim-pop">
+            <div className="text-xs text-amber-400 font-bold uppercase tracking-widest mb-1">📱 Tú dices...</div>
+            <div className="text-white font-black text-2xl leading-tight">{taqItems[idxB]?.item}</div>
+          </div>
+        ):(
+          <div className="bg-lime-500/15 border border-lime-500/50 rounded-2xl px-4 py-3 text-center text-lime-400 font-black">
+            ✅ ¡Terminaste todos!
+          </div>
+        )
+      )}
+      {/* Everyone else — no mires */}
+      {!iAmWhispererA&&!iAmWhispererB&&!isHost&&(
+        <div className="bg-zinc-800 rounded-2xl px-4 py-4 text-center">
+          <div className="text-4xl">🙉</div>
+          <div className="text-zinc-400 font-bold text-sm mt-1">¡No mires!</div>
+          <div className="text-zinc-600 text-xs mt-0.5">Sólo los lectores ven los ítems</div>
+        </div>
+      )}
+      {/* Host controls */}
+      {isHost&&(
+        <div className="space-y-2 border-t border-zinc-800 pt-2 mt-1">
+          <div className="text-xs text-zinc-500 uppercase tracking-widest text-center">Moderador — marcar acierto</div>
+          <div className="grid grid-cols-2 gap-2">
+            {/* Team A */}
+            <div className="space-y-1">
+              <div className="text-xs font-black text-center truncate" style={{color:spinnerTeam?.color}}>{partnerPlayer?.emoji} {partnerPlayer?.name}</div>
+              {idxA<totalItems?(
+                <div className="bg-zinc-900 rounded-xl p-2 text-center space-y-1.5">
+                  <div className="text-xs text-white font-bold leading-tight truncate">{taqItems[idxA]?.item}</div>
+                  <button onClick={()=>markCorrect('A')}
+                    className="btn-j w-full bg-lime-600 hover:bg-lime-500 text-white font-black py-2 rounded-lg text-xs shadow-[0_2px_0_#166534]">
+                    ✅ Correcto
+                  </button>
+                </div>
+              ):(
+                <div className="bg-zinc-900 rounded-xl p-2 text-center text-lime-400 text-xs font-bold">Todos ✅</div>
+              )}
+            </div>
+            {/* Team B */}
+            <div className="space-y-1">
+              <div className="text-xs font-black text-center truncate" style={{color:rivalTeamObj?.color}}>{rivalRepPlayer?.emoji} {rivalRepPlayer?.name}</div>
+              {idxB<totalItems?(
+                <div className="bg-zinc-900 rounded-xl p-2 text-center space-y-1.5">
+                  <div className="text-xs text-white font-bold leading-tight truncate">{taqItems[idxB]?.item}</div>
+                  <button onClick={()=>markCorrect('B')}
+                    className="btn-j w-full bg-lime-600 hover:bg-lime-500 text-white font-black py-2 rounded-lg text-xs shadow-[0_2px_0_#166534]">
+                    ✅ Correcto
+                  </button>
+                </div>
+              ):(
+                <div className="bg-zinc-900 rounded-xl p-2 text-center text-lime-400 text-xs font-bold">Todos ✅</div>
+              )}
+            </div>
+          </div>
+          {/* Finish button — when timer hits 0 or both teams done */}
+          {(timerLeft===0||(idxA>=totalItems&&idxB>=totalItems))&&(
+            <button onClick={finishGame}
+              className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-2.5 rounded-xl text-sm anim-pop">
+              {timerLeft===0?'⏱ Tiempo — Ver resultado':'🏁 Ambos terminaron — Ver resultado'}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MgAnagram({game,roomId,localId,players,teams}){
   const s=game?.mgState||{};
   const assignments=s.assignments||{};
-  const progress=s.progress||{};
+  const playerDone=s.playerDone||{};
+  const teamRound=s.teamRound||{};
   const winner=s.winner??null;
   const tc=game?.teamCount||2;
 
-  const myAssignment=assignments[localId];
-  const myProgress=progress[localId];
-  const isDone=myProgress?.status==='correct';
+  const me=players.find(p=>p.id===localId);
+  const myTeamId=me?.teamId;
+  const myAssignment=assignments[localId]; // array of 3 word objects
+  const currentRound=teamRound[myTeamId]??0;
+  const myWordData=myAssignment?.[currentRound];
+  const myRoundDone=(playerDone[localId]||[false,false,false])[currentRound];
 
   const [placed,setPlaced]=useState([]);
   const [available,setAvailable]=useState([]);
   const [shake,setShake]=useState(false);
   const [localDone,setLocalDone]=useState(false);
-  const initialized=useRef(false);
+  const [initRound,setInitRound]=useState(-1);
 
-  // Init puzzle once from Firestore assignment
+  // Re-init puzzle when team advances to a new round
   useEffect(()=>{
-    if(!myAssignment||initialized.current)return;
-    initialized.current=true;
-    setAvailable(myAssignment.scrambled.map((c,i)=>({id:`a${i}`,char:c})));
-    setPlaced(Array(myAssignment.wordEs.length).fill(null));
-  },[myAssignment]);
+    if(!myWordData||myRoundDone||initRound===currentRound)return;
+    setInitRound(currentRound);
+    setLocalDone(false);
+    setAvailable(myWordData.scrambled.map((c,i)=>({id:`r${currentRound}a${i}`,char:c})));
+    setPlaced(Array(myWordData.wordEs.length).fill(null));
+  },[currentRound,myWordData,myRoundDone]);
 
   const addLetter=(idx)=>{
     const firstEmpty=placed.findIndex(sl=>sl===null);
@@ -907,40 +1251,49 @@ function MgAnagram({game,roomId,localId,players,teams}){
 
   const checkAnswer=async()=>{
     const guess=placed.map(l=>l?.char||'').join('');
-    const target=myAssignment.wordEs.toUpperCase();
+    const target=myWordData.wordEs.toUpperCase();
     if(guess!==target){
       setShake(true);
       setTimeout(()=>setShake(false),500);
-      // Reset letters
       setTimeout(()=>{
-        setAvailable(myAssignment.scrambled.map((c,i)=>({id:`a${i}x${Date.now()}`,char:c})));
-        setPlaced(Array(myAssignment.wordEs.length).fill(null));
+        setAvailable(myWordData.scrambled.map((c,i)=>({id:`r${currentRound}a${i}x${Date.now()}`,char:c})));
+        setPlaced(Array(myWordData.wordEs.length).fill(null));
       },600);
       return;
     }
     setLocalDone(true);
-    const me=players.find(p=>p.id===localId);
-    const myTeamId=me?.teamId;
     await runTransaction(db,async txn=>{
       const snap=await txn.get(rRef(roomId));
       const d=snap.data();
       const st=d.mgState||{};
-      const newProgress={...(st.progress||{}),[localId]:{status:'correct'}};
+      const cr=st.teamRound?.[myTeamId]||0;
+      const newPD={...(st.playerDone||{})};
+      const myFlags=[...(newPD[localId]||[false,false,false])];
+      myFlags[cr]=true;
+      newPD[localId]=myFlags;
       const myTeamPlayers=(d.players||[]).filter(p=>p.teamId===myTeamId);
-      const allDone=myTeamPlayers.every(p=>newProgress[p.id]?.status==='correct');
-      const newSt={...st,progress:newProgress};
-      if(allDone&&!st.teamDone?.[myTeamId]){
-        newSt.teamDone={...(st.teamDone||{}),[myTeamId]:Date.now()};
-        if(st.winner==null){
-          newSt.winner=myTeamId;
-          newSt.result=myTeamId===d.winnerTeamId?'win':'strike';
+      const allDoneThisRound=myTeamPlayers.every(p=>{
+        const flags=[...(newPD[p.id]||[false,false,false])];
+        return flags[cr]===true;
+      });
+      const newSt={...st,playerDone:newPD};
+      if(allDoneThisRound){
+        const newTeamRound={...(st.teamRound||{}),[myTeamId]:cr+1};
+        newSt.teamRound=newTeamRound;
+        if(cr+1>=3){
+          // Team finished all 3 rounds!
+          newSt.teamDone={...(st.teamDone||{}),[myTeamId]:Date.now()};
+          if(st.winner==null){
+            newSt.winner=myTeamId;
+            newSt.result=myTeamId===d.winnerTeamId?'win':'strike';
+          }
         }
       }
       txn.update(rRef(roomId),{mgState:newSt});
     });
   };
 
-  // Progress board — shows for host, completed players, and non-players
+  // Progress board — per team: current round + per-player round completion
   const progressBoard=(
     <div className="w-full space-y-2 px-1">
       {winner!=null&&(
@@ -951,26 +1304,38 @@ function MgAnagram({game,roomId,localId,players,teams}){
       <div className={`grid gap-2 ${tc<=2?'grid-cols-2':'grid-cols-2'}`}>
         {teams.slice(0,tc).map(t=>{
           const tPs=players.filter(p=>p.teamId===t.id);
-          const doneAt=s.teamDone?.[t.id];
+          const tRound=teamRound[t.id]??0;
+          const tDone=tRound>=3;
           const isWinner=t.id===winner;
           return(
             <div key={t.id} className="rounded-xl p-2 transition-all"
               style={{background:`${t.color}15`,border:`1.5px solid ${isWinner?t.color:t.color+'33'}`}}>
-              <div className="text-xs font-black text-center mb-1.5" style={{color:t.color}}>{t.name}</div>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="text-xs font-black" style={{color:t.color}}>{t.name}</div>
+                <div className="text-xs font-black" style={{color:tDone?'#a3e635':t.color+'aa'}}>
+                  {tDone?'✅ Done':`R${Math.min(tRound+1,3)}/3`}
+                </div>
+              </div>
               <div className="space-y-1">
                 {tPs.map(p=>{
-                  const done=(progress[p.id]?.status==='correct')||(p.id===localId&&localDone);
+                  const flags=playerDone[p.id]||[false,false,false];
+                  const thisRoundDone=flags[tRound]||(p.id===localId&&localDone&&tRound===currentRound);
                   return(
                     <div key={p.id} className="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-all"
-                      style={{background:done?`${t.color}25`:'#1c1c1e'}}>
-                      <span className="text-xs">{done?'✅':'⏳'}</span>
+                      style={{background:thisRoundDone?`${t.color}25`:'#1c1c1e'}}>
+                      <div className="flex gap-0.5 shrink-0">
+                        {[0,1,2].map(r=>(
+                          <div key={r} className={`w-1.5 h-1.5 rounded-full ${flags[r]?'bg-lime-400':r<tRound?'bg-zinc-600':'bg-zinc-700'}`}/>
+                        ))}
+                      </div>
                       <span className="text-xs">{p.emoji}</span>
-                      <span className="text-xs font-bold truncate flex-1" style={{color:done?'#fff':'#71717a'}}>{p.name}</span>
+                      <span className="text-xs font-bold truncate flex-1" style={{color:thisRoundDone?'#fff':'#71717a'}}>{p.name}</span>
+                      {thisRoundDone&&<span className="text-xs">✅</span>}
                     </div>
                   );
                 })}
               </div>
-              {doneAt&&<div className="text-xs text-center mt-1.5 font-black" style={{color:isWinner?t.color:'#71717a'}}>{isWinner?'🥇 Ganadores':'✓ Completaron'}</div>}
+              {s.teamDone?.[t.id]&&<div className="text-xs text-center mt-1.5 font-black" style={{color:isWinner?t.color:'#71717a'}}>{isWinner?'🥇 1°':'✓'}</div>}
             </div>
           );
         })}
@@ -978,7 +1343,7 @@ function MgAnagram({game,roomId,localId,players,teams}){
     </div>
   );
 
-  // Host / observer (no assignment)
+  // Host / observer or no assignment
   if(!myAssignment) return(
     <div className="flex flex-col items-center gap-3 p-4 w-full">
       <div className="text-xs font-black text-zinc-400 uppercase tracking-widest">📊 Progreso en tiempo real</div>
@@ -986,27 +1351,34 @@ function MgAnagram({game,roomId,localId,players,teams}){
     </div>
   );
 
-  // Done — show completed word + progress board
-  if(isDone||localDone) return(
+  // Waiting for team to finish current round (I'm done, others aren't)
+  if(myRoundDone||localDone) return(
     <div className="flex flex-col items-center gap-3 p-4 w-full">
       <div className="bg-lime-900/40 border border-lime-600 rounded-2xl px-5 py-3 text-center anim-pop">
-        <div className="text-3xl mb-1">{myAssignment.emoji}</div>
-        <div className="text-lime-400 font-black text-2xl">{myAssignment.wordEs}</div>
-        <div className="text-zinc-400 text-xs mt-0.5">{myAssignment.wordEn}</div>
+        <div className="text-3xl mb-1">{myWordData?.emoji}</div>
+        <div className="text-lime-400 font-black text-2xl">{myWordData?.wordEs}</div>
+        <div className="text-zinc-400 text-xs mt-0.5">{myWordData?.wordEn}</div>
       </div>
-      <div className="text-xs font-bold text-lime-400 animate-pulse">✅ ¡Correcto! Esperando al equipo...</div>
+      {currentRound<3&&<div className="text-xs font-bold text-amber-400 animate-pulse">⏳ Esperando a tu equipo... Ronda {currentRound+1}/3</div>}
       {progressBoard}
     </div>
   );
 
-  // Playing — show puzzle
+  // Playing puzzle
   const allPlaced=placed.every(l=>l!==null);
   return(
     <div className="flex flex-col items-center gap-3 p-4 w-full max-w-sm mx-auto">
+      {/* Round indicator */}
+      <div className="flex gap-1.5 items-center">
+        {[0,1,2].map(r=>(
+          <div key={r} className={`h-1.5 rounded-full transition-all ${r<currentRound?'w-6 bg-lime-500':r===currentRound?'w-8 bg-amber-400':'w-6 bg-zinc-700'}`}/>
+        ))}
+        <span className="text-xs text-zinc-500 ml-1">Ronda {currentRound+1}/3</span>
+      </div>
       {/* Clue */}
       <div className="text-center">
-        <div className="text-4xl mb-1">{myAssignment.emoji}</div>
-        <div className="text-white font-black text-xl">{myAssignment.wordEn}</div>
+        <div className="text-4xl mb-1">{myWordData?.emoji}</div>
+        <div className="text-white font-black text-xl">{myWordData?.wordEn}</div>
         <div className="text-zinc-500 text-xs">Forma la palabra en español</div>
       </div>
       {/* Input slots */}
@@ -1018,7 +1390,7 @@ function MgAnagram({game,roomId,localId,players,teams}){
           </button>
         ))}
       </div>
-      {/* Available letter pool */}
+      {/* Available letters */}
       <div className="flex gap-2 flex-wrap justify-center min-h-[44px]">
         {available.map((l,i)=>(
           <button key={l.id} onClick={()=>addLetter(i)}
@@ -1140,7 +1512,7 @@ function TheFloor({game,teams,players,localId}){
     <div className={`grid gap-2 p-3 ${tc===4?'grid-cols-2':tc===3?'grid-cols-3':'grid-cols-2'}`} style={{gridTemplateRows:'auto'}}>
       {teams.map(t=>{
         const tPs=players.filter(p=>p.teamId===t.id);
-        const isWinner=t.id===winner&&(phase==='SPIN_ASSIGN'||phase==='MINIGAME'||phase==='HEIST');
+        const isWinner=t.id===winner&&(phase==='SPIN_ASSIGN'||phase==='MINIGAME'||phase==='HEIST'||phase==='VICTORY');
         const strikes=game?.teamStrikes?.[t.id]||0;
         const score=game?.teamScores?.[t.id]||0;
         return(
@@ -1180,6 +1552,8 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   const [questionVisible,setQuestionVisible]=useState(false); // true after questionRevealAt fires
   const [fetchingQ,setFetchingQ]=useState(false);
   const [fetchStep,setFetchStep]=useState(0);
+  const [fetchingHQ,setFetchingHQ]=useState(false); // heist question fetching
+  const [fetchHStep,setFetchHStep]=useState(0);
 
   const players=game?.players||[];
   const teams=game?.teams||[];
@@ -1191,6 +1565,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   const iAmSpinner=spinnerPid===localId;
   const me=players.find(p=>p.id===localId);
   const myTeam=me?teams.find(t=>t.id===me.teamId):null;
+  const tc=game?.teamCount||2;
 
   useEffect(()=>{if(game?.phase==='CURTAIN')setShowCurtain(true);},[game?.phase]);
 
@@ -1224,6 +1599,15 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
     return()=>clearTimeout(t);
   },[game?.questionRevealAt]);
 
+  // Confetti when team hits VICTORY (5 challenges)
+  useEffect(()=>{
+    if(game?.phase!=='VICTORY')return;
+    const wt=teams.find(t=>t.id===game?.winnerTeamId);
+    const colors=wt?[wt.color,'#fbbf24','#fff']:['#a3e635','#fbbf24','#ef4444'];
+    confetti({particleCount:320,spread:90,origin:{y:.35},colors});
+    setTimeout(()=>confetti({particleCount:160,spread:60,origin:{y:.5},colors}),600);
+  },[game?.phase]);
+
   // Confetti + wheelSettled on ALL devices when wheel lands
   useEffect(()=>{
     if(!game?.spinCount)return;
@@ -1238,8 +1622,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   const handleBuzz=async()=>{
     if(!localId)return;
     if(phase!=='BUZZER'&&phase!=='HEIST')return; // visible in CALL_UP but not yet active
-    if(phase==='BUZZER'&&!isCalledPlayer)return;  // BUZZER: solo los llamados
-    // HEIST: todos los no-eliminados (gateado por el UI con iHeistActive)
+    if(!isCalledPlayer)return;  // BUZZER + HEIST: solo los llamados (buzzCalled)
     if(game?.buzzUnlockedAt&&Date.now()<game.buzzUnlockedAt)return; // locked during countdown
     const buzz={playerId:localId,teamId:me?.teamId,ts:Date.now(),name:me?.name};
     await updateDoc(rRef(roomId),{buzzLog:arrayUnion(buzz)});
@@ -1254,7 +1637,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
     setTimeout(()=>setSpinning(false),4700);
   };
 
-  const buzzLog=([...(game?.buzzLog||[])]).sort((a,b)=>a.ts-b.ts);
+  const buzzLog=game?.buzzLog||[]; // insertion order = Firestore server receipt order (fairest)
   // buzzUnlocked: BUZZER/HEIST phase + precise timer fired (buzzOpen)
   const buzzUnlocked=(phase==='BUZZER'||phase==='HEIST')&&(!game?.buzzUnlockedAt||buzzOpen);
   const alreadyBuzzed=buzzLog.findIndex(b=>b.playerId===localId)>=0;
@@ -1348,22 +1731,45 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
     if(won){
       const newCW={...(game?.challengesWon||{}),[wt]:((game?.challengesWon||{})[wt]||0)+1};
       if(newCW[wt]>=5){
+        // 🏆 5 desafíos — equipo cobra, va a pantalla VICTORY (no CURTAIN)
         const newScores={...(game?.teamScores||{})};
-        newScores[wt]=(newScores[wt]||0)+(game?.accPts||0);
-        await updateDoc(rRef(roomId),{...clearMg,teamScores:newScores,accPts:0,challengesWon:{...(game?.challengesWon||{}),[wt]:0},teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,roundIdx:roundIdx+1,phase:'CURTAIN'});
+        const earned=game?.accPts||0;
+        newScores[wt]=(newScores[wt]||0)+earned;
+        await updateDoc(rRef(roomId),{...clearMg,teamScores:newScores,accPts:0,lastScoredPts:earned,challengesWon:{...(game?.challengesWon||{}),[wt]:0},teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,roundIdx:roundIdx+1,phase:'VICTORY'});
       }else{
+        // ✅ Desafío ganado — sigue el mismo equipo, strikes NO se reinician
         const nextSpinner=tPlayers[(newCursors[wt]||0)%tPlayers.length];
-        await updateDoc(rRef(roomId),{...clearMg,challengesWon:newCW,teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,spinnerPlayerId:nextSpinner?.id||null,spinCount:0,spinTarget:null,phase:'SPIN_ASSIGN'});
+        await updateDoc(rRef(roomId),{...clearMg,challengesWon:newCW,spinCursors:newCursors,spinnerPlayerId:nextSpinner?.id||null,spinCount:0,spinTarget:null,phase:'SPIN_ASSIGN'});
       }
     }else{
       const newStrikes={...(game?.teamStrikes||{}),[wt]:((game?.teamStrikes||{})[wt]||0)+1};
       if(newStrikes[wt]>=3){
-        await updateDoc(rRef(roomId),{...clearMg,teamStrikes:newStrikes,phase:'HEIST'});
+        await updateDoc(rRef(roomId),{...clearMg,teamStrikes:newStrikes,heistScores:{},heistVolunteering:false,phase:'HEIST'});
       }else{
         const spinner=tPlayers[(newCursors[wt]||0)%tPlayers.length];
         await updateDoc(rRef(roomId),{...clearMg,teamStrikes:newStrikes,spinCursors:newCursors,spinnerPlayerId:spinner?.id||null,spinCount:0,spinTarget:null,phase:'SPIN_ASSIGN'});
       }
     }
+  };
+
+  // Heist rep selection — Option 2: volunteer mechanic
+  const startHeistVolunteering=async()=>{
+    await updateDoc(rRef(roomId),{heistVolunteering:true,buzzCalled:[],buzzLog:[]});
+  };
+  const volunteerForHeist=async()=>{
+    if(!me||me.teamId===game?.winnerTeamId)return;
+    await runTransaction(db,async txn=>{
+      const snap=await txn.get(rRef(roomId));
+      const d=snap.data();
+      const called=d.buzzCalled||[];
+      const myTid=me.teamId;
+      const alreadyIn=called.some(pid=>{
+        const p=(d.players||[]).find(pl=>pl.id===pid);
+        return p?.teamId===myTid;
+      });
+      if(alreadyIn)return;
+      txn.update(rRef(roomId),{buzzCalled:[...called,localId]});
+    });
   };
 
   // Rotation list for the winning team in SPIN_ASSIGN — fixed join order, spinner highlighted
@@ -1373,8 +1779,9 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
 
   // Minigame component dispatch
   const renderMinigame=()=>{
-    const props={game,roomId,iAmSpinner,localId};
+    const props={game,roomId,iAmSpinner,localId,isHost};
     switch(game?.minigame){
+      case 'taquero':  return <MgTaquero   {...props} players={players} teams={teams}/>;
       case 'twister':  return <MgTongue    game={game} iAmSpinner={iAmSpinner}/>;
       case 'silabas':  return <MgSyllables  {...props}/>;
       case 'tilde':    return <MgThisOrThat {...props}/>;
@@ -1627,17 +2034,40 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                 Object.assign(initState,{cards:shuffled,flipped:null,answers:{},results:{},errors:0,correct:0,cardTimer:null,liveSel:null});
               }
               else if(gid==='anagrama'){
-                // Assign one word per player across ALL teams simultaneously
+                // 3 rounds × 1 word per player — team advances when ALL members finish each round
                 const allPlayers=players;
                 const wordPool=[...MOCK.anagrama].sort(()=>Math.random()-.5);
                 const assignments={};
-                allPlayers.forEach((p,i)=>{
-                  const w=wordPool[i%wordPool.length];
-                  assignments[p.id]={wordEs:w.wordEs,wordEn:w.wordEn,emoji:w.emoji,hint:w.hint,scrambled:makeScramble(w.wordEs)};
+                // Pre-assign 3 rounds worth of unique words per player
+                allPlayers.forEach((p,pi)=>{
+                  assignments[p.id]=[0,1,2].map(r=>{
+                    const w=wordPool[(pi+r*allPlayers.length)%wordPool.length];
+                    return{wordEs:w.wordEs,wordEn:w.wordEn,emoji:w.emoji,scrambled:makeScramble(w.wordEs)};
+                  });
                 });
-                const progress={};
-                allPlayers.forEach(p=>{progress[p.id]={status:'playing'};});
-                Object.assign(initState,{assignments,progress,winner:null,teamDone:{}});
+                // playerDone[id] = [false, false, false]  per-round completion flags
+                const playerDone={};allPlayers.forEach(p=>{playerDone[p.id]=[false,false,false];});
+                // teamRound[teamId] = current round for that team (0, 1, or 2 → done when 3)
+                const teamRound={};
+                TEAM_CATALOG.slice(0,game?.teamCount||2).forEach(t=>{teamRound[t.id]=0;});
+                Object.assign(initState,{assignments,playerDone,teamRound,winner:null,teamDone:{}});
+              }
+              else if(gid==='taquero'){
+                // El Taquero Sordo — spinner picks partner + rival team + rival volunteers
+                const shuffle=arr=>[...arr].sort(()=>Math.random()-.5);
+                const tacosPool=['taco de pollo','taco de carne','taco de quesadilla','taco de chorizo'];
+                const compsPool=['tomate','cebolla','cilantro','salsa verde','salsa roja','guacamole','limón','queso'];
+                const drinksPool=['cerveza','agua','refresco','jugo de naranja'];
+                const tacos=shuffle(tacosPool).slice(0,2+Math.floor(Math.random()*2));
+                const comps=shuffle(compsPool).slice(0,2+Math.floor(Math.random()*2));
+                const drinks=Math.random()<.6?[drinksPool[Math.floor(Math.random()*drinksPool.length)]]:[];
+                const taqItems=[...tacos,...comps,...drinks].map(item=>({item}));
+                Object.assign(initState,{
+                  taqSubPhase:'PICK_PARTNER',
+                  taqPartnerA:null,taqRivalTeam:null,taqRivalRep:null,
+                  taqVolunteering:false,taqItems,
+                  scoreA:0,scoreB:0,idxA:0,idxB:0,timerEnd:null,
+                });
               }
               await updateDoc(rRef(roomId),{phase:'MINIGAME',mgPhase:'ACTIVE',mgState:initState,accPts:(game?.accPts||0)+10});
             };
@@ -1735,41 +2165,270 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
             );
           })()}
 
-          {/* HEIST — 3 strikes, todos los demás equipos compiten por el pozo */}
+          {/* HEIST — 3 strikes, representantes de otros equipos compiten por el pozo */}
           {phase==='HEIST'&&(()=>{
-            const grayTeam=teams.find(t=>t.id===game?.winnerTeamId);
-            const heistLog=([...(game?.buzzLog||[])]).sort((a,b)=>a.ts-b.ts);
-            const heistUnlocked=buzzUnlocked; // uses buzzOpen state — same precise timer
-            const iHeistActive=me&&me.teamId!==game?.winnerTeamId;
-            const alreadyHeistBuzzed=heistLog.findIndex(b=>b.playerId===localId)>=0;
+            const eliminatedTeam=teams.find(t=>t.id===game?.winnerTeamId);
+            const heistReps=cPs; // buzzCalled = heist reps
+            const heistScores=game?.heistScores||{};
+            const heistActive=teams.filter(t=>t.id!==game?.winnerTeamId).slice(0,tc);
+            const iAmRep=heistReps.some(p=>p.id===localId);
+            const alreadyBuzzed=buzzLog.findIndex(b=>b.playerId===localId)>=0;
+            const fetchHeistQ=()=>{
+              if(fetchingHQ)return;
+              setFetchingHQ(true);setFetchHStep(1);
+              setTimeout(()=>setFetchHStep(2),900);
+              setTimeout(()=>setFetchHStep(3),1800);
+              setTimeout(async()=>{
+                await updateDoc(rRef(roomId),{buzzQuestion:'¿En qué año se fundó Canadá?'});
+                setFetchingHQ(false);setFetchHStep(0);
+              },2700);
+            };
+            const heistDeclareCorrect=async()=>{
+              const evalIdx=game?.activeBuzzerIdx||0;
+              const winner=buzzLog[evalIdx];if(!winner)return;
+              const newHS={...heistScores,[winner.teamId]:(heistScores[winner.teamId]||0)+1};
+              if(newHS[winner.teamId]>=2){
+                // Equipo ganó el heist
+                const newScores={...(game?.teamScores||{})};
+                const earned=game?.accPts||0;
+                newScores[winner.teamId]=(newScores[winner.teamId]||0)+earned;
+                await updateDoc(rRef(roomId),{teamScores:newScores,accPts:0,lastScoredPts:earned,heistScores:newHS,
+                  heistWinner:winner.teamId,winnerTeamId:winner.teamId,
+                  heistVolunteering:false,
+                  buzzCalled:[],buzzLog:[],buzzQuestion:'',buzzUnlockedAt:null,questionRevealAt:null,
+                  teamStrikes:{...(game?.teamStrikes||{}),[game?.winnerTeamId]:0},
+                  challengesWon:{...Object.fromEntries(Object.keys(game?.challengesWon||{}).map(k=>[k,0]))},
+                  roundIdx:(game?.roundIdx||0)+1,phase:'VICTORY'});
+              } else {
+                // Un punto pero siguen jugando — reset buzz para nueva pregunta
+                await updateDoc(rRef(roomId),{heistScores:newHS,buzzLog:[],buzzQuestion:'',buzzUnlockedAt:null,questionRevealAt:null,activeBuzzerIdx:0});
+              }
+            };
+            const heistMarkWrong=async()=>{
+              const evalIdx=game?.activeBuzzerIdx||0;
+              await updateDoc(rRef(roomId),{activeBuzzerIdx:evalIdx+1});
+            };
+            const heistNoAnswer=async()=>{
+              await updateDoc(rRef(roomId),{buzzLog:[],buzzQuestion:'',buzzUnlockedAt:null,questionRevealAt:null,activeBuzzerIdx:0});
+            };
             return(
-              <div className="flex flex-col items-center gap-4 p-4 w-full max-w-sm text-center anim-pop my-auto">
-                <div className="text-red-400 font-black text-2xl uppercase tracking-wider">🚨 POINTS HEIST</div>
-                {grayTeam&&<div className="text-zinc-400 text-sm">
-                  <span style={{color:grayTeam.color}}>{grayTeam.name}</span> acumula 3 strikes — el pozo de <span className="text-amber-400 font-black">{game?.accPts||0} pts</span> está en juego
+              <div className="flex flex-col items-center gap-3 p-4 w-full max-w-sm mx-auto anim-pop">
+                {/* Header */}
+                <div className="text-red-400 font-black text-2xl uppercase tracking-wider text-center">🚨 POINTS HEIST</div>
+                {eliminatedTeam&&<div className="text-zinc-400 text-sm text-center">
+                  <span style={{color:eliminatedTeam.color}}>{eliminatedTeam.name}</span> perdió el pozo de <span className="text-amber-400 font-black">{game?.accPts||0} pts</span>
                 </div>}
-                {game?.buzzQuestion&&<div className="bg-zinc-800 rounded-2xl px-5 py-3 text-white font-bold text-base w-full">{game.buzzQuestion}</div>}
-                {cdLeft!=null&&(
-                  <div className="text-6xl font-black text-amber-400 animate-pulse">{cdLeft}</div>
-                )}
-                {iHeistActive&&!alreadyHeistBuzzed&&game?.buzzQuestion&&(
-                  <button onClick={handleBuzz} disabled={!heistUnlocked}
-                    className={`btn-j w-40 h-40 rounded-full text-white font-black text-xl flex items-center justify-center flex-col gap-1 shadow-[0_6px_0_#7f1d1d] ${heistUnlocked?'bg-red-600 hover:bg-red-500 buzz-btn':'bg-zinc-700'}`}>
-                    <div className="text-4xl">{heistUnlocked?'🔴':'⏳'}</div>
-                    <div>{heistUnlocked?'¡BUZZ!':'Espera'}</div>
-                  </button>
-                )}
-                {iHeistActive&&alreadyHeistBuzzed&&<div className="text-zinc-400 font-bold">✅ Buzzeaste</div>}
-                {heistLog.length>0&&(
-                  <div className="w-full space-y-1.5">
-                    {heistLog.map((b,i)=>{const tp=players.find(p=>p.id===b.playerId);const tt=teams.find(t=>t.id===b.teamId);return(
-                      <div key={i} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{background:i===0?`${tt?.color}25`:'#18181b',border:`1px solid ${i===0?tt?.color+'55':'#3f3f46'}`}}>
-                        <span className="font-black text-sm w-4" style={{color:i===0?'#fbbf24':'#52525b'}}>{i+1}°</span>
-                        <span>{tp?.emoji}</span><span className="font-bold text-sm flex-1 text-white">{tp?.name}</span>
-                        <span className="text-xs font-bold" style={{color:tt?.color}}>{tt?.name}</span>
-                      </div>);
+
+                {/* Heist scoreboard — aciertos por equipo (need 2) */}
+                {heistReps.length>0&&(
+                  <div className={`grid gap-2 w-full ${heistActive.length===1?'grid-cols-1':heistActive.length===2?'grid-cols-2':'grid-cols-3'}`}>
+                    {heistActive.map(t=>{
+                      const sc=heistScores[t.id]||0;
+                      return(
+                        <div key={t.id} className="rounded-xl p-2 text-center transition-all"
+                          style={{background:`${t.color}20`,border:`1.5px solid ${sc>=2?t.color:t.color+'44'}`}}>
+                          <div className="text-xs font-black truncate" style={{color:t.color}}>{t.name}</div>
+                          <div className={`text-2xl font-black ${sc>=2?'text-lime-400':'text-white'}`}>{sc}<span className="text-zinc-600 text-sm">/2</span></div>
+                        </div>
+                      );
                     })}
                   </div>
+                )}
+
+                {/* Buzz buttons grid (reps, same as CALL_UP) */}
+                {heistReps.length>0&&(
+                  <div className={`grid gap-3 w-full ${heistReps.length<=2?'grid-cols-2':'grid-cols-2'}`}>
+                    {heistReps.map(p=>{
+                      const t=teams.find(t2=>t2.id===p.teamId);
+                      const isMe=p.id===localId;
+                      const pRank=buzzLog.findIndex(b=>b.playerId===p.id);
+                      const pBuzzed=pRank>=0;
+                      const canClick=isMe&&!pBuzzed&&buzzUnlocked&&!!game?.buzzQuestion;
+                      return(
+                        <div key={p.id} className="flex flex-col items-center gap-2">
+                          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-2xl font-black text-sm text-white ${isMe?'ring-2 ring-white/50':''}`}
+                            style={{background:`${t?.color}35`,border:`2px solid ${t?.color}`}}>
+                            <span className="text-base">{p.emoji}</span>
+                            <span>{p.name}</span>
+                            {isMe&&<span className="text-xs opacity-60 font-normal">(tú)</span>}
+                          </div>
+                          {pBuzzed?(
+                            <div className="w-16 h-16 rounded-full flex items-center justify-center font-black text-xl border-2 anim-pop"
+                              style={{background:`${t?.color}25`,borderColor:t?.color,color:t?.color}}>
+                              {pRank+1}°
+                            </div>
+                          ):(
+                            <button onClick={canClick?handleBuzz:undefined} disabled={!canClick}
+                              className={`btn-j w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all ${canClick?'bg-red-600 hover:bg-red-500 buzz-btn shadow-[0_4px_0_#7f1d1d]':'bg-zinc-800 border-2 border-zinc-700'}`}>
+                              {canClick?'🔴':'🔒'}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Countdown */}
+                {cdLeft!=null&&<div className="text-7xl font-black text-amber-400 animate-pulse anim-pop leading-none">{cdLeft}</div>}
+
+                {/* Question */}
+                {game?.buzzQuestion&&<div className="bg-zinc-800 border border-zinc-700 rounded-2xl px-4 py-3 text-white font-bold text-base w-full text-center leading-snug">{game.buzzQuestion}</div>}
+
+                {/* Buzz order */}
+                {buzzLog.length>0&&(
+                  <div className="w-full space-y-1.5">
+                    {buzzLog.map((b,i)=>{
+                      const bp=players.find(p=>p.id===b.playerId);
+                      const bt=teams.find(t=>t.id===b.teamId);
+                      const evalIdx=game?.activeBuzzerIdx||0;
+                      const isEval=i===evalIdx;
+                      return(
+                        <div key={i} className="flex items-center gap-2 rounded-xl px-3 py-2"
+                          style={{background:isEval?`${bt?.color}25`:'#18181b',border:`1px solid ${isEval?bt?.color+'77':'#3f3f46'}`}}>
+                          <span className="font-black w-5 text-sm" style={{color:isEval?'#fbbf24':'#71717a'}}>{i+1}°</span>
+                          <span>{bp?.emoji}</span>
+                          <span className="font-bold text-sm flex-1 text-white">{bp?.name}</span>
+                          <span className="text-xs font-bold" style={{color:bt?.color}}>{bt?.name}</span>
+                          {isEval&&<span className="text-xs text-amber-400 font-black animate-pulse">◄</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Volunteer button — for eligible non-host players */}
+                {game?.heistVolunteering&&!isHost&&myTeam?.id!==game?.winnerTeamId&&!iAmRep&&(
+                  <button onClick={volunteerForHeist}
+                    className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-4 rounded-2xl text-xl shadow-[0_5px_0_#92400e] anim-pop">
+                    🙋 Yo voy
+                  </button>
+                )}
+                {iAmRep&&game?.heistVolunteering&&(
+                  <div className="bg-lime-500/15 border border-lime-500/50 rounded-2xl px-4 py-2.5 text-center text-lime-400 font-black text-sm anim-pop">
+                    ✅ ¡Ya estás adentro!
+                  </div>
+                )}
+                {/* Waiting (no volunteering started) */}
+                {!game?.heistVolunteering&&heistReps.length===0&&!isHost&&<div className="text-zinc-600 text-xs animate-pulse">Esperando al moderador...</div>}
+
+                {/* ── HOST INLINE CONTROLS ── */}
+                {isHost&&(
+                  <div className="w-full space-y-2 border-t border-zinc-800 pt-2 mt-1">
+                    {/* Step 1a: open volunteering */}
+                    {heistReps.length===0&&!game?.heistVolunteering&&(
+                      <button onClick={startHeistVolunteering}
+                        className="btn-j w-full bg-red-600 hover:bg-red-500 text-white font-black py-3 rounded-xl text-sm flex items-center justify-center gap-2 shadow-[0_4px_0_#7f1d1d]">
+                        🙋 ¿Quién se apunta?
+                      </button>
+                    )}
+                    {/* Step 1b: volunteering open — per-team status */}
+                    {game?.heistVolunteering&&(
+                      <div className="space-y-1.5">
+                        <div className="text-xs text-zinc-500 text-center uppercase tracking-widest">Esperando voluntarios...</div>
+                        {heistActive.map(t=>{
+                          const tRep=heistReps.find(p=>p.teamId===t.id);
+                          return(
+                            <div key={t.id} className="flex items-center gap-2 rounded-lg px-2.5 py-1.5"
+                              style={{background:tRep?`${t.color}20`:'#18181b',border:`1px solid ${tRep?t.color+'66':'#3f3f46'}`}}>
+                              <span className="text-xs font-black" style={{color:t.color}}>{t.name}</span>
+                              {tRep?(
+                                <span className="text-xs text-lime-400 font-bold ml-auto">{tRep.emoji} {tRep.name} ✅</span>
+                              ):(
+                                <span className="text-xs text-zinc-600 ml-auto animate-pulse">Esperando...</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {heistReps.length>0&&(
+                          <button onClick={()=>updateDoc(rRef(roomId),{heistVolunteering:false})}
+                            className="btn-j w-full bg-zinc-700 hover:bg-zinc-600 text-zinc-300 font-bold py-2 rounded-xl text-xs">
+                            ✅ Cerrar — {heistReps.length} rep{heistReps.length!==1?'s':''} listo{heistReps.length!==1?'s':''}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {/* Step 2: fetch question (only after volunteering is closed) */}
+                    {heistReps.length>0&&!game?.buzzQuestion&&!game?.heistVolunteering&&(
+                      fetchingHQ?(
+                        <div className="bg-zinc-900 border border-zinc-700 rounded-2xl px-4 py-3 text-center min-h-[48px] flex items-center justify-center">
+                          <span className={`text-sm font-black animate-pulse ${fetchHStep>=3?'text-lime-400':'text-amber-400'}`}>
+                            {fetchHStep===1?'🔀 Buscando pregunta...'
+                             :fetchHStep===2?'✋ Eligiendo...'
+                             :'🎉 ¡Lista!'}
+                          </span>
+                        </div>
+                      ):(
+                        <button onClick={fetchHeistQ}
+                          className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-3 rounded-xl text-sm flex items-center justify-center gap-2">
+                          🎲 Obtener pregunta
+                        </button>
+                      )
+                    )}
+                    {/* Step 3: activate buzz */}
+                    {heistReps.length>0&&game?.buzzQuestion&&!game?.buzzUnlockedAt&&(
+                      <button onClick={()=>updateDoc(rRef(roomId),{buzzUnlockedAt:Date.now()+5500,buzzLog:[],activeBuzzerIdx:0})}
+                        className="btn-j w-full bg-red-600 hover:bg-red-500 text-white font-black py-3 rounded-xl text-sm flex items-center justify-center gap-2 shadow-[0_4px_0_#7f1d1d]">
+                        ⏱ Activar buzz — cuenta 5...
+                      </button>
+                    )}
+                    {/* Step 4: eval buzzer */}
+                    {heistReps.length>0&&buzzLog.length>0&&(()=>{
+                      const evalIdx=game?.activeBuzzerIdx||0;
+                      const current=buzzLog[evalIdx];
+                      const allWrong=evalIdx>=buzzLog.length;
+                      const cp=current?players.find(p=>p.id===current.playerId):null;
+                      const ct=current?teams.find(t=>t.id===current.teamId):null;
+                      return(
+                        <div className="space-y-2">
+                          {!allWrong&&(
+                            <>
+                              <div className="flex items-center gap-2 rounded-xl px-3 py-2"
+                                style={{background:`${ct?.color}25`,border:`1.5px solid ${ct?.color}`}}>
+                                <span className="text-xs font-black text-amber-400 shrink-0">{evalIdx+1}°</span>
+                                <span>{cp?.emoji}</span>
+                                <span className="font-bold text-white text-sm flex-1">{cp?.name}</span>
+                                <span className="text-xs font-black" style={{color:ct?.color}}>{ct?.name}</span>
+                                <span className="text-xs text-amber-400 font-black">{heistScores[current?.teamId]||0}/2</span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                <button onClick={heistDeclareCorrect} className="btn-j bg-lime-600 hover:bg-lime-500 text-white font-black py-3 rounded-xl text-sm">✅ Correcto</button>
+                                <button onClick={heistMarkWrong} className="btn-j bg-red-700 hover:bg-red-600 text-white font-black py-3 rounded-xl text-sm">❌ Incorrecto</button>
+                              </div>
+                            </>
+                          )}
+                          {allWrong&&(
+                            <button onClick={heistNoAnswer}
+                              className="btn-j w-full bg-zinc-700 hover:bg-zinc-600 text-zinc-300 font-bold py-2.5 rounded-xl text-sm">
+                              ⏭ Nadie supo — siguiente pregunta
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* VICTORY — equipo cobró 5 desafíos o ganó el heist */}
+          {phase==='VICTORY'&&(()=>{
+            const wt=teams.find(t=>t.id===game?.winnerTeamId);
+            const pts=game?.lastScoredPts||0;
+            return(
+              <div className="flex flex-col items-center gap-4 p-4 w-full max-w-sm text-center anim-pop my-auto">
+                <div className="text-6xl anim-float">🏆</div>
+                <div className="font-black text-2xl" style={{color:wt?.color||'#a3e635'}}>{wt?.name||'Ganadores'}</div>
+                <div className="text-white font-black text-4xl leading-none">{pts} <span className="text-amber-400">pts</span></div>
+                <div className="text-zinc-500 text-xs uppercase tracking-widest">¡A cobrar!</div>
+                {isHost?(
+                  <button onClick={()=>updateDoc(rRef(roomId),{phase:'CALL_UP',winnerTeamId:null,heistVolunteering:false,buzzCalled:[],buzzLog:[],buzzQuestion:'',buzzUnlockedAt:null,questionRevealAt:null,buzzShowOptions:false,activeBuzzerIdx:0})}
+                    className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-3 rounded-2xl text-base shadow-[0_5px_0_#92400e] mt-2 flex items-center justify-center gap-2 anim-up">
+                    ➡️ Ronda {(game?.roundIdx||0)+1} — ¡Siguiente!
+                  </button>
+                ):(
+                  <div className="text-zinc-600 text-xs animate-pulse mt-1">Esperando al moderador...</div>
                 )}
               </div>
             );
@@ -1853,7 +2512,7 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
   const [buzzQ,setBuzzQ]=useState('');
   const phase=game?.phase||'CURTAIN';
   const roundIdx=game?.roundIdx||0;
-  const buzzLog=([...(game?.buzzLog||[])]).sort((a,b)=>a.ts-b.ts);
+  const buzzLog=game?.buzzLog||[]; // insertion order = Firestore server receipt order (fairest)
 
   const markResult=async(won)=>{
     const wt=game?.winnerTeamId;
@@ -1863,23 +2522,24 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
     if(won){
       const newCW={...(game?.challengesWon||{}),[wt]:((game?.challengesWon||{})[wt]||0)+1};
       if(newCW[wt]>=5){
-        // 🏆 5 CHALLENGES — equipo cobra todos los puntos acumulados
+        // 🏆 5 desafíos → VICTORY (no CURTAIN), strikes reset solo aquí
         const newScores={...(game?.teamScores||{})};
-        newScores[wt]=(newScores[wt]||0)+(game?.accPts||0);
-        await updateDoc(rRef(roomId),{...clearMg,teamScores:newScores,accPts:0,challengesWon:{...(game?.challengesWon||{}),[wt]:0},teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,roundIdx:roundIdx+1,phase:'CURTAIN'});
+        const earned=game?.accPts||0;
+        newScores[wt]=(newScores[wt]||0)+earned;
+        await updateDoc(rRef(roomId),{...clearMg,teamScores:newScores,accPts:0,lastScoredPts:earned,challengesWon:{...(game?.challengesWon||{}),[wt]:0},teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,roundIdx:roundIdx+1,phase:'VICTORY'});
       } else {
-        // ✅ Challenge ganado, sigue el mismo equipo (siguiente jugador gira)
+        // ✅ Desafío ganado — strikes NO se reinician
         const tPlayers=players.filter(p=>p.teamId===wt);
         const nextSpinner=tPlayers[(newCursors[wt]||0)%tPlayers.length];
-        await updateDoc(rRef(roomId),{...clearMg,challengesWon:newCW,teamStrikes:{...(game?.teamStrikes||{}),[wt]:0},spinCursors:newCursors,spinnerPlayerId:nextSpinner?.id||null,spinCount:0,spinTarget:null,phase:'SPIN_ASSIGN'});
+        await updateDoc(rRef(roomId),{...clearMg,challengesWon:newCW,spinCursors:newCursors,spinnerPlayerId:nextSpinner?.id||null,spinCount:0,spinTarget:null,phase:'SPIN_ASSIGN'});
       }
     } else {
       const newStrikes={...(game?.teamStrikes||{}),[wt]:((game?.teamStrikes||{})[wt]||0)+1};
       if(newStrikes[wt]>=3){
         // ⚠️ 3 STRIKES → Points Heist
-        await updateDoc(rRef(roomId),{...clearMg,teamStrikes:newStrikes,phase:'HEIST'});
+        await updateDoc(rRef(roomId),{...clearMg,teamStrikes:newStrikes,heistScores:{},heistVolunteering:false,phase:'HEIST'});
       } else {
-        // ❌ Strike pero sigue — mismo equipo gira de nuevo (siguiente jugador)
+        // ❌ Strike — sigue el mismo equipo
         const teamPlayers=players.filter(p=>p.teamId===wt);
         const spinner=teamPlayers[newCursors[wt]%teamPlayers.length];
         await updateDoc(rRef(roomId),{...clearMg,teamStrikes:newStrikes,spinCursors:newCursors,spinnerPlayerId:spinner?.id||null,spinCount:0,spinTarget:null,phase:'SPIN_ASSIGN'});
@@ -2032,41 +2692,10 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
             );
           })()}
 
-          {/* HEIST controls */}
-          {phase==='HEIST'&&(
-            <div className="space-y-2">
-              <div className="text-xs text-red-400 font-black uppercase tracking-widest">🚨 Points Heist</div>
-              <div className="text-xs text-zinc-400">Pozo: <span className="text-amber-400 font-black">{game?.accPts||0} pts</span></div>
-              {!game?.buzzQuestion&&(
-                <div className="space-y-2">
-                  <textarea rows={2} value={buzzQ} onChange={e=>setBuzzQ(e.target.value)}
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-red-500 resize-none"
-                    placeholder="Pregunta del heist..."/>
-                  <button onClick={()=>updateDoc(rRef(roomId),{buzzQuestion:buzzQ,buzzLog:[]})} disabled={!buzzQ.trim()}
-                    className="btn-j w-full bg-red-600 hover:bg-red-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-black py-2.5 rounded-xl text-sm">
-                    👁 Mostrar pregunta
-                  </button>
-                </div>
-              )}
-              {game?.buzzQuestion&&!game?.buzzUnlockedAt&&(
-                <button onClick={()=>updateDoc(rRef(roomId),{buzzUnlockedAt:Date.now()+5500,buzzLog:[]})}
-                  className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-2.5 rounded-xl text-sm">
-                  ⏱ ¿Ready? — Iniciar cuenta 5...
-                </button>
-              )}
-              {buzzLog.length>0&&(
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={()=>{
-                    const first=buzzLog[0];
-                    if(!first)return;
-                    const newScores={...(game?.teamScores||{})};
-                    newScores[first.teamId]=(newScores[first.teamId]||0)+(game?.accPts||0);
-                    updateDoc(rRef(roomId),{teamScores:newScores,accPts:0,buzzQuestion:'',buzzUnlockedAt:null,buzzLog:[],buzzCalled:[],challengesWon:{...Object.fromEntries(Object.keys(game?.challengesWon||{}).map(k=>[k,0]))},teamStrikes:{...(game?.teamStrikes||{}),[game?.winnerTeamId]:0},roundIdx:roundIdx+1,phase:'CURTAIN'});
-                  }} className="btn-j bg-lime-600 text-white font-black py-2.5 rounded-xl text-sm">✅ 1° correcto</button>
-                  <button onClick={()=>updateDoc(rRef(roomId),{buzzQuestion:'',buzzUnlockedAt:null,buzzLog:[],buzzCalled:[],accPts:0,roundIdx:roundIdx+1,phase:'CURTAIN'})}
-                    className="btn-j bg-zinc-700 text-zinc-300 font-bold py-2.5 rounded-xl text-sm">⏭ Nadie supo</button>
-                </div>
-              )}
+          {/* HEIST / VICTORY — el flujo ya está inline en pantalla */}
+          {(phase==='HEIST'||phase==='VICTORY')&&(
+            <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl px-3 py-2.5 text-center">
+              <p className="text-zinc-500 text-xs">El flujo del heist está <span className="text-red-400 font-bold">en pantalla</span> — usa los controles inline.</p>
             </div>
           )}
 
