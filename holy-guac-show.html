@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Holy Guacamole Game Show</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
@@ -18,9 +18,18 @@
   }
   </script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    // Samsung / Android Chrome: 100dvh can include browser chrome and status bar.
+    // window.innerHeight gives the actual visible viewport height reliably on all devices.
+    (function(){
+      function setH(){document.documentElement.style.setProperty('--app-h',window.innerHeight+'px');}
+      setH();
+      window.addEventListener('resize',setH,{passive:true});
+    })();
+  </script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800;900&display=swap');
-    html,body{font-family:'Plus Jakarta Sans',sans-serif;height:100dvh;overflow:hidden;overscroll-behavior:contain;touch-action:manipulation;background:#09090b;}
+    html,body{font-family:'Plus Jakarta Sans',sans-serif;height:100vh;height:100dvh;height:var(--app-h,100dvh);overflow:hidden;overscroll-behavior:contain;touch-action:manipulation;background:#09090b;}
     button,a,label{user-select:none;-webkit-user-select:none;}
     .btn-j{transition:transform .12s cubic-bezier(.4,0,.2,1),filter .12s;}
     .btn-j:active:not(:disabled){transform:scale(.92);}
@@ -121,6 +130,20 @@ const MOCK = {
     {sentence:'___ hermano llegó primero.',    a:'Tu',  b:'Tú',  answer:'Tu'},
     {sentence:'___ no sabe la respuesta.',     a:'El',  b:'Él',  answer:'Él'},
     {sentence:'¿___ estás haciendo?',          a:'que', b:'qué', answer:'qué'},
+  ],
+  acentos:[
+    {word:'canción',   type:'aguda'},
+    {word:'café',      type:'aguda'},
+    {word:'reloj',     type:'aguda'},
+    {word:'hablar',    type:'aguda'},
+    {word:'papel',     type:'aguda'},
+    {word:'árbol',     type:'grave'},
+    {word:'fácil',     type:'grave'},
+    {word:'mesa',      type:'grave'},
+    {word:'cárcel',    type:'grave'},
+    {word:'música',    type:'esdrujula'},
+    {word:'pájaro',    type:'esdrujula'},
+    {word:'rápido',    type:'esdrujula'},
   ],
   vocab_mc:[
     {q:'¿Qué tipo de palabra es "música" según su sílaba tónica?', opts:['Aguda','Grave','Esdrújula','Sobresdrújula'], ans:2},
@@ -652,6 +675,159 @@ function MgThisOrThat({game,roomId,iAmSpinner,localId}){
   );
 }
 
+// ── Minigame: Aguda / Grave / Esdrújula ──────────────────────
+function MgAcentos({game,roomId,iAmSpinner}){
+  const s=game?.mgState||{};
+  const cards=s.cards||[];
+  const flipped=s.flipped??null;
+  const answers=s.answers||{};
+  const results=s.results||{};
+  const errors=s.errors||0;
+  const correct=s.correct||0;
+  const cardTimer=s.cardTimer||null;
+  const liveSel=s.liveSel||null;
+  const done=!!s.result;
+  const isOpen=flipped!==null;
+
+  const [localSel,setLocalSel]=useState(null);
+  const [tLeft,setTLeft]=useState(10);
+  const localSelRef=useRef(null);
+
+  // Reset selection when card changes
+  useEffect(()=>{setLocalSel(null);localSelRef.current=null;setTLeft(10);},[flipped]);
+
+  // Countdown per card
+  useEffect(()=>{
+    if(!isOpen||!cardTimer||done)return;
+    const iv=setInterval(()=>{
+      const l=Math.max(0,Math.round((cardTimer-Date.now())/1000));
+      setTLeft(l);
+      if(l<=0){clearInterval(iv);if(iAmSpinner)doSubmit(localSelRef.current);}
+    },200);
+    return()=>clearInterval(iv);
+  },[isOpen,cardTimer,done]);
+
+  const flipCard=async(idx)=>{
+    if(!iAmSpinner||isOpen||answers[idx]!==undefined||done)return;
+    await updateDoc(rRef(roomId),{'mgState.flipped':idx,'mgState.cardTimer':Date.now()+10000,'mgState.liveSel':null});
+  };
+
+  const selectOption=async(opt)=>{
+    if(!isOpen||!iAmSpinner)return;
+    setLocalSel(opt);localSelRef.current=opt;
+    updateDoc(rRef(roomId),{'mgState.liveSel':opt});
+  };
+
+  const doSubmit=async(sel)=>{
+    if(flipped===null)return;
+    const card=cards[flipped];
+    const isRight=sel===card?.type;
+    const newAnswers={...answers,[flipped]:sel??'none'};
+    const newResults={...results,[flipped]:isRight};
+    const newErrors=errors+(isRight?0:1);
+    const newCorrect=correct+(isRight?1:0);
+    let result=null;
+    if(newCorrect>=6)result='win';
+    else if(newErrors>=3)result='strike';
+    await updateDoc(rRef(roomId),{
+      'mgState.answers':newAnswers,'mgState.results':newResults,
+      'mgState.errors':newErrors,'mgState.correct':newCorrect,
+      'mgState.flipped':null,'mgState.cardTimer':null,'mgState.liveSel':null,
+      ...(result?{'mgState.result':result}:{})
+    });
+  };
+
+  const OPTS=['aguda','grave','esdrujula'];
+  const OPT_LABELS={aguda:'Aguda',grave:'Grave',esdrujula:'Esdrújula'};
+  const OPT_COLORS={aguda:'#ef4444',grave:'#22c55e',esdrujula:'#8b5cf6'};
+  const currentSel=iAmSpinner?localSel:liveSel;
+
+  return(
+    <div className="w-full p-3 flex flex-col gap-2.5 max-w-sm mx-auto">
+      {/* Score bar */}
+      <div className="flex items-center justify-between px-1">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-zinc-500 font-bold">Aciertos</span>
+          <div className="flex gap-1">{Array.from({length:6},(_,i)=>(
+            <div key={i} className={`w-3 h-3 rounded-full ${i<correct?'bg-lime-500':'bg-zinc-700'}`}/>
+          ))}</div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-zinc-500 font-bold">Errores</span>
+          <div className="flex gap-1">{[0,1,2].map(i=>(
+            <div key={i} className={`w-3 h-3 rounded-full ${i<errors?'bg-red-500':'bg-zinc-700'}`}/>
+          ))}</div>
+        </div>
+      </div>
+
+      {/* 3×3 card grid */}
+      <div className="grid grid-cols-3 gap-2">
+        {cards.map((card,idx)=>{
+          const isFlippedCard=idx===flipped;
+          const isDone=answers[idx]!==undefined;
+          const wasCorrect=results[idx];
+          const canFlip=iAmSpinner&&!isDone&&!isOpen&&!done;
+          return(
+            <button key={idx} onClick={()=>flipCard(idx)} disabled={!canFlip&&!isDone}
+              className={`btn-j aspect-[4/3] rounded-xl flex flex-col items-center justify-center transition-all border-2 select-none
+                ${isDone?(wasCorrect?'bg-lime-900/40 border-lime-600':'bg-red-900/40 border-red-600')
+                  :isFlippedCard?'bg-amber-500/20 border-amber-400 ring-2 ring-amber-400/40'
+                  :canFlip?'bg-zinc-800 border-zinc-700 hover:border-amber-500/50 active:scale-95'
+                  :'bg-zinc-900 border-zinc-800'}`}>
+              {isDone?(
+                <>
+                  <span className="text-xs leading-tight text-center px-1 font-black" style={{color:wasCorrect?'#a3e635':'#f87171'}}>{card.word}</span>
+                  <span className="text-sm mt-0.5">{wasCorrect?'✅':'❌'}</span>
+                </>
+              ):isFlippedCard?(
+                <span className="text-sm font-black text-white text-center px-1 leading-tight">{card.word}</span>
+              ):(
+                <span className="text-2xl">{canFlip?'🎴':'🔒'}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Option panel — when a card is open */}
+      {isOpen&&!done&&(
+        <div className="space-y-2 anim-up">
+          <div className={`text-center text-3xl font-black leading-none ${tLeft<=3?'text-red-400 animate-pulse':'text-amber-400'}`}>{tLeft}s</div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {OPTS.map(opt=>{
+              const isSel=currentSel===opt;
+              return(
+                <button key={opt} onClick={()=>iAmSpinner&&selectOption(opt)}
+                  className={`btn-j py-3 rounded-xl font-black text-xs transition-all border-2 ${isSel?'text-white ring-1':iAmSpinner?'bg-zinc-800 border-zinc-700 text-zinc-300 hover:border-zinc-500':'bg-zinc-800/50 border-zinc-800 text-zinc-600 cursor-default'}`}
+                  style={isSel?{background:`${OPT_COLORS[opt]}33`,borderColor:OPT_COLORS[opt],boxShadow:`0 0 14px ${OPT_COLORS[opt]}44`}:{}}>
+                  {OPT_LABELS[opt]}
+                </button>
+              );
+            })}
+          </div>
+          {iAmSpinner?(
+            <button onClick={()=>doSubmit(localSel)}
+              className={`btn-j w-full py-2.5 rounded-xl font-black text-sm ${localSel?'bg-amber-500 hover:bg-amber-400 text-black shadow-[0_4px_0_#92400e]':'bg-zinc-700 text-zinc-500'}`}>
+              {localSel?`✅ Es ${OPT_LABELS[localSel]}`:'⚠️ Selecciona primero'}
+            </button>
+          ):(
+            <div className="text-center text-xs font-bold py-0.5 animate-pulse" style={{color:currentSel?'#fbbf24':'#52525b'}}>
+              {currentSel?`🔴 Seleccionó: ${OPT_LABELS[currentSel]}`:'Eligiendo...'}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Prompt — waiting for card */}
+      {!isOpen&&!done&&(
+        <div className="text-center text-xs font-bold py-1" style={{color:iAmSpinner?'#a3e635':'#52525b'}}>
+          {iAmSpinner?`Toca una carta · ${9-Object.keys(answers).length} restantes`:'Esperando que el jugador abra una carta...'}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Minigame: Alphabet Pyramid ────────────────────────────────
 function MgAlphabet({game}){
   const s=game?.mgState||{};
@@ -912,8 +1088,10 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
     const winnerLocalIdx=tPs.findIndex(p=>p.id===winner.playerId);
     const nextIdx=tPs.length>1?(winnerLocalIdx+1)%tPs.length:winnerLocalIdx;
     const spinnerId=tPs[nextIdx]?.id||null;
+    // ← Also update spinCursors so quickResult advances from the right position
+    const newCursors={...(game?.spinCursors||{}),[winner.teamId]:nextIdx};
     await updateDoc(rRef(roomId),{
-      winnerTeamId:winner.teamId,spinnerPlayerId:spinnerId,
+      winnerTeamId:winner.teamId,spinnerPlayerId:spinnerId,spinCursors:newCursors,
       phase:'SPIN_ASSIGN',buzzQuestion:'',buzzUnlockedAt:null,activeBuzzerIdx:0,
       spinCount:0,spinTarget:null,minigame:null,
     });
@@ -977,6 +1155,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
       case 'twister':  return <MgTongue    game={game} iAmSpinner={iAmSpinner}/>;
       case 'silabas':  return <MgSyllables  {...props}/>;
       case 'tilde':    return <MgThisOrThat {...props}/>;
+      case 'acentos':  return <MgAcentos    {...props}/>;
       case 'piramide': return <MgAlphabet   game={game}/>;
       case 'vocab':    return <MgVocab      {...props}/>;
       default: return <div className="text-zinc-400 text-sm font-bold p-4 text-center">Mini-juego: <span className="text-white">{mg?.label}</span><br/><span className="text-xs text-zinc-600">Módulo en construcción — el moderador conduce en físico</span></div>;
@@ -1030,12 +1209,12 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
           })}
         </div>
 
-        {/* Phase content — scrollable if needed */}
-        <div className={`flex-1 overflow-y-auto scroll-y flex flex-col items-center ${phase==='MINIGAME'?'justify-start py-2':'justify-center'}`}>
+        {/* Phase content — always justify-start to avoid flexbox overflow-clip bug */}
+        <div className="flex-1 overflow-y-auto scroll-y flex flex-col items-center justify-start">
 
           {/* ── WELCOME (CALL_UP, nadie llamado aún) ─────────── */}
           {phase==='CALL_UP'&&cPs.length===0&&(
-            <div className="flex flex-col items-center gap-2 py-2 px-4 w-full max-w-sm mx-auto anim-pop">
+            <div className="flex flex-col items-center gap-2 py-2 px-4 w-full max-w-sm mx-auto anim-pop my-auto">
               <div className="text-6xl anim-float">{game?.hostEmoji||'🌶️'}</div>
               <div className="text-zinc-300 font-black text-xl leading-tight text-center">¡Bienvenidos al</div>
               <div className="text-lime-400 font-black text-3xl leading-tight tracking-tight text-center">Holy Guacamole!</div>
@@ -1214,6 +1393,10 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
               else if(gid==='vocab') Object.assign(initState,{timerEnd:Date.now()+30000,playerAnswers:{},revealed:false});
               else if(gid==='twister') Object.assign(initState,{ttLevel:0,ttResults:[null,null,null]});
               else if(gid==='piramide') Object.assign(initState,{history:[],currentLetter:null});
+              else if(gid==='acentos'){
+                const shuffled=[...MOCK.acentos].sort(()=>Math.random()-0.5).slice(0,9);
+                Object.assign(initState,{cards:shuffled,flipped:null,answers:{},results:{},errors:0,correct:0,cardTimer:null,liveSel:null});
+              }
               await updateDoc(rRef(roomId),{phase:'MINIGAME',mgPhase:'ACTIVE',mgState:initState,accPts:(game?.accPts||0)+10});
             };
             return(
@@ -1318,7 +1501,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
             const iHeistActive=me&&me.teamId!==game?.winnerTeamId;
             const alreadyHeistBuzzed=heistLog.findIndex(b=>b.playerId===localId)>=0;
             return(
-              <div className="flex flex-col items-center gap-4 p-4 w-full max-w-sm text-center anim-pop">
+              <div className="flex flex-col items-center gap-4 p-4 w-full max-w-sm text-center anim-pop my-auto">
                 <div className="text-red-400 font-black text-2xl uppercase tracking-wider">🚨 POINTS HEIST</div>
                 {grayTeam&&<div className="text-zinc-400 text-sm">
                   <span style={{color:grayTeam.color}}>{grayTeam.name}</span> acumula 3 strikes — el pozo de <span className="text-amber-400 font-black">{game?.accPts||0} pts</span> está en juego
