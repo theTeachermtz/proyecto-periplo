@@ -711,6 +711,8 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   const [spinning,setSpinning]=useState(false);
   const [showCurtain,setShowCurtain]=useState(game?.phase==='CURTAIN');
   const [cdLeft,setCdLeft]=useState(null); // countdown seconds
+  const [fetchingQ,setFetchingQ]=useState(false);
+  const [fetchStep,setFetchStep]=useState(0);
 
   const players=game?.players||[];
   const teams=game?.teams||[];
@@ -745,7 +747,10 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   },[game?.spinCount]);
 
   const handleBuzz=async()=>{
-    if(!localId||!isCalledPlayer)return;
+    if(!localId)return;
+    if(phase!=='BUZZER'&&phase!=='HEIST')return; // visible in CALL_UP but not yet active
+    if(phase==='BUZZER'&&!isCalledPlayer)return;  // BUZZER: solo los llamados
+    // HEIST: todos los no-eliminados (gateado por el UI con iHeistActive)
     if(game?.buzzUnlockedAt&&Date.now()<game.buzzUnlockedAt)return; // locked during countdown
     const buzz={playerId:localId,teamId:me?.teamId,ts:Date.now(),name:me?.name};
     await updateDoc(rRef(roomId),{buzzLog:arrayUnion(buzz)});
@@ -760,8 +765,67 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   };
 
   const buzzLog=([...(game?.buzzLog||[])]).sort((a,b)=>a.ts-b.ts);
-  const buzzUnlocked=!game?.buzzUnlockedAt||Date.now()>=game.buzzUnlockedAt;
+  // buzzUnlocked only fires in BUZZER/HEIST phase AND after countdown expires
+  const buzzUnlocked=(phase==='BUZZER'||phase==='HEIST')&&(!game?.buzzUnlockedAt||Date.now()>=game.buzzUnlockedAt);
   const alreadyBuzzed=buzzLog.findIndex(b=>b.playerId===localId)>=0;
+  const roundIdx=game?.roundIdx||0;
+  const cPs=calledIds.map(id=>players.find(p=>p.id===id)).filter(Boolean);
+
+  // ── Mod inline functions (no panel needed for buzzer flow) ───────
+  const callUpPlayers=async()=>{
+    const tc=game?.teamCount||2;
+    const pair=TEAM_CATALOG.slice(0,tc).map(td=>{
+      const t=teams.find(t2=>t2.id===td.id);if(!t)return null;
+      const tPs=players.filter(p=>p.teamId===t.id);if(!tPs.length)return null;
+      return tPs[roundIdx%tPs.length];
+    }).filter(Boolean);
+    await updateDoc(rRef(roomId),{buzzCalled:pair.map(p=>p.id),buzzLog:[],winnerTeamId:null,spinnerPlayerId:null,buzzQuestion:'',buzzUnlockedAt:null});
+  };
+
+  const handleFetchQuestion=()=>{
+    if(fetchingQ)return;
+    setFetchingQ(true);setFetchStep(1);
+    setTimeout(()=>setFetchStep(2),900);
+    setTimeout(()=>setFetchStep(3),1800);
+    setTimeout(async()=>{
+      // MOCK — siempre la misma pregunta por ahora
+      await updateDoc(rRef(roomId),{buzzQuestion:'¿Cuántos días tiene la semana?'});
+      setFetchingQ(false);setFetchStep(0);
+    },2700);
+  };
+
+  const startCountdown=async()=>{
+    await updateDoc(rRef(roomId),{phase:'BUZZER',buzzUnlockedAt:Date.now()+5500,buzzLog:[]});
+  };
+
+  const assignSpinner=teamId=>{
+    const tPs=players.filter(p=>p.teamId===teamId);
+    const cursor=(game?.spinCursors||{})[teamId]||0;
+    return{teamId,spinnerId:tPs[cursor%tPs.length]?.id||null};
+  };
+
+  const declareCorrect=async()=>{
+    const first=buzzLog[0];if(!first)return;
+    const{teamId,spinnerId}=assignSpinner(first.teamId);
+    await updateDoc(rRef(roomId),{winnerTeamId:teamId,spinnerPlayerId:spinnerId,phase:'SPIN_ASSIGN',buzzQuestion:'',buzzUnlockedAt:null});
+  };
+
+  const declareIncorrect=async()=>{
+    const first=buzzLog[0];
+    const alt=buzzLog.find(b=>b.teamId!==first?.teamId);
+    if(alt){
+      const{teamId,spinnerId}=assignSpinner(alt.teamId);
+      await updateDoc(rRef(roomId),{winnerTeamId:teamId,spinnerPlayerId:spinnerId,phase:'SPIN_ASSIGN',buzzQuestion:'',buzzUnlockedAt:null});
+    }else{
+      const tid=first?.teamId;if(tid==null)return;
+      const newStrikes={...(game?.teamStrikes||{}),[tid]:((game?.teamStrikes||{})[tid]||0)+1};
+      if(newStrikes[tid]>=3){
+        await updateDoc(rRef(roomId),{teamStrikes:newStrikes,accPts:0,roundIdx:roundIdx+1,phase:'CURTAIN',buzzQuestion:'',buzzUnlockedAt:null,buzzCalled:[]});
+      }else{
+        await updateDoc(rRef(roomId),{teamStrikes:newStrikes,roundIdx:roundIdx+1,phase:'CURTAIN',buzzQuestion:'',buzzUnlockedAt:null,buzzCalled:[]});
+      }
+    }
+  };
 
   // Rotation list for the winning team in SPIN_ASSIGN
   const rotationList=(teamId)=>{
@@ -836,85 +900,134 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
         {/* Phase content — scrollable if needed */}
         <div className="flex-1 overflow-y-auto scroll-y flex flex-col items-center justify-center">
 
-          {/* CALL_UP */}
-          {phase==='CALL_UP'&&(()=>{
-            const cPs=calledIds.map(id=>players.find(p=>p.id===id)).filter(Boolean);
-            return(
-              <div className="text-center p-4 space-y-3 w-full max-w-sm anim-pop">
-                {cPs.length>0?(
-                  <>
-                    <div className="text-2xl font-black text-amber-400 uppercase tracking-widest">Come up front!</div>
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {cPs.map(p=>{const t=teams.find(t2=>t2.id===p.teamId);return(
-                        <div key={p.id} className="flex items-center gap-2 px-4 py-2 rounded-2xl font-black text-white text-lg" style={{background:`${t?.color}30`,border:`2px solid ${t?.color}`}}>
-                          <span>{p.emoji}</span><span>{p.name}</span>
-                        </div>
-                      );})}
-                    </div>
-                    {!isCalledPlayer&&me&&<div className="text-zinc-500 text-sm mt-2">👀 <span className="font-bold text-zinc-400">{cPs.find(p=>p.teamId===me.teamId)?.name||'Tu representante'}</span> juega por tu equipo</div>}
-                  </>
-                ):(
-                  /* Welcome screen — shows while mod is setting up */
-                  <div className="flex flex-col items-center gap-2 py-2 anim-pop">
-                    <div className="text-6xl anim-float">{game?.hostEmoji||'🌶️'}</div>
-                    <div className="text-zinc-300 font-black text-xl leading-tight text-center">
-                      ¡Bienvenidos al
-                    </div>
-                    <div className="text-lime-400 font-black text-3xl leading-tight tracking-tight text-center">
-                      Holy Guacamole!
-                    </div>
-                    <div className="text-zinc-400 font-bold text-base tracking-widest uppercase text-center">
-                      Game Show
-                    </div>
-                    <div className="flex items-center gap-2 mt-1 bg-lime-500/10 border border-lime-500/20 rounded-full px-4 py-1.5">
-                      <span className="text-sm">{game?.hostEmoji||'🎙️'}</span>
-                      <span className="text-lime-400 font-bold text-sm">{game?.hostName||'Moderador'}</span>
-                    </div>
-                    <div className="text-zinc-600 text-xs animate-pulse mt-1">Preparando la ronda...</div>
-                  </div>
-                )}
+          {/* ── WELCOME (CALL_UP, nadie llamado aún) ─────────── */}
+          {phase==='CALL_UP'&&cPs.length===0&&(
+            <div className="flex flex-col items-center gap-2 py-2 px-4 w-full max-w-sm mx-auto anim-pop">
+              <div className="text-6xl anim-float">{game?.hostEmoji||'🌶️'}</div>
+              <div className="text-zinc-300 font-black text-xl leading-tight text-center">¡Bienvenidos al</div>
+              <div className="text-lime-400 font-black text-3xl leading-tight tracking-tight text-center">Holy Guacamole!</div>
+              <div className="text-zinc-400 font-bold text-sm tracking-widest uppercase text-center">Game Show</div>
+              <div className="flex items-center gap-2 mt-1 bg-lime-500/10 border border-lime-500/20 rounded-full px-4 py-1.5">
+                <span className="text-sm">{game?.hostEmoji||'🎙️'}</span>
+                <span className="text-lime-400 font-bold text-sm">{game?.hostName||'Moderador'}</span>
               </div>
-            );
-          })()}
-
-          {/* BUZZER */}
-          {phase==='BUZZER'&&(
-            <div className="flex flex-col items-center gap-4 w-full max-w-sm p-4 text-center">
-              {game?.buzzQuestion&&(
-                <div className="bg-zinc-800 rounded-2xl px-5 py-3 text-white font-bold text-base anim-up w-full">{game.buzzQuestion}</div>
-              )}
-              {!game?.buzzQuestion&&(
-                <div className="text-zinc-500 text-sm animate-pulse">Esperando pregunta del moderador...</div>
-              )}
-              {/* Countdown display */}
-              {game?.buzzQuestion&&cdLeft!=null&&(
-                <div className="text-6xl font-black text-amber-400 animate-pulse">{cdLeft}</div>
-              )}
-              {/* Buzz button — only for called players after unlock */}
-              {isCalledPlayer&&!alreadyBuzzed&&game?.buzzQuestion&&(
-                <button onClick={handleBuzz} disabled={!buzzUnlocked}
-                  className={`btn-j w-48 h-48 rounded-full text-white font-black text-2xl shadow-[0_8px_0_#7f1d1d] flex items-center justify-center flex-col gap-1 anim-pop ${buzzUnlocked?'bg-red-600 hover:bg-red-500 buzz-btn':'bg-zinc-700'}`}>
-                  <div className="text-5xl">{buzzUnlocked?'🔴':'⏳'}</div>
-                  <div>{buzzUnlocked?'¡BUZZ!':'Espera...'}</div>
+              {isHost?(
+                <button onClick={callUpPlayers} className="btn-j mt-3 w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-3 rounded-2xl text-base shadow-[0_5px_0_#92400e] flex items-center justify-center gap-2 anim-up">
+                  ➡️ Empezar ronda
                 </button>
+              ):(
+                <div className="text-zinc-600 text-xs animate-pulse mt-1">Preparando la ronda...</div>
               )}
-              {isCalledPlayer&&alreadyBuzzed&&<div className="text-zinc-400 font-bold">✅ Buzzeaste · esperando al moderador...</div>}
-              {!isCalledPlayer&&game?.buzzQuestion&&(
-                <div className="text-zinc-500 text-xs font-bold animate-pulse">
-                  {me?`👀 ${calledIds.map(id=>players.find(p=>p.id===id)?.name).filter(Boolean).find(n=>players.find(p=>p.name===n&&p.teamId===me.teamId))||'Tu representante'} juega por ti`:'Manos atrás'}
+            </div>
+          )}
+
+          {/* ── BUZZER FLOW (CALL_UP con players, o BUZZER) ──── */}
+          {(phase==='CALL_UP'||phase==='BUZZER')&&cPs.length>0&&(
+            <div className="flex flex-col items-center gap-3 w-full p-3 max-w-sm mx-auto">
+
+              {/* Player chips + buzz buttons grid */}
+              <div className={`grid gap-3 w-full ${cPs.length<=2?'grid-cols-2':'grid-cols-2'}`}>
+                {cPs.map(p=>{
+                  const t=teams.find(t2=>t2.id===p.teamId);
+                  const isMe=p.id===localId;
+                  const pRank=buzzLog.findIndex(b=>b.playerId===p.id);
+                  const pBuzzed=pRank>=0;
+                  const canClick=isMe&&!pBuzzed&&buzzUnlocked;
+                  return(
+                    <div key={p.id} className="flex flex-col items-center gap-2">
+                      {/* Chip */}
+                      <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-2xl font-black text-sm text-white ${isMe?'ring-2 ring-white/50':''}`}
+                        style={{background:`${t?.color}35`,border:`2px solid ${t?.color}`}}>
+                        <span className="text-base">{p.emoji}</span>
+                        <span>{p.name}</span>
+                        {isMe&&<span className="text-xs opacity-60 font-normal">(tú)</span>}
+                      </div>
+                      {/* Buzz button */}
+                      {pBuzzed?(
+                        <div className="w-16 h-16 rounded-full flex items-center justify-center font-black text-xl border-2 anim-pop"
+                          style={{background:`${t?.color}25`,borderColor:t?.color,color:t?.color}}>
+                          {pRank+1}°
+                        </div>
+                      ):(
+                        <button onClick={canClick?handleBuzz:undefined} disabled={!canClick}
+                          className={`btn-j w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all
+                            ${canClick?'bg-red-600 hover:bg-red-500 buzz-btn shadow-[0_4px_0_#7f1d1d]':
+                              isMe&&phase==='BUZZER'&&!buzzUnlocked?'bg-zinc-800 border-2 border-amber-400/60 animate-pulse':
+                              'bg-zinc-800 border-2 border-zinc-700'}`}>
+                          {canClick?'🔴':phase==='BUZZER'&&isMe?'⏳':'🔒'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Countdown big number */}
+              {phase==='BUZZER'&&cdLeft!=null&&(
+                <div className="text-7xl font-black text-amber-400 animate-pulse anim-pop leading-none">{cdLeft}</div>
+              )}
+
+              {/* Question box */}
+              {game?.buzzQuestion&&(
+                <div className="bg-zinc-800 border border-zinc-700 rounded-2xl px-4 py-3 text-white font-bold text-base anim-pop w-full text-center leading-snug">
+                  {game.buzzQuestion}
                 </div>
               )}
+
+              {/* Buzz order */}
               {buzzLog.length>0&&(
                 <div className="w-full space-y-1.5 anim-up">
-                  {buzzLog.map((b,i)=>{const tp=players.find(p=>p.id===b.playerId);const tt=teams.find(t=>t.id===b.teamId);return(
-                    <div key={i} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{background:i===0?`${tt?.color}25`:'#18181b',border:i===0?`1px solid ${tt?.color}55`:'1px solid #3f3f46'}}>
+                  {buzzLog.map((b,i)=>{const bp=players.find(p=>p.id===b.playerId);const bt=teams.find(t=>t.id===b.teamId);return(
+                    <div key={i} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{background:i===0?`${bt?.color}25`:'#18181b',border:`1px solid ${i===0?bt?.color+'55':'#3f3f46'}`}}>
                       <span className="font-black w-5 text-sm" style={{color:i===0?'#fbbf24':'#71717a'}}>{i+1}°</span>
-                      <span>{tp?.emoji}</span><span className="font-bold text-sm flex-1 text-white">{tp?.name}</span>
-                      <span className="text-xs font-bold" style={{color:tt?.color}}>{tt?.name}</span>
+                      <span>{bp?.emoji}</span><span className="font-bold text-sm flex-1 text-white">{bp?.name}</span>
+                      <span className="text-xs font-bold" style={{color:bt?.color}}>{bt?.name}</span>
                     </div>
                   );})}
                 </div>
               )}
+
+              {/* ── MOD INLINE CONTROLS ─────────────────────── */}
+              {isHost&&(
+                <div className="w-full space-y-2 border-t border-zinc-800 pt-2 mt-1">
+
+                  {/* CALL_UP: fetch question */}
+                  {phase==='CALL_UP'&&!game?.buzzQuestion&&(
+                    fetchingQ?(
+                      <div className="bg-zinc-900 border border-zinc-700 rounded-2xl px-4 py-3 text-center min-h-[48px] flex items-center justify-center">
+                        <span className={`text-sm font-black animate-pulse ${fetchStep>=3?'text-lime-400':'text-amber-400'}`}>
+                          {fetchStep===1?'🔀 Revolviendo las preguntas...'
+                           :fetchStep===2?'✋ Metiendo la mano...'
+                           :'🎉 ¡Listo!'}
+                        </span>
+                      </div>
+                    ):(
+                      <button onClick={handleFetchQuestion}
+                        className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-3 rounded-xl text-sm flex items-center justify-center gap-2">
+                        🎲 Obtener pregunta
+                      </button>
+                    )
+                  )}
+
+                  {/* CALL_UP: start countdown after question shown */}
+                  {phase==='CALL_UP'&&game?.buzzQuestion&&(
+                    <button onClick={startCountdown}
+                      className="btn-j w-full bg-red-600 hover:bg-red-500 text-white font-black py-3 rounded-xl text-sm flex items-center justify-center gap-2 shadow-[0_4px_0_#7f1d1d]">
+                      ⏱ Empezar countdown 5…4…3…
+                    </button>
+                  )}
+
+                  {/* BUZZER: correcto / incorrecto */}
+                  {phase==='BUZZER'&&buzzLog.length>0&&(
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={declareCorrect} className="btn-j bg-lime-600 hover:bg-lime-500 text-white font-black py-3 rounded-xl text-sm">✅ Correcto</button>
+                      <button onClick={declareIncorrect} className="btn-j bg-red-700 hover:bg-red-600 text-white font-black py-3 rounded-xl text-sm">❌ Incorrecto</button>
+                    </div>
+                  )}
+
+                </div>
+              )}
+
             </div>
           )}
 
@@ -1020,78 +1133,16 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
 
 // ── MODERATOR PANEL ───────────────────────────────────────────
 function ModPanel({game,roomId,players,teams,onClose,onLeave}){
-  const [buzzQ,setBuzzQ]=useState(game?.buzzQuestion||'');
+  const [buzzQ,setBuzzQ]=useState('');
   const phase=game?.phase||'CURTAIN';
   const roundIdx=game?.roundIdx||0;
   const buzzLog=([...(game?.buzzLog||[])]).sort((a,b)=>a.ts-b.ts);
 
-  // Auto-compute called players from round index
-  const getCalledPair=()=>{
-    const tc=game?.teamCount||2;
-    return TEAM_CATALOG.slice(0,tc).map(td=>{
-      const t=teams.find(t2=>t2.id===td.id);
-      if(!t)return null;
-      const tPlayers=players.filter(p=>p.teamId===t.id);
-      if(!tPlayers.length)return null;
-      return tPlayers[roundIdx%tPlayers.length];
-    }).filter(Boolean);
-  };
-
-  const callUpPlayers=async()=>{
-    const pair=getCalledPair();
-    await updateDoc(rRef(roomId),{buzzCalled:pair.map(p=>p.id),buzzLog:[],winnerTeamId:null,spinnerPlayerId:null,phase:'CALL_UP'});
-  };
-
-  const activateBuzzers=async()=>{
-    // Step 1: activate buzzers — players see red button, question hidden yet
-    await updateDoc(rRef(roomId),{phase:'BUZZER',buzzLog:[],buzzQuestion:''});
-  };
-
-  const revealQuestion=async()=>{
-    if(!buzzQ.trim())return;
-    // Step 2: show question on all screens simultaneously
-    await updateDoc(rRef(roomId),{buzzQuestion:buzzQ});
-  };
-
-  const assignSpinner=(teamId)=>{
-    const teamPlayers=players.filter(p=>p.teamId===teamId);
-    const cursor=(game?.spinCursors||{})[teamId]||0;
-    const spinner=teamPlayers[cursor%teamPlayers.length];
-    return {teamId, spinnerId: spinner?.id||null};
-  };
-
-  const declareCorrect=async()=>{
-    // First buzzer's team wins → go to spin
-    const first=buzzLog[0];
-    if(!first)return;
-    const {teamId,spinnerId}=assignSpinner(first.teamId);
-    await updateDoc(rRef(roomId),{winnerTeamId:teamId,spinnerPlayerId:spinnerId,phase:'SPIN_ASSIGN'});
-  };
-
-  const declareIncorrect=async()=>{
-    // Give the win to the second buzzer's team if they're from a different team
-    const first=buzzLog[0];
-    const alt=buzzLog.find(b=>b.teamId!==first?.teamId);
-    if(alt){
-      const {teamId,spinnerId}=assignSpinner(alt.teamId);
-      await updateDoc(rRef(roomId),{winnerTeamId:teamId,spinnerPlayerId:spinnerId,phase:'SPIN_ASSIGN'});
-    } else {
-      // Nobody else buzzed — strike for first team
-      const tid=first?.teamId;
-      if(tid==null)return;
-      const newStrikes={...(game?.teamStrikes||{}),[tid]:((game?.teamStrikes||{})[tid]||0)+1};
-      if(newStrikes[tid]>=3){
-        await updateDoc(rRef(roomId),{teamStrikes:newStrikes,accPts:0,roundIdx:roundIdx+1,phase:'CURTAIN'});
-      } else {
-        await updateDoc(rRef(roomId),{teamStrikes:newStrikes,roundIdx:roundIdx+1,phase:'CURTAIN'});
-      }
-    }
-  };
-
   const markResult=async(won)=>{
     const wt=game?.winnerTeamId;
     const newCursors={...(game?.spinCursors||{}),[wt]:((game?.spinCursors||{})[wt]||0)+1};
-    const clearMg={minigame:null,mgPhase:null,mgState:{}};
+    // clearMg: reset minigame state + clear buzzer state for next round
+    const clearMg={minigame:null,mgPhase:null,mgState:{},buzzCalled:[],buzzLog:[],buzzQuestion:'',buzzUnlockedAt:null};
     if(won){
       const newCW={...(game?.challengesWon||{}),[wt]:((game?.challengesWon||{})[wt]||0)+1};
       if(newCW[wt]>=5){
@@ -1136,85 +1187,18 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
             <span className="text-zinc-600 text-xs ml-2">· Ronda {roundIdx+1}</span>
           </div>
 
-          {/* CURTAIN → manual skip if animation didn't auto-advance */}
+          {/* CURTAIN → manual skip (fallback si la animación no avanzó) */}
           {phase==='CURTAIN'&&(
             <button onClick={()=>updateDoc(rRef(roomId),{phase:'CALL_UP'})}
               className="btn-j w-full bg-zinc-700 hover:bg-zinc-600 border border-zinc-600 text-zinc-300 font-bold py-3 rounded-xl text-sm">
-              ⏭ Skip cortinas → llamar jugadores
+              ⏭ Skip cortinas
             </button>
           )}
 
-          {/* CALL_UP setup */}
-          {(phase==='CURTAIN'||phase==='CALL_UP')&&(
-            <div className="space-y-2">
-              <div className="text-xs text-zinc-500 uppercase tracking-widest">Jugadores a llamar (Ronda {roundIdx+1})</div>
-              {getCalledPair().map((p)=>{
-                const t=teams.find(t2=>t2.id===p.teamId);
-                return(<div key={p.id} className="flex items-center gap-2 bg-zinc-800 rounded-xl px-3 py-2">
-                  <span>{p.emoji}</span><span className="font-bold text-sm flex-1">{p.name}</span>
-                  <span className="text-xs font-bold" style={{color:t?.color}}>{t?.name}</span>
-                </div>);
-              })}
-              <button onClick={callUpPlayers} className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-2.5 rounded-xl text-sm">
-                📢 Llamar al frente
-              </button>
-            </div>
-          )}
-
-          {/* CALL_UP → activate buzzers (no question yet) */}
-          {phase==='CALL_UP'&&(
-            <button onClick={activateBuzzers}
-              className="btn-j w-full bg-red-600 hover:bg-red-500 text-white font-black py-3 rounded-xl text-sm flex items-center justify-center gap-2">
-              🔴 Activar Buzzers
-            </button>
-          )}
-
-          {/* BUZZER — sub-step 1: pregunta no revelada → textarea + botón mostrar */}
-          {phase==='BUZZER'&&!game?.buzzQuestion&&(
-            <div className="space-y-2">
-              <div className="text-xs text-zinc-500 uppercase tracking-widest">Paso 2 — Mostrar pregunta</div>
-              <textarea rows={3} value={buzzQ} onChange={e=>setBuzzQ(e.target.value)}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 resize-none"
-                placeholder="Escribe la pregunta y muéstrala en pantalla..."/>
-              <button onClick={revealQuestion} disabled={!buzzQ.trim()}
-                className="btn-j w-full bg-amber-500 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-black py-2.5 rounded-xl text-sm">
-                👁 Mostrar pregunta a todos
-              </button>
-            </div>
-          )}
-
-          {/* BUZZER — sub-step 2: pregunta revelada → countdown + buzz order + correcto/incorrecto */}
-          {phase==='BUZZER'&&game?.buzzQuestion&&(
-            <div className="space-y-2">
-              <div className="text-xs text-zinc-400 bg-zinc-800 rounded-xl px-3 py-2 italic">"{game.buzzQuestion}"</div>
-              {/* Countdown launch */}
-              {!game?.buzzUnlockedAt&&(
-                <button onClick={()=>updateDoc(rRef(roomId),{buzzUnlockedAt:Date.now()+5500,buzzLog:[]})}
-                  className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-2.5 rounded-xl text-sm">
-                  ⏱ ¿Ready? — Iniciar cuenta 5...4...3...
-                </button>
-              )}
-              {game?.buzzUnlockedAt&&Date.now()<game.buzzUnlockedAt&&(
-                <div className="text-center text-amber-400 font-black text-2xl animate-pulse">Countdown activo...</div>
-              )}
-              <div className="text-xs text-zinc-500 uppercase tracking-widest mt-2">Orden de buzzers</div>
-              {buzzLog.length===0&&<div className="text-zinc-600 text-sm italic animate-pulse">Esperando buzzers...</div>}
-              {buzzLog.map((b,i)=>{
-                const p=players.find(pl=>pl.id===b.playerId);
-                const t=teams.find(t2=>t2.id===b.teamId);
-                const isFirst=i===0;
-                return(<div key={i} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{background:isFirst?`${t?.color}25`:'#27272a',border:isFirst?`1px solid ${t?.color}55`:'1px solid #3f3f46'}}>
-                  <span className="font-black w-4" style={{color:isFirst?'#fbbf24':'#71717a'}}>{i+1}°</span>
-                  <span>{p?.emoji}</span><span className="font-bold text-sm flex-1">{p?.name}</span>
-                  <span className="text-xs font-bold" style={{color:t?.color}}>{t?.name}</span>
-                </div>);
-              })}
-              {buzzLog.length>0&&(
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button onClick={declareCorrect} className="btn-j bg-lime-600 hover:bg-lime-500 text-white font-black py-3 rounded-xl text-sm">✅ Correcto</button>
-                  <button onClick={declareIncorrect} className="btn-j bg-red-700 hover:bg-red-600 text-white font-black py-3 rounded-xl text-sm">❌ Incorrecto</button>
-                </div>
-              )}
+          {/* CALL_UP / BUZZER — el flujo principal ya está inline en pantalla */}
+          {(phase==='CALL_UP'||phase==='BUZZER')&&(
+            <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl px-3 py-2.5 text-center">
+              <p className="text-zinc-500 text-xs">El flujo del buzzer está <span className="text-lime-400 font-bold">en pantalla</span> — no necesitas el panel aquí.</p>
             </div>
           )}
 
@@ -1358,9 +1342,9 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
                     if(!first)return;
                     const newScores={...(game?.teamScores||{})};
                     newScores[first.teamId]=(newScores[first.teamId]||0)+(game?.accPts||0);
-                    updateDoc(rRef(roomId),{teamScores:newScores,accPts:0,buzzQuestion:'',buzzUnlockedAt:null,buzzLog:[],challengesWon:{...Object.fromEntries(Object.keys(game?.challengesWon||{}).map(k=>[k,0]))},teamStrikes:{...(game?.teamStrikes||{}),[game?.winnerTeamId]:0},roundIdx:roundIdx+1,phase:'CURTAIN'});
+                    updateDoc(rRef(roomId),{teamScores:newScores,accPts:0,buzzQuestion:'',buzzUnlockedAt:null,buzzLog:[],buzzCalled:[],challengesWon:{...Object.fromEntries(Object.keys(game?.challengesWon||{}).map(k=>[k,0]))},teamStrikes:{...(game?.teamStrikes||{}),[game?.winnerTeamId]:0},roundIdx:roundIdx+1,phase:'CURTAIN'});
                   }} className="btn-j bg-lime-600 text-white font-black py-2.5 rounded-xl text-sm">✅ 1° correcto</button>
-                  <button onClick={()=>updateDoc(rRef(roomId),{buzzQuestion:'',buzzUnlockedAt:null,buzzLog:[],accPts:0,roundIdx:roundIdx+1,phase:'CURTAIN'})}
+                  <button onClick={()=>updateDoc(rRef(roomId),{buzzQuestion:'',buzzUnlockedAt:null,buzzLog:[],buzzCalled:[],accPts:0,roundIdx:roundIdx+1,phase:'CURTAIN'})}
                     className="btn-j bg-zinc-700 text-zinc-300 font-bold py-2.5 rounded-xl text-sm">⏭ Nadie supo</button>
                 </div>
               )}
