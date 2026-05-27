@@ -56,6 +56,8 @@
     .scroll-y::-webkit-scrollbar{width:4px}
     .scroll-y::-webkit-scrollbar-thumb{background:#3f3f46;border-radius:4px}
     input:-webkit-autofill{-webkit-box-shadow:0 0 0 1000px #27272a inset;-webkit-text-fill-color:#fff}
+    @keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-5px)}40%,80%{transform:translateX(5px)}}
+    .anim-shake{animation:shake .4s ease-in-out;}
   </style>
 </head>
 <body class="bg-zinc-950 text-white select-none">
@@ -150,6 +152,39 @@ const MOCK = {
     {q:'¿Cómo se dice "beer" en español?',                         opts:['Café','Cerveza','Jugo','Agua'],             ans:1},
     {q:'La palabra "café" es una palabra...',                      opts:['Aguda','Grave','Esdrújula','Monosílaba'],   ans:0},
   ],
+  anagrama:[
+    {wordEs:'perro',   wordEn:'dog',      emoji:'🐕', hint:'loyal pet'},
+    {wordEs:'gato',    wordEn:'cat',      emoji:'🐱', hint:'says meow'},
+    {wordEs:'casa',    wordEn:'house',    emoji:'🏠', hint:'where you live'},
+    {wordEs:'agua',    wordEn:'water',    emoji:'💧', hint:'you drink it'},
+    {wordEs:'libro',   wordEn:'book',     emoji:'📚', hint:'you read it'},
+    {wordEs:'mesa',    wordEn:'table',    emoji:'🪑', hint:'you eat here'},
+    {wordEs:'silla',   wordEn:'chair',    emoji:'🪑', hint:'you sit on it'},
+    {wordEs:'carro',   wordEn:'car',      emoji:'🚗', hint:'you drive it'},
+    {wordEs:'árbol',   wordEn:'tree',     emoji:'🌳', hint:'has leaves'},
+    {wordEs:'playa',   wordEn:'beach',    emoji:'🏖️', hint:'sand and waves'},
+    {wordEs:'noche',   wordEn:'night',    emoji:'🌙', hint:'the dark time'},
+    {wordEs:'comida',  wordEn:'food',     emoji:'🍽️', hint:'you eat it'},
+    {wordEs:'ciudad',  wordEn:'city',     emoji:'🏙️', hint:'urban area'},
+    {wordEs:'escuela', wordEn:'school',   emoji:'🏫', hint:'where you study'},
+    {wordEs:'verde',   wordEn:'green',    emoji:'💚', hint:'a color'},
+    {wordEs:'rojo',    wordEn:'red',      emoji:'❤️', hint:'color of fire'},
+    {wordEs:'amigo',   wordEn:'friend',   emoji:'🤝', hint:'you trust them'},
+    {wordEs:'música',  wordEn:'music',    emoji:'🎵', hint:'you listen to it'},
+  ],
+};
+
+// ── Scramble helper (used in goToChallenge for Group Anagram) ──
+const makeScramble=(word)=>{
+  const letters=word.toUpperCase().split('');
+  let shuffled=[...letters];
+  if(!letters.every(l=>l===letters[0])){
+    let attempts=0;
+    while(shuffled.join('')===letters.join('')&&attempts<10){
+      shuffled=shuffled.sort(()=>Math.random()-.5);attempts++;
+    }
+  }
+  return shuffled;
 };
 
 // ── Room factory ──────────────────────────────────────────────
@@ -165,6 +200,7 @@ const mkRoom = (hostName,hostEmoji,hostRole,tc=2) => ({
   buzzCalled:[],          // [playerId, ...]  — one per team
   buzzLog:[],             // [{playerId,teamId,ts}]
   buzzUnlockedAt:null,    // ms timestamp — null=locked, past=open
+  questionRevealAt:null,  // ms timestamp — when question becomes visible to non-hosts
   activeBuzzerIdx:0,      // which buzzLog entry is being evaluated
   buzzShowOptions:false,  // show MC options when retrying
   winnerTeamId:null,
@@ -828,6 +864,178 @@ function MgAcentos({game,roomId,iAmSpinner}){
   );
 }
 
+// ── Minigame: Group Anagram ───────────────────────────────────
+function MgAnagram({game,roomId,localId,players,teams}){
+  const s=game?.mgState||{};
+  const assignments=s.assignments||{};
+  const progress=s.progress||{};
+  const winner=s.winner??null;
+  const tc=game?.teamCount||2;
+
+  const myAssignment=assignments[localId];
+  const myProgress=progress[localId];
+  const isDone=myProgress?.status==='correct';
+
+  const [placed,setPlaced]=useState([]);
+  const [available,setAvailable]=useState([]);
+  const [shake,setShake]=useState(false);
+  const [localDone,setLocalDone]=useState(false);
+  const initialized=useRef(false);
+
+  // Init puzzle once from Firestore assignment
+  useEffect(()=>{
+    if(!myAssignment||initialized.current)return;
+    initialized.current=true;
+    setAvailable(myAssignment.scrambled.map((c,i)=>({id:`a${i}`,char:c})));
+    setPlaced(Array(myAssignment.wordEs.length).fill(null));
+  },[myAssignment]);
+
+  const addLetter=(idx)=>{
+    const firstEmpty=placed.findIndex(sl=>sl===null);
+    if(firstEmpty===-1)return;
+    const letter=available[idx];
+    setPlaced(prev=>{const n=[...prev];n[firstEmpty]=letter;return n;});
+    setAvailable(prev=>prev.filter((_,i)=>i!==idx));
+  };
+
+  const removeLetter=(idx)=>{
+    const letter=placed[idx];
+    if(!letter)return;
+    setPlaced(prev=>{const n=[...prev];n[idx]=null;return n;});
+    setAvailable(prev=>[...prev,letter]);
+  };
+
+  const checkAnswer=async()=>{
+    const guess=placed.map(l=>l?.char||'').join('');
+    const target=myAssignment.wordEs.toUpperCase();
+    if(guess!==target){
+      setShake(true);
+      setTimeout(()=>setShake(false),500);
+      // Reset letters
+      setTimeout(()=>{
+        setAvailable(myAssignment.scrambled.map((c,i)=>({id:`a${i}x${Date.now()}`,char:c})));
+        setPlaced(Array(myAssignment.wordEs.length).fill(null));
+      },600);
+      return;
+    }
+    setLocalDone(true);
+    const me=players.find(p=>p.id===localId);
+    const myTeamId=me?.teamId;
+    await runTransaction(db,async txn=>{
+      const snap=await txn.get(rRef(roomId));
+      const d=snap.data();
+      const st=d.mgState||{};
+      const newProgress={...(st.progress||{}),[localId]:{status:'correct'}};
+      const myTeamPlayers=(d.players||[]).filter(p=>p.teamId===myTeamId);
+      const allDone=myTeamPlayers.every(p=>newProgress[p.id]?.status==='correct');
+      const newSt={...st,progress:newProgress};
+      if(allDone&&!st.teamDone?.[myTeamId]){
+        newSt.teamDone={...(st.teamDone||{}),[myTeamId]:Date.now()};
+        if(st.winner==null){
+          newSt.winner=myTeamId;
+          newSt.result=myTeamId===d.winnerTeamId?'win':'strike';
+        }
+      }
+      txn.update(rRef(roomId),{mgState:newSt});
+    });
+  };
+
+  // Progress board — shows for host, completed players, and non-players
+  const progressBoard=(
+    <div className="w-full space-y-2 px-1">
+      {winner!=null&&(
+        <div className="text-center font-black text-sm py-1 anim-pop" style={{color:teams.find(t=>t.id===winner)?.color||'#a3e635'}}>
+          🏆 ¡{teams.find(t=>t.id===winner)?.name} terminó primero!
+        </div>
+      )}
+      <div className={`grid gap-2 ${tc<=2?'grid-cols-2':'grid-cols-2'}`}>
+        {teams.slice(0,tc).map(t=>{
+          const tPs=players.filter(p=>p.teamId===t.id);
+          const doneAt=s.teamDone?.[t.id];
+          const isWinner=t.id===winner;
+          return(
+            <div key={t.id} className="rounded-xl p-2 transition-all"
+              style={{background:`${t.color}15`,border:`1.5px solid ${isWinner?t.color:t.color+'33'}`}}>
+              <div className="text-xs font-black text-center mb-1.5" style={{color:t.color}}>{t.name}</div>
+              <div className="space-y-1">
+                {tPs.map(p=>{
+                  const done=(progress[p.id]?.status==='correct')||(p.id===localId&&localDone);
+                  return(
+                    <div key={p.id} className="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-all"
+                      style={{background:done?`${t.color}25`:'#1c1c1e'}}>
+                      <span className="text-xs">{done?'✅':'⏳'}</span>
+                      <span className="text-xs">{p.emoji}</span>
+                      <span className="text-xs font-bold truncate flex-1" style={{color:done?'#fff':'#71717a'}}>{p.name}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {doneAt&&<div className="text-xs text-center mt-1.5 font-black" style={{color:isWinner?t.color:'#71717a'}}>{isWinner?'🥇 Ganadores':'✓ Completaron'}</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  // Host / observer (no assignment)
+  if(!myAssignment) return(
+    <div className="flex flex-col items-center gap-3 p-4 w-full">
+      <div className="text-xs font-black text-zinc-400 uppercase tracking-widest">📊 Progreso en tiempo real</div>
+      {progressBoard}
+    </div>
+  );
+
+  // Done — show completed word + progress board
+  if(isDone||localDone) return(
+    <div className="flex flex-col items-center gap-3 p-4 w-full">
+      <div className="bg-lime-900/40 border border-lime-600 rounded-2xl px-5 py-3 text-center anim-pop">
+        <div className="text-3xl mb-1">{myAssignment.emoji}</div>
+        <div className="text-lime-400 font-black text-2xl">{myAssignment.wordEs}</div>
+        <div className="text-zinc-400 text-xs mt-0.5">{myAssignment.wordEn}</div>
+      </div>
+      <div className="text-xs font-bold text-lime-400 animate-pulse">✅ ¡Correcto! Esperando al equipo...</div>
+      {progressBoard}
+    </div>
+  );
+
+  // Playing — show puzzle
+  const allPlaced=placed.every(l=>l!==null);
+  return(
+    <div className="flex flex-col items-center gap-3 p-4 w-full max-w-sm mx-auto">
+      {/* Clue */}
+      <div className="text-center">
+        <div className="text-4xl mb-1">{myAssignment.emoji}</div>
+        <div className="text-white font-black text-xl">{myAssignment.wordEn}</div>
+        <div className="text-zinc-500 text-xs">Forma la palabra en español</div>
+      </div>
+      {/* Input slots */}
+      <div className={`flex gap-2 justify-center flex-wrap ${shake?'anim-shake':''}`}>
+        {placed.map((l,i)=>(
+          <button key={i} onClick={()=>removeLetter(i)}
+            className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-base border-2 transition-all ${l?'bg-amber-500 border-amber-400 text-black hover:bg-amber-400':'bg-zinc-800 border-zinc-700 border-dashed text-zinc-600'}`}>
+            {l?.char||''}
+          </button>
+        ))}
+      </div>
+      {/* Available letter pool */}
+      <div className="flex gap-2 flex-wrap justify-center min-h-[44px]">
+        {available.map((l,i)=>(
+          <button key={l.id} onClick={()=>addLetter(i)}
+            className="btn-j w-10 h-10 rounded-xl bg-zinc-700 hover:bg-zinc-600 border border-zinc-600 text-white font-black text-sm flex items-center justify-center">
+            {l.char}
+          </button>
+        ))}
+      </div>
+      {/* Verify */}
+      <button onClick={checkAnswer} disabled={!allPlaced}
+        className={`btn-j w-full py-3 rounded-xl font-black text-sm ${allPlaced?'bg-amber-500 hover:bg-amber-400 text-black shadow-[0_4px_0_#92400e]':'bg-zinc-700 text-zinc-500'}`}>
+        {allPlaced?'✅ Verificar':'Coloca todas las letras'}
+      </button>
+    </div>
+  );
+}
+
 // ── Minigame: Alphabet Pyramid ────────────────────────────────
 function MgAlphabet({game}){
   const s=game?.mgState||{};
@@ -969,6 +1177,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   const [showCurtain,setShowCurtain]=useState(game?.phase==='CURTAIN');
   const [cdLeft,setCdLeft]=useState(null); // countdown display (seconds)
   const [buzzOpen,setBuzzOpen]=useState(false); // true when buzzUnlockedAt has truly expired
+  const [questionVisible,setQuestionVisible]=useState(false); // true after questionRevealAt fires
   const [fetchingQ,setFetchingQ]=useState(false);
   const [fetchStep,setFetchStep]=useState(0);
 
@@ -986,21 +1195,34 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   useEffect(()=>{if(game?.phase==='CURTAIN')setShowCurtain(true);},[game?.phase]);
 
   // Countdown display (5→0) + buzzOpen precise unlock
+  // New buzz flow: buzzUnlockedAt = Date.now() (immediate), questionRevealAt = +5.5s
+  // Countdown ticks toward questionRevealAt (if set) else toward buzzUnlockedAt (HEIST legacy)
   useEffect(()=>{
     setBuzzOpen(false);
     setCdLeft(null);
     if(!game?.buzzUnlockedAt)return;
-    // Countdown display — updates every 100ms
+    // buzzOpen fires when buzzUnlockedAt expires (immediate in new flow, 5s in HEIST)
+    const unlockDelay=game.buzzUnlockedAt-Date.now();
+    const unlockTid=unlockDelay>0?setTimeout(()=>setBuzzOpen(true),unlockDelay):null;
+    if(unlockDelay<=0)setBuzzOpen(true);
+    // Countdown display counts toward questionRevealAt (new) or buzzUnlockedAt (legacy)
+    const countTarget=game?.questionRevealAt??game.buzzUnlockedAt;
     const iv=setInterval(()=>{
-      const left=Math.max(0,Math.ceil((game.buzzUnlockedAt-Date.now())/1000));
+      const left=Math.max(0,Math.ceil((countTarget-Date.now())/1000));
       setCdLeft(left>0?left:null);
     },100);
-    // Precise unlock — fires at the exact ms buzzUnlockedAt expires
-    const delay=game.buzzUnlockedAt-Date.now();
-    const tid=delay>0?setTimeout(()=>setBuzzOpen(true),delay):null;
-    if(delay<=0)setBuzzOpen(true); // already past (late join, etc.)
-    return()=>{clearInterval(iv);if(tid)clearTimeout(tid);};
-  },[game?.buzzUnlockedAt]);
+    return()=>{clearInterval(iv);if(unlockTid)clearTimeout(unlockTid);};
+  },[game?.buzzUnlockedAt,game?.questionRevealAt]);
+
+  // Question reveal for non-hosts — fires at questionRevealAt
+  useEffect(()=>{
+    setQuestionVisible(false);
+    if(!game?.questionRevealAt)return;
+    const delay=game.questionRevealAt-Date.now();
+    if(delay<=0){setQuestionVisible(true);return;}
+    const t=setTimeout(()=>setQuestionVisible(true),delay);
+    return()=>clearTimeout(t);
+  },[game?.questionRevealAt]);
 
   // Confetti + wheelSettled on ALL devices when wheel lands
   useEffect(()=>{
@@ -1053,7 +1275,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
       const tPs=players.filter(p=>p.teamId===t.id);if(!tPs.length)return null;
       return tPs[roundIdx%tPs.length];
     }).filter(Boolean);
-    await updateDoc(rRef(roomId),{buzzCalled:pair.map(p=>p.id),buzzLog:[],winnerTeamId:null,spinnerPlayerId:null,buzzQuestion:'',buzzUnlockedAt:null,activeBuzzerIdx:0,buzzShowOptions:false});
+    await updateDoc(rRef(roomId),{buzzCalled:pair.map(p=>p.id),buzzLog:[],winnerTeamId:null,spinnerPlayerId:null,buzzQuestion:'',buzzUnlockedAt:null,questionRevealAt:null,activeBuzzerIdx:0,buzzShowOptions:false});
   };
 
   const handleFetchQuestion=()=>{
@@ -1069,7 +1291,8 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   };
 
   const startCountdown=async()=>{
-    await updateDoc(rRef(roomId),{phase:'BUZZER',buzzUnlockedAt:Date.now()+5500,buzzLog:[],activeBuzzerIdx:0});
+    // New flow: buttons unlock IMMEDIATELY, question reveals after 5s countdown
+    await updateDoc(rRef(roomId),{phase:'BUZZER',buzzUnlockedAt:Date.now(),questionRevealAt:Date.now()+5500,buzzLog:[],activeBuzzerIdx:0});
   };
 
   const assignSpinner=teamId=>{
@@ -1092,7 +1315,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
     const newCursors={...(game?.spinCursors||{}),[winner.teamId]:nextIdx};
     await updateDoc(rRef(roomId),{
       winnerTeamId:winner.teamId,spinnerPlayerId:spinnerId,spinCursors:newCursors,
-      phase:'SPIN_ASSIGN',buzzQuestion:'',buzzUnlockedAt:null,activeBuzzerIdx:0,
+      phase:'SPIN_ASSIGN',buzzQuestion:'',buzzUnlockedAt:null,questionRevealAt:null,activeBuzzerIdx:0,
       spinCount:0,spinTarget:null,minigame:null,
     });
   };
@@ -1105,14 +1328,14 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   const retryWithOptions=async()=>{
     await updateDoc(rRef(roomId),{
       buzzLog:[],activeBuzzerIdx:0,buzzShowOptions:true,
-      phase:'CALL_UP',buzzUnlockedAt:null,
+      phase:'CALL_UP',buzzUnlockedAt:null,questionRevealAt:null,
     });
   };
 
   const noAnswerReset=async()=>{
     await updateDoc(rRef(roomId),{
       buzzLog:[],activeBuzzerIdx:0,buzzShowOptions:false,
-      phase:'CALL_UP',buzzQuestion:'',buzzUnlockedAt:null,
+      phase:'CALL_UP',buzzQuestion:'',buzzUnlockedAt:null,questionRevealAt:null,
     });
   };
 
@@ -1120,7 +1343,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
   const quickResult=async(won)=>{
     const wt=game?.winnerTeamId;if(wt==null)return;
     const newCursors={...(game?.spinCursors||{}),[wt]:((game?.spinCursors||{})[wt]||0)+1};
-    const clearMg={minigame:null,mgPhase:null,mgState:{},buzzCalled:[],buzzLog:[],buzzQuestion:'',buzzUnlockedAt:null};
+    const clearMg={minigame:null,mgPhase:null,mgState:{},buzzCalled:[],buzzLog:[],buzzQuestion:'',buzzUnlockedAt:null,questionRevealAt:null};
     const tPlayers=players.filter(p=>p.teamId===wt);
     if(won){
       const newCW={...(game?.challengesWon||{}),[wt]:((game?.challengesWon||{})[wt]||0)+1};
@@ -1158,6 +1381,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
       case 'acentos':  return <MgAcentos    {...props}/>;
       case 'piramide': return <MgAlphabet   game={game}/>;
       case 'vocab':    return <MgVocab      {...props}/>;
+      case 'anagrama': return <MgAnagram    {...props} players={players} teams={teams}/>;
       default: return <div className="text-zinc-400 text-sm font-bold p-4 text-center">Mini-juego: <span className="text-white">{mg?.label}</span><br/><span className="text-xs text-zinc-600">Módulo en construcción — el moderador conduce en físico</span></div>;
     }
   };
@@ -1263,10 +1487,8 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                       ):(
                         <button onClick={canClick?handleBuzz:undefined} disabled={!canClick}
                           className={`btn-j w-16 h-16 rounded-full flex items-center justify-center text-2xl transition-all
-                            ${canClick?'bg-red-600 hover:bg-red-500 buzz-btn shadow-[0_4px_0_#7f1d1d]':
-                              isMe&&phase==='BUZZER'&&!buzzUnlocked?'bg-zinc-800 border-2 border-amber-400/60 animate-pulse':
-                              'bg-zinc-800 border-2 border-zinc-700'}`}>
-                          {canClick?'🔴':phase==='BUZZER'&&isMe?'⏳':'🔒'}
+                            ${canClick?'bg-red-600 hover:bg-red-500 buzz-btn shadow-[0_4px_0_#7f1d1d]':'bg-zinc-800 border-2 border-zinc-700'}`}>
+                          {canClick?'🔴':'🔒'}
                         </button>
                       )}
                     </div>
@@ -1279,11 +1501,18 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                 <div className="text-7xl font-black text-amber-400 animate-pulse anim-pop leading-none">{cdLeft}</div>
               )}
 
-              {/* Question box */}
-              {game?.buzzQuestion&&(
+              {/* Question box — host always sees it; non-hosts see it only after questionRevealAt fires */}
+              {game?.buzzQuestion&&(isHost||questionVisible)&&(
                 <div className="bg-zinc-800 border border-zinc-700 rounded-2xl px-4 py-3 text-white font-bold text-base anim-pop w-full text-center leading-snug">
                   {game.buzzQuestion}
+                  {isHost&&!questionVisible&&game?.questionRevealAt&&(
+                    <div className="text-xs text-zinc-500 mt-1 font-normal">🔒 Solo tú ves esto</div>
+                  )}
                 </div>
+              )}
+              {/* Hint for non-hosts while question is hidden */}
+              {game?.buzzQuestion&&!isHost&&!questionVisible&&(
+                <div className="text-xs text-center font-bold text-zinc-500 animate-pulse">✓ Pregunta lista — espera la señal...</div>
               )}
 
               {/* Buzz order */}
@@ -1330,11 +1559,11 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                     )
                   )}
 
-                  {/* CALL_UP: start countdown after question shown */}
+                  {/* CALL_UP: activate buzz + start countdown (buttons unlock immediately, question reveals at 0) */}
                   {phase==='CALL_UP'&&game?.buzzQuestion&&(
                     <button onClick={startCountdown}
                       className="btn-j w-full bg-red-600 hover:bg-red-500 text-white font-black py-3 rounded-xl text-sm flex items-center justify-center gap-2 shadow-[0_4px_0_#7f1d1d]">
-                      ⏱ Empezar countdown 5…4…3…
+                      🔴 Activar buzz + cuenta regresiva
                     </button>
                   )}
 
@@ -1396,6 +1625,19 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
               else if(gid==='acentos'){
                 const shuffled=[...MOCK.acentos].sort(()=>Math.random()-0.5).slice(0,9);
                 Object.assign(initState,{cards:shuffled,flipped:null,answers:{},results:{},errors:0,correct:0,cardTimer:null,liveSel:null});
+              }
+              else if(gid==='anagrama'){
+                // Assign one word per player across ALL teams simultaneously
+                const allPlayers=players;
+                const wordPool=[...MOCK.anagrama].sort(()=>Math.random()-.5);
+                const assignments={};
+                allPlayers.forEach((p,i)=>{
+                  const w=wordPool[i%wordPool.length];
+                  assignments[p.id]={wordEs:w.wordEs,wordEn:w.wordEn,emoji:w.emoji,hint:w.hint,scrambled:makeScramble(w.wordEs)};
+                });
+                const progress={};
+                allPlayers.forEach(p=>{progress[p.id]={status:'playing'};});
+                Object.assign(initState,{assignments,progress,winner:null,teamDone:{}});
               }
               await updateDoc(rRef(roomId),{phase:'MINIGAME',mgPhase:'ACTIVE',mgState:initState,accPts:(game?.accPts||0)+10});
             };
@@ -1617,7 +1859,7 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
     const wt=game?.winnerTeamId;
     const newCursors={...(game?.spinCursors||{}),[wt]:((game?.spinCursors||{})[wt]||0)+1};
     // clearMg: reset minigame state + clear buzzer state for next round
-    const clearMg={minigame:null,mgPhase:null,mgState:{},buzzCalled:[],buzzLog:[],buzzQuestion:'',buzzUnlockedAt:null};
+    const clearMg={minigame:null,mgPhase:null,mgState:{},buzzCalled:[],buzzLog:[],buzzQuestion:'',buzzUnlockedAt:null,questionRevealAt:null};
     if(won){
       const newCW={...(game?.challengesWon||{}),[wt]:((game?.challengesWon||{})[wt]||0)+1};
       if(newCW[wt]>=5){
