@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Jeopardy! | Periplo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
+  <script type="importmap">
+  {
+    "imports": {
+      "react":             "https://esm.sh/react@18.2.0",
+      "react-dom/client":  "https://esm.sh/react-dom@18.2.0/client",
+      "firebase/app":      "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+      "firebase/firestore":"https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js",
+      "canvas-confetti":   "https://esm.sh/canvas-confetti@1.6.0"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    (function(){
+      function setH(){document.documentElement.style.setProperty('--app-h',window.innerHeight+'px');}
+      setH();window.addEventListener('resize',setH,{passive:true});
+    })();
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800;900&display=swap');
+    html,body{font-family:'Plus Jakarta Sans',sans-serif;height:100vh;height:100dvh;height:var(--app-h,100dvh);overflow:hidden;overscroll-behavior:contain;touch-action:manipulation;background:#030712;}
+    button,a{user-select:none;-webkit-user-select:none;}
+    .btn-j{transition:transform .12s cubic-bezier(.4,0,.2,1),filter .12s;}
+    .btn-j:active:not(:disabled){transform:scale(.91);}
+    .btn-j:hover:not(:disabled){filter:brightness(1.12);}
+
+    @keyframes pop-in   {0%{transform:scale(.3) rotate(-8deg);opacity:0}70%{transform:scale(1.07)}100%{transform:scale(1);opacity:1}}
+    @keyframes slide-up {from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+    @keyframes float    {0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
+    @keyframes shake    {0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-7px)}40%,80%{transform:translateX(7px)}}
+    @keyframes glow-pulse{0%,100%{box-shadow:0 0 18px rgba(251,191,36,.4)}50%{box-shadow:0 0 42px rgba(251,191,36,.85),0 0 80px rgba(251,191,36,.18)}}
+    @keyframes twinkle  {0%{opacity:.12}100%{opacity:.55}}
+    @keyframes score-pop{0%{transform:scale(1)}45%{transform:scale(1.45)}100%{transform:scale(1)}}
+    @keyframes correct-bg{0%,100%{background:rgba(5,46,22,.98)}35%{background:rgba(21,128,61,.5)}}
+    @keyframes wrong-bg  {0%,100%{background:rgba(3,7,18,.98)}35%{background:rgba(185,28,28,.4)}}
+    @keyframes curtain-l {from{transform:translateX(0)}to{transform:translateX(-102%)}}
+    @keyframes curtain-r {from{transform:translateX(0)}to{transform:translateX(102%)}}
+
+    .anim-pop    {animation:pop-in    .42s cubic-bezier(.34,1.56,.64,1) both}
+    .anim-up     {animation:slide-up  .3s ease both}
+    .anim-float  {animation:float     3s ease-in-out infinite}
+    .anim-shake  {animation:shake     .5s ease-in-out}
+    .anim-glow   {animation:glow-pulse 1.8s ease-in-out infinite}
+    .anim-correct{animation:correct-bg .9s ease-in-out}
+    .anim-wrong  {animation:wrong-bg   .9s ease-in-out}
+    .star        {position:absolute;border-radius:50%;background:#fff;animation:twinkle 3s ease-in-out infinite alternate;}
+
+    /* Jeopardy board */
+    .board-cell {
+      background:linear-gradient(160deg,#1e3a8a 0%,#1d4ed8 55%,#2563eb 100%);
+      border:2px solid rgba(99,148,255,.28);
+      transition:all .18s;
+    }
+    .board-cell:hover:not(.revealed):not(:disabled){
+      background:linear-gradient(160deg,#1d4ed8 0%,#3b82f6 55%,#60a5fa 100%);
+      border-color:rgba(251,191,36,.6);
+      transform:translateY(-2px);
+      box-shadow:0 8px 24px rgba(37,99,235,.4);
+    }
+    .board-cell.revealed {background:rgba(15,23,42,.7);border-color:rgba(30,58,138,.2);cursor:not-allowed;}
+    .board-cell.active   {border-color:#fbbf24;}
+    .cat-header {background:linear-gradient(180deg,#0a1128 0%,#0f1f3d 100%);border-bottom:2px solid rgba(251,191,36,.55);}
+
+    .scroll-y{overflow-y:auto;scrollbar-width:thin;scrollbar-color:#1e3a8a transparent;}
+    .scroll-y::-webkit-scrollbar{width:4px;}
+    .scroll-y::-webkit-scrollbar-thumb{background:#1e3a8a;border-radius:4px;}
+    input:-webkit-autofill{-webkit-box-shadow:0 0 0 1000px #0f172a inset;-webkit-text-fill-color:#fff;}
+  </style>
+</head>
+<body class="bg-[#030712] text-white select-none">
+<div id="root" class="h-full w-full"></div>
+
+<script type="text/babel" data-type="module">
+import React,{useState,useEffect,useRef,useCallback} from 'react';
+import {createRoot} from 'react-dom/client';
+import {initializeApp} from 'firebase/app';
+import {getFirestore,doc,getDoc,setDoc,updateDoc,onSnapshot,runTransaction} from 'firebase/firestore';
+import confetti from 'canvas-confetti';
+
+// ── Firebase ──────────────────────────────────────────────────
+const fbApp = initializeApp({
+  apiKey:"AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+  authDomain:"proyecto-periplo.firebaseapp.com",
+  projectId:"proyecto-periplo",
+  storageBucket:"proyecto-periplo.firebasestorage.app",
+  messagingSenderId:"236795998392",
+  appId:"1:236795998392:web:0da24b4f018611b55c844d"
+},'jeopardy');
+const db = getFirestore(fbApp);
+const rRef = id => doc(db,'jeopardy-rooms',id);
+
+// ── URL params ────────────────────────────────────────────────
+const P        = new URLSearchParams(window.location.search);
+const IS_JOIN  = P.get('join') === 'true';
+const URL_CODE = P.get('code') || '';
+const QUIZ_ID  = P.get('id')   || '';
+const QUIZ_UID = P.get('uid')  || 'teacher_builder_001';
+
+// ── Constants ─────────────────────────────────────────────────
+const PTS = [100, 200, 300, 400, 500];
+
+const CAT_META = {
+  multipleChoice:  {label:'Multiple Choice', emoji:'📝', auto:true },
+  dragDrop:        {label:'Fill the Gap',    emoji:'🧩', auto:true },
+  oddOneOut:       {label:'Odd One Out',     emoji:'🎯', auto:true },
+  unscramble:      {label:'Unscramble',      emoji:'🔤', auto:true },
+  fillBlank:       {label:'Fill Blank',      emoji:'✏️', auto:false},
+  matching:        {label:'Matching',        emoji:'🔗', auto:false},
+  errorCorrection: {label:'Fix the Error',  emoji:'🔧', auto:false},
+  speaking:        {label:'Speaking',        emoji:'🎤', auto:false},
+  listening:       {label:'Listening',       emoji:'🎧', auto:false},
+  roleplay:        {label:'Roleplay',        emoji:'🎭', auto:false},
+};
+
+const TEAMS = [
+  {id:0, name:'Team Red',   color:'#ef4444', bg:'#450a0a', emoji:'🔴'},
+  {id:1, name:'Team Blue',  color:'#3b82f6', bg:'#1e3a5f', emoji:'🔵'},
+  {id:2, name:'Team Green', color:'#22c55e', bg:'#052e16', emoji:'🟢'},
+  {id:3, name:'Team Gold',  color:'#eab308', bg:'#422006', emoji:'🌟'},
+];
+
+const AVATARS = ['👸','🤴','🦄','🐉','🦁','🐯','🦊','🐺','🐼','🦋','🦅','🦚','🐬','🦈','🐲','🧙','🧝','🧜','🤓','😎','🥷','🎸','🏆','👑','⚡','🔥','🌙','🌈','💎','🚀'];
+
+// ── Helpers ───────────────────────────────────────────────────
+const baseUrl    = () => window.location.href.split('?')[0];
+const studentUrl = (code='') => {
+  const sp = new URLSearchParams({join:'true'});
+  if(code)    sp.set('code',code);
+  if(QUIZ_ID) sp.set('id',QUIZ_ID);
+  if(QUIZ_UID !== 'teacher_builder_001') sp.set('uid',QUIZ_UID);
+  return `${baseUrl()}?${sp.toString()}`;
+};
+
+const mkToast = (set,msg,ms=2400) => {set(msg);setTimeout(()=>set(''),ms);};
+const fireConfetti = () => confetti({particleCount:200,spread:90,origin:{y:0.55},colors:['#fbbf24','#3b82f6','#22c55e','#ef4444','#a855f7']});
+const buildBoard = (content) => {
+  const cats = Object.keys(CAT_META).filter(k => (content?.[k]?.length||0) > 0).slice(0,6);
+  return {categories:cats, revealed:{}, active:null};
+};
+const mkRoom = (hostName,hostEmoji,tc,quizId) => ({
+  status:'LOBBY', hostName, hostEmoji, teamCount:tc, quizId,
+  teams:  TEAMS.slice(0,tc).map(t=>({...t,players:[]})),
+  players:[],
+  teamScores: Object.fromEntries(TEAMS.slice(0,tc).map(t=>[t.id,0])),
+  board:  {categories:[],revealed:{},active:null},
+  createdAt:Date.now(),
+});
+
+// ── Decorative stars ──────────────────────────────────────────
+function Stars(){
+  const s = useRef(Array.from({length:28},(_,i)=>({
+    id:i, x:Math.random()*100, y:Math.random()*100,
+    sz:Math.random()*2+0.8, delay:Math.random()*3,
+  }))).current;
+  return(
+    <div className="absolute inset-0 pointer-events-none overflow-hidden">
+      {s.map(x=>(
+        <div key={x.id} className="star" style={{
+          left:`${x.x}%`,top:`${x.y}%`,
+          width:`${x.sz}px`,height:`${x.sz}px`,
+          animationDelay:`${x.delay}s`,
+        }}/>
+      ))}
+    </div>
+  );
+}
+
+function Toast({msg}){
+  return msg?(
+    <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[400] bg-white text-black px-6 py-3 rounded-full font-black shadow-2xl anim-pop border-4 border-amber-400 whitespace-nowrap text-sm">
+      {msg}
+    </div>
+  ):null;
+}
+
+function QrModal({url,onClose}){
+  const qr=`https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(url)}&bgcolor=030712&color=ffffff&qzone=2`;
+  return(
+    <div className="fixed inset-0 z-[200] bg-black/85 flex items-center justify-center p-6" onClick={onClose}>
+      <div className="bg-slate-900 border-2 border-amber-500 rounded-3xl p-8 text-center anim-pop max-w-xs w-full" onClick={e=>e.stopPropagation()}>
+        <div className="text-xl font-black mb-3">📱 Scan to Join</div>
+        <img src={qr} alt="QR" className="rounded-2xl mx-auto w-56 h-56 border-4 border-slate-800"/>
+        <p className="mt-4 text-xs text-slate-500 font-mono break-all">{url}</p>
+        <button onClick={onClose} className="btn-j mt-4 w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl">Close</button>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// SCREENS: HOME
+// ════════════════════════════════════════════════════════════════
+function ScreenHome({onCreate,onJoin,quizTitle}){
+  const [code,setCode]=useState(URL_CODE);
+  const [copied,setCopied]=useState(false);
+  const [showQr,setShowQr]=useState(false);
+  const copy=()=>navigator.clipboard.writeText(studentUrl()).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2200);});
+  return(
+    <div className="h-full flex flex-col items-center justify-center relative p-6">
+      <Stars/>
+      {showQr&&<QrModal url={studentUrl()} onClose={()=>setShowQr(false)}/>}
+      <div className="absolute top-4 right-4 flex gap-2 z-10">
+        <button onClick={()=>setShowQr(true)} className="btn-j text-slate-400 hover:text-white bg-slate-900/80 border border-slate-700 px-3 py-2 rounded-xl text-sm font-bold backdrop-blur">📱 QR</button>
+        <button onClick={copy} className="btn-j text-slate-400 hover:text-white bg-slate-900/80 border border-slate-700 px-3 py-2 rounded-xl text-sm font-bold backdrop-blur">
+          {copied?'✅':'🔗'} Student Link
+        </button>
+      </div>
+      <div className="relative z-10 w-full max-w-sm space-y-6">
+        <div className="text-center">
+          <div className="text-7xl mb-3 anim-float">🎯</div>
+          <h1 className="text-6xl font-black tracking-tight leading-none" style={{
+            background:'linear-gradient(135deg,#fbbf24 0%,#f59e0b 45%,#fff 100%)',
+            WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',
+            filter:'drop-shadow(0 0 24px rgba(251,191,36,.35))',
+          }}>JEOPARDY!</h1>
+          <p className="text-slate-500 font-bold tracking-widest text-xs uppercase mt-2">Periplo English</p>
+          {quizTitle&&(
+            <div className="mt-3 inline-block px-4 py-1.5 bg-amber-500/10 border border-amber-500/30 rounded-full text-amber-400 font-bold text-xs">
+              📚 {quizTitle}
+            </div>
+          )}
+          {!QUIZ_ID&&(
+            <div className="mt-3 inline-block px-4 py-1.5 bg-red-500/10 border border-red-500/30 rounded-full text-red-400 font-bold text-xs">
+              ⚠️ No quiz loaded — open from dashboard
+            </div>
+          )}
+        </div>
+        <div className="bg-slate-900/90 border border-slate-700 rounded-3xl p-6 shadow-2xl backdrop-blur space-y-4">
+          <button onClick={onCreate}
+            className="btn-j w-full py-4 rounded-2xl font-black text-xl text-black flex items-center justify-center gap-2 shadow-[0_6px_0_#a16207]"
+            style={{background:'linear-gradient(135deg,#fbbf24 0%,#f59e0b 100%)'}}>
+            👑 Create Room
+          </button>
+          <div className="flex items-center gap-3">
+            <div className="h-px bg-slate-800 flex-1"/>
+            <span className="text-slate-600 font-bold text-xs uppercase">or join</span>
+            <div className="h-px bg-slate-800 flex-1"/>
+          </div>
+          <div className="flex gap-2">
+            <input value={code} onChange={e=>setCode(e.target.value.toUpperCase())}
+              onKeyDown={e=>e.key==='Enter'&&onJoin(code)}
+              placeholder="CODE" maxLength="4"
+              className="bg-slate-800 text-white font-black text-center text-2xl uppercase px-4 py-3 rounded-2xl w-full border-2 border-slate-700 outline-none focus:border-amber-500 transition-colors tracking-widest"/>
+            <button onClick={()=>onJoin(code)}
+              className="btn-j bg-blue-600 hover:bg-blue-500 text-white px-5 py-3 rounded-2xl font-black text-lg">→</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// SCREEN: JOIN
+// ════════════════════════════════════════════════════════════════
+function ScreenJoin({onJoin}){
+  const [code,setCode]=useState(URL_CODE);
+  return(
+    <div className="h-full flex flex-col items-center justify-center relative p-6">
+      <Stars/>
+      <div className="relative z-10 bg-slate-900/90 border-2 border-amber-500/70 rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center anim-pop backdrop-blur">
+        <div className="text-5xl mb-3 anim-float">🎯</div>
+        <h1 className="text-2xl font-black mb-1">Jeopardy!</h1>
+        <p className="text-amber-400 font-bold text-xs uppercase tracking-widest mb-6">Enter room code</p>
+        <input value={code} onChange={e=>setCode(e.target.value.toUpperCase())}
+          onKeyDown={e=>e.key==='Enter'&&onJoin(code)}
+          placeholder="XXXX" maxLength="4" autoFocus
+          className="bg-slate-800 text-white font-black text-center text-3xl uppercase px-4 py-4 rounded-2xl w-full border-2 border-slate-700 outline-none focus:border-amber-500 transition-colors tracking-widest mb-4"/>
+        <button onClick={()=>onJoin(code)} disabled={!code.trim()}
+          className="btn-j w-full bg-amber-500 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500 text-black py-4 rounded-2xl font-black text-xl shadow-[0_5px_0_#92400e] disabled:shadow-none">
+          Join →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// SCREEN: PROFILE
+// ════════════════════════════════════════════════════════════════
+function ScreenProfile({isHost,teams,onSubmit,onBack}){
+  const [name,setName]=useState(()=>localStorage.getItem('jp_name')||'');
+  const [emoji,setEmoji]=useState(()=>localStorage.getItem('jp_emoji')||'🎯');
+  const [teamIdx,setTeamIdx]=useState(0);
+  const [tc,setTc]=useState(2);
+  const save=()=>{localStorage.setItem('jp_name',name);localStorage.setItem('jp_emoji',emoji);};
+  return(
+    <div className="h-full overflow-y-auto scroll-y bg-[#030712] flex flex-col items-center px-5 pt-5 pb-8 relative">
+      <Stars/>
+      <button onClick={onBack} className="btn-j relative z-10 self-start text-slate-500 hover:text-white bg-slate-900 border border-slate-700 px-3 py-2 rounded-xl text-sm font-bold mb-4">← Back</button>
+      <div className="relative z-10 bg-slate-900/90 border-2 border-amber-500/50 rounded-3xl p-7 w-full max-w-md shadow-2xl anim-pop backdrop-blur">
+        <div className="text-4xl text-center mb-1">{emoji}</div>
+        <h2 className="text-2xl font-black text-center mb-1">Your Profile</h2>
+        <p className="text-slate-500 text-xs text-center mb-5">Saved for next sessions</p>
+
+        <div className="text-left mb-4">
+          <label className="text-slate-400 font-bold text-xs uppercase tracking-widest ml-1 mb-1.5 block">1. Name</label>
+          <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Alex" maxLength="14"
+            autoComplete="off" autoCorrect="off" spellCheck="false"
+            className="bg-slate-800 text-white font-black text-xl px-4 py-3 rounded-2xl w-full border-2 border-slate-700 outline-none focus:border-amber-500 transition-all"/>
+        </div>
+
+        <div className="text-left mb-5">
+          <label className="text-slate-400 font-bold text-xs uppercase tracking-widest ml-1 mb-1.5 block">2. Avatar</label>
+          <div className="grid grid-cols-6 gap-1.5 p-3 border-2 border-slate-800 rounded-2xl bg-slate-950">
+            {AVATARS.map(av=>(
+              <button key={av} onClick={()=>setEmoji(av)}
+                className={`btn-j text-2xl aspect-square rounded-xl flex items-center justify-center transition-all ${emoji===av?'bg-amber-500/30 ring-2 ring-amber-400 scale-110':'bg-slate-800 hover:bg-slate-700 opacity-55 hover:opacity-100'}`}>
+                {av}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {isHost?(
+          <>
+            <div className="text-left mb-5">
+              <label className="text-slate-400 font-bold text-xs uppercase tracking-widest ml-1 mb-2 block">3. Number of Teams</label>
+              <div className="grid grid-cols-4 gap-2">
+                {[1,2,3,4].map(n=>(
+                  <button key={n} onClick={()=>setTc(n)}
+                    className={`btn-j py-3 rounded-xl font-black text-lg transition-all border-2 ${tc===n?'bg-amber-500 border-amber-500 text-black':'bg-slate-800 border-slate-700 text-slate-300 hover:border-amber-500/40'}`}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+              {tc===1&&<p className="text-xs text-slate-500 mt-2 ml-1">Solo mode — student competes against themselves 🎯</p>}
+            </div>
+            <button onClick={()=>{if(!name.trim())return;save();onSubmit(name,emoji,'HOST',0,tc);}}
+              disabled={!name.trim()}
+              className="btn-j w-full py-4 rounded-2xl font-black text-lg text-black disabled:bg-slate-700 disabled:text-slate-500 disabled:shadow-none shadow-[0_6px_0_#a16207] flex items-center justify-center gap-2"
+              style={{background:name.trim()?'linear-gradient(135deg,#fbbf24 0%,#f59e0b 100%)':''}}>
+              🎮 Create Room →
+            </button>
+          </>
+        ):(
+          <>
+            {teams&&teams.length>1&&(
+              <div className="text-left mb-5">
+                <label className="text-slate-400 font-bold text-xs uppercase tracking-widest ml-1 mb-1.5 block">3. Your Team</label>
+                <div className="space-y-2">
+                  {teams.map((t,i)=>(
+                    <button key={t.id} onClick={()=>setTeamIdx(i)}
+                      className="btn-j w-full flex items-center gap-3 rounded-2xl px-4 py-3 transition-all"
+                      style={{background:teamIdx===i?`${t.color}28`:'#0f172a',border:`${teamIdx===i?2:1}px solid ${teamIdx===i?t.color:'#334155'}`}}>
+                      <span className="text-xl">{t.emoji}</span>
+                      <span className="font-bold text-white">{t.name}</span>
+                      <span className="ml-auto text-xs text-slate-500">{(t.players||[]).length} player{(t.players||[]).length!==1?'s':''}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <button onClick={()=>{if(!name.trim())return;save();onSubmit(name,emoji,'PLAYER',teamIdx,null);}}
+              disabled={!name.trim()}
+              className="btn-j w-full bg-amber-500 disabled:bg-slate-700 disabled:text-slate-500 text-black py-4 rounded-2xl font-black text-xl shadow-[0_5px_0_#92400e] disabled:shadow-none flex items-center justify-center gap-2 mt-1">
+              🎯 Join Game! →
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// SCREEN: LOBBY
+// ════════════════════════════════════════════════════════════════
+function ScreenLobby({game,roomId,isHost,localId,quizTitle,onStart,onLeave}){
+  const [copied,setCopied]=useState(false);
+  const [showQr,setShowQr]=useState(false);
+  const teams=game?.teams||[];
+  const players=game?.players||[];
+  const copyCode=()=>navigator.clipboard.writeText(roomId).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000);});
+  const copyLink=()=>navigator.clipboard.writeText(studentUrl(roomId)).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000);});
+  return(
+    <div className="h-full overflow-y-auto scroll-y bg-[#030712] flex flex-col items-center px-5 pt-4 pb-8 gap-3 relative">
+      <Stars/>
+      {showQr&&<QrModal url={studentUrl(roomId)} onClose={()=>setShowQr(false)}/>}
+      <div className="relative z-10 w-full max-w-md flex items-center justify-between shrink-0">
+        <button onClick={onLeave} className="btn-j text-slate-500 hover:text-white bg-slate-900 border border-slate-700 px-3 py-2 rounded-xl text-sm font-bold">
+          ← {isHost?'Close':'Leave'}
+        </button>
+        {quizTitle&&<span className="text-xs font-black px-3 py-1.5 rounded-full bg-amber-900/40 border border-amber-700/50 text-amber-400">📚 {quizTitle}</span>}
+      </div>
+      <div className="relative z-10 bg-slate-900/90 border-2 border-amber-500/50 rounded-3xl p-7 w-full max-w-md shadow-2xl anim-pop backdrop-blur">
+        <button onClick={copyCode} className="btn-j w-full bg-slate-950 border border-slate-800 hover:border-amber-500 rounded-2xl p-4 mb-4 transition-colors">
+          <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mb-1">{copied?'✅ Copied':'🔢 Tap to copy'}</p>
+          <p className="text-5xl font-black tracking-widest">{roomId}</p>
+        </button>
+        <div className="flex gap-2 mb-5">
+          <button onClick={()=>setShowQr(true)} className="btn-j flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold py-2 rounded-xl text-sm">📱 QR Students</button>
+          <button onClick={copyLink} className="btn-j flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold py-2 rounded-xl text-sm">🔗 Student Link</button>
+        </div>
+        <div className="space-y-2 mb-5">
+          {teams.map(t=>{
+            const tp=players.filter(p=>p.teamId===t.id);
+            return(
+              <div key={t.id} className="rounded-xl p-3 text-left" style={{background:`${t.color}14`,border:`1px solid ${t.color}40`}}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-base">{t.emoji}</span>
+                  <span className="font-black text-sm" style={{color:t.color}}>{t.name}</span>
+                  <span className="text-xs text-slate-600 ml-auto">{tp.length} player{tp.length!==1?'s':''}</span>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {tp.map(p=>(
+                    <span key={p.id} className={`inline-flex items-center gap-1 text-xs bg-slate-800 rounded-full px-2 py-0.5 font-semibold ${p.id===localId?'ring-1 ring-white/40 text-white':'text-slate-300'}`}>
+                      {p.emoji} {p.name}
+                    </span>
+                  ))}
+                  {tp.length===0&&<span className="text-xs text-slate-700 italic">empty...</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {isHost?(
+          <button onClick={onStart}
+            className="btn-j w-full py-4 rounded-2xl font-black text-xl text-black shadow-[0_6px_0_#a16207] flex items-center justify-center gap-2"
+            style={{background:'linear-gradient(135deg,#fbbf24 0%,#f59e0b 100%)'}}>
+            🎯 Start Jeopardy!
+          </button>
+        ):(
+          <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4 text-center">
+            <p className="text-slate-400 font-bold animate-pulse text-sm">Waiting for host to start...</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// QUESTION TYPE COMPONENTS (student phone)
+// ════════════════════════════════════════════════════════════════
+
+function QMultipleChoice({item,onAnswer,locked}){
+  const [sel,setSel]=useState(null);
+  if(!item)return null;
+  return(
+    <div className="space-y-3 w-full max-w-sm mx-auto">
+      <p className="text-white font-black text-base text-center leading-snug">{item.question}</p>
+      <div className="space-y-2 mt-1">
+        {(item.options||[]).map((opt,i)=>{
+          const correct=i===item.correct, isSel=sel===i, show=locked&&sel!==null;
+          let cls='bg-slate-800 border-slate-700 text-white hover:border-blue-400';
+          if(show){
+            if(correct) cls='bg-emerald-900/60 border-emerald-500 text-emerald-200';
+            else if(isSel) cls='bg-red-900/60 border-red-500 text-red-200';
+            else cls='bg-slate-900 border-slate-800 text-slate-500';
+          } else if(isSel) cls='bg-blue-900/60 border-blue-400 text-blue-100';
+          return(
+            <button key={i} onClick={()=>{if(!locked){setSel(i);onAnswer(i,i===item.correct);}}} disabled={locked}
+              className={`btn-j w-full text-left px-4 py-3 rounded-xl border-2 font-bold text-sm transition-all ${cls}`}>
+              <span className="text-xs text-slate-500 mr-2 font-black">{String.fromCharCode(65+i)}.</span>{opt}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function QDragDrop({item,onAnswer,locked}){
+  const [sel,setSel]=useState(null);
+  if(!item)return null;
+  const parts=(item.sentence||'').split('[BLANK]');
+  const opts=Array.from(new Set([...(item.options||[]),item.correct]));
+  return(
+    <div className="space-y-4 w-full max-w-sm mx-auto">
+      <div className="bg-slate-800 rounded-xl px-4 py-3 text-center font-bold text-base text-white leading-relaxed">
+        {parts[0]}
+        <span className={`inline-block px-3 py-0.5 rounded-lg mx-1 font-black text-sm border-2 transition-all ${sel?'bg-blue-700 border-blue-500 text-white':'bg-slate-700 border-dashed border-slate-500 text-slate-400'}`}>
+          {sel||'______'}
+        </span>
+        {parts[1]}
+      </div>
+      <div className="flex flex-wrap gap-2 justify-center">
+        {opts.map((opt,i)=>{
+          const correct=opt===item.correct, isSel=sel===opt, show=locked&&sel!==null;
+          let cls='bg-slate-700 border-slate-600 text-white hover:border-blue-400';
+          if(show){
+            if(correct) cls='bg-emerald-700 border-emerald-500 text-white';
+            else if(isSel) cls='bg-red-700 border-red-500 text-white';
+          } else if(isSel) cls='bg-blue-700 border-blue-500 text-white';
+          return(
+            <button key={i} onClick={()=>{if(!locked){setSel(opt);onAnswer(opt,opt===item.correct);}}} disabled={locked}
+              className={`btn-j px-4 py-2.5 rounded-xl border-2 font-black text-sm transition-all ${cls}`}>
+              {opt}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function QOddOneOut({item,onAnswer,locked}){
+  const [sel,setSel]=useState(null);
+  if(!item)return null;
+  return(
+    <div className="space-y-4 w-full max-w-sm mx-auto">
+      <p className="text-slate-400 font-bold text-center text-sm">Which one doesn't belong? 🤔</p>
+      <div className="grid grid-cols-2 gap-2">
+        {(item.words||[]).map((w,i)=>{
+          const odd=w===item.odd, isSel=sel===w, show=locked&&sel!==null;
+          let cls='bg-slate-800 border-slate-700 text-white hover:border-amber-400';
+          if(show){
+            if(odd) cls='bg-emerald-900/60 border-emerald-500 text-emerald-200';
+            else if(isSel) cls='bg-red-900/60 border-red-500 text-red-200';
+          } else if(isSel) cls='bg-amber-900/60 border-amber-400 text-amber-100';
+          return(
+            <button key={i} onClick={()=>{if(!locked){setSel(w);onAnswer(w,w===item.odd);}}} disabled={locked}
+              className={`btn-j py-5 rounded-xl border-2 font-black text-sm transition-all ${cls}`}>
+              {w}
+            </button>
+          );
+        })}
+      </div>
+      {locked&&item.reason&&<p className="text-xs text-slate-400 text-center italic mt-1">{item.reason}</p>}
+    </div>
+  );
+}
+
+function QUnscramble({item,onAnswer,locked}){
+  const [built,setBuilt]=useState([]);
+  const [pool,setPool]=useState([]);
+  const [submitted,setSubmitted]=useState(false);
+  useEffect(()=>{
+    if(!item)return;
+    const ws=(item.words||item.text?.split(' ')||[]).filter(Boolean);
+    setPool([...ws].sort(()=>Math.random()-.5).map((w,i)=>({w,i,used:false})));
+    setBuilt([]);setSubmitted(false);
+  },[item?.text]);
+  if(!item)return null;
+  const correct=(item.words||item.text?.split(' ')||[]).join(' ');
+  const addWord=wi=>{
+    if(locked||submitted)return;
+    setPool(p=>p.map(x=>x.i===wi?{...x,used:true}:x));
+    setBuilt(b=>[...b,pool.find(x=>x.i===wi)]);
+  };
+  const removeWord=pos=>{
+    if(locked||submitted)return;
+    const rm=built[pos];
+    setBuilt(b=>b.filter((_,i)=>i!==pos));
+    setPool(p=>p.map(x=>x.i===rm.i?{...x,used:false}:x));
+  };
+  const submit=()=>{
+    const sentence=built.map(x=>x.w).join(' ');
+    setSubmitted(true);
+    onAnswer(sentence,sentence.toLowerCase()===correct.toLowerCase());
+  };
+  const isCorrect=built.map(x=>x.w).join(' ').toLowerCase()===correct.toLowerCase();
+  return(
+    <div className="space-y-3 w-full max-w-sm mx-auto">
+      {item.translation&&<p className="text-amber-400 font-bold text-center text-sm italic">"{item.translation}"</p>}
+      <div className="min-h-[52px] bg-slate-800 rounded-xl p-3 flex flex-wrap gap-1.5 border-2 border-dashed border-slate-600">
+        {built.map((x,pos)=>(
+          <button key={pos} onClick={()=>removeWord(pos)}
+            className={`btn-j px-3 py-1.5 rounded-lg font-black text-sm border ${submitted?(isCorrect?'bg-emerald-700 border-emerald-600 text-white':'bg-red-700 border-red-600 text-white'):'bg-blue-700 border-blue-600 text-white hover:bg-blue-600'}`}>
+            {x.w}
+          </button>
+        ))}
+        {built.length===0&&<span className="text-slate-500 text-sm italic self-center">Build the sentence...</span>}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {pool.filter(x=>!x.used).map(x=>(
+          <button key={x.i} onClick={()=>addWord(x.i)} disabled={locked||submitted}
+            className="btn-j px-3 py-1.5 bg-slate-700 border border-slate-600 rounded-lg font-black text-sm text-white hover:border-amber-400 hover:bg-slate-600 disabled:opacity-40">
+            {x.w}
+          </button>
+        ))}
+      </div>
+      {!submitted&&built.length>0&&!locked&&(
+        <button onClick={submit} className="btn-j w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-3 rounded-xl">✅ Submit</button>
+      )}
+      {(submitted||locked)&&<p className="text-xs text-slate-400 text-center">✔ {correct}</p>}
+    </div>
+  );
+}
+
+function QFillBlank({item,onAnswer,locked}){
+  const [val,setVal]=useState('');
+  const [sent,setSent]=useState(false);
+  if(!item)return null;
+  const parts=(item.sentence||'').split('[BLANK]');
+  const submit=()=>{if(!val.trim()||sent)return;setSent(true);onAnswer(val.trim(),val.trim().toLowerCase()===item.answer?.toLowerCase());};
+  return(
+    <div className="space-y-3 w-full max-w-sm mx-auto">
+      <div className="bg-slate-800 rounded-xl px-4 py-3 text-white font-bold text-base text-center leading-relaxed">
+        {parts[0]}<span className="text-amber-400 font-black">______</span>{parts[1]}
+      </div>
+      {item.hint&&<p className="text-xs text-slate-500 text-center italic">💡 {item.hint}</p>}
+      {sent||locked?(
+        <div className="space-y-1 text-center text-sm">
+          {val&&<p className="text-slate-300">Your answer: <span className="font-black text-white">{val}</span></p>}
+          <p className="text-slate-400">Expected: <span className="font-black text-amber-400">{item.answer}</span></p>
+        </div>
+      ):(
+        <>
+          <input value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}
+            placeholder="Type your answer..."
+            className="w-full bg-slate-800 border-2 border-slate-700 focus:border-amber-500 rounded-xl px-4 py-3 text-white font-bold outline-none text-center text-lg transition-colors"/>
+          <button onClick={submit} disabled={!val.trim()}
+            className="btn-j w-full bg-amber-500 disabled:bg-slate-700 disabled:text-slate-500 hover:bg-amber-400 text-black font-black py-3 rounded-xl">✅ Submit</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function QErrorCorrection({item,onAnswer,locked}){
+  const [val,setVal]=useState('');
+  const [sent,setSent]=useState(false);
+  if(!item)return null;
+  const submit=()=>{if(!val.trim()||sent)return;setSent(true);onAnswer(val.trim(),val.trim().toLowerCase()===item.correction?.toLowerCase());};
+  return(
+    <div className="space-y-3 w-full max-w-sm mx-auto">
+      <div className="bg-red-900/20 border border-red-700/40 rounded-xl px-4 py-3 text-center">
+        <p className="text-xs text-red-400 font-bold uppercase tracking-widest mb-1">Find &amp; fix the error</p>
+        <p className="text-white font-bold text-base">{item.sentence}</p>
+      </div>
+      {sent||locked?(
+        <div className="space-y-1 text-center text-sm">
+          {val&&<p className="text-slate-300">Your fix: <span className="font-black text-white">{val}</span></p>}
+          <p className="text-slate-400">Error: <span className="font-black text-red-400">"{item.error}"</span> → <span className="font-black text-emerald-400">"{item.correction}"</span></p>
+        </div>
+      ):(
+        <>
+          <input value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}
+            placeholder="Type the correct word..."
+            className="w-full bg-slate-800 border-2 border-slate-700 focus:border-amber-500 rounded-xl px-4 py-3 text-white font-bold outline-none text-center text-lg transition-colors"/>
+          <button onClick={submit} disabled={!val.trim()}
+            className="btn-j w-full bg-amber-500 disabled:bg-slate-700 disabled:text-slate-500 text-black font-black py-3 rounded-xl">✅ Submit</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function QMatching({item,onAnswer,locked}){
+  const [leftSel,setLeftSel]=useState(null);
+  const [matched,setMatched]=useState({});
+  const [rightOrder,setRightOrder]=useState([]);
+  useEffect(()=>{
+    if(item?.pairs){
+      setRightOrder([...item.pairs.keys()].sort(()=>Math.random()-.5));
+      setLeftSel(null);setMatched({});
+    }
+  },[item]);
+  if(!item)return null;
+  const pairs=item.pairs||[];
+  const matchedRights=new Set(Object.values(matched));
+  const pickRight=ri=>{
+    if(locked||leftSel===null||matchedRights.has(ri))return;
+    const nm={...matched,[leftSel]:ri};
+    setMatched(nm);setLeftSel(null);
+    if(Object.keys(nm).length===pairs.length){
+      const ok=pairs.every((_,i)=>nm[i]===i);
+      onAnswer(nm,ok);
+    }
+  };
+  return(
+    <div className="space-y-3 w-full max-w-sm mx-auto">
+      <p className="text-xs text-slate-400 text-center font-bold">Tap left → then tap the match on the right</p>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-2">
+          {pairs.map((p,i)=>{
+            const done=matched[i]!==undefined, sel=leftSel===i;
+            return(
+              <button key={i} onClick={()=>{if(!locked&&!done)setLeftSel(sel?null:i);}} disabled={locked||done}
+                className={`btn-j w-full text-left px-3 py-2.5 rounded-xl border-2 font-bold text-xs transition-all ${done?'bg-emerald-900/40 border-emerald-600 text-emerald-300':sel?'bg-blue-900/60 border-blue-400 text-blue-100':'bg-slate-800 border-slate-700 text-white hover:border-amber-400'}`}>
+                {p.left}
+              </button>
+            );
+          })}
+        </div>
+        <div className="space-y-2">
+          {rightOrder.map(ri=>{
+            const done=matchedRights.has(ri);
+            const ok=locked&&matched[ri]===ri; // simplified check
+            return(
+              <button key={ri} onClick={()=>pickRight(ri)} disabled={locked||done}
+                className={`btn-j w-full text-left px-3 py-2.5 rounded-xl border-2 font-bold text-xs transition-all ${locked?(ok?'bg-emerald-900/40 border-emerald-600 text-emerald-300':'bg-red-900/30 border-red-700/50 text-red-300'):done?'bg-slate-700/40 border-slate-700 text-slate-500':'bg-slate-800 border-slate-700 text-white hover:border-amber-400'}`}>
+                {pairs[ri].right}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QSpeaking({item}){
+  if(!item)return null;
+  return(
+    <div className="space-y-4 w-full max-w-sm mx-auto text-center">
+      <div className="text-5xl anim-float">🎤</div>
+      <div className="bg-slate-800 border border-slate-700 rounded-xl px-5 py-4">
+        <p className="text-xs text-amber-400 font-bold uppercase tracking-widest mb-2">Say in English:</p>
+        <p className="text-white font-black text-lg">{item.spanish}</p>
+      </div>
+      <p className="text-slate-500 text-sm font-bold animate-pulse">Speak out loud — teacher will grade 🎯</p>
+    </div>
+  );
+}
+
+function QListening({item,onAnswer,locked}){
+  const [val,setVal]=useState('');
+  const [playing,setPlaying]=useState(false);
+  const [sent,setSent]=useState(false);
+  if(!item)return null;
+  const speak=()=>{
+    if(!window.speechSynthesis)return;
+    window.speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(item.audioText);
+    u.lang='en-US';u.rate=0.88;
+    u.onend=()=>setPlaying(false);
+    setPlaying(true);
+    window.speechSynthesis.speak(u);
+  };
+  const submit=()=>{if(!val.trim()||sent)return;setSent(true);onAnswer(val.trim(),false);};
+  return(
+    <div className="space-y-4 w-full max-w-sm mx-auto text-center">
+      <div className="text-5xl anim-float">🎧</div>
+      <button onClick={speak} disabled={playing}
+        className={`btn-j w-full py-4 rounded-xl font-black text-sm flex items-center justify-center gap-2 ${playing?'bg-amber-500/20 border border-amber-500 text-amber-300 animate-pulse':'bg-amber-500 hover:bg-amber-400 text-black'}`}>
+        {playing?'🔊 Playing...':'▶ Play Audio'}
+      </button>
+      {sent||locked?(
+        <div className="space-y-1 text-sm text-center">
+          {val&&<p className="text-slate-300">You typed: <span className="font-black text-white">{val}</span></p>}
+          <p className="text-slate-400">Expected: <span className="font-black text-emerald-400">{item.answer}</span></p>
+        </div>
+      ):(
+        <>
+          <input value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}
+            placeholder="What did you hear?"
+            className="w-full bg-slate-800 border-2 border-slate-700 focus:border-amber-500 rounded-xl px-4 py-3 text-white font-bold outline-none text-center text-base transition-colors"/>
+          <button onClick={submit} disabled={!val.trim()}
+            className="btn-j w-full bg-blue-600 disabled:bg-slate-700 disabled:text-slate-500 hover:bg-blue-500 text-white font-black py-3 rounded-xl">
+            ✅ Submit (teacher grades)
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function QRoleplay({item}){
+  if(!item)return null;
+  return(
+    <div className="space-y-4 w-full max-w-sm mx-auto text-center">
+      <div className="text-5xl anim-float">🎭</div>
+      <div className="bg-slate-800 border border-slate-700 rounded-xl px-5 py-4">
+        <p className="text-xs text-purple-400 font-bold uppercase tracking-widest mb-2">Your situation:</p>
+        <p className="text-white font-bold text-base">{item.situation}</p>
+      </div>
+      <p className="text-slate-500 text-sm font-bold animate-pulse">Respond in English — teacher will grade 🎯</p>
+    </div>
+  );
+}
+
+function QuestionBody({cat,item,onAnswer,locked}){
+  if(!item)return<div className="text-slate-500 text-center text-sm">Loading question...</div>;
+  const p={item,onAnswer,locked};
+  switch(cat){
+    case 'multipleChoice':  return<QMultipleChoice  {...p}/>;
+    case 'dragDrop':        return<QDragDrop        {...p}/>;
+    case 'oddOneOut':       return<QOddOneOut        {...p}/>;
+    case 'unscramble':      return<QUnscramble       {...p}/>;
+    case 'fillBlank':       return<QFillBlank        {...p}/>;
+    case 'errorCorrection': return<QErrorCorrection  {...p}/>;
+    case 'matching':        return<QMatching         {...p}/>;
+    case 'speaking':        return<QSpeaking         {...p}/>;
+    case 'listening':       return<QListening        {...p}/>;
+    case 'roleplay':        return<QRoleplay         {...p}/>;
+    default: return null;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// GAME SCREEN
+// ════════════════════════════════════════════════════════════════
+function ScreenGame({game,roomId,isHost,localId,quizContent,onLeave}){
+  const [shake,setShake]=useState(false);
+  const board=game?.board||{};
+  const cats=board.categories||[];
+  const revealed=board.revealed||{};
+  const active=board.active||null;
+  const teams=(game?.teams||[]).slice(0,game?.teamCount||2);
+  const players=game?.players||[];
+  const scores=game?.teamScores||{};
+  const tc=game?.teamCount||1;
+
+  const myPlayer=isHost?null:players.find(p=>p.id===localId);
+  const myTeamId=myPlayer?.teamId??null;
+  const ansTeam=teams.find(t=>t.id===active?.answerTeamId);
+
+  useEffect(()=>{
+    if(active?.result==='wrong'){setShake(true);setTimeout(()=>setShake(false),600);}
+  },[active?.result]);
+
+  // ── Teacher selects tile ───────────────────────────────────
+  const pickTile=async(cat,pts)=>{
+    if(!isHost||active)return;
+    const qIdx=PTS.indexOf(pts);
+    const hasQ=(quizContent?.[cat]?.length||0)>qIdx;
+    if(!hasQ||revealed[`${cat}-${pts}`])return;
+    const phase=tc===1?'ANSWERING':'SELECT_TEAM';
+    const answerTeamId=tc===1?0:null;
+    await updateDoc(rRef(roomId),{'board.active':{cat,pts,qIdx,phase,answerTeamId,playerAnswer:null,result:null}});
+  };
+
+  // ── Teacher assigns team ───────────────────────────────────
+  const assignTeam=async(teamId)=>{
+    if(!isHost||active?.phase!=='SELECT_TEAM')return;
+    await updateDoc(rRef(roomId),{'board.active':{...active,answerTeamId:teamId,phase:'ANSWERING'}});
+  };
+
+  // ── Student submits answer ─────────────────────────────────
+  const submitAnswer=async(answer,isCorrect)=>{
+    if(!active||active.phase!=='ANSWERING')return;
+    const meta=CAT_META[active.cat];
+    if(meta?.auto){
+      const newScores={...scores};
+      if(isCorrect&&active.answerTeamId!=null)
+        newScores[active.answerTeamId]=(newScores[active.answerTeamId]||0)+active.pts;
+      await updateDoc(rRef(roomId),{
+        'board.active':{...active,playerAnswer:answer,result:isCorrect?'correct':'wrong',phase:'RESULT'},
+        teamScores:newScores,
+        [`board.revealed.${active.cat}-${active.pts}`]:true,
+      });
+      if(isCorrect)fireConfetti();
+    } else {
+      await updateDoc(rRef(roomId),{'board.active':{...active,playerAnswer:answer,phase:'JUDGING'}});
+    }
+  };
+
+  // ── Teacher judges ─────────────────────────────────────────
+  const judge=async(isCorrect)=>{
+    if(!isHost||active?.phase!=='JUDGING')return;
+    const newScores={...scores};
+    if(isCorrect&&active.answerTeamId!=null)
+      newScores[active.answerTeamId]=(newScores[active.answerTeamId]||0)+active.pts;
+    await updateDoc(rRef(roomId),{
+      'board.active':{...active,result:isCorrect?'correct':'wrong',phase:'RESULT'},
+      teamScores:newScores,
+      [`board.revealed.${active.cat}-${active.pts}`]:true,
+    });
+    if(isCorrect)fireConfetti();
+  };
+
+  const dismiss=async()=>{if(isHost)await updateDoc(rRef(roomId),{'board.active':null});};
+
+  // ── Scoreboard strip ───────────────────────────────────────
+  const Scores=()=>(
+    <div className={`flex gap-2 px-3 py-2 overflow-x-auto ${tc<=2?'justify-center':''}`}>
+      {teams.map(t=>(
+        <div key={t.id} className="flex flex-col items-center min-w-[68px] px-3 py-1.5 rounded-xl border-2 transition-all"
+          style={{background:active?.answerTeamId===t.id?`${t.color}28`:`${t.color}10`,borderColor:active?.answerTeamId===t.id?t.color:`${t.color}35`}}>
+          <span className="text-lg">{t.emoji}</span>
+          <span className="text-[10px] font-bold" style={{color:t.color}}>{t.name.replace('Team ','')}</span>
+          <span className="text-xl font-black text-white leading-tight">{scores[t.id]||0}</span>
+        </div>
+      ))}
+    </div>
+  );
+
+  // ── Active question overlay ────────────────────────────────
+  const ActiveQ=()=>{
+    if(!active)return null;
+    const meta=CAT_META[active.cat]||{};
+    const item=quizContent?.[active.cat]?.[active.qIdx];
+    const amAnswering=!isHost&&active.answerTeamId===myTeamId;
+
+    // SELECT_TEAM: host picks which team answers
+    if(active.phase==='SELECT_TEAM'&&isHost){
+      return(
+        <div className="fixed inset-0 z-50 bg-black/92 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border-2 border-amber-500 rounded-3xl p-6 w-full max-w-sm anim-pop shadow-2xl text-center">
+            <div className="text-4xl mb-2">{meta.emoji}</div>
+            <h3 className="text-xl font-black text-white mb-1">{meta.label}</h3>
+            <div className="inline-block px-4 py-1 bg-amber-500/20 border border-amber-500/40 rounded-full text-amber-400 font-black text-lg mb-5">${active.pts}</div>
+            <p className="text-slate-400 text-sm font-bold mb-4">Which team answers?</p>
+            <div className="space-y-2">
+              {teams.map(t=>(
+                <button key={t.id} onClick={()=>assignTeam(t.id)}
+                  className="btn-j w-full flex items-center gap-3 rounded-2xl px-5 py-3.5 font-black"
+                  style={{background:`${t.color}22`,border:`2px solid ${t.color}`}}>
+                  <span className="text-xl">{t.emoji}</span>
+                  <span style={{color:t.color}}>{t.name}</span>
+                  <span className="ml-auto text-xs text-slate-500">{players.filter(p=>p.teamId===t.id).length} player{players.filter(p=>p.teamId===t.id).length!==1?'s':''}</span>
+                </button>
+              ))}
+            </div>
+            <button onClick={()=>updateDoc(rRef(roomId),{'board.active':null})}
+              className="btn-j mt-3 w-full bg-slate-800 hover:bg-slate-700 text-slate-400 py-2.5 rounded-xl font-bold text-sm">
+              Cancel
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    const isResult=active.phase==='RESULT';
+    const isJudging=active.phase==='JUDGING';
+    const isAnswering=active.phase==='ANSWERING';
+
+    return(
+      <div className={`fixed inset-0 z-50 flex flex-col ${shake?'anim-shake':''} ${isResult?(active.result==='correct'?'anim-correct':'anim-wrong'):''}`}
+        style={{background:isResult?(active.result==='correct'?'rgba(5,46,22,.98)':'rgba(69,10,10,.98)'):'rgba(3,7,18,.98)'}}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/60 shrink-0 bg-black/30">
+          <div className="flex items-center gap-2.5">
+            <span className="text-2xl">{meta.emoji}</span>
+            <div>
+              <div className="font-black text-white text-sm leading-tight">{meta.label}</div>
+              <div className="text-xs font-bold" style={{color:ansTeam?.color||'#fbbf24'}}>
+                ${active.pts} · {ansTeam?`${ansTeam.emoji} ${ansTeam.name}`:'All teams'}
+              </div>
+            </div>
+          </div>
+          {isResult&&isHost&&(
+            <button onClick={dismiss}
+              className="btn-j bg-slate-800 hover:bg-slate-700 text-slate-200 px-5 py-2.5 rounded-xl font-bold text-sm">
+              Next →
+            </button>
+          )}
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto scroll-y flex flex-col items-center justify-center p-5 gap-5">
+
+          {/* Result banner */}
+          {isResult&&(
+            <div className={`w-full max-w-sm text-center py-4 px-6 rounded-2xl font-black text-3xl anim-pop border-2 ${active.result==='correct'?'bg-emerald-500/20 border-emerald-400 text-emerald-300':'bg-red-500/20 border-red-400 text-red-300'}`}>
+              {active.result==='correct'
+                ?<>✅ CORRECT! <span className="text-amber-400">+${active.pts}</span></>
+                :'❌ WRONG!'}
+            </div>
+          )}
+
+          {/* Question content — all phases show the question */}
+          {item&&(
+            <QuestionBody
+              cat={active.cat}
+              item={item}
+              onAnswer={amAnswering&&isAnswering?submitAnswer:()=>{}}
+              locked={!amAnswering||isJudging||isResult}
+            />
+          )}
+
+          {/* Not-your-turn notice for students */}
+          {isAnswering&&!amAnswering&&!isHost&&(
+            <p className="text-slate-500 font-bold text-sm animate-pulse text-center">
+              {ansTeam?`⏳ ${ansTeam.emoji} ${ansTeam.name} is answering...`:'Waiting...'}
+            </p>
+          )}
+
+          {/* Waiting for teacher to judge */}
+          {isJudging&&!isHost&&(
+            <p className="text-slate-400 font-bold text-sm animate-pulse text-center">⏳ Waiting for teacher to grade...</p>
+          )}
+
+          {/* Teacher judge panel */}
+          {isJudging&&isHost&&(
+            <div className="w-full max-w-sm space-y-3">
+              {active.playerAnswer&&(
+                <div className="bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-3 text-center">
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">Student answered:</p>
+                  <p className="text-white font-bold text-base">{active.playerAnswer}</p>
+                </div>
+              )}
+              {item&&(item.answer||item.english||item.correction||item.expected)&&(
+                <div className="bg-emerald-900/20 border border-emerald-700/40 rounded-xl px-4 py-2.5 text-center">
+                  <p className="text-xs text-emerald-400 font-bold uppercase tracking-widest mb-1">Expected:</p>
+                  <p className="text-emerald-300 font-bold text-sm">{item.answer||item.english||item.correction||item.expected}</p>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={()=>judge(true)}
+                  className="btn-j bg-emerald-600 hover:bg-emerald-500 text-white font-black py-5 rounded-xl text-xl shadow-[0_4px_0_#14532d]">
+                  ✅ Correct
+                </button>
+                <button onClick={()=>judge(false)}
+                  className="btn-j bg-red-700 hover:bg-red-600 text-white font-black py-5 rounded-xl text-xl shadow-[0_4px_0_#7f1d1d]">
+                  ❌ Wrong
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Score strip inside overlay */}
+        <div className="border-t border-slate-800/60 bg-black/30 shrink-0">
+          <Scores/>
+        </div>
+      </div>
+    );
+  };
+
+  // ── BOARD (teacher desktop view) ───────────────────────────
+  if(isHost){
+    const allDone=cats.length>0&&cats.every(cat=>PTS.every(pts=>{
+      const qIdx=PTS.indexOf(pts);
+      return revealed[`${cat}-${pts}`]||(quizContent?.[cat]?.length||0)<=qIdx;
+    }));
+    return(
+      <div className="h-full flex flex-col bg-[#030712] relative overflow-hidden">
+        <Stars/>
+        <ActiveQ/>
+
+        {/* Scoreboard */}
+        <div className="relative z-10 border-b border-slate-800/60 bg-black/50 backdrop-blur shrink-0">
+          <Scores/>
+        </div>
+
+        {/* Board grid */}
+        <div className="relative z-10 flex-1 overflow-auto p-2 md:p-3">
+          {cats.length===0?(
+            <div className="h-full flex items-center justify-center">
+              <div className="text-center space-y-2">
+                <div className="text-5xl">⚠️</div>
+                <p className="text-slate-400 font-bold">No quiz content.</p>
+                <p className="text-slate-600 text-sm">Open from dashboard-bg.html with a quiz ID.</p>
+              </div>
+            </div>
+          ):(
+            <div className="min-w-max mx-auto" style={{
+              display:'grid',
+              gridTemplateColumns:`repeat(${cats.length},minmax(90px,1fr))`,
+              gap:'5px',
+            }}>
+              {/* Category headers */}
+              {cats.map(cat=>{
+                const m=CAT_META[cat]||{};
+                return(
+                  <div key={cat} className="cat-header rounded-xl px-2 py-3 text-center">
+                    <div className="text-2xl mb-1">{m.emoji}</div>
+                    <div className="text-amber-400 font-black text-xs leading-tight">{m.label}</div>
+                  </div>
+                );
+              })}
+              {/* Point value rows */}
+              {PTS.map(pts=>
+                cats.map(cat=>{
+                  const key=`${cat}-${pts}`;
+                  const qIdx=PTS.indexOf(pts);
+                  const hasQ=(quizContent?.[cat]?.length||0)>qIdx;
+                  const isRev=!!revealed[key];
+                  const isAct=active?.cat===cat&&active?.pts===pts;
+                  return(
+                    <button key={key}
+                      onClick={()=>pickTile(cat,pts)}
+                      disabled={!hasQ||isRev||!!active}
+                      className={`board-cell rounded-xl flex items-center justify-center font-black text-2xl transition-all select-none ${isRev?'revealed':!hasQ?'opacity-15 cursor-not-allowed':isAct?'active anim-glow':''}`}
+                      style={{height:'64px'}}>
+                      {isRev?'':isAct?<span className="text-amber-400 anim-glow text-sm">${pts}</span>:`$${pts}`}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Bottom bar */}
+        <div className="relative z-10 border-t border-slate-800/60 bg-black/50 px-4 py-2 flex items-center justify-between shrink-0">
+          <button onClick={onLeave} className="btn-j text-slate-600 hover:text-red-400 text-xs font-bold">🚪 End Game</button>
+          {allDone&&cats.length>0&&(
+            <span className="text-xs text-amber-400 font-black animate-pulse">🏁 Board complete!</span>
+          )}
+          <div className="text-xs text-slate-600 font-bold">
+            {cats.reduce((n,cat)=>n+PTS.filter(pts=>revealed[`${cat}-${pts}`]).length,0)} / {cats.reduce((n,cat)=>n+Math.min(5,quizContent?.[cat]?.length||0),0)} done
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── STUDENT VIEW ───────────────────────────────────────────
+  return(
+    <div className="h-full flex flex-col bg-[#030712] relative overflow-hidden">
+      <Stars/>
+      <ActiveQ/>
+
+      {/* Score strip */}
+      <div className="relative z-10 border-b border-slate-800/60 bg-black/50 backdrop-blur shrink-0">
+        <Scores/>
+      </div>
+
+      {/* Idle state */}
+      {!active&&(
+        <div className="flex-1 flex flex-col items-center justify-center relative z-10 gap-5 p-6 text-center">
+          <div className="text-7xl anim-float">🎯</div>
+          <div>
+            <h2 className="text-3xl font-black" style={{
+              background:'linear-gradient(135deg,#fbbf24,#f59e0b,#fff)',
+              WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',
+            }}>JEOPARDY!</h2>
+            <p className="text-slate-500 text-sm font-bold mt-1 animate-pulse">Waiting for host to pick a question...</p>
+          </div>
+          {myPlayer&&(()=>{
+            const t=teams.find(x=>x.id===myTeamId);
+            return(
+              <div className="flex items-center gap-2 px-4 py-2 rounded-full border font-bold text-sm"
+                style={{color:t?.color||'#fbbf24',borderColor:`${t?.color||'#fbbf24'}44`,background:`${t?.color||'#fbbf24'}12`}}>
+                {myPlayer.emoji} {myPlayer.name} &middot; {t?.name||''}
+              </div>
+            );
+          })()}
+          {/* Mini board preview for students */}
+          {cats.length>0&&(
+            <div className="w-full max-w-xs mt-2">
+              <div className="grid gap-1" style={{gridTemplateColumns:`repeat(${cats.length},1fr)`}}>
+                {cats.map(cat=>(
+                  <div key={cat} className="text-center text-xs font-bold text-slate-500 pb-1">{CAT_META[cat]?.emoji}</div>
+                ))}
+                {PTS.map(pts=>cats.map(cat=>{
+                  const key=`${cat}-${pts}`;
+                  const qIdx=PTS.indexOf(pts);
+                  const hasQ=(quizContent?.[cat]?.length||0)>qIdx;
+                  const rev=revealed[key];
+                  return(
+                    <div key={key} className={`h-6 rounded text-center text-[10px] font-black flex items-center justify-center transition-all ${rev?'bg-slate-800/40 text-slate-700':!hasQ?'bg-slate-900/20 text-slate-800':'bg-blue-900/60 border border-blue-700/40 text-blue-400'}`}>
+                      {rev?'✓':hasQ?`$${pts}`:''}
+                    </div>
+                  );
+                }))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// ROOT APP
+// ════════════════════════════════════════════════════════════════
+function App(){
+  const [screen,setScreen]=useState(()=>IS_JOIN?(URL_CODE?'PROFILE':'JOIN'):'HOME');
+  const [roomId,setRoomId]=useState(URL_CODE);
+  const [isHost,setIsHost]=useState(false);
+  const [localId,setLocalId]=useState(null);
+  const [game,setGame]=useState(null);
+  const [roomTeams,setRoomTeams]=useState(null);
+  const [quizContent,setQuizContent]=useState(null);
+  const [quizTitle,setQuizTitle]=useState('');
+  const [toast,setToast]=useState('');
+  const unsub=useRef(null);
+  const toast_=msg=>mkToast(setToast,msg);
+
+  // Load quiz content
+  useEffect(()=>{
+    if(!QUIZ_ID)return;
+    getDoc(doc(db,`artifacts/periplo-app-v1/users/${QUIZ_UID}/quizzes`,QUIZ_ID))
+      .then(snap=>{
+        if(!snap.exists())return;
+        const d=snap.data();
+        setQuizTitle(d.title||'');
+        setQuizContent(d.content||{});
+      })
+      .catch(e=>console.warn('Quiz load failed',e));
+  },[]);
+
+  const subscribeRoom=useCallback(id=>{
+    if(unsub.current)unsub.current();
+    unsub.current=onSnapshot(rRef(id),snap=>{
+      if(snap.exists()){
+        const d=snap.data();
+        setGame(d);
+        if(d.status==='PLAYING')setScreen('PLAYING');
+        if(d.status==='CLOSED'){toast_('⚠️ Room was closed');resetState();}
+      } else {toast_('⚠️ Room not found');resetState();}
+    });
+  },[]);
+
+  useEffect(()=>()=>unsub.current?.(),[]);
+
+  useEffect(()=>{
+    const onVis=()=>{
+      if(document.visibilityState==='visible'&&roomId&&(screen==='LOBBY'||screen==='PLAYING'))
+        subscribeRoom(roomId);
+    };
+    document.addEventListener('visibilitychange',onVis);
+    return()=>document.removeEventListener('visibilitychange',onVis);
+  },[roomId,screen,subscribeRoom]);
+
+  const resetState=()=>{
+    setScreen(IS_JOIN?'JOIN':'HOME');
+    setRoomId('');setGame(null);setLocalId(null);setIsHost(false);setRoomTeams(null);
+  };
+
+  const validateCode=async code=>{
+    if(!code.trim())return toast_('⚠️ Enter a code');
+    const c=code.trim().toUpperCase();
+    try{
+      const snap=await getDoc(rRef(c));
+      if(!snap.exists())return toast_('❌ Room not found');
+      const d=snap.data();
+      if(d.status==='PLAYING')return toast_('❌ Game already started');
+      if(d.status==='CLOSED')return toast_('❌ Room is closed');
+      setRoomId(c);setRoomTeams(d.teams||[]);setIsHost(false);setScreen('PROFILE');
+    }catch{toast_('❌ Connection error');}
+  };
+
+  const handleProfile=async(name,emoji,role,teamIdx,tc)=>{
+    if(role==='HOST'){
+      const id=Math.random().toString(36).slice(2,6).toUpperCase();
+      const r=mkRoom(name,emoji,tc,QUIZ_ID);
+      await setDoc(rRef(id),r);
+      setRoomId(id);setLocalId('HOST');setGame(r);
+      subscribeRoom(id);setScreen('LOBBY');setIsHost(true);
+    } else {
+      let aid=null;
+      try{
+        await runTransaction(db,async txn=>{
+          const snap=await txn.get(rRef(roomId));
+          if(!snap.exists())throw new Error('NO_ROOM');
+          const d=snap.data();
+          if(d.status!=='LOBBY')throw new Error('STARTED');
+          const ps=d.players||[];
+          aid=ps.length+1;
+          const np={id:aid,name,emoji,teamId:teamIdx};
+          const nt=(d.teams||[]).map((t,i)=>i===teamIdx?{...t,players:[...t.players,name]}:t);
+          txn.update(rRef(roomId),{players:[...ps,np],teams:nt});
+        });
+        setLocalId(aid);subscribeRoom(roomId);setScreen('LOBBY');setIsHost(false);
+      }catch(e){toast_(e.message==='NO_ROOM'?'❌ Room not found':'❌ Could not join');resetState();}
+    }
+  };
+
+  const startGame=async()=>{
+    const board=buildBoard(quizContent);
+    await updateDoc(rRef(roomId),{status:'PLAYING',board});
+    setScreen('PLAYING');
+  };
+
+  const leaveRoom=async()=>{
+    if(unsub.current)unsub.current();
+    if(isHost){try{await updateDoc(rRef(roomId),{status:'CLOSED'});}catch{}}
+    resetState();
+  };
+
+  return(
+    <div className="h-full w-full bg-[#030712] text-white">
+      <Toast msg={toast}/>
+      {screen==='HOME'   &&<ScreenHome    onCreate={()=>{setIsHost(true);setScreen('PROFILE');}} onJoin={validateCode} quizTitle={quizTitle}/>}
+      {screen==='JOIN'   &&<ScreenJoin    onJoin={validateCode}/>}
+      {screen==='PROFILE'&&<ScreenProfile isHost={isHost} teams={roomTeams} onSubmit={handleProfile} onBack={()=>{setScreen(IS_JOIN?'JOIN':'HOME');setIsHost(false);setRoomId('');}}/>}
+      {screen==='LOBBY'  &&game&&<ScreenLobby  game={game} roomId={roomId} isHost={isHost} localId={localId} quizTitle={quizTitle} onStart={startGame} onLeave={leaveRoom}/>}
+      {screen==='PLAYING'&&game&&<ScreenGame   game={game} roomId={roomId} isHost={isHost} localId={localId} quizContent={quizContent} onLeave={leaveRoom}/>}
+    </div>
+  );
+}
+
+createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

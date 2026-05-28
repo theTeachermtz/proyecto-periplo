@@ -119,7 +119,7 @@ El bloque Vocab (08:00–18:00) debe cubrir las tres capas — nunca solo el Ver
 | `loteria.html` | dashboard-lot.html | Lotería Mexicana bilingüe — baraja + tabla 4×4 | ✅ |
 | `whatif.html` | dashboard-whatif.html | Condicionales — causa/consecuencia visual | ✅ |
 | `citymap.html` | citymap.html | Navegación con preposiciones | ⚙️ |
-| `jeopardy.html` | dashboard-jeopardy.html | Grammar quiz competitivo | ⚙️ |
+| `jeopardy.html` | dashboard-bg.html | Grammar quiz competitivo | ✅ |
 | `weakestlink.html` | dashboard-weakestlink.html | Vocab/grammar eliminatorio | ⚙️ |
 | `familyfeud.html` | dashboard-ff.html | Respuestas grupales / encuestas | ⚙️ |
 | `songpipeline.html` | dashboard-songpipeline.html | Canción con fill-in | ⚙️ |
