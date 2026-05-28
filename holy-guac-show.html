@@ -174,13 +174,37 @@ const MOCK = {
   ],
 };
 
-// ── Taquero order generator ───────────────────────────────────
-const generateTaqOrder=()=>{
-  const sh=arr=>[...arr].sort(()=>Math.random()-.5);
-  const tacos=sh(['taco de pollo','taco de carne','taco de quesadilla','taco de chorizo']).slice(0,2+Math.floor(Math.random()*2));
-  const comps=sh(['tomate','cebolla','cilantro','salsa verde','salsa roja','guacamole','limón','queso']).slice(0,2+Math.floor(Math.random()*2));
-  const drinks=Math.random()<.6?[['cerveza','agua','refresco','jugo de naranja'][Math.floor(Math.random()*4)]]:[];
-  return[...tacos,...comps,...drinks].map(item=>({item}));
+// ── Bank loading — replaces MOCK when ?bankId=XXX is in URL ──
+const BANK_ID  = P.get('bankId') || '';
+const BANK_UID = P.get('uid')    || 'teacher_anita_001';
+let BANK_TITLE = '';
+
+// Mutable content source — starts as MOCK, overwritten when bank loads
+let CONTENT = {
+  tongue_twister: MOCK.tongue_twister,
+  syllables:      MOCK.syllables,
+  this_or_that:   MOCK.this_or_that,
+  acentos:        MOCK.acentos,
+  vocab_mc:       MOCK.vocab_mc,
+  anagrama:       MOCK.anagrama,
+  taquero_orders: null,  // null = use fallback generator
+};
+
+// Taquero fallback: generate 12 random orders from built-in vocab
+const TAQ_FALLBACK={
+  tacos:['taco de frijol','taco de pescado','taco de camarón','taco de bistec','taco de chorizo','taco de pollo','esquite','gordita','sope','flauta','tostada','enchilada','tamal','quesadilla','burrito'],
+  complementos:['la cuenta','la propina','el mesero','el churro','el plato','la cuchara','el tenedor','arroz','queso','crema','tortilla','limón','tomate','cebolla','cilantro','chile chipotle','chile habanero','chile jalapeño','salsa','guacamole','aguacate','mole','nopal','totopos','sopa','postre'],
+  bebidas:['café de olla','cerveza','margarita','horchata','jamaica','mezcal','tequila','agua fresca'],
+};
+const _shuf=arr=>[...arr].sort(()=>Math.random()-.5);
+const buildFallbackOrders=(n=12)=>{
+  const out=[];
+  for(let i=0;i<n;i++){
+    const nt=Math.random()<.4?2:1,nb=Math.random()<.55?1:0;
+    const nc=Math.min(4,Math.max(2,(5+Math.floor(Math.random()*3))-nt-nb));
+    out.push({items:[..._shuf(TAQ_FALLBACK.tacos).slice(0,nt),..._shuf(TAQ_FALLBACK.complementos).slice(0,nc),..._shuf(TAQ_FALLBACK.bebidas).slice(0,nb)]});
+  }
+  return out;
 };
 
 // ── Scramble helper (used in goToChallenge for Group Anagram) ──
@@ -459,10 +483,15 @@ function ScreenLobby({game,roomId,isHost,localId,onStart,onLeave}){
       style={{paddingBottom:'calc(env(safe-area-inset-bottom) + 20px)'}}>
       {showQr&&<QrModal url={studentUrl(roomId)} onClose={()=>setShowQr(false)}/>}
       {/* Back button — in-flow so it scrolls with content on small screens */}
-      <div className="w-full max-w-md flex shrink-0">
+      <div className="w-full max-w-md flex items-center justify-between shrink-0">
         <button onClick={onLeave} className="btn-j text-zinc-500 hover:text-white bg-zinc-900 border border-zinc-800 px-3 py-2 rounded-xl text-sm font-bold">
           ← {isHost?'Cerrar':'Salir'}
         </button>
+        {BANK_TITLE&&(
+          <span className="text-xs font-black px-3 py-1.5 rounded-full bg-lime-900/40 border border-lime-700/50 text-lime-400">
+            🌶️ {BANK_TITLE}
+          </span>
+        )}
       </div>
       <div className="bg-zinc-900 border-4 border-lime-500 rounded-3xl p-7 w-full max-w-md shadow-2xl text-center anim-pop">
         {/* Code */}
@@ -566,7 +595,7 @@ function MgTongue({game,iAmSpinner}){
   const s=game?.mgState||{};
   const level=s.ttLevel||0;
   const results=s.ttResults||[null,null,null];
-  const tt=MOCK.tongue_twister[Math.min(level,2)];
+  const tt=CONTENT.tongue_twister[Math.min(level,2)];
   return(
     <div className="flex flex-col items-center gap-4 p-4 w-full max-w-lg mx-auto">
       <div className="flex gap-3">
@@ -585,7 +614,7 @@ function MgTongue({game,iAmSpinner}){
 
 // ── Minigame: How Many Syllables ──────────────────────────────
 function MgSyllables({game,roomId,iAmSpinner,localId}){
-  const words=MOCK.syllables;
+  const words=CONTENT.syllables;
   const s=game?.mgState||{};
   const [ans,setAns]=useState([1,1,1,1,1]);
   const [tLeft,setTLeft]=useState(45);
@@ -647,7 +676,7 @@ function MgSyllables({game,roomId,iAmSpinner,localId}){
 
 // ── Minigame: This or That ────────────────────────────────────
 function MgThisOrThat({game,roomId,iAmSpinner,localId}){
-  const items=MOCK.this_or_that;
+  const items=CONTENT.this_or_that;
   const s=game?.mgState||{};
   const [sel,setSel]=useState(items.map(()=>null));
   const [tLeft,setTLeft]=useState(45);
@@ -921,18 +950,24 @@ function MgTaquero({game,roomId,localId,iAmSpinner,players,teams,isHost}){
 
   // Mark one item correct — if order complete, auto-advance to next order
   const markCorrect=async(team)=>{
+    const bankOrders=CONTENT.taquero_orders||buildFallbackOrders(12);
+    const toItems=ord=>ord.items.map(item=>({item}));
     if(team==='A'){
       const newIdx=idxA+1;
       if(newIdx>=orderA.length){
-        // Order complete → +1, fresh order, reset progress
-        await updateDoc(rRef(roomId),{'mgState.scoreA':scoreA+1,'mgState.idxA':0,'mgState.orderA':generateTaqOrder()});
+        // Order complete → advance to next in sequence
+        const newPos=(s.posA||0)+1;
+        const nextOrder=toItems(bankOrders[s.seqA[newPos%s.seqA.length]]);
+        await updateDoc(rRef(roomId),{'mgState.scoreA':scoreA+1,'mgState.idxA':0,'mgState.posA':newPos,'mgState.orderA':nextOrder});
       } else {
         await updateDoc(rRef(roomId),{'mgState.idxA':newIdx});
       }
     } else {
       const newIdx=idxB+1;
       if(newIdx>=orderB.length){
-        await updateDoc(rRef(roomId),{'mgState.scoreB':scoreB+1,'mgState.idxB':0,'mgState.orderB':generateTaqOrder()});
+        const newPos=(s.posB||0)+1;
+        const nextOrder=toItems(bankOrders[s.seqB[newPos%s.seqB.length]]);
+        await updateDoc(rRef(roomId),{'mgState.scoreB':scoreB+1,'mgState.idxB':0,'mgState.posB':newPos,'mgState.orderB':nextOrder});
       } else {
         await updateDoc(rRef(roomId),{'mgState.idxB':newIdx});
       }
@@ -1519,7 +1554,7 @@ function MgAlphabet({game}){
 // ── Minigame: Vocab Multiple Choice ──────────────────────────
 function MgVocab({game,roomId,iAmSpinner,localId}){
   const s=game?.mgState||{};
-  const q=MOCK.vocab_mc[(s.questionIdx||0)%MOCK.vocab_mc.length];
+  const q=CONTENT.vocab_mc[(s.questionIdx||0)%CONTENT.vocab_mc.length];
   const [localSel,setLocalSel]=useState(null); // local — not locked until submit
   const [tLeft,setTLeft]=useState(30);
   const revealed=!!s.revealed;
@@ -2099,13 +2134,13 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
               else if(gid==='twister') Object.assign(initState,{ttLevel:0,ttResults:[null,null,null]});
               else if(gid==='piramide') Object.assign(initState,{history:[],currentLetter:null});
               else if(gid==='acentos'){
-                const shuffled=[...MOCK.acentos].sort(()=>Math.random()-0.5).slice(0,9);
+                const shuffled=[...CONTENT.acentos].sort(()=>Math.random()-0.5).slice(0,9);
                 Object.assign(initState,{cards:shuffled,flipped:null,answers:{},results:{},errors:0,correct:0,cardTimer:null,liveSel:null});
               }
               else if(gid==='anagrama'){
                 // 3 rounds × 1 word per player — team advances when ALL members finish each round
                 const allPlayers=players;
-                const wordPool=[...MOCK.anagrama].sort(()=>Math.random()-.5);
+                const wordPool=[...CONTENT.anagrama].sort(()=>Math.random()-.5);
                 const assignments={};
                 // Pre-assign 3 rounds worth of unique words per player
                 allPlayers.forEach((p,pi)=>{
@@ -2122,13 +2157,19 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
                 Object.assign(initState,{assignments,playerDone,teamRound,winner:null,teamDone:{}});
               }
               else if(gid==='taquero'){
-                // El Taquero Sordo — 2v2, independent orders per team, count complete orders
+                // Build pre-shuffled sequences from bank orders (or fallback)
+                const bankOrders=CONTENT.taquero_orders||buildFallbackOrders(12);
+                const n=bankOrders.length;
+                const shufIdx=()=>Array.from({length:n},(_,i)=>i).sort(()=>Math.random()-.5);
+                const seqA=shufIdx(),seqB=shufIdx();
+                const toItems=ord=>ord.items.map(item=>({item}));
                 Object.assign(initState,{
                   taqSubPhase:'PICK_PARTNER',
                   taqPartnerA:null,taqRivalTeam:null,
-                  taqRivalRep:null,      // whisperer of rival team (📱 reads)
-                  taqRivalListener:null, // listener of rival team (🎧 guesses)
-                  orderA:generateTaqOrder(),orderB:generateTaqOrder(),
+                  taqRivalRep:null,taqRivalListener:null,
+                  seqA,seqB,posA:0,posB:0,
+                  orderA:toItems(bankOrders[seqA[0]]),
+                  orderB:toItems(bankOrders[seqB[0]]),
                   scoreA:0,scoreB:0,idxA:0,idxB:0,timerEnd:null,
                 });
               }
@@ -2805,6 +2846,28 @@ function App(){
   const [roomTeams,setRoomTeams]=useState(null); // fetched teams for profile
   const unsub=useRef(null);
   const toast_=msg=>mkToast(setToast,msg);
+
+  // Load content bank if ?bankId= is present (fire-and-forget — done before game starts)
+  useEffect(()=>{
+    if(!BANK_ID)return;
+    getDoc(doc(db,`artifacts/periplo-app-v1/users/${BANK_UID}/quizzes`,BANK_ID))
+      .then(snap=>{
+        if(!snap.exists())return;
+        const d=snap.data();
+        BANK_TITLE=d.title||'';
+        const c=d.content||{};
+        Object.assign(CONTENT,{
+          tongue_twister: c.twister?.length   ? c.twister   : MOCK.tongue_twister,
+          syllables:      c.silabas?.length   ? c.silabas   : MOCK.syllables,
+          this_or_that:   c.tilde?.length     ? c.tilde     : MOCK.this_or_that,
+          acentos:        c.acentos?.length   ? c.acentos   : MOCK.acentos,
+          vocab_mc:       c.vocab?.length     ? c.vocab     : MOCK.vocab_mc,
+          anagrama:       c.anagrama?.length  ? c.anagrama  : MOCK.anagrama,
+          taquero_orders: c.taquero?.orders   || null,
+        });
+      })
+      .catch(e=>console.warn('Bank load failed:',e));
+  },[]);
 
   // If opened directly with ?join=true&code=XXXX, fetch room teams for profile screen
   useEffect(()=>{
