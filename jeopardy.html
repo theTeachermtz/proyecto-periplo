@@ -143,7 +143,13 @@ const mkToast = (set,msg,ms=2400) => {set(msg);setTimeout(()=>set(''),ms);};
 const fireConfetti = () => confetti({particleCount:200,spread:90,origin:{y:0.55},colors:['#fbbf24','#3b82f6','#22c55e','#ef4444','#a855f7']});
 const buildBoard = (content) => {
   const cats = Object.keys(CAT_META).filter(k => (content?.[k]?.length||0) > 0).slice(0,6);
-  return {categories:cats, revealed:{}, active:null};
+  // Store extracted questions in the room so students get them via Firestore
+  // regardless of whether they have the quiz ID in their URL
+  const questions = {};
+  cats.forEach(cat => {
+    questions[cat] = PTS.map((_,idx) => content?.[cat]?.[idx] || null);
+  });
+  return {categories:cats, revealed:{}, active:null, questions};
 };
 const mkRoom = (hostName,hostEmoji,tc,quizId) => ({
   status:'LOBBY', hostName, hostEmoji, teamCount:tc, quizId,
@@ -806,6 +812,10 @@ function ScreenGame({game,roomId,isHost,localId,quizContent,onLeave}){
   const myTeamId=myPlayer?.teamId??null;
   const ansTeam=teams.find(t=>t.id===active?.answerTeamId);
 
+  // Get question from room (board.questions, written at startGame) OR local cache
+  // This ensures students without ?id= in their URL still see the questions
+  const getItem=(cat,qIdx)=>game?.board?.questions?.[cat]?.[qIdx]??quizContent?.[cat]?.[qIdx]??null;
+
   useEffect(()=>{
     if(active?.result==='wrong'){setShake(true);setTimeout(()=>setShake(false),600);}
   },[active?.result]);
@@ -880,7 +890,7 @@ function ScreenGame({game,roomId,isHost,localId,quizContent,onLeave}){
   const ActiveQ=()=>{
     if(!active)return null;
     const meta=CAT_META[active.cat]||{};
-    const item=quizContent?.[active.cat]?.[active.qIdx];
+    const item=getItem(active.cat, active.qIdx);
     const amAnswering=!isHost&&active.answerTeamId===myTeamId;
 
     // SELECT_TEAM: host picks which team answers
@@ -951,8 +961,15 @@ function ScreenGame({game,roomId,isHost,localId,quizContent,onLeave}){
             </div>
           )}
 
-          {/* Question content — all phases show the question */}
-          {item&&(
+          {/* Waiting for team assignment (SELECT_TEAM phase, non-host) */}
+          {active.phase==='SELECT_TEAM'&&!isHost&&(
+            <p className="text-amber-400 font-bold text-sm animate-pulse text-center">
+              ⏳ Teacher is choosing which team answers...
+            </p>
+          )}
+
+          {/* Question content — all phases after SELECT_TEAM show the question */}
+          {item&&active.phase!=='SELECT_TEAM'&&(
             <QuestionBody
               cat={active.cat}
               item={item}
@@ -961,11 +978,21 @@ function ScreenGame({game,roomId,isHost,localId,quizContent,onLeave}){
             />
           )}
 
+          {/* Fallback: item not available yet (edge case) */}
+          {!item&&active.phase!=='SELECT_TEAM'&&(
+            <p className="text-slate-500 font-bold text-sm animate-pulse text-center">⏳ Loading question...</p>
+          )}
+
           {/* Not-your-turn notice for students */}
           {isAnswering&&!amAnswering&&!isHost&&(
             <p className="text-slate-500 font-bold text-sm animate-pulse text-center">
               {ansTeam?`⏳ ${ansTeam.emoji} ${ansTeam.name} is answering...`:'Waiting...'}
             </p>
+          )}
+
+          {/* Your turn — if answering and it IS my team */}
+          {isAnswering&&amAnswering&&!item&&(
+            <p className="text-amber-400 font-bold text-sm animate-pulse text-center">⏳ Loading your question...</p>
           )}
 
           {/* Waiting for teacher to judge */}
@@ -1014,7 +1041,8 @@ function ScreenGame({game,roomId,isHost,localId,quizContent,onLeave}){
   if(isHost){
     const allDone=cats.length>0&&cats.every(cat=>PTS.every(pts=>{
       const qIdx=PTS.indexOf(pts);
-      return revealed[`${cat}-${pts}`]||(quizContent?.[cat]?.length||0)<=qIdx;
+      const has=getItem(cat,qIdx)!==null&&getItem(cat,qIdx)!==undefined;
+      return revealed[`${cat}-${pts}`]||!has;
     }));
     return(
       <div className="h-full flex flex-col bg-[#030712] relative overflow-hidden">
@@ -1057,7 +1085,7 @@ function ScreenGame({game,roomId,isHost,localId,quizContent,onLeave}){
                 cats.map(cat=>{
                   const key=`${cat}-${pts}`;
                   const qIdx=PTS.indexOf(pts);
-                  const hasQ=(quizContent?.[cat]?.length||0)>qIdx;
+                  const hasQ=getItem(cat,qIdx)!==null&&getItem(cat,qIdx)!==undefined;
                   const isRev=!!revealed[key];
                   const isAct=active?.cat===cat&&active?.pts===pts;
                   return(
@@ -1082,7 +1110,7 @@ function ScreenGame({game,roomId,isHost,localId,quizContent,onLeave}){
             <span className="text-xs text-amber-400 font-black animate-pulse">🏁 Board complete!</span>
           )}
           <div className="text-xs text-slate-600 font-bold">
-            {cats.reduce((n,cat)=>n+PTS.filter(pts=>revealed[`${cat}-${pts}`]).length,0)} / {cats.reduce((n,cat)=>n+Math.min(5,quizContent?.[cat]?.length||0),0)} done
+            {cats.reduce((n,cat)=>n+PTS.filter(pts=>revealed[`${cat}-${pts}`]).length,0)} / {cats.reduce((n,cat)=>n+PTS.filter((_,qi)=>getItem(cat,qi)!==null&&getItem(cat,qi)!==undefined).length,0)} done
           </div>
         </div>
       </div>
@@ -1130,7 +1158,7 @@ function ScreenGame({game,roomId,isHost,localId,quizContent,onLeave}){
                 {PTS.map(pts=>cats.map(cat=>{
                   const key=`${cat}-${pts}`;
                   const qIdx=PTS.indexOf(pts);
-                  const hasQ=(quizContent?.[cat]?.length||0)>qIdx;
+                  const hasQ=getItem(cat,qIdx)!==null&&getItem(cat,qIdx)!==undefined;
                   const rev=revealed[key];
                   return(
                     <div key={key} className={`h-6 rounded text-center text-[10px] font-black flex items-center justify-center transition-all ${rev?'bg-slate-800/40 text-slate-700':!hasQ?'bg-slate-900/20 text-slate-800':'bg-blue-900/60 border border-blue-700/40 text-blue-400'}`}>
