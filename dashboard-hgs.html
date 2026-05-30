@@ -10,6 +10,7 @@
   <script type="importmap">
   {"imports":{"react":"https://esm.sh/react@18.2.0","react-dom/client":"https://esm.sh/react-dom@18.2.0/client","firebase/app":"https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js","firebase/firestore":"https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"}}
   </script>
+  <script src="periplo-taxonomy-es.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
@@ -435,6 +436,47 @@ function ReviewScreen({content,title,setTitle,onSave,isSaving}){
   );
 }
 
+// ─── Taxonomy Modal ───────────────────────────────────────────
+function TaxModal({saveLevels,setSaveLevels,temaInput,setTemaInput,isSaving,onConfirm,onCancel}){
+  const NEW_LEVELS=(window.PERIPLO_TAXONOMY_ES?.NEW_LEVELS)||["ES1","ES2","ES3","ES4","ES5","ES-Mix1"];
+  const valid=saveLevels.length>0&&temaInput.trim().length>0;
+  return(
+    <div className="fixed inset-0 bg-black/90 z-[200] flex items-center justify-center p-4 backdrop-blur-sm">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-md p-6 shadow-2xl">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-black text-white">🌶️ Clasificar Banco HGS</h2>
+          <button onClick={onCancel} className="text-zinc-500 hover:text-white p-2 rounded-full hover:bg-zinc-800 text-lg leading-none">✕</button>
+        </div>
+        <div className="space-y-6">
+          <div>
+            <label className="text-xs font-black text-lime-400 uppercase tracking-widest block mb-3">1. Nivel del estudiante <span className="text-red-400">*</span></label>
+            <div className="flex flex-wrap gap-2">
+              {NEW_LEVELS.map(lvl=>(
+                <button key={lvl}
+                  onClick={()=>setSaveLevels(p=>p.includes(lvl)?p.filter(l=>l!==lvl):[...p,lvl])}
+                  className={`px-4 py-2 rounded-xl font-bold text-sm border-2 transition-all ${saveLevels.includes(lvl)?'bg-lime-600 border-lime-500 text-white shadow-md':'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-lime-500 hover:text-lime-300'}`}>
+                  {lvl}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-black text-amber-400 uppercase tracking-widest block mb-3">2. Tema del taller <span className="text-red-400">*</span></label>
+            <input value={temaInput} onChange={e=>setTemaInput(e.target.value)}
+              placeholder="Ej: Pronunciación, Día de Muertos, Jerga mexicana…"
+              className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-3 text-sm font-bold text-white outline-none focus:border-amber-500 placeholder-zinc-600"/>
+          </div>
+        </div>
+        <button onClick={onConfirm} disabled={isSaving||!valid}
+          className="btn w-full mt-6 bg-lime-600 hover:bg-lime-500 disabled:opacity-40 disabled:cursor-not-allowed text-white py-4 rounded-xl font-black text-base flex items-center justify-center gap-2">
+          {isSaving?<><span className="animate-spin inline-block">🌶️</span>Guardando...</>:<>💾 Confirmar y Guardar</>}
+        </button>
+        {!valid&&<p className="text-center text-xs text-zinc-600 mt-2">Selecciona nivel y escribe el tema para continuar</p>}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Dashboard ────────────────────────────────────────────
 function Dashboard(){
   const[apiKey,setApiKey]=useState(localStorage.getItem('periplo_google_key')||'AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo');
@@ -450,6 +492,10 @@ function Dashboard(){
   const[title,setTitle]=useState('');
   const[isSaving,setIsSaving]=useState(false);
   const[editingId,setEditingId]=useState(null);
+  const[showTaxModal,setShowTaxModal]=useState(false);
+  const[pendingContent,setPendingContent]=useState(null);
+  const[saveLevels,setSaveLevels]=useState([]);
+  const[temaInput,setTemaInput]=useState('');
 
   useEffect(()=>{
     const eid=urlParams.get('edit');
@@ -457,7 +503,11 @@ function Dashboard(){
     (async()=>{
       try{
         const s=await getDoc(doc(db,QUIZZES_PATH,eid));
-        if(s.exists()){const d=s.data();setContent(d.content);setTitle(d.title||'');setEditingId(eid);}
+        if(s.exists()){
+            const d=s.data();
+            setContent(d.content);setTitle(d.title||'');setEditingId(eid);
+            if(d.tags){setSaveLevels(d.tags.levels||[]);setTemaInput((d.tags.topics||[])[0]||'');}
+          }
       }catch(e){alert(e.message);}
     })();
   },[]);
@@ -502,13 +552,19 @@ function Dashboard(){
     setIsGenerating(false);
   };
 
-  const saveToFirebase=async(finalContent)=>{
+  const handleSaveRequest=(finalContent)=>{
     if(!title.trim())return alert('Ponle nombre al banco.');
+    setPendingContent(finalContent);
+    setShowTaxModal(true);
+  };
+
+  const saveToFirebase=async(tags)=>{
+    if(!pendingContent)return;
     setIsSaving(true);
     try{
       const fp=urlParams.get('folder');
       const pp=(fp&&fp!=='undefined'&&fp!=='null')?decodeURIComponent(fp):'';
-      const payload={title,type:'HGS_BANK',content:finalContent,createdAt:serverTimestamp(),parentPath:pp};
+      const payload={title,type:'HGS_BANK',content:pendingContent,tags,createdAt:serverTimestamp(),parentPath:pp};
       if(editingId){
         await updateDoc(doc(db,QUIZZES_PATH,editingId),{...payload,updatedAt:serverTimestamp()});
       }else{
@@ -520,10 +576,19 @@ function Dashboard(){
   };
 
   if(content)return(
-    <ReviewScreen
-      content={content} title={title} setTitle={setTitle}
-      onSave={saveToFirebase} isSaving={isSaving}
-    />
+    <>
+      {showTaxModal&&<TaxModal
+        saveLevels={saveLevels} setSaveLevels={setSaveLevels}
+        temaInput={temaInput} setTemaInput={setTemaInput}
+        isSaving={isSaving}
+        onConfirm={()=>saveToFirebase({levels:saveLevels,categories:['holyguac'],topics:temaInput.trim()?[temaInput.trim()]:[]})}
+        onCancel={()=>{setShowTaxModal(false);setPendingContent(null);}}
+      />}
+      <ReviewScreen
+        content={content} title={title} setTitle={setTitle}
+        onSave={handleSaveRequest} isSaving={isSaving}
+      />
+    </>
   );
 
   const activeCats=CATS.filter(c=>enabled[c.id]);
