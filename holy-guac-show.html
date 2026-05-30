@@ -618,7 +618,8 @@ function MgTongue({game,iAmSpinner}){
 // ── Minigame: How Many Syllables ──────────────────────────────
 function MgSyllables({game,roomId,iAmSpinner,localId}){
   const s=game?.mgState||{};
-  const words=s.words?.length?s.words:[...CONTENT.syllables].sort(()=>Math.random()-.5).slice(0,5);
+  const allWords=s.words?.length?s.words:[...CONTENT.syllables].sort(()=>Math.random()-.5);
+  const words=allWords.slice(0,7); // always cap at 7
   const [ans,setAns]=useState(()=>words.map(()=>1));
   const [tLeft,setTLeft]=useState(45);
   const locked=!!(s.locked||(s.timerEnd&&Date.now()>s.timerEnd));
@@ -694,7 +695,8 @@ function MgSyllables({game,roomId,iAmSpinner,localId}){
 // ── Minigame: This or That ────────────────────────────────────
 function MgThisOrThat({game,roomId,iAmSpinner,localId}){
   const s=game?.mgState||{};
-  const items=s.items?.length?s.items:[...CONTENT.this_or_that].sort(()=>Math.random()-.5).slice(0,5);
+  const allItems=s.items?.length?s.items:[...CONTENT.this_or_that].sort(()=>Math.random()-.5);
+  const items=allItems.slice(0,5); // always cap at 5
   const [sel,setSel]=useState(()=>items.map(()=>null));
   const [tLeft,setTLeft]=useState(45);
   const locked=!!(s.locked||(s.timerEnd&&Date.now()>s.timerEnd));
@@ -2198,7 +2200,7 @@ function ScreenPlaying({game,roomId,isHost,localId,onLeave}){
               const gid=game?.minigame;
               let initState={result:null};
               if(gid==='silabas'){
-                const wPool=[...CONTENT.syllables].sort(()=>Math.random()-.5).slice(0,5);
+                const wPool=[...CONTENT.syllables].sort(()=>Math.random()-.5).slice(0,7);
                 Object.assign(initState,{timerEnd:Date.now()+45000,playerAnswers:{},revealed:false,words:wPool});
               }
               else if(gid==='tilde'){
@@ -2944,6 +2946,11 @@ function ModPanel({game,roomId,players,teams,onClose,onLeave}){
   );
 }
 
+// ── Session persistence helpers ───────────────────────────────
+const saveSession=(rId,lId,host)=>{try{localStorage.setItem('hgs_session',JSON.stringify({roomId:rId,localId:lId,isHost:host}));}catch{}};
+const clearSession=()=>{try{localStorage.removeItem('hgs_session');}catch{}};
+const loadSession=()=>{try{return JSON.parse(localStorage.getItem('hgs_session')||'null');}catch{return null;}};
+
 // ════════════════════════════════════════════════════════════════
 // ROOT APP
 // ════════════════════════════════════════════════════════════════
@@ -2989,6 +2996,30 @@ function App(){
   // Load from room document (players) — fires when they first see game.bankId
   useEffect(()=>{ loadBank(game?.bankId,game?.bankUid); },[game?.bankId]);
 
+  // ── Restore session on page refresh / reopen ─────────────────
+  useEffect(()=>{
+    const saved=loadSession();
+    if(!saved?.roomId)return;
+    getDoc(rRef(saved.roomId)).then(snap=>{
+      if(!snap.exists()||snap.data().status==='CLOSED'){clearSession();return;}
+      const d=snap.data();
+      setRoomId(saved.roomId);
+      setLocalId(saved.localId);
+      setIsHost(saved.isHost);
+      setGame(d);
+      subscribeRoom(saved.roomId);
+      setScreen(d.status==='PLAYING'?'PLAYING':'LOBBY');
+    }).catch(()=>clearSession());
+  },[]);// eslint-disable-line
+
+  // ── Host beforeunload — ask before closing tab ────────────────
+  useEffect(()=>{
+    if(!isHost||!roomId)return;
+    const h=e=>{e.preventDefault();e.returnValue='';return '';};
+    window.addEventListener('beforeunload',h);
+    return()=>window.removeEventListener('beforeunload',h);
+  },[isHost,roomId]);
+
   // If opened directly with ?join=true&code=XXXX, fetch room teams for profile screen
   useEffect(()=>{
     if(IS_JOIN&&URL_CODE&&!roomTeams){
@@ -3024,7 +3055,7 @@ function App(){
     return()=>document.removeEventListener('visibilitychange',onVisible);
   },[roomId,screen,subscribeRoom]);
 
-  const resetState=()=>{setScreen(IS_JOIN?'JOIN':'HOME');setRoomId('');setGame(null);setLocalId(null);setIsHost(false);};
+  const resetState=()=>{clearSession();setScreen(IS_JOIN?'JOIN':'HOME');setRoomId('');setGame(null);setLocalId(null);setIsHost(false);};
 
   // Validate code before profile
   const validateCode=async code=>{
@@ -3046,7 +3077,9 @@ function App(){
       const r=mkRoom(name,emoji,role,4);
       if(BANK_ID){r.bankId=BANK_ID;r.bankUid=BANK_UID;}
       await setDoc(rRef(id),r);
-      setRoomId(id); setLocalId(role==='PLAYER_MOD'?1:'HOST'); setGame(r);
+      const hLid=role==='PLAYER_MOD'?1:'HOST';
+      setRoomId(id); setLocalId(hLid); setGame(r);
+      saveSession(id,hLid,true);
       subscribeRoom(id); setScreen('LOBBY');
     } else {
       let aid=null;
@@ -3062,7 +3095,7 @@ function App(){
           const newTeams=(d.teams||[]).map((t,i)=>i===teamIdx?{...t,players:[...t.players,name]}:t);
           txn.update(rRef(roomId),{players:[...ps,newPlayer],teams:newTeams});
         });
-        setLocalId(aid); subscribeRoom(roomId); setScreen('LOBBY');
+        setLocalId(aid); saveSession(roomId,aid,false); subscribeRoom(roomId); setScreen('LOBBY');
       }catch(e){toast_(e.message==='NO_ROOM'?'❌ Sala no encontrada':'❌ Error al unirse');resetState();}
     }
   };
