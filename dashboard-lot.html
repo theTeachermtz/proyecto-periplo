@@ -17,6 +17,7 @@
     }
     </script>
     <script src="periplo-config.js"></script>
+    <script src="periplo-taxonomy-es.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
         body { user-select: none; -webkit-user-select: none; background-color: #09090b; }
@@ -31,7 +32,7 @@
         import { createRoot } from 'react-dom/client';
         import { initializeApp } from 'firebase/app';
         import { getFirestore, collection, addDoc, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-        import { Save, ArrowLeft, Sparkles, Plus, Trash2, Loader2, X, Key, Search, Shuffle } from 'lucide-react';
+        import { Save, ArrowLeft, Sparkles, Plus, Trash2, Loader2, X, Key, Search, Shuffle, Tags } from 'lucide-react';
 
         const app = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
         const db = getFirestore(app);
@@ -40,6 +41,9 @@
         const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001';
         const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
         const BACK_URL = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html' : 'index.html';
+
+        const taxonomyEs = window.PERIPLO_TAXONOMY_ES || { NEW_LEVELS: [], NEW_CATS: [], MACRO_SKILLS: [], getAllTopicsForCategory: () => [] };
+        const { NEW_LEVELS, NEW_CATS, MACRO_SKILLS, getAllTopicsForCategory } = taxonomyEs;
 
         const THEMES = [
             { id:'taco',       label:'Taco House',     icon:'🌮', nav1:'#450a0a', nav2:'#7f1d1d' },
@@ -67,7 +71,17 @@
             const [selectedModel, setSelectedModel] = useState('');
             const [isLoadingModels, setIsLoadingModels] = useState(false);
 
+            const [showSaveModal, setShowSaveModal] = useState(false);
+            const [saveLevels, setSaveLevels]       = useState([]);
+            const [saveCats, setSaveCats]           = useState([]);
+            const [saveTopics, setSaveTopics]       = useState([]);
+
             const abortControllerRef = useRef(null);
+
+            const toggleSelection = (arr, setArr, item) => {
+                if (arr.includes(item)) setArr(arr.filter(i => i !== item));
+                else setArr([...arr, item]);
+            };
 
             useEffect(() => {
                 const savedKey = localStorage.getItem('periplo_google_key');
@@ -83,6 +97,11 @@
                             setTheme(data.theme || 'taco');
                             if (data.content?.cards) {
                                 setCards(data.content.cards.map((c, i) => ({ ...c, id: Date.now() + i })));
+                            }
+                            if (data.tags) {
+                                setSaveLevels(data.tags.levels || []);
+                                setSaveCats(data.tags.categories || []);
+                                setSaveTopics(data.tags.topics || []);
                             }
                             setEditingId(editId);
                         }
@@ -170,8 +189,13 @@
                 }
             };
 
-            const saveDeck = async () => {
+            const handlePreSave = () => {
                 if (!title.trim() || cards.length === 0) return alert("Falta el título o cartas.");
+                setShowSaveModal(true);
+            };
+
+            const executeFinalSave = async () => {
+                setShowSaveModal(false);
                 setLoading(true);
 
                 const cleanCards = cards.map((c, index) => ({
@@ -183,12 +207,18 @@
                     emoji: c.emoji
                 }));
 
+                const tags = { levels: saveLevels, categories: saveCats, topics: saveTopics };
+                const folderParam = urlParams.get('folder');
+                const parentPath = (folderParam && folderParam !== 'undefined' && folderParam !== 'null') ? decodeURIComponent(folderParam) : '';
+
                 const data = {
                     title,
                     type: 'LOTERIA',
                     language,
                     theme,
                     content: { cards: cleanCards },
+                    tags,
+                    parentPath,
                     cardCount: cleanCards.length,
                     updatedAt: serverTimestamp()
                 };
@@ -201,7 +231,6 @@
                         const ref = await addDoc(collection(db, QUIZZES_PATH), { ...data, createdAt: serverTimestamp() });
                         docId = ref.id;
                     }
-                    alert("¡Lotería guardada con éxito!");
                     window.location.href = `loteria.html?id=${docId}&uid=${TEACHER_UID}`;
                 } catch (e) {
                     alert(e.message);
@@ -218,6 +247,111 @@
                             <button onClick={cancelMagia} className="bg-rose-600 px-6 py-3 rounded-full flex gap-2 font-black shadow-xl">
                                 <X size={20}/> CANCELAR
                             </button>
+                        </div>
+                    )}
+
+                    {/* ================================================================ */}
+                    {/* MODAL DE CLASIFICACIÓN (TAXONOMY)                               */}
+                    {/* ================================================================ */}
+                    {showSaveModal && (
+                        <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-2xl p-6 shadow-2xl max-h-[90vh] flex flex-col">
+                                <div className="flex justify-between items-center mb-6 shrink-0">
+                                    <h2 className="text-xl font-black flex items-center gap-2 text-white">
+                                        <Tags className="text-sky-400"/> Clasificar Mazo de Lotería
+                                    </h2>
+                                    <button onClick={() => setShowSaveModal(false)} className="text-zinc-500 hover:text-white p-2 rounded-full hover:bg-zinc-800 transition">
+                                        <X size={20}/>
+                                    </button>
+                                </div>
+
+                                <div className="space-y-8 overflow-y-auto custom-scrollbar pr-2 flex-1">
+
+                                    {/* PASO 1 — NIVELES */}
+                                    <div>
+                                        <label className="block text-xs font-black text-sky-400 uppercase tracking-widest mb-3">
+                                            1. Nivel del Estudiante <span className="text-zinc-600 normal-case font-medium">(selección múltiple)</span>
+                                        </label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {NEW_LEVELS.map(lvl => (
+                                                <button key={lvl}
+                                                    onClick={() => toggleSelection(saveLevels, setSaveLevels, lvl)}
+                                                    className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveLevels.includes(lvl) ? 'bg-sky-600 border-sky-600 text-white shadow-md' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-sky-500 hover:text-sky-300'}`}>
+                                                    {lvl}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* PASO 2 — CATEGORÍAS */}
+                                    <div>
+                                        <label className="block text-xs font-black text-emerald-400 uppercase tracking-widest mb-3">
+                                            2. Categoría <span className="text-zinc-600 normal-case font-medium">(selección múltiple)</span>
+                                        </label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {NEW_CATS.map(cat => (
+                                                <button key={cat.id}
+                                                    onClick={() => toggleSelection(saveCats, setSaveCats, cat.id)}
+                                                    className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveCats.includes(cat.id) ? 'bg-emerald-600 border-emerald-600 text-white shadow-md' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-emerald-500 hover:text-emerald-300'}`}>
+                                                    {cat.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* PASO 3 — TEMAS */}
+                                    {saveCats.length > 0 && saveLevels.length > 0 && (
+                                        <div className="bg-zinc-950/50 p-4 rounded-2xl border border-zinc-800 space-y-4">
+                                            <label className="block text-xs font-black text-amber-400 uppercase tracking-widest mb-1">
+                                                3. Temas Específicos
+                                            </label>
+
+                                            {saveCats.map(catId => {
+                                                if (catId === 'otro') return null;
+                                                const catLabel = NEW_CATS.find(c => c.id === catId)?.label || catId;
+                                                const topics   = getAllTopicsForCategory(catId, saveLevels);
+                                                if (topics.length === 0) return null;
+                                                return (
+                                                    <div key={catId} className="bg-zinc-900/50 rounded-xl p-3 border border-zinc-800/50">
+                                                        <h4 className="text-[10px] font-black uppercase text-zinc-500 tracking-wider mb-2">{catLabel}</h4>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {topics.map(topic => (
+                                                                <button key={topic}
+                                                                    onClick={() => toggleSelection(saveTopics, setSaveTopics, topic)}
+                                                                    className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all border ${saveTopics.includes(topic) ? 'bg-zinc-200 border-zinc-200 text-zinc-900 shadow-sm' : 'bg-transparent border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'}`}>
+                                                                    {topic}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+
+                                            {saveCats.includes('otro') && (
+                                                <div className="bg-amber-900/10 rounded-xl p-3 border border-amber-900/30">
+                                                    <h4 className="text-[10px] font-black uppercase text-amber-600 tracking-wider mb-2">Macro Habilidades</h4>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {MACRO_SKILLS.map(skill => (
+                                                            <button key={skill}
+                                                                onClick={() => toggleSelection(saveTopics, setSaveTopics, skill)}
+                                                                className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all border ${saveTopics.includes(skill) ? 'bg-amber-500 border-amber-500 text-zinc-900 shadow-sm' : 'bg-transparent border-amber-900/50 text-amber-500 hover:border-amber-500'}`}>
+                                                                {skill}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <button onClick={executeFinalSave}
+                                    disabled={loading || saveLevels.length === 0 || saveCats.length === 0}
+                                    className="w-full mt-6 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:bg-zinc-800 disabled:cursor-not-allowed text-white py-4 rounded-xl font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 shrink-0">
+                                    <Save size={18}/>
+                                    {(saveLevels.length === 0 || saveCats.length === 0) ? "Selecciona Nivel y Categoría" : "Confirmar y Guardar Lotería"}
+                                </button>
+                            </div>
                         </div>
                     )}
 
@@ -251,7 +385,7 @@
                             <button onClick={() => setMagiaModal(true)} className="bg-sky-500 text-black px-4 py-2 rounded-xl font-bold flex gap-2 items-center">
                                 <Sparkles size={18}/> IA Assist
                             </button>
-                            <button onClick={saveDeck} className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold flex gap-2 items-center">
+                            <button onClick={handlePreSave} className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold flex gap-2 items-center">
                                 <Save size={18}/> Guardar
                             </button>
                         </div>
