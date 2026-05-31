@@ -358,3 +358,17 @@ const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001';
 const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
 const BACK_URL = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html' : 'index.html';
 ```
+
+---
+
+## Flujo de trabajo con Git (Israel + Anita)
+
+Israel y Anita trabajan el mismo repo en paralelo. **Anita suele editar archivos directo en GitHub web** (sobre todo los renderers `-es` como `flashcards-es.html`), mientras Israel trabaja en local. Esto causa que el local de Israel quede desactualizado y aparezcan conflictos al commitear/sincronizar.
+
+**Regla para evitar conflictos:** antes de empezar a trabajar en cualquier archivo en local, hacer `git pull` primero para traer lo que Anita haya subido por web.
+
+**Si ya hay un conflicto al intentar commitear:**
+1. `git fetch origin` y comparar las versiones — a menudo los cambios de ambos son funcionalmente idénticos (solo difieren en espacios en blanco).
+2. Confirmar con Israel con cuál versión quedarse antes de resolver.
+3. Resolver tomando la versión acordada (`git checkout --ours/--theirs <archivo>`), cerrar el merge con un commit de merge (**no destructivo** — conserva el historial de ambos) y hacer push.
+4. Nunca hacer force-push para "limpiar" el historial sin que Israel lo pida — destruiría los commits de Anita.
