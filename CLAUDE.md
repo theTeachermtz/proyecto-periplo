@@ -372,3 +372,55 @@ Israel y Anita trabajan el mismo repo en paralelo. **Anita suele editar archivos
 2. Confirmar con Israel con cuál versión quedarse antes de resolver.
 3. Resolver tomando la versión acordada (`git checkout --ours/--theirs <archivo>`), cerrar el merge con un commit de merge (**no destructivo** — conserva el historial de ambos) y hacer push.
 4. Nunca hacer force-push para "limpiar" el historial sin que Israel lo pida — destruiría los commits de Anita.
+
+---
+
+## Banner estándar Periplo (renderers)
+
+Todos los renderers (tanto inglés como `-es`) usan el mismo banner sticky en la parte superior. **No inventar headers propios.**
+
+### Estructura JSX
+
+```jsx
+<header className="sticky top-0 z-20 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between px-6 py-3"
+        style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+    {/* LEFT: badge P + divider + título + subtítulo */}
+    <div className="flex items-center gap-4">
+        <button onClick={goBack} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20">P</div>
+        </button>
+        <div className="hidden sm:block w-px h-8 bg-zinc-800 mx-1"/>
+        <div>
+            <h1 className="text-lg font-black text-white leading-none tracking-tight">{título del juego}</h1>
+            <p className="text-[10px] font-bold uppercase tracking-widest mt-1" style={{ color: accentColor }}>Modo: {nombre}</p>
+        </div>
+    </div>
+    {/* RIGHT: botones específicos del juego */}
+    <div className="flex items-center gap-2">
+        ...
+    </div>
+</header>
+```
+
+### Reglas
+
+| Elemento | Valor fijo |
+|---|---|
+| Background | `bg-zinc-950` — siempre oscuro, no cambia con dark mode toggle |
+| Badge | `bg-indigo-600 rounded-xl w-10 h-10` con letra **P** en blanco, `font-black` |
+| Divider | `w-px h-8 bg-zinc-800` |
+| Título | `text-lg font-black text-white tracking-tight` |
+| Subtítulo | `text-[10px] font-bold uppercase tracking-widest` — color varía por juego |
+| Font del banner | `Plus Jakarta Sans` (importar junto con el font de contenido) |
+| Sticky | `sticky top-0 z-20` |
+
+### Colores de subtítulo por tipo de juego
+
+| Tipo | Color |
+|---|---|
+| Vocab / Flashcards (inglés) | `text-sky-500` |
+| Grammar / Anagram | `text-rose-500` |
+| Cultural / Recuérdalo | `text-orange-400` |
+| Listening | `text-emerald-400` |
+| Reading | `text-amber-400` |
+| Conversación | `text-violet-400` |

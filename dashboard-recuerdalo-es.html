@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Recuérdalo Builder | Periplo Español</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' }; document.documentElement.classList.add('dark');</script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="periplo-taxonomy-es.js"></script>
+    <style>
+        body { user-select: none; -webkit-user-select: none; }
+        input, textarea { user-select: text; -webkit-user-select: text; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        .drop-active { border-color: #f97316 !important; background: rgba(249,115,22,0.08) !important; }
+    </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100">
+    <div id="root"></div>
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getFirestore, collection, addDoc, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+        import { Save, ArrowLeft, Sparkles, Plus, Trash2, Loader2, X, Key, Search, Tags, Image } from 'lucide-react';
+
+        // ── Firebase ─────────────────────────────────────────────────────────
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo", storageBucket: "proyecto-periplo.firebasestorage.app", messagingSenderId: "236795998392", appId: "1:236795998392:web:0da24b4f018611b55c844d" };
+        const app = initializeApp(firebaseConfig);
+        const db  = getFirestore(app);
+
+        const FS_APP_ID   = 'periplo-app-v1';
+        const TEACHER_UID = 'teacher_anita_001';
+
+        const { NEW_LEVELS, NEW_CATS, MACRO_SKILLS, getAllTopicsForCategory } = window.PERIPLO_TAXONOMY_ES;
+
+        // ── Empty card factory ────────────────────────────────────────────────
+        const makeCard = (n = Date.now()) => ({
+            id:           n,
+            wordEs:       '',
+            wordEn:       '',
+            emoji:        '',
+            definition:   '',
+            culturalNote: '',
+            relatedWords: [],
+            _relInput:    '',   // UI-only, stripped before save
+            imageData:    null, // session-only, stripped before save
+        });
+
+        // ── Component ────────────────────────────────────────────────────────
+        const RecuerdaloBuilder = () => {
+            const [title,      setTitle]     = useState('');
+            const [cards,      setCards]     = useState([makeCard(1)]);
+            const [loading,    setLoading]   = useState(false);
+            const [editingId,  setEditingId] = useState(null);
+
+            // IA Assist
+            const [magiaModal,       setMagiaModal]       = useState(false);
+            const [omniPrompt,       setOmniPrompt]       = useState('');
+            const [targetCount,      setTargetCount]      = useState(8);
+            const [apiKey,           setApiKey]           = useState('');
+            const [availableModels,  setAvailableModels]  = useState([]);
+            const [selectedModel,    setSelectedModel]    = useState('');
+            const [isLoadingModels,  setIsLoadingModels]  = useState(false);
+
+            // Save flow
+            const [showSaveModal,   setShowSaveModal]   = useState(false);
+            const [saveLevels,      setSaveLevels]       = useState([]);
+            const [saveCats,        setSaveCats]         = useState([]);
+            const [saveTopics,      setSaveTopics]       = useState([]);
+            const [showPreviewModal,setShowPreviewModal] = useState(false);
+            const [savedDocId,      setSavedDocId]       = useState(null);
+
+            const abortControllerRef = useRef(null);
+
+            const toggleSelection = (arr, setArr, item) =>
+                arr.includes(item) ? setArr(arr.filter(i => i !== item)) : setArr([...arr, item]);
+
+            // ── Load on edit ──────────────────────────────────────────────────
+            useEffect(() => {
+                const savedKey = localStorage.getItem('periplo_google_key');
+                if (savedKey) setApiKey(savedKey);
+
+                const params = new URLSearchParams(window.location.search);
+                const editId = params.get('edit');
+                if (editId) {
+                    getDoc(doc(db, `artifacts/${FS_APP_ID}/users/${TEACHER_UID}/quizzes`, editId)).then(snap => {
+                        if (snap.exists()) {
+                            const data = snap.data();
+                            setTitle(data.title || '');
+                            if (data.content?.cards) {
+                                setCards(data.content.cards.map((c, i) => ({
+                                    ...makeCard(Date.now() + i),
+                                    ...c,
+                                    imageData:   null,
+                                    _relInput:   '',
+                                    relatedWords: c.relatedWords || [],
+                                })));
+                            }
+                            if (data.tags) {
+                                setSaveLevels(data.tags.levels  || []);
+                                setSaveCats(data.tags.categories || []);
+                                setSaveTopics(data.tags.topics  || []);
+                            }
+                            setEditingId(editId);
+                        }
+                    });
+                }
+            }, []);
+
+            // ── Card helpers ──────────────────────────────────────────────────
+            const addRow    = () => setCards(c => [...c, makeCard()]);
+            const removeRow = id => { if (cards.length > 1) setCards(c => c.filter(x => x.id !== id)); };
+            const updateField = (id, field, value) =>
+                setCards(c => c.map(x => x.id === id ? { ...x, [field]: value } : x));
+
+            // related words
+            const addRelWord = (id) => {
+                const card = cards.find(c => c.id === id);
+                if (!card || !card._relInput.trim()) return;
+                if ((card.relatedWords || []).length >= 4) return;
+                updateField(id, 'relatedWords', [...(card.relatedWords || []), card._relInput.trim()]);
+                updateField(id, '_relInput', '');
+            };
+            const removeRelWord = (id, wi) => {
+                const card = cards.find(c => c.id === id);
+                updateField(id, 'relatedWords', card.relatedWords.filter((_, i) => i !== wi));
+            };
+
+            // drag-and-drop image
+            const handleDrop = (e, id) => {
+                e.preventDefault();
+                e.currentTarget.classList.remove('drop-active');
+                const file = e.dataTransfer.files[0];
+                if (!file || !file.type.startsWith('image/')) return;
+                const reader = new FileReader();
+                reader.onload = ev => updateField(id, 'imageData', ev.target.result);
+                reader.readAsDataURL(file);
+            };
+
+            // ── API Key ───────────────────────────────────────────────────────
+            const handleApiKeyChange = e => {
+                setApiKey(e.target.value);
+                localStorage.setItem('periplo_google_key', e.target.value);
+            };
+            const fetchModels = async () => {
+                if (!apiKey) return alert('Ingresa tu API Key primero');
+                setIsLoadingModels(true);
+                try {
+                    const res  = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey.trim()}`);
+                    if (!res.ok) throw new Error('Error conectando con Google');
+                    const data = await res.json();
+                    const valid = data.models
+                        .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+                        .map(m => m.name);
+                    setAvailableModels(valid);
+                    const pref = valid.find(m => m.includes('gemini-2.5-flash')) || valid.find(m => m.includes('gemini-2.0')) || valid[0];
+                    if (pref) setSelectedModel(pref);
+                } catch (e) { alert('Error al buscar modelos: ' + e.message); }
+                finally { setIsLoadingModels(false); }
+            };
+            const cancelMagia = () => {
+                if (abortControllerRef.current) { abortControllerRef.current.abort(); setLoading(false); }
+            };
+
+            // ── IA — genera cultural cards ────────────────────────────────────
+            const executeMagia = async () => {
+                if (!apiKey.trim())     return alert('⚠️ Necesitas ingresar tu API Key.');
+                if (!selectedModel)     return alert('⚠️ Escanea y selecciona un modelo primero.');
+                if (!omniPrompt.trim()) return alert('⚠️ Escribe qué quieres que genere la IA.');
+                setMagiaModal(false);
+                setLoading(true);
+                abortControllerRef.current = new AbortController();
+
+                const prompt = `
+You are an expert Spanish language and culture teacher creating cultural deep-dive flashcards for English-speaking students.
+Each card covers a Spanish word that needs cultural context to be truly understood — food, slang, regional expressions, social customs.
+
+USER REQUEST: "${omniPrompt}"
+
+Generate EXACTLY ${targetCount} cultural cards based on that request.
+
+For each card:
+1. "wordEs": The Spanish word or expression (frontal)
+2. "wordEn": Natural English translation — conversational, not a dictionary definition
+3. "emoji": Exactly 1 emoji that best represents this word
+4. "definition": 2–3 sentences in English explaining what it is like you'd tell a curious friend. NOT a dictionary entry.
+5. "culturalNote": One surprising fact — etymology, regional use, cultural association, or something that makes the word memorable
+6. "relatedWords": Array of 2–4 related Spanish words (synonyms, family terms, associated foods/concepts)
+
+Respond ONLY with valid JSON, no markdown, no extra text:
+{"title":"...","cards":[{"wordEs":"...","wordEn":"...","emoji":"...","definition":"...","culturalNote":"...","relatedWords":["...","..."]}]}
+                `.trim();
+
+                try {
+                    const res = await fetch(
+                        `https://generativelanguage.googleapis.com/v1beta/${selectedModel}:generateContent?key=${apiKey.trim()}`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.8, maxOutputTokens: 8192 } }),
+                            signal: abortControllerRef.current.signal,
+                        }
+                    );
+                    if (!res.ok) throw new Error(`API Error ${res.status}`);
+                    const result   = await res.json();
+                    const rawText  = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                    const match    = rawText.match(/\{[\s\S]*\}/);
+                    if (!match) throw new Error('La IA no devolvió un JSON válido.');
+                    const parsed   = JSON.parse(match[0]);
+                    if (!parsed.cards || !Array.isArray(parsed.cards)) throw new Error('Estructura de JSON inválida.');
+                    if (parsed.title && !title) setTitle(parsed.title);
+                    setCards(parsed.cards.map((c, i) => ({
+                        ...makeCard(Date.now() + i),
+                        wordEs:       c.wordEs       || '',
+                        wordEn:       c.wordEn       || '',
+                        emoji:        c.emoji        || '',
+                        definition:   c.definition   || '',
+                        culturalNote: c.culturalNote || '',
+                        relatedWords: Array.isArray(c.relatedWords) ? c.relatedWords.slice(0, 4) : [],
+                    })));
+                } catch (e) {
+                    if (e.name !== 'AbortError') { console.error(e); alert('Error al contactar la IA.\n\n' + e.message); }
+                } finally { setLoading(false); abortControllerRef.current = null; }
+            };
+
+            // ── Save flow ─────────────────────────────────────────────────────
+            const handlePreSave = () => {
+                if (!title.trim() || cards.some(c => !c.wordEs || !c.wordEn)) {
+                    alert('Asegúrate de tener un título y que ninguna tarjeta tenga las palabras en blanco.');
+                    return;
+                }
+                setShowSaveModal(true);
+            };
+
+            const executeFinalSave = async () => {
+                setShowSaveModal(false);
+                setLoading(true);
+                // Strip UI-only fields before saving
+                const cleanCards = cards.map(({ id, imageData, _relInput, ...rest }) => rest);
+                const data = {
+                    title,
+                    type:      'CULTURAL_CARDS',
+                    content:   { cards: cleanCards },
+                    tags:      { levels: saveLevels, categories: saveCats, topics: saveTopics },
+                    cardCount: cleanCards.length,
+                    language:  'es',
+                    updatedAt: serverTimestamp(),
+                };
+                const params      = new URLSearchParams(window.location.search);
+                const folderParam = params.get('folder');
+                const parentPath  = (folderParam && folderParam !== 'undefined' && folderParam !== 'null') ? decodeURIComponent(folderParam) : '';
+                data.parentPath   = parentPath;
+
+                try {
+                    let docId = editingId;
+                    if (editingId) {
+                        await updateDoc(doc(db, `artifacts/${FS_APP_ID}/users/${TEACHER_UID}/quizzes`, editingId), data);
+                    } else {
+                        const ref = await addDoc(collection(db, `artifacts/${FS_APP_ID}/users/${TEACHER_UID}/quizzes`), { ...data, createdAt: serverTimestamp() });
+                        docId = ref.id;
+                    }
+                    setLoading(false);
+                    setSavedDocId(docId);
+                    setShowPreviewModal(true);
+                } catch (e) { alert(e.message); setLoading(false); }
+            };
+
+            const goToHub = () => {
+                const params     = new URLSearchParams(window.location.search);
+                const folder     = params.get('folder');
+                const parentPath = (folder && folder !== 'undefined' && folder !== 'null') ? decodeURIComponent(folder) : '';
+                window.location.href = parentPath ? `index-es.html?folder=${encodeURIComponent(parentPath)}` : 'index-es.html';
+            };
+
+            // ═══════════════════════════════════════════════════════════════════
+            // RENDER
+            // ═══════════════════════════════════════════════════════════════════
+            return (
+                <div className="max-w-5xl mx-auto p-6 relative">
+
+                    {/* ── LOADING OVERLAY ────────────────────────────────────── */}
+                    {loading && (
+                        <div className="fixed inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center backdrop-blur-sm">
+                            <Loader2 className="animate-spin text-orange-500 mb-6" size={56}/>
+                            <p className="text-orange-500 font-bold uppercase tracking-widest mb-8">Procesando...</p>
+                            <button onClick={cancelMagia} className="bg-rose-600 hover:bg-rose-500 text-white font-black px-6 py-3 rounded-full flex items-center gap-2 border-2 border-rose-700 transition-all active:scale-95 shadow-xl">
+                                <X size={20}/> CANCELAR
+                            </button>
+                        </div>
+                    )}
+
+                    {/* ── MODAL GUARDAR — taxonomy tags ──────────────────────── */}
+                    {showSaveModal && (
+                        <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-2xl p-6 shadow-2xl max-h-[90vh] flex flex-col">
+                                <div className="flex justify-between items-center mb-6 shrink-0">
+                                    <h2 className="text-xl font-black flex items-center gap-2 text-white">
+                                        <Tags className="text-orange-400"/> Clasificar Cultural Cards
+                                    </h2>
+                                    <button onClick={() => setShowSaveModal(false)} className="text-zinc-500 hover:text-white p-2 rounded-full hover:bg-zinc-800 transition">
+                                        <X size={20}/>
+                                    </button>
+                                </div>
+                                <div className="space-y-8 overflow-y-auto custom-scrollbar pr-2 flex-1">
+                                    <div>
+                                        <label className="block text-xs font-black text-orange-400 uppercase tracking-widest mb-3">1. Nivel <span className="text-zinc-600 normal-case font-medium">(selección múltiple)</span></label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {NEW_LEVELS.map(lvl => (
+                                                <button key={lvl} onClick={() => toggleSelection(saveLevels, setSaveLevels, lvl)}
+                                                    className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveLevels.includes(lvl) ? 'bg-orange-600 border-orange-600 text-white shadow-md' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-orange-500'}`}>
+                                                    {lvl}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-black text-emerald-400 uppercase tracking-widest mb-3">2. Categoría <span className="text-zinc-600 normal-case font-medium">(selección múltiple)</span></label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {NEW_CATS.map(cat => (
+                                                <button key={cat.id} onClick={() => toggleSelection(saveCats, setSaveCats, cat.id)}
+                                                    className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveCats.includes(cat.id) ? 'bg-emerald-600 border-emerald-600 text-white shadow-md' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-emerald-500'}`}>
+                                                    {cat.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    {saveCats.length > 0 && saveLevels.length > 0 && (
+                                        <div className="bg-zinc-950/50 p-4 rounded-2xl border border-zinc-800 space-y-4">
+                                            <label className="block text-xs font-black text-amber-400 uppercase tracking-widest mb-1">3. Temas Específicos</label>
+                                            {saveCats.map(catId => {
+                                                if (catId === 'otro') return null;
+                                                const catLabel = NEW_CATS.find(c => c.id === catId)?.label || catId;
+                                                const topics   = getAllTopicsForCategory(catId, saveLevels);
+                                                if (!topics.length) return null;
+                                                return (
+                                                    <div key={catId} className="bg-zinc-900/50 rounded-xl p-3 border border-zinc-800/50">
+                                                        <h4 className="text-[10px] font-black uppercase text-zinc-500 tracking-wider mb-2">{catLabel}</h4>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {topics.map(t => (
+                                                                <button key={t} onClick={() => toggleSelection(saveTopics, setSaveTopics, t)}
+                                                                    className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all border ${saveTopics.includes(t) ? 'bg-zinc-200 border-zinc-200 text-zinc-900' : 'bg-transparent border-zinc-700 text-zinc-400 hover:border-zinc-500'}`}>
+                                                                    {t}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                            {saveCats.includes('otro') && (
+                                                <div className="bg-amber-900/10 rounded-xl p-3 border border-amber-900/30">
+                                                    <h4 className="text-[10px] font-black uppercase text-amber-600 tracking-wider mb-2">Macro Habilidades</h4>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {MACRO_SKILLS.map(s => (
+                                                            <button key={s} onClick={() => toggleSelection(saveTopics, setSaveTopics, s)}
+                                                                className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all border ${saveTopics.includes(s) ? 'bg-amber-500 border-amber-500 text-zinc-900' : 'bg-transparent border-amber-900/50 text-amber-500 hover:border-amber-500'}`}>
+                                                                {s}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                                <button onClick={executeFinalSave}
+                                    disabled={loading || saveLevels.length === 0 || saveCats.length === 0}
+                                    className="w-full mt-6 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:bg-zinc-800 disabled:cursor-not-allowed text-white py-4 rounded-xl font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 shrink-0">
+                                    <Save size={18}/>
+                                    {(saveLevels.length === 0 || saveCats.length === 0) ? 'Selecciona Nivel y Categoría' : 'Confirmar y Guardar'}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ── MODAL PREVIEW POST-SAVE ─────────────────────────────── */}
+                    {showPreviewModal && (
+                        <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm p-6 shadow-2xl">
+                                <div className="text-center mb-6">
+                                    <div className="w-16 h-16 bg-emerald-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4 text-3xl">✅</div>
+                                    <h2 className="text-xl font-black text-white">¡Cultural Cards guardadas!</h2>
+                                    <p className="text-zinc-400 text-sm mt-1 font-medium">"{title}"</p>
+                                    <p className="text-zinc-500 text-xs mt-2">{cards.length} tarjetas · Listas en Recuérdalo</p>
+                                </div>
+                                <div className="space-y-2 mb-4">
+                                    <button
+                                        onClick={() => window.location.href = `recuerdalo.html?id=${savedDocId}&uid=${TEACHER_UID}`}
+                                        className="w-full flex items-center gap-3 p-3 rounded-xl border border-orange-500/50 bg-orange-500/10 text-orange-400 font-bold text-sm transition-all active:scale-95 hover:opacity-80">
+                                        <span className="text-xl">🇲🇽</span>
+                                        <span>Abrir en Recuérdalo</span>
+                                    </button>
+                                </div>
+                                <button onClick={goToHub} className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-sm transition-colors">
+                                    Volver al Hub sin previsualizar
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ── HEADER ─────────────────────────────────────────────── */}
+                    <header className="flex justify-between items-center mb-8">
+                        <button onClick={() => window.location.href = 'index-es.html'}
+                            className="p-2 bg-zinc-900 rounded-xl border border-zinc-800 hover:bg-zinc-800 transition-colors">
+                            <ArrowLeft/>
+                        </button>
+                        <div className="flex items-center gap-3">
+                            <span className="text-3xl hidden sm:block">🇲🇽</span>
+                            <div>
+                                <h1 className="text-2xl font-black italic text-orange-400 tracking-tight leading-none">RECUÉRDALO BUILDER — ESPAÑOL</h1>
+                                <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mt-0.5">Cultural Cards · Deep Dive</p>
+                            </div>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={() => setMagiaModal(true)}
+                                className="bg-orange-500 hover:bg-orange-400 text-black px-4 sm:px-6 py-2 rounded-xl font-bold flex gap-2 items-center transition-colors">
+                                <Sparkles size={18}/> <span className="hidden sm:inline">IA Assist</span>
+                            </button>
+                            <button onClick={handlePreSave}
+                                className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 sm:px-6 py-2 rounded-xl font-bold flex gap-2 items-center transition-colors">
+                                <Save size={18}/> <span className="hidden sm:inline">Guardar</span>
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* CHIP — renderer destino */}
+                    <div className="flex gap-2 mb-6">
+                        <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full border border-orange-500/50 bg-orange-500/10 text-orange-400">
+                            🇲🇽 recuerdalo.html
+                        </span>
+                    </div>
+
+                    {/* TÍTULO DEL SET */}
+                    <input value={title} onChange={e => setTitle(e.target.value)}
+                        placeholder="Título del set cultural..."
+                        className="w-full bg-transparent text-3xl sm:text-4xl font-black border-b-2 border-zinc-800 mb-8 outline-none focus:border-orange-500 pb-2 text-white placeholder-zinc-700 transition-colors"/>
+
+                    {/* ── CARDS ──────────────────────────────────────────────── */}
+                    <div className="space-y-6">
+                        {cards.map((c, idx) => (
+                            <div key={c.id}
+                                className="bg-zinc-900 p-5 rounded-2xl border border-zinc-800 relative group transition-all hover:border-zinc-700 shadow-md">
+
+                                {/* Badge número */}
+                                <div className="absolute -left-3 -top-3 bg-orange-500 text-black w-8 h-8 rounded-full flex items-center justify-center text-sm font-black shadow-lg border-4 border-zinc-950 z-10">
+                                    {idx + 1}
+                                </div>
+
+                                {/* Delete */}
+                                {cards.length > 1 && (
+                                    <button onClick={() => removeRow(c.id)}
+                                        className="absolute -right-2 -top-2 bg-rose-500 hover:bg-rose-400 text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-10">
+                                        <Trash2 size={14}/>
+                                    </button>
+                                )}
+
+                                {/* ── Fila 1: Emoji + Palabra + Traducción ──────── */}
+                                <div className="grid grid-cols-12 gap-3 mb-4">
+                                    <div className="col-span-1">
+                                        <label className="block text-[10px] font-bold text-zinc-500 uppercase mb-1.5 pl-1">Emoji</label>
+                                        <input value={c.emoji}
+                                            onChange={e => updateField(c.id, 'emoji', e.target.value)}
+                                            placeholder="🌮"
+                                            maxLength={4}
+                                            className="w-full bg-zinc-950 p-3 rounded-xl border border-zinc-800 text-2xl text-center outline-none focus:border-orange-500 transition-colors"/>
+                                    </div>
+                                    <div className="col-span-5">
+                                        <label className="block text-[10px] font-bold text-orange-400 uppercase mb-1.5 pl-1">Español 🇲🇽</label>
+                                        <input value={c.wordEs}
+                                            onChange={e => updateField(c.id, 'wordEs', e.target.value)}
+                                            placeholder="palabra o expresión..."
+                                            className="w-full bg-zinc-950 p-3 rounded-xl border border-zinc-800 text-base font-bold text-white focus:border-orange-500 outline-none transition-colors"/>
+                                    </div>
+                                    <div className="col-span-6">
+                                        <label className="block text-[10px] font-bold text-sky-400 uppercase mb-1.5 pl-1">English 🇺🇸</label>
+                                        <input value={c.wordEn}
+                                            onChange={e => updateField(c.id, 'wordEn', e.target.value)}
+                                            placeholder="natural translation..."
+                                            className="w-full bg-zinc-950 p-3 rounded-xl border border-zinc-800 text-base font-bold text-white focus:border-sky-500 outline-none transition-colors"/>
+                                    </div>
+                                </div>
+
+                                {/* ── Fila 2: Definition + Cultural Note ──────── */}
+                                <div className="grid grid-cols-2 gap-3 mb-4">
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-zinc-400 uppercase mb-1.5 pl-1">📖 Definition in English</label>
+                                        <textarea value={c.definition}
+                                            onChange={e => updateField(c.id, 'definition', e.target.value)}
+                                            placeholder="It's basically a thick corn tortilla split open and stuffed..."
+                                            rows={3}
+                                            className="w-full bg-zinc-950 p-3 rounded-xl border border-zinc-800 text-sm text-zinc-300 focus:border-orange-500 outline-none resize-none placeholder-zinc-700 leading-relaxed transition-colors"/>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-amber-500 uppercase mb-1.5 pl-1">💡 Cultural Curiosity</label>
+                                        <textarea value={c.culturalNote}
+                                            onChange={e => updateField(c.id, 'culturalNote', e.target.value)}
+                                            placeholder="The word also means 'chubby' as a term of endearment..."
+                                            rows={3}
+                                            className="w-full bg-zinc-950 p-3 rounded-xl border border-amber-900/40 text-sm text-zinc-300 focus:border-amber-500 outline-none resize-none placeholder-zinc-700 leading-relaxed transition-colors"/>
+                                    </div>
+                                </div>
+
+                                {/* ── Fila 3: Related Words + Image drop ──────── */}
+                                <div className="grid grid-cols-2 gap-3">
+                                    {/* Related words */}
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-zinc-500 uppercase mb-1.5 pl-1">
+                                            🔗 Related Words <span className="text-zinc-700 normal-case">(máx 4)</span>
+                                        </label>
+                                        <div className="flex flex-wrap gap-1.5 mb-2 min-h-[28px]">
+                                            {(c.relatedWords || []).map((w, wi) => (
+                                                <span key={wi} className="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 border border-zinc-700 text-zinc-300 rounded-full text-xs font-bold">
+                                                    {w}
+                                                    <button onClick={() => removeRelWord(c.id, wi)} className="text-zinc-500 hover:text-rose-400 ml-0.5 transition-colors">
+                                                        <X size={10}/>
+                                                    </button>
+                                                </span>
+                                            ))}
+                                            {!c.relatedWords?.length && <span className="text-zinc-700 text-xs italic">sin palabras aún...</span>}
+                                        </div>
+                                        {(c.relatedWords || []).length < 4 && (
+                                            <div className="flex gap-2">
+                                                <input value={c._relInput}
+                                                    onChange={e => updateField(c.id, '_relInput', e.target.value)}
+                                                    onKeyDown={e => e.key === 'Enter' && addRelWord(c.id)}
+                                                    placeholder="sope, huarache... Enter"
+                                                    className="flex-1 bg-zinc-950 p-2.5 rounded-xl border border-zinc-800 text-xs text-white focus:border-orange-500 outline-none placeholder-zinc-700 transition-colors"/>
+                                                <button onClick={() => addRelWord(c.id)}
+                                                    className="px-3 py-2 bg-zinc-800 hover:bg-orange-500 hover:text-black text-zinc-400 rounded-xl text-xs font-bold transition-colors">
+                                                    <Plus size={14}/>
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Image drop zone */}
+                                    <div>
+                                        <label className="block text-[10px] font-bold text-zinc-500 uppercase mb-1.5 pl-1">
+                                            📷 Imagen <span className="text-zinc-700 normal-case">(solo sesión, no se guarda)</span>
+                                        </label>
+                                        {c.imageData ? (
+                                            <div className="relative inline-block">
+                                                <img src={c.imageData} alt="" className="h-20 w-auto rounded-xl border border-zinc-700 object-cover shadow"/>
+                                                <button onClick={() => updateField(c.id, 'imageData', null)}
+                                                    className="absolute -top-1.5 -right-1.5 p-1 bg-rose-500 hover:bg-rose-400 text-white rounded-full transition-colors shadow">
+                                                    <X size={10}/>
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div
+                                                onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('drop-active'); }}
+                                                onDragLeave={e => e.currentTarget.classList.remove('drop-active')}
+                                                onDrop={e => handleDrop(e, c.id)}
+                                                className="h-20 border-2 border-dashed border-zinc-700 rounded-xl flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer hover:border-zinc-500">
+                                                <Image size={18} className="text-zinc-600"/>
+                                                <span className="text-xs text-zinc-600 font-medium">Drag image here</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Añadir tarjeta */}
+                    <div className="mt-8">
+                        <button onClick={addRow}
+                            className="w-full py-4 border-2 border-dashed border-zinc-800 rounded-2xl text-zinc-500 font-bold flex items-center justify-center gap-2 hover:bg-zinc-900 hover:text-orange-500 hover:border-orange-900 transition-colors">
+                            <Plus/> Añadir Cultural Card
+                        </button>
+                    </div>
+
+                    {/* ── MODAL IA ASSIST ─────────────────────────────────────── */}
+                    {magiaModal && (
+                        <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                                <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
+                                    <div className="flex items-center gap-3">
+                                        <div className="bg-orange-500/20 p-2 rounded-xl text-orange-500"><Sparkles size={24}/></div>
+                                        <div>
+                                            <h3 className="font-black text-xl text-white">IA Assistant</h3>
+                                            <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">Generador de Cultural Cards</p>
+                                        </div>
+                                    </div>
+                                    <button onClick={() => setMagiaModal(false)} className="p-2 hover:bg-zinc-800 rounded-full text-zinc-400 transition-colors">
+                                        <X size={20}/>
+                                    </button>
+                                </div>
+                                <div className="p-6 overflow-y-auto custom-scrollbar space-y-6">
+                                    {/* API Key */}
+                                    <div className="bg-black/30 p-4 rounded-xl border border-zinc-800/50 flex flex-col sm:flex-row gap-2 items-center">
+                                        <div className="w-full flex items-center gap-2 bg-zinc-900 p-1.5 rounded-xl border border-zinc-700">
+                                            <Key size={14} className="text-zinc-500 ml-2 shrink-0"/>
+                                            <input type="password" placeholder="Tu API Key de Google..." value={apiKey} onChange={handleApiKeyChange}
+                                                className="bg-transparent text-white px-2 py-1 text-xs font-mono w-full focus:outline-none"/>
+                                            <button onClick={fetchModels} disabled={isLoadingModels || !apiKey}
+                                                className="p-2 bg-orange-500 hover:bg-orange-400 text-black rounded-lg transition-colors shrink-0">
+                                                {isLoadingModels ? <Loader2 className="animate-spin" size={16}/> : <Search size={16}/>}
+                                            </button>
+                                        </div>
+                                        {availableModels.length > 0 && (
+                                            <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)}
+                                                className="bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white w-full sm:w-auto outline-none">
+                                                {availableModels.map(m => <option key={m} value={m}>{m.replace('models/', '')}</option>)}
+                                            </select>
+                                        )}
+                                    </div>
+
+                                    {/* Prompt */}
+                                    <div>
+                                        <label className="block text-xs font-black text-orange-400 uppercase tracking-widest mb-2">Instrucción Libre</label>
+                                        <p className="text-xs text-zinc-500 mb-3 leading-relaxed">
+                                            Dile un tema, pégale una lista de palabras, o pégale un texto y pídele que extraiga el vocab cultural.
+                                        </p>
+                                        <p className="text-[10px] text-zinc-600 mb-3 italic">
+                                            Ej: "Genera 8 palabras de comida mexicana callejera" · "Explica estos platillos: tamal, pozole, mole" · "Vocab de la taquería"
+                                        </p>
+                                        <textarea value={omniPrompt} onChange={e => setOmniPrompt(e.target.value)}
+                                            placeholder="Ej: Genera cultural cards sobre antojitos mexicanos para nivel intermedio..."
+                                            className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-sm text-white focus:border-orange-500 outline-none h-36 resize-none shadow-inner"/>
+                                    </div>
+
+                                    {/* Slider */}
+                                    <div>
+                                        <label className="block text-xs font-black text-zinc-500 uppercase tracking-widest mb-3">
+                                            Cantidad: <span className="text-orange-400">{targetCount} tarjetas</span>
+                                        </label>
+                                        <input type="range" min="3" max="20" value={targetCount} onChange={e => setTargetCount(Number(e.target.value))} className="w-full accent-orange-500"/>
+                                        <div className="flex justify-between text-[10px] text-zinc-600 mt-1"><span>3</span><span>20</span></div>
+                                    </div>
+
+                                    <button onClick={executeMagia} disabled={!apiKey || !omniPrompt || !selectedModel}
+                                        className="w-full bg-orange-500 hover:bg-orange-400 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-black font-black py-4 rounded-xl uppercase tracking-widest flex items-center justify-center gap-2 transition-colors">
+                                        <Sparkles size={18}/> Generar {targetCount} Cultural Cards
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<RecuerdaloBuilder />);
+    </script>
+</body>
+</html>
