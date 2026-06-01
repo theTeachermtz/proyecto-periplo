@@ -18,6 +18,7 @@
     </script>
     <script src="periplo-config.js"></script>
     <script src="periplo-taxonomy-es.js"></script>
+    <script src="periplo-ai.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
         body { user-select: none; -webkit-user-select: none; background-color: #09090b; }
@@ -41,6 +42,10 @@
         const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001';
         const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
         const BACK_URL = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html' : 'index.html';
+
+        // IA Assistant compartido (periplo-ai.js)
+        const AI = window.PERIPLO_AI;
+        const ApiKeyBar = AI.createApiKeyBar(React);
 
         const taxonomyEs = window.PERIPLO_TAXONOMY_ES || { NEW_LEVELS: [], NEW_CATS: [], MACRO_SKILLS: [], getAllTopicsForCategory: () => [] };
         const { NEW_LEVELS, NEW_CATS, MACRO_SKILLS, getAllTopicsForCategory } = taxonomyEs;
@@ -84,7 +89,7 @@
             };
 
             useEffect(() => {
-                const savedKey = localStorage.getItem('periplo_google_key');
+                const savedKey = AI.loadKey();
                 if (savedKey) setApiKey(savedKey);
 
                 const editId = urlParams.get('edit');
@@ -118,15 +123,9 @@
                 if (!apiKey) return alert("Ingresa tu API Key primero");
                 setIsLoadingModels(true);
                 try {
-                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey.trim()}`);
-                    if (!response.ok) throw new Error("Error conectando con Google");
-                    const data = await response.json();
-                    const validModels = data.models.filter(m => m.supportedGenerationMethods?.includes("generateContent")).map(m => m.name);
+                    const validModels = await AI.fetchModels(apiKey);
                     setAvailableModels(validModels);
-                    if (validModels.length > 0) {
-                        const preferred = validModels.find(m => m.includes("gemini-2.5-flash")) || validModels[0];
-                        setSelectedModel(preferred);
-                    }
+                    if (validModels.length > 0) setSelectedModel(AI.pickPreferredModel(validModels));
                 } catch (e) { alert("Error al buscar modelos: " + e.message); }
                 finally { setIsLoadingModels(false); }
             };
@@ -163,21 +162,11 @@
                 `;
 
                 try {
-                    const response = await fetch(
-                        `https://generativelanguage.googleapis.com/v1beta/${selectedModel}:generateContent?key=${apiKey.trim()}`,
-                        {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 8192 } }),
-                            signal: abortControllerRef.current.signal
-                        }
-                    );
-                    if (!response.ok) throw new Error(`API Error ${response.status}`);
-                    const result = await response.json();
-                    const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
-                    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-                    if (!jsonMatch) throw new Error("La IA no devolvió JSON válido.");
-                    const parsed = JSON.parse(jsonMatch[0]);
+                    const rawText = await AI.callGemini({
+                        apiKey, model: selectedModel, prompt: promptText,
+                        signal: abortControllerRef.current.signal
+                    });
+                    const parsed = AI.extractJSON(rawText);
 
                     if (parsed.title && !title) setTitle(parsed.title);
                     setCards(parsed.cards.map((c, i) => ({ ...c, id: Date.now() + i })));
@@ -471,19 +460,17 @@
                                     <button onClick={() => setMagiaModal(false)}><X size={20}/></button>
                                 </div>
 
-                                <div className="flex gap-2 mb-4 bg-zinc-950 p-2 rounded-xl">
-                                    <Key size={16} className="text-zinc-500 mt-1"/>
-                                    <input type="password" value={apiKey} onChange={e => { setApiKey(e.target.value); localStorage.setItem('periplo_google_key', e.target.value); }} placeholder="API Key de Google AI..." className="bg-transparent w-full outline-none text-xs font-mono text-white"/>
-                                    <button onClick={fetchModels} disabled={isLoadingModels} className="text-sky-500 disabled:opacity-50">
-                                        {isLoadingModels ? <Loader2 size={16} className="animate-spin"/> : <Search size={16}/>}
-                                    </button>
+                                <div className="mb-4">
+                                    <ApiKeyBar
+                                        variant="modal"
+                                        accentBtn="bg-sky-500 hover:bg-sky-400 text-black"
+                                        placeholder="API Key de Google AI..."
+                                        apiKey={apiKey} setApiKey={setApiKey}
+                                        models={availableModels} selectedModel={selectedModel} setSelectedModel={setSelectedModel}
+                                        isLoading={isLoadingModels} onFetch={fetchModels}
+                                        onClear={() => setAvailableModels([])}
+                                    />
                                 </div>
-
-                                {availableModels.length > 0 && (
-                                    <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} className="w-full mb-4 bg-zinc-950 p-2 rounded-xl border border-zinc-800 text-xs text-white">
-                                        {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
-                                    </select>
-                                )}
 
                                 <textarea value={omniPrompt} onChange={e => setOmniPrompt(e.target.value)} placeholder="Ej: Comida Mexicana, Verbos de Acción, Acentuación del español..." className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-sm focus:border-sky-500 outline-none h-32 resize-none mb-4"/>
 

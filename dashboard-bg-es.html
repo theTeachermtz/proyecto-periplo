@@ -24,7 +24,8 @@
     <script type="module" src="https://esm.sh/run"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="periplo-taxonomy-es.js"></script>
-    
+    <script src="periplo-ai.js"></script>
+
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
         body{font-family:'Plus Jakarta Sans',sans-serif;height:100dvh;overflow:hidden}
@@ -51,6 +52,10 @@ const FS_APP_ID = 'periplo-app-v1';
 const TEACHER_UID = 'teacher_anita_001'; // <-- Biblioteca de Anita
 
 const { TAXONOMY, NEW_LEVELS, NEW_CATS, MACRO_SKILLS, getAllTopicsForCategory } = window.PERIPLO_TAXONOMY_ES;
+
+// IA Assistant compartido (periplo-ai.js)
+const AI = window.PERIPLO_AI;
+const ApiKeyBar = AI.createApiKeyBar(React);
 
 const toggleSelection = (stateArray, setStateFunction, item) => {
     if (stateArray.includes(item)) {
@@ -282,7 +287,7 @@ const ContentEditor=({content,onSaveToFirebase,title,setTitle,isEditing,initialT
 // MAIN DASHBOARD
 // ============================================================
 const Dashboard=()=>{
-    const[apiKey,setApiKey]=useState(localStorage.getItem('periplo_google_key')||'');
+    const[apiKey,setApiKey]=useState(AI.loadKey());
     const[gameTitle,setGameTitle]=useState('');
     const[globalContext,setGlobalContext]=useState('');
     
@@ -350,12 +355,9 @@ const Dashboard=()=>{
     const fetchModels=async()=>{
         if(!apiKey)return alert("Ingresa tu API Key");setLoadingModels(true);
         try{
-            const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-            if(!r.ok)throw new Error("Error al conectar");
-            const d=await r.json();
-            const v=d.models.filter(m=>m.supportedGenerationMethods?.includes("generateContent")).map(m=>m.name);
+            const v=await AI.fetchModels(apiKey);
             setModels(v);
-            if(v.length>0)setSelModel(v.find(m=>m.includes("gemini-2.5-flash"))||v.find(m=>m.includes("gemini-2.0"))||v[0]);
+            if(v.length>0)setSelModel(AI.pickPreferredModel(v));
         }catch(e){alert(e.message)}setLoadingModels(false);
     };
 
@@ -395,11 +397,8 @@ const Dashboard=()=>{
 - Output STRICT JSON containing ONLY the requested arrays. No markdown, no explanations.`;
 
         try{
-            const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/${selModel}:generateContent?key=${apiKey}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{responseMimeType:"application/json"}})});
-            const d=await r.json();
-            if(d.error)throw new Error(d.error.message);
-            if(!d.candidates?.[0]?.content)throw new Error("Sin resultados de la IA.");
-            const t=d.candidates[0].content.parts[0].text.replace(/```json|```/g,"").trim();
+            const raw=await AI.callGemini({apiKey,model:selModel,prompt,json:true});
+            const t=raw.replace(/```json|```/g,"").trim();
             setGeneratedContent(JSON.parse(t));
         }catch(e){alert("Error: "+e.message)}
         setIsGenerating(false);
@@ -485,11 +484,15 @@ const Dashboard=()=>{
                         Boardgames Builder — <span className="text-orange-400">Español</span>
                     </h1>
                 </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <input type="password" placeholder="API Key..." value={apiKey} onChange={e=>{setApiKey(e.target.value);localStorage.setItem('periplo_google_key',e.target.value)}} className="bg-zinc-900 border border-zinc-700 text-white rounded-lg px-2 py-1.5 text-xs font-mono w-28 focus:border-orange-500 outline-none"/>
-                    <button onClick={fetchModels} disabled={loadingModels||!apiKey} className="btn-juicy p-1.5 bg-orange-600 hover:bg-orange-500 text-white rounded-lg">{loadingModels?<Loader2 className="animate-spin" size={14}/>:<Search size={14}/>}</button>
-                    {models.length>0&&<select value={selModel} onChange={e=>setSelModel(e.target.value)} className="bg-zinc-900 border border-zinc-700 rounded-lg px-1.5 py-1.5 text-[10px] text-white max-w-[120px] outline-none">{models.map(m=><option key={m} value={m}>{m.replace('models/','')}</option>)}</select>}
-                </div>
+                <ApiKeyBar
+                    variant="compact"
+                    accentBtn="bg-orange-600 hover:bg-orange-500 text-white"
+                    placeholder="API Key..."
+                    apiKey={apiKey} setApiKey={setApiKey}
+                    models={models} selectedModel={selModel} setSelectedModel={setSelModel}
+                    isLoading={loadingModels} onFetch={fetchModels}
+                    onClear={()=>setModels([])}
+                />
             </div>
 
             <div className="flex flex-1 flex-col md:flex-row overflow-hidden">
