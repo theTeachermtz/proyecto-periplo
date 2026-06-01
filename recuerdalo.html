@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover">
     <title>Recuérdalo | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -55,8 +55,11 @@
         * { box-sizing: border-box; }
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            /* iOS safe area — evita que la barra inferior tape contenido */
+            /* iOS safe area — notch + home bar + side rounded corners */
+            padding-top:    env(safe-area-inset-top);
+            padding-right:  env(safe-area-inset-right);
             padding-bottom: env(safe-area-inset-bottom);
+            padding-left:   env(safe-area-inset-left);
         }
 
         /* ── Responsive card grid ───────────────────────────── */
@@ -417,9 +420,10 @@
         );
     }
 
-    const urlParams   = new URLSearchParams(window.location.search);
-    const TEACHER_UID = urlParams.get('uid') || 'teacher_anita_001';
-    const QUIZ_ID     = urlParams.get('id')  || null;
+    const urlParams    = new URLSearchParams(window.location.search);
+    const TEACHER_UID  = urlParams.get('uid')    || 'teacher_anita_001';
+    const QUIZ_ID      = urlParams.get('id')     || null;
+    const IS_STUDENT   = urlParams.get('student') === 'true';
     const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
 
     // ── Signature surface configs per card ───────────────────────────────────
@@ -486,14 +490,18 @@
         // ── Navigation with mini-game trigger ────────────────────────────────
         const handleNext = () => {
             const newIdx = idx + 1;
-            if (newIdx >= cards.length) return; // shouldn't happen (button is disabled)
-            // After every 5th card (idx 4, 9, 14…) trigger a mini-game
+            // Mini-game every 5th card (takes priority over end screen)
             if ((idx + 1) % 5 === 0) {
                 const batch = cards.slice(idx - 4, idx + 1);
                 setMgCards(batch);
                 setMgType(mgRound % 2 === 0 ? 'match' : 'pairnopair');
                 setPendingIdx(newIdx);
                 setPhase('minigame');
+                return;
+            }
+            // No mini-game — last card → finished screen
+            if (newIdx >= cards.length) {
+                setPhase('finished');
             } else {
                 setIdx(newIdx);
             }
@@ -501,8 +509,12 @@
         const handlePrev = () => setIdx(i => Math.max(0, i - 1));
         const handleMgComplete = () => {
             setMgRound(r => r + 1);
-            if (pendingIdx < cards.length) setIdx(pendingIdx);
-            setPhase('cards');
+            if (pendingIdx >= cards.length) {
+                setPhase('finished');   // mini-game was after the last card
+            } else {
+                setIdx(pendingIdx);
+                setPhase('cards');
+            }
         };
 
         // ── Derived values ────────────────────────────────────────────────────
@@ -557,8 +569,44 @@
             </div>
         );
 
-        // ── Cover screen ──────────────────────────────────────────────────────
+        // ── Shared background image ───────────────────────────────────────────
         const coverBg = cards.find(c => c.imageData)?.imageData || null;
+
+        // ── Finished screen ───────────────────────────────────────────────────
+        if (phase === 'finished') return (
+            <div className="relative min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-8 text-center"
+                 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                <BlurBg src={coverBg} dark={true}/>
+                <div className="relative z-10 w-full max-w-sm">
+                    <p className="text-6xl mb-4">🎉</p>
+                    <p className="text-orange-400 text-xs font-bold uppercase tracking-widest mb-2">Cultural Deep Dive · Español</p>
+                    <h1 className="text-3xl font-black text-white mb-2 leading-tight" style={{ letterSpacing: '-0.02em' }}>
+                        {quizTitle || 'Recuérdalo'}
+                    </h1>
+                    <p className="text-zinc-400 text-base mb-10">You've explored all {cards.length} words!</p>
+
+                    {IS_STUDENT ? (
+                        <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-6">
+                            <p className="text-zinc-300 font-bold text-lg mb-1">You're done! ✓</p>
+                            <p className="text-zinc-500 text-sm">You can close this window now.</p>
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            <button
+                                onClick={() => { setIdx(0); setMgRound(0); setPhase('cover'); }}
+                                className="w-full py-4 bg-orange-500 hover:bg-orange-400 active:scale-95 text-black font-black rounded-2xl text-lg transition-all">
+                                Start over →
+                            </button>
+                            <button
+                                onClick={() => window.location.href = 'index-es.html'}
+                                className="w-full py-4 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 font-bold rounded-2xl transition-colors">
+                                Back to hub
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
         if (phase === 'cover') return (
             <CoverScreen title={quizTitle} cardCount={cards.length}
                          onStart={() => setPhase('cards')} bgImage={coverBg} dark={dark}/>
@@ -582,9 +630,9 @@
                     {/* LEFT: P badge + divider + título */}
                     <div className="flex items-center gap-4">
                         <button
-                            onClick={() => window.location.href = 'index-es.html'}
-                            className="flex items-center gap-2 hover:opacity-80 transition-opacity"
-                            style={{ cursor: 'pointer' }}>
+                            onClick={() => { if (!IS_STUDENT) window.location.href = 'index-es.html'; }}
+                            className={`flex items-center gap-2 transition-opacity ${IS_STUDENT ? 'cursor-default' : 'hover:opacity-80 cursor-pointer'}`}
+                            title={IS_STUDENT ? 'Nothing to see here 👀' : ''}>
                             <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20">
                                 P
                             </div>
@@ -626,13 +674,13 @@
                             <span className="hidden sm:inline">Anterior</span>
                         </button>
 
-                        {/* Siguiente → — texto siempre visible (CTA primario) */}
+                        {/* Siguiente → / Finalizar (last card) */}
                         <button
                             onClick={handleNext}
-                            disabled={idx === cards.length - 1}
-                            className="flex items-center gap-1.5 px-3 sm:px-4 py-2 bg-zinc-100 border border-zinc-200 text-zinc-900 rounded-xl font-bold text-sm disabled:opacity-30 hover:bg-white transition-colors"
-                            style={{ cursor: idx === cards.length - 1 ? 'default' : 'pointer' }}>
-                            Siguiente <ChevronRight size={15}/>
+                            className="flex items-center gap-1.5 px-3 sm:px-4 py-2 bg-zinc-100 border border-zinc-200 text-zinc-900 rounded-xl font-bold text-sm hover:bg-white transition-colors"
+                            style={{ cursor: 'pointer' }}>
+                            {idx === cards.length - 1 ? 'Finalizar' : 'Siguiente'}
+                            <ChevronRight size={15}/>
                         </button>
 
                         {/* 📚 Índice de palabras */}
