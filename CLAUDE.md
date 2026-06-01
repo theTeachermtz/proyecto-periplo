@@ -512,21 +512,32 @@ Todos los renderers (tanto inglés como `-es`) usan el mismo banner sticky en la
 
 ```bash
 cd scripts
-node update-images.js                      # todos los mazos sin imágenes
-node update-images.js "Irregulares A-F"    # solo mazos cuyo título contenga ese texto
+node update-images.js                              # todos los mazos sin imágenes
+node update-images.js "Irregulares A-F"            # solo mazos cuyo título contenga ese texto
+node update-images.js "Irregulares A-F" --force    # re-procesa aunque ya tengan imagen (reemplaza)
 ```
 
-El argumento opcional es un **filtro por nombre** (coincidencia parcial, sin importar mayúsculas). Útil para apuntar a un solo mazo. Siempre **ignora la papelera** (`isDeleted: true`).
+- **Filtro por nombre** (arg opcional): coincidencia parcial, sin importar mayúsculas. Siempre **ignora la papelera** (`isDeleted`).
+- **`--force`**: re-procesa tarjetas que ya tienen imagen (para reemplazar fotos viejas/feas con mejor fuente).
+- Comando rápido: **`/update-images <nombre>`** — la IA lo corre en background y reporta. Israel no toca la terminal.
 
-O decirle a la IA: **"corre el script de imágenes"** — lo ejecuta directo desde esta sesión.
+### Fuentes de imágenes (en orden)
+
+1. **Pexels** (fotos stock profesionales, la mejor) — requiere `PEXELS_API_KEY` en el entorno. Ya guardada permanente en el Windows de Israel (`setx`). Saca key gratis en pexels.com/api.
+2. **Wikimedia Commons** (keyword) · 3. **Wikipedia** (por título) · 4. **Google CSE** (si hay `GOOGLE_API_KEY`).
+- Las flashcards con campo **`imageQuery`** (frase visual generada por el IA Assist, ej. "begin" → "runners starting race") buscan ESA frase en Pexels/Commons — evita que verbos caigan en artículos equivocados (begin → un pueblo francés). El dashboard genera `imageQuery` automáticamente.
 
 ### Qué hace
 
 1. Recorre **ambos UIDs** (`teacher_builder_001` + `teacher_anita_001`) y los tipos `CULTURAL_CARDS`, `WORDPACK` (flashcards inglés) y `WORD_BANK` (flashcards español). Ignora `isDeleted: true`.
 2. **Cultural cards:** búsqueda optimizada comida mexicana (Wikipedia ES → EN → Commons → Google CSE) usando `WIKI_ALIASES` y re-fetch siempre.
-3. **Flashcards (vocab general):** búsqueda por el término en **inglés** (`wordEn`) que es lo que mejor encuentra fotos nítidas; **skip si la tarjeta ya tiene `imageData`** (no re-procesa, ahorra tiempo/cuota).
-4. Comprime a JPEG 320px/58% (~8-15KB por imagen) para respetar el límite de 1MB de Firestore.
+3. **Flashcards:** usa `imageQuery` (si existe) → Pexels → Commons → Google. Sin `imageQuery`, cae al término en inglés. **Skip si ya tiene `imageData`** (salvo `--force`).
+4. Comprime a JPEG 320px (~8-20KB por imagen) para respetar el límite de 1MB de Firestore.
 5. Guarda en Firebase. Los renderers (`flashcards.html`, `flashcards-es.html`, `recuerdalo`) muestran `imageData` si existe y el emoji como fallback (componente `<CardVisual>`).
+
+### Editar/subir imágenes a mano (dashboard-fc)
+
+Cada tarjeta en `dashboard-fc.html` tiene en la columna izquierda: si hay imagen, preview con overlay **Cambiar/Quitar**; si no, el input de emoji + **"+ Subir foto"**. La imagen subida se comprime en el navegador (canvas, JPEG 320px) igual que el script. Útil para corregir las pocas fotos que la búsqueda automática no acierte.
 
 ### Modo verbos de flashcards (`?mode=verbs`)
 
