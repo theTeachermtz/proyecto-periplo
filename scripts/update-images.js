@@ -26,9 +26,13 @@ const FIREBASE_CONFIG = {
 const TEACHER_UIDS   = ['teacher_builder_001', 'teacher_anita_001'];
 const IMAGE_TYPES    = ['CULTURAL_CARDS', 'WORDPACK', 'WORD_BANK'];
 
-// Filtro opcional por nombre del mazo:  node update-images.js "Irregulares A-F"
-// Coincidencia parcial, sin importar mayúsculas. Sin argumento → procesa todos.
-const TITLE_FILTER   = process.argv.slice(2).join(' ').trim().toLowerCase();
+// Args:  node update-images.js "Irregulares A-F" [--force]
+//   - nombre: filtro parcial por título (case-insensitive). Sin nombre → todos.
+//   - --force: re-procesa también las tarjetas que YA tienen imagen (para
+//     reemplazar fotos viejas/feas con una mejor fuente como Pexels).
+const RAW_ARGS       = process.argv.slice(2);
+const FORCE          = RAW_ARGS.includes('--force');
+const TITLE_FILTER   = RAW_ARGS.filter(a => a !== '--force').join(' ').trim().toLowerCase();
 // La API key de Google se lee de una variable de entorno — NUNCA se hardcodea ni se commitea.
 // Antes de correr el script:   set GOOGLE_API_KEY=tu_key   (Windows)  /  export GOOGLE_API_KEY=tu_key  (Mac/Linux)
 // La API key de Google es OPCIONAL: solo se usa para el último recurso (Google
@@ -37,6 +41,12 @@ const TITLE_FILTER   = process.argv.slice(2).join(' ').trim().toLowerCase();
 // (GOOGLE_API_KEY), se aprovecha como fallback extra; si no, simplemente se omite.
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
 const GOOGLE_CX      = 'b33357881960e4c8a';
+
+// PEXELS: fotos stock profesionales (gratis). Es la MEJOR fuente para flashcards.
+// Saca tu key gratis en https://www.pexels.com/api/ y córrela así:
+//   PowerShell:  $env:PEXELS_API_KEY="tu_key"; node update-images.js
+// Es opcional: si no está, el script usa Wikipedia/Commons como antes.
+const PEXELS_API_KEY = process.env.PEXELS_API_KEY || '';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const app = initializeApp(FIREBASE_CONFIG);
@@ -143,6 +153,23 @@ async function getCommonsImage(query) {
     } catch (_) { return null; }
 }
 
+// ── Pexels: fotos stock profesionales (solo si hay API key) ───────────────────
+async function getPexelsImage(query) {
+    if (!PEXELS_API_KEY) return null;
+    try {
+        const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=1&orientation=square`;
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 12000);
+        const res = await fetch(url, { signal: ctrl.signal, headers: { Authorization: PEXELS_API_KEY } });
+        clearTimeout(t);
+        if (!res.ok) return null;
+        const data = await res.json();
+        const photo = data.photos?.[0];
+        // 'large' (~940px) o 'medium'; luego sharp lo baja a 320px
+        return photo?.src?.large || photo?.src?.medium || photo?.src?.original || null;
+    } catch (_) { return null; }
+}
+
 // ── Google Custom Search fallback (solo si hay API key) ───────────────────────
 async function getGoogleImage(query) {
     if (!GOOGLE_API_KEY) return null; // sin key: se omite este último recurso
@@ -175,18 +202,20 @@ async function findImageUrl(card, kind = 'general') {
         url = await getGoogleImage(`${es} comida mexicana`); return url;
     }
 
-    // Si la IA dio una frase visual (imageQuery), es lo MÁS confiable: se busca como
-    // keyword en Commons / Google (no por título de Wikipedia, que confunde verbos
-    // con lugares — "begin" → un pueblo francés). Es el caso premium.
+    // Si la IA dio una frase visual (imageQuery), es lo MÁS confiable. Orden:
+    // 1) Pexels (fotos stock bonitas) → 2) Commons → 3) Google. Pexels es el que
+    // da el look premium ("begin" → corredores en la salida, no un pueblo francés).
     if (query) {
-        let url = await getCommonsImage(query);  if (url) return url;
+        let url = await getPexelsImage(query);   if (url) return url;
+        url = await getCommonsImage(query);      if (url) return url;
         url = await getGoogleImage(query);       if (url) return url;
         // si la frase no dio nada, cae al flujo normal de abajo
     }
 
-    // Vocabulario general (flashcards): el inglés manda
+    // Vocabulario general (flashcards): el inglés manda. Pexels también primero.
     const term = en || es;
-    let url = await getWikiImage(wikiTitle(term), 'en'); if (url) return url;
+    let url = await getPexelsImage(term);                if (url) return url;
+    url = await getWikiImage(wikiTitle(term), 'en');     if (url) return url;
     url = await getCommonsImage(term);                   if (url) return url;
     if (es && es !== en) { url = await getWikiImage(wikiTitle(es), 'es'); if (url) return url; }
     url = await getGoogleImage(term);                    return url;
@@ -232,9 +261,10 @@ async function processUid(uid) {
             const label = card.wordEn || card.wordEs || '(?)';
             const pad  = `  [${String(i+1).padStart(2)}/${cards.length}]`;
 
-            // Flashcards: si ya tiene imagen, NO re-procesar (ahorra tiempo y cuota).
+            // Flashcards: si ya tiene imagen, NO re-procesar (ahorra tiempo y cuota),
+            // salvo --force (para reemplazar fotos viejas con una mejor fuente).
             // Cultural cards: re-fetch siempre (para corregir imágenes viejas con alias).
-            if (card.imageData && !isCultural) {
+            if (card.imageData && !isCultural && !FORCE) {
                 console.log(`${pad} ${label} — ya tiene imagen, skip`);
                 skipped++;
                 continue;
