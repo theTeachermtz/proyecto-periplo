@@ -21,7 +21,10 @@ const FIREBASE_CONFIG = {
     messagingSenderId: "236795998392",
     appId:             "1:236795998392:web:0da24b4f018611b55c844d"
 };
-const TEACHER_UID    = 'teacher_anita_001';
+// Recorremos ambas bibliotecas (inglés = builder, español = anita) y los 3 tipos
+// que llevan imágenes: cultural cards (recuérdalo) y los wordpacks de flashcards.
+const TEACHER_UIDS   = ['teacher_builder_001', 'teacher_anita_001'];
+const IMAGE_TYPES    = ['CULTURAL_CARDS', 'WORDPACK', 'WORD_BANK'];
 // La API key de Google se lee de una variable de entorno — NUNCA se hardcodea ni se commitea.
 // Antes de correr el script:   set GOOGLE_API_KEY=tu_key   (Windows)  /  export GOOGLE_API_KEY=tu_key  (Mac/Linux)
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
@@ -153,33 +156,29 @@ async function getGoogleImage(query) {
 }
 
 // ── Try all sources in order ──────────────────────────────────────────────────
-async function findImageUrl(wordEs) {
-    const title = wikiTitle(wordEs);          // e.g. "Cochinita_Pibil"
-    const titleEn = wikiTitle(wordEs);
+// CULTURAL_CARDS son comida mexicana → priorizamos español + contexto "comida".
+// WORDPACK / WORD_BANK son vocabulario general → priorizamos el término en inglés
+// (es lo que mejor encuentra fotos reales nítidas en Wikipedia/Commons).
+async function findImageUrl(card, kind = 'general') {
+    const es = card.wordEs || '';
+    const en = card.wordEn || '';
 
-    // 1. Spanish Wikipedia (exact title)
-    let url = await getWikiImage(title, 'es');
-    if (url) return url;
+    if (kind === 'cultural') {
+        // Flujo original optimizado para comida mexicana
+        let url = await getWikiImage(wikiTitle(es), 'es'); if (url) return url;
+        url = await getWikiImage(wikiTitle(es), 'en');     if (url) return url;
+        url = await getWikiImage(`${wikiTitle(es)} (food)`, 'en'); if (url) return url;
+        url = await getCommonsImage(`${es} Mexican food`); if (url) return url;
+        url = await getCommonsImage(es);                   if (url) return url;
+        url = await getGoogleImage(`${es} comida mexicana`); return url;
+    }
 
-    // 2. English Wikipedia (exact title)
-    url = await getWikiImage(titleEn, 'en');
-    if (url) return url;
-
-    // 3. English Wikipedia with "Mexican" context
-    url = await getWikiImage(`${titleEn} (food)`, 'en');
-    if (url) return url;
-
-    // 4. Wikimedia Commons (great for food photography)
-    url = await getCommonsImage(`${wordEs} Mexican food`);
-    if (url) return url;
-
-    // 5. Wikimedia Commons without context
-    url = await getCommonsImage(wordEs);
-    if (url) return url;
-
-    // 6. Google Custom Search (last resort)
-    url = await getGoogleImage(`${wordEs} comida mexicana`);
-    return url;
+    // Vocabulario general (flashcards): el inglés manda
+    const term = en || es;
+    let url = await getWikiImage(wikiTitle(term), 'en'); if (url) return url;
+    url = await getCommonsImage(term);                   if (url) return url;
+    if (es && es !== en) { url = await getWikiImage(wikiTitle(es), 'es'); if (url) return url; }
+    url = await getGoogleImage(term);                    return url;
 }
 
 // ── Download + compress to base64 ────────────────────────────────────────────
@@ -193,46 +192,45 @@ async function fetchAndCompress(imageUrl) {
     return `data:image/jpeg;base64,${out.toString('base64')}`;
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
-async function main() {
-    const path = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
-
-    console.log('🔍 Reading Firebase...\n');
+// ── Procesa todos los sets con imágenes de un UID ──────────────────────────────
+async function processUid(uid) {
+    const path = `artifacts/periplo-app-v1/users/${uid}/quizzes`;
     const snap = await getDocs(collection(db, path));
 
     const docs = snap.docs.filter(d => {
         const data = d.data();
-        return data.type === 'CULTURAL_CARDS' && data.isDeleted !== true;
+        return IMAGE_TYPES.includes(data.type) && data.isDeleted !== true;
     });
-    if (!docs.length) { console.log('No Cultural Cards found.'); process.exit(0); }
-    console.log(`Found ${docs.length} set(s)\n`);
+    if (!docs.length) { console.log(`  (sin sets con imágenes para ${uid})\n`); return; }
+    console.log(`  ${docs.length} set(s) en ${uid}\n`);
 
     for (const docSnap of docs) {
-        const data  = docSnap.data();
-        const cards = [...(data.content?.cards || [])];
+        const data    = docSnap.data();
+        const isCultural = data.type === 'CULTURAL_CARDS';
+        const kind    = isCultural ? 'cultural' : 'general';
+        const cards   = [...(data.content?.cards || [])];
         let changed = false;
         let found = 0, skipped = 0, failed = 0;
 
-        console.log(`📋  "${data.title}" — ${cards.length} cards`);
+        console.log(`📋  "${data.title}" [${data.type}] — ${cards.length} cards`);
 
         for (let i = 0; i < cards.length; i++) {
             const card = cards[i];
+            const label = card.wordEn || card.wordEs || '(?)';
             const pad  = `  [${String(i+1).padStart(2)}/${cards.length}]`;
 
-            if (card.imageData) {
-                // Re-compress if existing image is large (>15KB)
-                // Always re-fetch with correct alias to fix wrong images
-                const existingKb = Math.round(card.imageData.length * 0.75 / 1024);
-                process.stdout.write(`${pad} ${card.wordEs} (replacing ${existingKb}KB)...`);
-                // Re-compress oversized existing image
-                process.stdout.write(`${pad} ${card.wordEs} (recompressing ${existingKb}KB)...`);
-                // Fall through to re-fetch with alias
+            // Flashcards: si ya tiene imagen, NO re-procesar (ahorra tiempo y cuota).
+            // Cultural cards: re-fetch siempre (para corregir imágenes viejas con alias).
+            if (card.imageData && !isCultural) {
+                console.log(`${pad} ${label} — ya tiene imagen, skip`);
+                skipped++;
+                continue;
             }
 
-            process.stdout.write(`${pad} ${card.wordEs}...`);
+            process.stdout.write(`${pad} ${label}...`);
 
             try {
-                const imageUrl = await findImageUrl(card.wordEs);
+                const imageUrl = await findImageUrl(card, kind);
                 if (!imageUrl) { console.log(' ✗ not found'); failed++; continue; }
 
                 const imageData = await fetchAndCompress(imageUrl);
@@ -250,17 +248,25 @@ async function main() {
             await sleep(1500); // Wikipedia requires polite crawling
         }
 
-        console.log(`\n  Summary: ${found} new images, ${skipped} already had one, ${failed} not found`);
+        console.log(`\n  Summary: ${found} nuevas, ${skipped} ya tenían, ${failed} no encontradas`);
 
         if (changed) {
             await updateDoc(doc(db, path, docSnap.id), { 'content.cards': cards });
-            console.log(`  💾 Saved to Firebase\n`);
+            console.log(`  💾 Guardado en Firebase\n`);
         } else {
-            console.log(`  (no changes)\n`);
+            console.log(`  (sin cambios)\n`);
         }
     }
+}
 
-    console.log('✅ All done! Reload recuerdalo.html to see the images.');
+// ── Main ──────────────────────────────────────────────────────────────────────
+async function main() {
+    console.log('🔍 Reading Firebase...\n');
+    for (const uid of TEACHER_UIDS) {
+        console.log(`══ ${uid} ══`);
+        await processUid(uid);
+    }
+    console.log('✅ All done! Reload recuerdalo.html / flashcards para ver las imágenes.');
     process.exit(0);
 }
 
