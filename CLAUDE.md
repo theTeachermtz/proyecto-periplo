@@ -375,6 +375,40 @@ Israel y Anita trabajan el mismo repo en paralelo. **Anita suele editar archivos
 
 ---
 
+## API Key de Google / Gemini (IA Assistant de los dashboards)
+
+Los dashboards (`dashboard-fc-es.html`, `dashboard-fc.html`, etc.) tienen un **"IA Assistant"** que genera vocabulario con la **API de Gemini**. La key se teclea a mano en el campo de password (la lupita) — **NO está hardcodeada en el código y nunca debe commitearse.**
+
+### ⚠️ La cuenta de la API NO es la de trabajo
+
+| Para qué | Cuenta de Google |
+|---|---|
+| **API de Gemini + facturación** | **`tuzo.arsi@gmail.com`** ← aquí se pagó la API |
+| Todo lo demás (trabajo, etc.) | `israel.martinez.silva1904@gmail.com` |
+
+La key de Gemini vive en el proyecto de Google Cloud **"Default Gemini Project"** (`gen-lang-client-0505684142`), que pertenece a **`tuzo.arsi`**. Si en Cloud Console sale "necesitas acceso adicional" o el botón de crear key bloqueado → estás en la cuenta equivocada; cambiar a `tuzo.arsi`.
+
+### La key correcta y cómo usarla
+
+- **Key activa:** `Periplo_Daniel_Final` (empieza con `AIzaSyBVREwbDco-...`).
+- **Restricción:** HTTP referrers → solo funciona desde **`proyecto-periplo.vercel.app/*`**.
+- **Por eso:** la lupita solo jala si el dashboard se abre en **`https://proyecto-periplo.vercel.app/`** — NO en localhost ni en preview (esos no mandan el referer de Vercel y dan **403**).
+
+### Diagnóstico de errores comunes
+
+- **"Error conectando con Google" / "Error al buscar modelos":** casi siempre es que la key pegada está **muerta** (borrada/rotada) o es una vieja. Verificar cuál key está activa en Cloud Console (cuenta `tuzo.arsi`) y volver a pegar la buena.
+- **403 `API_KEY_HTTP_REFERRER_BLOCKED`:** la app no se abrió desde `proyecto-periplo.vercel.app`, o falta ese dominio en los Website restrictions de la key.
+- **NO confundir** esta key de Gemini con la **API key de Firebase** (`AIza...MIGPo`), que es pública por diseño, va en todos los renderers y no es un secreto.
+
+### Para el script de imágenes
+
+`scripts/update-images.js` lee la key de la variable de entorno `GOOGLE_API_KEY` (nunca hardcodeada):
+```
+$env:GOOGLE_API_KEY="la_key"; node update-images.js   # PowerShell
+```
+
+---
+
 ## Banner estándar Periplo (renderers)
 
 Todos los renderers (tanto inglés como `-es`) usan el mismo banner sticky en la parte superior. **No inventar headers propios.**
