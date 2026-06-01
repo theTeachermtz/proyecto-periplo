@@ -535,9 +535,14 @@ node update-images.js "Irregulares A-F" --force    # re-procesa aunque ya tengan
 4. Comprime a JPEG 320px (~8-20KB por imagen) para respetar el límite de 1MB de Firestore.
 5. Guarda en Firebase. Los renderers (`flashcards.html`, `flashcards-es.html`, `recuerdalo`) muestran `imageData` si existe y el emoji como fallback (componente `<CardVisual>`).
 
-### Editar/subir imágenes a mano (dashboard-fc)
+### Editar/generar imágenes a mano (dashboard-fc)
 
-Cada tarjeta en `dashboard-fc.html` tiene en la columna izquierda: si hay imagen, preview con overlay **Cambiar/Quitar**; si no, el input de emoji + **"+ Subir foto"**. La imagen subida se comprime en el navegador (canvas, JPEG 320px) igual que el script. Útil para corregir las pocas fotos que la búsqueda automática no acierte.
+Cada tarjeta en `dashboard-fc.html` tiene en la columna izquierda 3 acciones:
+- **✨ IA** — genera una ilustración con la API de Imagen (`imagen-4.0 :predict`) usando la oración de ejemplo (`exampleEn`) como prompt. Si ya hay imagen, actúa como "refresh" (regenera solo esa). Usa la key del IA Assist (la del navegador). **Cuesta cuota de Google** (cuenta tuzo.arsi) — úsalo solo en las pocas que la búsqueda automática no acierte.
+- **Cambiar/Subir** — sube tu propia foto.
+- **Quitar** — vuelve al emoji.
+
+TODAS las imágenes (subidas o generadas) se comprimen en el navegador (canvas, JPEG 320px ~60%) ANTES de guardar, para respetar el límite de 1MB de Firestore. ⚠️ Nota: `dashboard-presentations*.html` NO comprime (por eso "5 imágenes no guarda"); flashcards sí.
 
 ### Modo verbos de flashcards (`?mode=verbs`)
 
