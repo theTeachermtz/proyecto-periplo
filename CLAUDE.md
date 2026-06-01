@@ -424,3 +424,34 @@ Todos los renderers (tanto inglés como `-es`) usan el mismo banner sticky en la
 | Listening | `text-emerald-400` |
 | Reading | `text-amber-400` |
 | Conversación | `text-violet-400` |
+
+---
+
+## Script de imágenes — Cultural Cards
+
+`scripts/update-images.js` — Node.js script que busca imágenes en Wikipedia y las guarda en Firebase para todos los sets de tipo `CULTURAL_CARDS`.
+
+### Cómo correrlo
+
+```bash
+cd scripts
+node update-images.js
+```
+
+O decirle a la IA: **"corre el script de imágenes"** — lo ejecuta directo desde esta sesión.
+
+### Qué hace
+
+1. Lee todos los sets `CULTURAL_CARDS` activos (ignora `isDeleted: true`)
+2. Por cada tarjeta sin imagen: busca en Wikipedia ES → EN → Wikimedia Commons → Google CSE
+3. Usa `WIKI_ALIASES` para palabras ambiguas (pastor → Tacos_al_pastor, etc.)
+4. Comprime a JPEG 320px/58% (~8-15KB por imagen) para respetar el límite de 1MB de Firestore
+5. Guarda en Firebase y skippea tarjetas que ya tienen imagen
+
+### Para agregar nuevas palabras al diccionario
+
+Editar `WIKI_ALIASES` en `scripts/update-images.js` — agregar `'palabra': 'Titulo_Wikipedia'`.
+
+### Dependencias
+
+`firebase` + `sharp` — ya instaladas en `scripts/node_modules/`. Si se borran: `cd scripts && npm install`.
