@@ -18,6 +18,7 @@
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="periplo-taxonomy-es.js"></script>
+    <script src="periplo-ai.js"></script>
     <style>
         body { user-select: none; -webkit-user-select: none; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
@@ -44,6 +45,10 @@
         const TEACHER_UID = 'teacher_anita_001';
 
         const { TAXONOMY, NEW_LEVELS, NEW_CATS, MACRO_SKILLS, getAllTopicsForCategory } = window.PERIPLO_TAXONOMY_ES;
+
+        // IA Assistant compartido (periplo-ai.js)
+        const AI = window.PERIPLO_AI;
+        const ApiKeyBar = AI.createApiKeyBar(React);
 
         // ============================================================
         // JUEGOS DISPONIBLES EN UN WORDPACK — versión español
@@ -89,7 +94,7 @@
             };
 
             useEffect(() => {
-                const savedKey = localStorage.getItem('periplo_google_key');
+                const savedKey = AI.loadKey();
                 if (savedKey) setApiKey(savedKey);
 
                 const params = new URLSearchParams(window.location.search);
@@ -113,19 +118,6 @@
                 }
             }, []);
 
-            const handleApiKeyChange = (e) => {
-                const val = e.target.value;
-                setApiKey(val);
-                localStorage.setItem('periplo_google_key', val);
-            };
-
-            const clearApiKey = () => {
-                localStorage.removeItem('periplo_google_key');
-                setApiKey("");
-                setAvailableModels([]);
-                setSelectedModel('');
-            };
-
             const addRow    = () => setCards([...cards, { id: Date.now(), wordEs: '', wordEn: '', emojis: '', exampleEs: '' }]);
             const removeRow = (id) => { if (cards.length > 1) setCards(cards.filter(c => c.id !== id)); };
 
@@ -133,15 +125,9 @@
                 if (!apiKey) return alert("Ingresa tu API Key primero");
                 setIsLoadingModels(true);
                 try {
-                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey.trim()}`);
-                    if (!response.ok) throw new Error("Error conectando con Google");
-                    const data = await response.json();
-                    const validModels = data.models.filter(m => m.supportedGenerationMethods?.includes("generateContent")).map(m => m.name);
+                    const validModels = await AI.fetchModels(apiKey);
                     setAvailableModels(validModels);
-                    if (validModels.length > 0) {
-                        const preferred = validModels.find(m => m.includes("gemini-2.5-flash")) || validModels.find(m => m.includes("gemini-2.0")) || validModels[0];
-                        setSelectedModel(preferred);
-                    }
+                    if (validModels.length > 0) setSelectedModel(AI.pickPreferredModel(validModels));
                 } catch (e) { alert("Error al buscar modelos: " + e.message); }
                 finally { setIsLoadingModels(false); }
             };
@@ -189,21 +175,11 @@ Respond ONLY with a valid JSON with this exact structure, no extra text, no mark
                 `;
 
                 try {
-                    const response = await fetch(
-                        `https://generativelanguage.googleapis.com/v1beta/${selectedModel}:generateContent?key=${apiKey.trim()}`,
-                        {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 8192 } }),
-                            signal: abortControllerRef.current.signal
-                        }
-                    );
-                    if (!response.ok) throw new Error(`API Error ${response.status}`);
-                    const result    = await response.json();
-                    const rawText   = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
-                    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-                    if (!jsonMatch) throw new Error("La IA no devolvió un JSON válido.");
-                    const parsed = JSON.parse(jsonMatch[0]);
+                    const rawText = await AI.callGemini({
+                        apiKey, model: selectedModel, prompt: promptText,
+                        signal: abortControllerRef.current.signal
+                    });
+                    const parsed = AI.extractJSON(rawText);
                     if (!parsed.cards || !Array.isArray(parsed.cards)) throw new Error("Estructura de JSON inválida.");
                     if (parsed.title && !title) setTitle(parsed.title);
                     setCards(parsed.cards.map((c, i) => ({ ...c, id: Date.now() + i })));
@@ -546,30 +522,16 @@ Respond ONLY with a valid JSON with this exact structure, no extra text, no mark
                                 </div>
 
                                 <div className="p-6 overflow-y-auto custom-scrollbar space-y-6">
-                                    {/* API KEY */}
-                                    <div className="bg-black/30 p-4 rounded-xl border border-zinc-800/50 flex flex-col sm:flex-row gap-2 items-center">
-                                        <div className="w-full flex items-center gap-2 bg-zinc-900 p-1.5 rounded-xl border border-zinc-700">
-                                            <Key size={14} className="text-zinc-500 ml-2 shrink-0"/>
-                                            <input type="password" placeholder="Tu API Key de Google..." value={apiKey} onChange={handleApiKeyChange}
-                                                className="bg-transparent text-white px-2 py-1 text-xs font-mono w-full focus:outline-none"/>
-                                            <button onClick={fetchModels} disabled={isLoadingModels || !apiKey}
-                                                className="p-2 bg-orange-500 hover:bg-orange-400 text-black rounded-lg transition-colors shrink-0" title="Escanear Modelos">
-                                                {isLoadingModels ? <Loader2 className="animate-spin" size={16}/> : <Search size={16}/>}
-                                            </button>
-                                            {apiKey && (
-                                                <button onClick={clearApiKey}
-                                                    className="p-2 bg-zinc-800 hover:bg-rose-600 text-zinc-400 hover:text-white rounded-lg transition-colors shrink-0" title="Borrar la API Key guardada">
-                                                    <Trash2 size={16}/>
-                                                </button>
-                                            )}
-                                        </div>
-                                        {availableModels.length > 0 && (
-                                            <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}
-                                                className="bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2.5 text-xs text-white w-full sm:w-auto outline-none">
-                                                {availableModels.map(m => <option key={m} value={m}>{m.replace('models/', '')}</option>)}
-                                            </select>
-                                        )}
-                                    </div>
+                                    {/* API KEY (componente compartido periplo-ai.js) */}
+                                    <ApiKeyBar
+                                        variant="modal"
+                                        accentBtn="bg-orange-500 hover:bg-orange-400 text-black"
+                                        placeholder="Tu API Key de Google..."
+                                        apiKey={apiKey} setApiKey={setApiKey}
+                                        models={availableModels} selectedModel={selectedModel} setSelectedModel={setSelectedModel}
+                                        isLoading={isLoadingModels} onFetch={fetchModels}
+                                        onClear={() => setAvailableModels([])}
+                                    />
 
                                     {/* PROMPT */}
                                     <div>
