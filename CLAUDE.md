@@ -361,6 +361,49 @@ const BACK_URL = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html
 
 ---
 
+## Módulo compartido `periplo-ai.js` (IA Assistant)
+
+**TODA la lógica del "IA Assistant" (API key de Gemini) vive en un solo archivo: `periplo-ai.js`.** Igual que `periplo-config.js` y `periplo-taxonomy.js`, se carga con `<script src>` y expone `window.PERIPLO_AI`. Los 19 dashboards lo consumen — **un cambio se hace una sola vez aquí, no archivo por archivo.**
+
+### Qué expone `window.PERIPLO_AI`
+
+- **Key (localStorage, llave única `periplo_google_key`):** `loadKey()`, `saveKey(k)`, `clearKey()`.
+- **Modelos:** `fetchModels(apiKey)` → array de modelos; `pickPreferredModel(models)` → 2.5-flash › 2.0 › primero.
+- **Generación:** `callGemini({ apiKey, model, prompt, signal?, json?, temperature? })` → devuelve el TEXTO crudo. Con `json:true` añade `responseMimeType: application/json`.
+- **Parseo:** `extractJSON(rawText)` → objeto (regex `{...}` + JSON.parse). Para respuestas tipo **array** `[...]`, parsear local (extractJSON solo maneja objetos).
+- **UI:** `createApiKeyBar(React)` → componente `<ApiKeyBar>` (factory, sin JSX, iconos SVG inline — no depende de lucide).
+
+### Cómo se usa en un dashboard
+
+```javascript
+const AI = window.PERIPLO_AI;
+const ApiKeyBar = AI.createApiKeyBar(React);
+// init:    const k = AI.loadKey(); if (k) setApiKey(k);
+// fetch:   const m = await AI.fetchModels(apiKey); setSelectedModel(AI.pickPreferredModel(m));
+// genera:  const raw = await AI.callGemini({ apiKey, model: selectedModel, prompt }); const data = AI.extractJSON(raw);
+```
+
+```jsx
+<ApiKeyBar variant="modal" accentBtn="bg-orange-500 hover:bg-orange-400 text-black"
+    apiKey={apiKey} setApiKey={setApiKey}
+    models={availableModels} selectedModel={selectedModel} setSelectedModel={setSelectedModel}
+    isLoading={isLoadingModels} onFetch={fetchModels} onClear={() => setAvailableModels([])} />
+```
+
+### Reglas del componente `<ApiKeyBar>`
+
+| Prop | Para qué |
+|---|---|
+| `variant` | `'modal'` (caja oscura), `'compact'` (header inline), `'sidebar'` (claro/oscuro) |
+| `accentBtn` | string de clases Tailwind COMPLETAS del botón lupita (no concatenar — Tailwind CDN no las generaría) |
+| `showSelector` | `false` solo para casos de modelo fijo (multimodal). Por defecto `true`: lupita + dropdown |
+
+- **Estándar:** TODOS los dashboards llevan lupita + selector de modelo + botón de basura. El botón de basura aparece solo cuando hay key.
+- **Excepciones (no migrar la generación, solo la key):** `dashboard-whatif.html` y las imágenes de `dashboard-presentations*.html` usan llamadas **multimodales** (`inline_data` / `imagen-4.0 :predict`) que NO pasan por `callGemini`. Ahí el ApiKeyBar va con `showSelector={false}` o se conserva la llamada local.
+- **La key se teclea, nunca se hardcodea.** `periplo-ai.js` no contiene ninguna key. La de Firebase (`AIza...MIGPo`) sí va hardcodeada en cada dashboard (es pública por diseño) — no confundir con la de Gemini.
+
+---
+
 ## Flujo de trabajo con Git (Israel + Anita)
 
 Israel y Anita trabajan el mismo repo en paralelo. **Anita suele editar archivos directo en GitHub web** (sobre todo los renderers `-es` como `flashcards-es.html`), mientras Israel trabaja en local. Esto causa que el local de Israel quede desactualizado y aparezcan conflictos al commitear/sincronizar.
