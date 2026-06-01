@@ -50,6 +50,34 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
+        // ── SONIDOS (Web Audio API, sintetizados — sin archivos, se graban en pantalla) ──
+        const SFX = (() => {
+            let ctx = null;
+            const ac = () => { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)(); return ctx; };
+            // toca una nota: freq Hz, dur seg, tipo de onda, volumen
+            const tone = (freq, start, dur, type = 'sine', vol = 0.22) => {
+                const c = ac();
+                const o = c.createOscillator(), g = c.createGain();
+                o.type = type; o.frequency.value = freq;
+                o.connect(g); g.connect(c.destination);
+                const t = c.currentTime + start;
+                g.gain.setValueAtTime(0, t);
+                g.gain.linearRampToValueAtTime(vol, t + 0.015);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+                o.start(t); o.stop(t + dur + 0.02);
+            };
+            return {
+                // Celebración: acorde ascendente alegre (do-mi-sol-do agudo)
+                success: () => { try { [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, i * 0.09, 0.35, 'triangle', 0.2)); } catch(e){} },
+                // Acierto individual: "ding" corto y brillante
+                ding:    () => { try { tone(880, 0, 0.18, 'triangle', 0.18); tone(1318.5, 0.05, 0.18, 'triangle', 0.14); } catch(e){} },
+                // Error: grave corto y seco
+                error:   () => { try { tone(160, 0, 0.28, 'sawtooth', 0.16); tone(120, 0.04, 0.28, 'sawtooth', 0.14); } catch(e){} },
+                // Voltear tarjeta: clic suave
+                flip:    () => { try { tone(440, 0, 0.07, 'sine', 0.1); } catch(e){} },
+            };
+        })();
+
         // Modo especial: ?mode=verbs → frente presente, reverso pasado + participio
         const FC_MODE = new URLSearchParams(window.location.search).get('mode') || 'normal';
         const IS_VERBS = FC_MODE === 'verbs';
@@ -89,6 +117,7 @@
 
             // Muestra una celebración y luego completa (para que el alumno sepa que acertó)
             const celebrateAndComplete = () => {
+                SFX.success();
                 setSuccess(true);
                 setTimeout(() => onComplete(), 1100);
             };
@@ -104,6 +133,7 @@
                 });
                 setErrors(newErrors);
                 if (!hasError) celebrateAndComplete();
+                else SFX.error();
             };
 
             const handleInputChange = (idx, val) => {
@@ -118,8 +148,9 @@
             const handleTF = (guess) => {
                 if (guess === miniGame.data[step].isTrue) {
                     if (step + 1 >= miniGame.cards.length) celebrateAndComplete();
-                    else setStep(step + 1);
+                    else { SFX.ding(); setStep(step + 1); }
                 } else {
+                    SFX.error();
                     setShake(true);
                     setTimeout(() => setShake(false), 400);
                 }
@@ -133,12 +164,15 @@
                 const targetWord = miniGame.data[step]?.target || miniGame.cards[step].wordEn;
                 const wordChars = targetWord.toLowerCase().split('');
                 const requiredChars = wordChars.filter(c => c !== ' ' && c !== '/');
+                // sonido por tecla: ding si la letra está en la palabra, error suave si no
+                if (targetWord.toLowerCase().includes(key)) SFX.flip(); else SFX.error();
                 const isWordComplete = requiredChars.every(c => newGuessed.includes(c));
 
                 if (isWordComplete) {
                     setTimeout(() => {
                         if (step + 1 >= miniGame.cards.length) celebrateAndComplete();
                         else {
+                            SFX.ding();
                             setStep(step + 1);
                             setGuessed([]);
                         }
@@ -487,6 +521,7 @@
             const handleFlip = () => {
                 if (isAnimating || feedback || gameState !== 'playing' || !currentCard) return;
                 const newFlippedState = !isFlipped;
+                SFX.flip();
                 setIsFlipped(newFlippedState);
                 if (newFlippedState) setHasSeenBack(true);
             };
@@ -579,6 +614,7 @@
                 if(e) e.stopPropagation();
                 if (isAnimating || feedback || deck.length === 0) return;
 
+                SFX.ding();
                 setFeedback('correct');
 
                 setTimeout(() => {
@@ -615,6 +651,7 @@
                 if(e) e.stopPropagation();
                 if (isAnimating || feedback || deck.length === 0) return;
 
+                SFX.error();
                 setFeedback('incorrect');
 
                 setTimeout(() => {
@@ -638,6 +675,7 @@
 
             useEffect(() => {
                 if (deck.length === 0 && originalCards.length > 0 && !activeMiniGame && gameState === 'playing') {
+                    SFX.success();
                     setGameState('victory');
                 }
             }, [deck.length, originalCards.length, activeMiniGame, gameState]);
@@ -694,9 +732,9 @@
                     {/* HEADER - ALTURA FIJA (Shrink 0) */}
                     <div className="w-full shrink-0 flex justify-between items-center z-20 p-4 sm:p-6">
                         <div className="flex items-center gap-3">
-                            <button onClick={(e) => { e.stopPropagation(); goBack(); }} className="flex items-center justify-center w-10 h-10 bg-indigo-600 rounded-xl text-white font-black shadow-lg shadow-indigo-600/20 active:scale-95 transition-transform">
+                            <div className="flex items-center justify-center w-10 h-10 bg-indigo-600 rounded-xl text-white font-black shadow-lg shadow-indigo-600/20">
                                 P
-                            </button>
+                            </div>
                             <div className="hidden sm:block w-px h-8 bg-zinc-800 mx-1"></div>
                             <div className="flex flex-col">
                                 <h1 className="text-base sm:text-lg font-black text-white leading-none tracking-tight truncate max-w-[150px] sm:max-w-xs">{quizData?.title || 'Actividad Periplo'}</h1>
