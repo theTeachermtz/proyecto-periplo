@@ -512,8 +512,11 @@ Todos los renderers (tanto inglés como `-es`) usan el mismo banner sticky en la
 
 ```bash
 cd scripts
-node update-images.js
+node update-images.js                      # todos los mazos sin imágenes
+node update-images.js "Irregulares A-F"    # solo mazos cuyo título contenga ese texto
 ```
+
+El argumento opcional es un **filtro por nombre** (coincidencia parcial, sin importar mayúsculas). Útil para apuntar a un solo mazo. Siempre **ignora la papelera** (`isDeleted: true`).
 
 O decirle a la IA: **"corre el script de imágenes"** — lo ejecuta directo desde esta sesión.
 

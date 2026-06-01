@@ -25,6 +25,10 @@ const FIREBASE_CONFIG = {
 // que llevan imágenes: cultural cards (recuérdalo) y los wordpacks de flashcards.
 const TEACHER_UIDS   = ['teacher_builder_001', 'teacher_anita_001'];
 const IMAGE_TYPES    = ['CULTURAL_CARDS', 'WORDPACK', 'WORD_BANK'];
+
+// Filtro opcional por nombre del mazo:  node update-images.js "Irregulares A-F"
+// Coincidencia parcial, sin importar mayúsculas. Sin argumento → procesa todos.
+const TITLE_FILTER   = process.argv.slice(2).join(' ').trim().toLowerCase();
 // La API key de Google se lee de una variable de entorno — NUNCA se hardcodea ni se commitea.
 // Antes de correr el script:   set GOOGLE_API_KEY=tu_key   (Windows)  /  export GOOGLE_API_KEY=tu_key  (Mac/Linux)
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
@@ -199,7 +203,9 @@ async function processUid(uid) {
 
     const docs = snap.docs.filter(d => {
         const data = d.data();
-        return IMAGE_TYPES.includes(data.type) && data.isDeleted !== true;
+        if (!IMAGE_TYPES.includes(data.type) || data.isDeleted === true) return false;
+        if (TITLE_FILTER && !(data.title || '').toLowerCase().includes(TITLE_FILTER)) return false;
+        return true;
     });
     if (!docs.length) { console.log(`  (sin sets con imágenes para ${uid})\n`); return; }
     console.log(`  ${docs.length} set(s) en ${uid}\n`);
@@ -262,6 +268,7 @@ async function processUid(uid) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
     console.log('🔍 Reading Firebase...\n');
+    if (TITLE_FILTER) console.log(`🎯 Filtro de nombre activo: solo mazos que contengan "${TITLE_FILTER}"\n`);
     for (const uid of TEACHER_UIDS) {
         console.log(`══ ${uid} ══`);
         await processUid(uid);
