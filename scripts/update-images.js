@@ -31,16 +31,12 @@ const IMAGE_TYPES    = ['CULTURAL_CARDS', 'WORDPACK', 'WORD_BANK'];
 const TITLE_FILTER   = process.argv.slice(2).join(' ').trim().toLowerCase();
 // La API key de Google se lee de una variable de entorno — NUNCA se hardcodea ni se commitea.
 // Antes de correr el script:   set GOOGLE_API_KEY=tu_key   (Windows)  /  export GOOGLE_API_KEY=tu_key  (Mac/Linux)
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+// La API key de Google es OPCIONAL: solo se usa para el último recurso (Google
+// Custom Search). Las fuentes principales (Wikipedia + Wikimedia Commons) NO la
+// necesitan, así que el script corre perfecto sin ella. Si está en el entorno
+// (GOOGLE_API_KEY), se aprovecha como fallback extra; si no, simplemente se omite.
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
 const GOOGLE_CX      = 'b33357881960e4c8a';
-
-if (!GOOGLE_API_KEY) {
-    console.error('\n❌ Falta la variable de entorno GOOGLE_API_KEY.');
-    console.error('   Windows (cmd):   set GOOGLE_API_KEY=tu_key && node update-images.js');
-    console.error('   PowerShell:      $env:GOOGLE_API_KEY="tu_key"; node update-images.js');
-    console.error('   Mac/Linux:       GOOGLE_API_KEY=tu_key node update-images.js\n');
-    process.exit(1);
-}
 // ─────────────────────────────────────────────────────────────────────────────
 
 const app = initializeApp(FIREBASE_CONFIG);
@@ -147,8 +143,9 @@ async function getCommonsImage(query) {
     } catch (_) { return null; }
 }
 
-// ── Google Custom Search fallback ─────────────────────────────────────────────
+// ── Google Custom Search fallback (solo si hay API key) ───────────────────────
 async function getGoogleImage(query) {
+    if (!GOOGLE_API_KEY) return null; // sin key: se omite este último recurso
     try {
         const url = `https://www.googleapis.com/customsearch/v1?`
             + `key=${GOOGLE_API_KEY}&cx=${GOOGLE_CX}`
