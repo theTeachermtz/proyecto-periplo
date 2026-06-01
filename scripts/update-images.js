@@ -163,6 +163,7 @@ async function getGoogleImage(query) {
 async function findImageUrl(card, kind = 'general') {
     const es = card.wordEs || '';
     const en = card.wordEn || '';
+    const query = (card.imageQuery || '').trim(); // frase visual concreta de la IA
 
     if (kind === 'cultural') {
         // Flujo original optimizado para comida mexicana
@@ -172,6 +173,15 @@ async function findImageUrl(card, kind = 'general') {
         url = await getCommonsImage(`${es} Mexican food`); if (url) return url;
         url = await getCommonsImage(es);                   if (url) return url;
         url = await getGoogleImage(`${es} comida mexicana`); return url;
+    }
+
+    // Si la IA dio una frase visual (imageQuery), es lo MÁS confiable: se busca como
+    // keyword en Commons / Google (no por título de Wikipedia, que confunde verbos
+    // con lugares — "begin" → un pueblo francés). Es el caso premium.
+    if (query) {
+        let url = await getCommonsImage(query);  if (url) return url;
+        url = await getGoogleImage(query);       if (url) return url;
+        // si la frase no dio nada, cae al flujo normal de abajo
     }
 
     // Vocabulario general (flashcards): el inglés manda
