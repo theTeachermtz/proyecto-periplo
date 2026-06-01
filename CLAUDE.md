@@ -504,9 +504,9 @@ Todos los renderers (tanto inglés como `-es`) usan el mismo banner sticky en la
 
 ---
 
-## Script de imágenes — Cultural Cards
+## Script de imágenes — Cultural Cards + Flashcards
 
-`scripts/update-images.js` — Node.js script que busca imágenes en Wikipedia y las guarda en Firebase para todos los sets de tipo `CULTURAL_CARDS`.
+`scripts/update-images.js` — Node.js script que busca imágenes reales en Wikipedia/Commons y las guarda comprimidas en Firebase. Sirve para **dos cosas**: las cultural cards de `recuerdalo` y las imágenes de los mazos de **flashcards** (sustituyen a los emojis para dar el look premium).
 
 ### Cómo correrlo
 
@@ -519,11 +519,15 @@ O decirle a la IA: **"corre el script de imágenes"** — lo ejecuta directo des
 
 ### Qué hace
 
-1. Lee todos los sets `CULTURAL_CARDS` activos (ignora `isDeleted: true`)
-2. Por cada tarjeta sin imagen: busca en Wikipedia ES → EN → Wikimedia Commons → Google CSE
-3. Usa `WIKI_ALIASES` para palabras ambiguas (pastor → Tacos_al_pastor, etc.)
-4. Comprime a JPEG 320px/58% (~8-15KB por imagen) para respetar el límite de 1MB de Firestore
-5. Guarda en Firebase y skippea tarjetas que ya tienen imagen
+1. Recorre **ambos UIDs** (`teacher_builder_001` + `teacher_anita_001`) y los tipos `CULTURAL_CARDS`, `WORDPACK` (flashcards inglés) y `WORD_BANK` (flashcards español). Ignora `isDeleted: true`.
+2. **Cultural cards:** búsqueda optimizada comida mexicana (Wikipedia ES → EN → Commons → Google CSE) usando `WIKI_ALIASES` y re-fetch siempre.
+3. **Flashcards (vocab general):** búsqueda por el término en **inglés** (`wordEn`) que es lo que mejor encuentra fotos nítidas; **skip si la tarjeta ya tiene `imageData`** (no re-procesa, ahorra tiempo/cuota).
+4. Comprime a JPEG 320px/58% (~8-15KB por imagen) para respetar el límite de 1MB de Firestore.
+5. Guarda en Firebase. Los renderers (`flashcards.html`, `flashcards-es.html`, `recuerdalo`) muestran `imageData` si existe y el emoji como fallback (componente `<CardVisual>`).
+
+### Modo verbos de flashcards (`?mode=verbs`)
+
+`flashcards.html?id=...&mode=verbs` activa un modo especial para advanced: **frente = presente** (`wordEn`), **reverso = pasado + participio** (campos `past`/`participle` si existen, o se parsea `wordEs` separando por `/`, ej. `"went / gone"`), ejemplo en inglés. Los minijuegos se desactivan en este modo. Es solo de la rama inglés.
 
 ### Para agregar nuevas palabras al diccionario
 
