@@ -490,11 +490,13 @@ const BACK_URL = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html
 **Estructura mínima del doc en Firestore:**
 ```javascript
 {
-  type: 'TIPO_DEL_JUEGO',       // string constante, ej: 'WORDPACK', 'TALKTIME', 'LOTERIA'
+  type: 'TIPO_DEL_JUEGO',       // string constante, ej: 'WORDPACK', 'TALKTIME', 'SPELLPHRASE'
   title: string,
-  level: string,
-  category: string,
-  topic: string,
+  tags: {                       // OBLIGATORIO — index.html lee SOLO de aquí para filtrar/clasificar
+    levels:     [string],       // ej: ['B1', 'B2']
+    categories: [string],       // ej: ['vocab', 'grammar']
+    topics:     [string],       // ej: ['Modal Verbs'] — puede estar vacío
+  },
   isDeleted: false,
   parentPath: QUIZZES_PATH,
   createdAt: serverTimestamp(),
@@ -502,6 +504,8 @@ const BACK_URL = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html
   // ...campos específicos del juego
 }
 ```
+
+> **Regla crítica:** `index.html` lee `q.tags.levels`, `q.tags.categories`, `q.tags.topics` para asignar carpeta, nivel y etiqueta. Si el doc no tiene `tags`, el quiz aparece como "Sin Clasificar" y sin filtros. Nunca guardar a top-level `level`/`category`/`topic`.
 
 **Banner Periplo:** estructura estándar (ver sección "Banner estándar Periplo") — `bg-zinc-950`, badge P indigo, `sticky top-0 z-20`.
 
