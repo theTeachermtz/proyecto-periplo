@@ -691,6 +691,7 @@ Sin un `<input>` enfocado, iOS/Android **no abren el teclado**. Patrón:
 - Captura con `onChange` (lee `e.target.value`, procesa el último carácter, luego `e.target.value=''`) — funciona en móvil. Borrar: `onKeyDown` Backspace (desktop) + `e.nativeEvent.inputType === 'deleteContentBackward'` (móvil).
 - `autoCapitalize/autoCorrect/autoComplete="off"`, `spellCheck={false}`, `inputMode="text"`.
 - Re-enfocar (`focusInput()`) tras cada gesto: `onClick` del contenedor, tras pista/saltar, al cambiar de ítem. **No** poner `disabled` al input entre ítems (deshabilitarlo cierra el teclado en iOS).
+- **Nunca remontar el input.** Si usas `key={...}` para reproducir animaciones (ej. shake al fallar), ese `key` debe ir en un nodo **hermano** del input (solo lo visual), nunca en un ancestro que lo contenga — remontarlo le quita el foco (en desktop deja de escribir, en móvil cierra el teclado).
 
 ### 4. Modo alumno (`?student=true`)
 
