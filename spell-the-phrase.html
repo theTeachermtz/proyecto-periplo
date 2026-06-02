@@ -5,318 +5,380 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Spell the Phrase | Periplo</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = { darkMode: 'class' };
-        document.documentElement.classList.add('dark');
-    </script>
-    <script type="importmap">
-    {
-      "imports": {
-        "react": "https://esm.sh/react@18.2.0",
-        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-        "lucide-react": "https://esm.sh/lucide-react@0.263.1"
-      }
-    }
-    </script>
+    <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
+    <script type="importmap">{"imports":{"react":"https://esm.sh/react@18.2.0","react-dom/client":"https://esm.sh/react-dom@18.2.0/client","firebase/app":"https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js","firebase/firestore":"https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"}}</script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="periplo-config.js"></script>
     <link rel="stylesheet" href="periplo.css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
-        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow: hidden; overscroll-behavior-y: none; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
-        .pb-safe { padding-bottom: env(safe-area-inset-bottom, 20px); }
-        .min-h-screen-safe { min-height: 100vh; min-height: -webkit-fill-available; }
-        @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
-        .animate-shake { animation: shake 0.35s ease both; }
-        @keyframes pop { 0%{transform:scale(0.85);opacity:0} 100%{transform:scale(1);opacity:1} }
-        .animate-pop { animation: pop 0.18s ease both; }
+        body{font-family:'Plus Jakarta Sans',sans-serif;background-color:#09090b;overflow:hidden;overscroll-behavior-y:none;user-select:none;-webkit-user-select:none;touch-action:manipulation;}
+        .pb-safe{padding-bottom:env(safe-area-inset-bottom,20px);}
+        .min-h-safe{min-height:100vh;min-height:-webkit-fill-available;}
+        @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-7px)}75%{transform:translateX(7px)}}
+        .animate-shake{animation:shake 0.3s ease both;}
+        @keyframes pop{0%{transform:scale(0.85);opacity:0}100%{transform:scale(1);opacity:1}}
+        .animate-pop{animation:pop 0.18s ease both;}
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+        .animate-blink{animation:blink 1s step-end infinite;}
+        @keyframes pulse-amber{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0)}50%{box-shadow:0 0 0 8px rgba(245,158,11,0.35)}}
+        .animate-pulse-amber{animation:pulse-amber 0.9s ease-in-out infinite;}
     </style>
 </head>
 <body class="text-zinc-100">
-    <div id="root"></div>
-    <script type="text/babel" data-type="module">
-        import React, { useState, useEffect, useCallback, useRef } from 'react';
-        import { createRoot } from 'react-dom/client';
-        import { RefreshCw, CheckCircle2, XCircle, Trophy, ChevronRight, Link2 } from 'lucide-react';
+<div id="root"></div>
+<script type="text/babel" data-type="module">
+import React,{useState,useEffect,useCallback,useRef,useMemo} from 'react';
+import {createRoot} from 'react-dom/client';
+import {initializeApp} from 'firebase/app';
+import {getFirestore,doc,getDoc} from 'firebase/firestore';
 
-        const shuffle = (arr) => {
-            const a = [...arr];
-            for (let i = a.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [a[i], a[j]] = [a[j], a[i]];
+const app = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
+const db  = getFirestore(app);
+const urlParams  = new URLSearchParams(window.location.search);
+const QUIZ_ID    = urlParams.get('id');
+const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001';
+const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
+
+// ─── Audio ────────────────────────────────────────────────
+const beep = (freq, dur, type='square', vol=0.22) => {
+    try {
+        const ctx = new (window.AudioContext||window.webkitAudioContext)();
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.frequency.value=freq; o.type=type;
+        g.gain.setValueAtTime(vol, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+dur);
+        o.start(); o.stop(ctx.currentTime+dur);
+    } catch(e){}
+};
+const playError   = () => beep(160, 0.18);
+const playCorrect = () => { beep(520,0.15,'sine'); setTimeout(()=>beep(660,0.2,'sine'),130); };
+
+// ─── Helpers ──────────────────────────────────────────────
+const PUNCT = new Set(['.','?','!',',','...','…',';',':']);
+const isTypable = t => !PUNCT.has(t);
+
+export default function STP() {
+    const [exercises, setExercises] = useState([]);
+    const [loading,   setLoading]   = useState(true);
+    const [current,   setCurrent]   = useState(0);
+    const [gameState, setGameState] = useState('playing');
+    const [coins,     setCoins]     = useState(10);
+    const [score,     setScore]     = useState(0);
+
+    // per-phrase
+    const [wordIdx,    setWordIdx]    = useState(0);
+    const [letterIdx,  setLetterIdx]  = useState(0);
+    const [typed,      setTyped]      = useState({});   // wi → string
+    const [hinted,     setHinted]     = useState(new Set()); // "wi-li"
+    const [consErrors, setConsErrors] = useState(0);
+    const [shakeKey,   setShakeKey]   = useState(0);
+    const [flashPos,   setFlashPos]   = useState(null); // "wi-li" to flash red
+    const [done,       setDone]       = useState(false);
+
+    const timer = useRef(null);
+
+    const goBack = () => { window.location.href = document.referrer?.includes('index') ? document.referrer : 'index.html'; };
+
+    // ─── Load ─────────────────────────────────────────────
+    useEffect(() => {
+        (async () => {
+            try {
+                if (QUIZ_ID) {
+                    const snap = await getDoc(doc(db, QUIZZES_PATH, QUIZ_ID));
+                    if (snap.exists()) {
+                        const d = snap.data();
+                        const phrases = d.phrases || [];
+                        if (phrases.length) { setExercises(phrases); setLoading(false); return; }
+                    }
+                }
+                const r = await fetch('spell-the-phrase.json');
+                setExercises(await r.json());
+            } catch(e){ console.error(e); }
+            setLoading(false);
+        })();
+    }, []);
+
+    // ─── Reset on phrase change ────────────────────────────
+    const resetPhrase = useCallback(() => {
+        clearTimeout(timer.current);
+        setWordIdx(0); setLetterIdx(0); setTyped({});
+        setHinted(new Set()); setConsErrors(0); setDone(false);
+    }, []);
+
+    useEffect(() => { if (exercises.length) resetPhrase(); }, [current, exercises]);
+
+    // ─── Derived ──────────────────────────────────────────
+    const ex = exercises[current];
+    const tokenList   = useMemo(() => ex ? ex.english_tokens.map(t=>({t,typable:isTypable(t)})) : [], [ex]);
+    const typableList = useMemo(() => tokenList.filter(x=>x.typable).map(x=>x.t), [tokenList]);
+    const curWord     = typableList[wordIdx] || '';
+    const curChar     = curWord[letterIdx] || '';
+
+    // ─── Advance phrase ────────────────────────────────────
+    const advance = useCallback(() => {
+        const next = current + 1;
+        if (next >= exercises.length) setGameState('victory');
+        else setCurrent(next);
+    }, [current, exercises.length]);
+
+    // ─── Handle correct letter ─────────────────────────────
+    const acceptLetter = useCallback((char) => {
+        setConsErrors(0);
+        const newWord = (typed[wordIdx] || '') + char;
+        const newTyped = { ...typed, [wordIdx]: newWord };
+        setTyped(newTyped);
+
+        if (newWord.length >= curWord.length) {
+            // word done
+            const nextWi = wordIdx + 1;
+            if (nextWi >= typableList.length) {
+                // phrase done!
+                setDone(true);
+                setScore(s => s + 1);
+                setCoins(c => c + 5);
+                playCorrect();
+                timer.current = setTimeout(advance, 1700);
+            } else {
+                setWordIdx(nextWi);
+                setLetterIdx(0);
             }
-            return a;
+        } else {
+            setLetterIdx(li => li + 1);
+        }
+    }, [typed, wordIdx, curWord, typableList.length, advance]);
+
+    // ─── Keyboard ─────────────────────────────────────────
+    useEffect(() => {
+        if (!ex || done || gameState !== 'playing') return;
+
+        const onKey = (e) => {
+            const k = e.key;
+
+            if (k === 'Backspace') {
+                e.preventDefault();
+                if (letterIdx > 0 && !hinted.has(`${wordIdx}-${letterIdx-1}`)) {
+                    setTyped(prev => ({ ...prev, [wordIdx]: (prev[wordIdx]||'').slice(0,-1) }));
+                    setLetterIdx(li => li - 1);
+                    setConsErrors(0);
+                }
+                return;
+            }
+
+            if (k.length !== 1 || !/[a-zA-Z']/.test(k)) return;
+            e.preventDefault();
+
+            if (!curChar) return;
+            if (k.toLowerCase() === curChar.toLowerCase()) {
+                acceptLetter(curChar); // always store canonical case
+            } else {
+                playError();
+                setShakeKey(n => n + 1);
+                setFlashPos(`${wordIdx}-${letterIdx}`);
+                setTimeout(() => setFlashPos(null), 320);
+                setConsErrors(n => n + 1);
+            }
         };
 
-        const buildTokens = (tokens) =>
-            tokens.map((text, i) => ({ text, key: `${text}-${i}` }));
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [ex, done, gameState, wordIdx, letterIdx, typed, curChar, hinted, acceptLetter]);
 
-        export default function SpellThePhraseApp() {
-            const [exercises, setExercises]   = useState([]);
-            const [loading, setLoading]       = useState(true);
-            const [current, setCurrent]       = useState(0);
-            const [gameState, setGameState]   = useState('playing');
-            const [bank, setBank]             = useState([]);
-            const [answer, setAnswer]         = useState([]);
-            const [feedback, setFeedback]     = useState(null); // null | 'correct' | 'incorrect'
-            const [score, setScore]           = useState(0);
-            const [shakeKey, setShakeKey]     = useState(0);
-            const [copied, setCopied]         = useState(false);
-            const advanceTimer = useRef(null);
+    // ─── Hint ──────────────────────────────────────────────
+    const handleHint = () => {
+        if (coins < 2 || done || !curChar) return;
+        setCoins(c => c - 2);
+        setConsErrors(0);
+        setHinted(prev => new Set([...prev, `${wordIdx}-${letterIdx}`]));
+        acceptLetter(curChar);
+    };
 
-            const goBack = () => {
-                window.location.href = document.referrer?.includes('index') ? document.referrer : 'index.html';
-            };
+    const handleSkip = () => {
+        clearTimeout(timer.current);
+        advance();
+    };
 
-            const copyStudentLink = () => {
-                const url = `${window.location.origin}/spell-the-phrase.html`;
-                navigator.clipboard.writeText(url).then(() => {
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 2000);
-                });
-            };
+    const restart = () => {
+        clearTimeout(timer.current);
+        setCurrent(0); setScore(0); setCoins(10); setGameState('playing');
+    };
 
-            const initExercise = useCallback((ex) => {
-                setBank(shuffle(buildTokens(ex.english_tokens)));
-                setAnswer([]);
-                setFeedback(null);
-            }, []);
-
-            useEffect(() => {
-                fetch('spell-the-phrase.json')
-                    .then(r => r.json())
-                    .then(data => {
-                        setExercises(data);
-                        initExercise(data[0]);
-                        setLoading(false);
-                    })
-                    .catch(e => { console.error(e); setLoading(false); });
-            }, []);
-
-            // Auto-verify when all tokens are placed
-            useEffect(() => {
-                const ex = exercises[current];
-                if (!ex || feedback || answer.length !== ex.english_tokens.length) return;
-
-                const isCorrect = answer.map(t => t.text).join(' ') === ex.english_tokens.join(' ');
-
-                if (isCorrect) {
-                    setFeedback('correct');
-                    setScore(s => s + 1);
-                    advanceTimer.current = setTimeout(() => {
-                        doAdvance(current, exercises);
-                    }, 1100);
-                } else {
-                    setFeedback('incorrect');
-                    setShakeKey(k => k + 1);
-                }
-            }, [answer]);
-
-            useEffect(() => () => clearTimeout(advanceTimer.current), []);
-
-            const doAdvance = (cur, exs) => {
-                const next = cur + 1;
-                if (next >= exs.length) {
-                    setGameState('victory');
-                } else {
-                    setCurrent(next);
-                    initExercise(exs[next]);
-                }
-            };
-
-            const handleSkip = () => {
-                clearTimeout(advanceTimer.current);
-                doAdvance(current, exercises);
-            };
-
-            const handleRetry = () => initExercise(exercises[current]);
-
-            const handleBankTap = (token) => {
-                if (feedback) return;
-                setBank(prev => prev.filter(t => t.key !== token.key));
-                setAnswer(prev => [...prev, token]);
-            };
-
-            const handleAnswerTap = (token) => {
-                if (feedback) return;
-                setAnswer(prev => prev.filter(t => t.key !== token.key));
-                setBank(prev => [...prev, token]);
-            };
-
-            const restart = () => {
-                clearTimeout(advanceTimer.current);
-                setCurrent(0);
-                setScore(0);
-                setGameState('playing');
-                if (exercises.length > 0) initExercise(exercises[0]);
-            };
-
-            if (loading) return (
-                <div className="min-h-screen-safe w-screen flex items-center justify-center bg-zinc-950">
-                    <div className="flex flex-col items-center gap-4">
-                        <div className="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin"></div>
-                        <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">Cargando...</p>
-                    </div>
-                </div>
-            );
-
-            if (gameState === 'victory') return (
-                <div className="min-h-screen-safe w-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500">
-                    <div className="w-24 h-24 bg-amber-500/10 border border-amber-500/20 rounded-full flex items-center justify-center mb-6 shadow-inner">
-                        <Trophy size={48} className="text-amber-500" />
-                    </div>
-                    <h2 className="text-3xl sm:text-4xl font-black text-white mb-2">¡Completado!</h2>
-                    <p className="text-zinc-400 mb-1 text-lg">
-                        Aciertos: <span className="text-emerald-400 font-black">{score}</span>
-                        <span className="text-zinc-600"> / {exercises.length}</span>
-                    </p>
-                    <p className="text-zinc-600 text-sm mb-10 font-medium">Reconstruiste {exercises.length} oraciones en inglés.</p>
-                    <div className="flex flex-col w-full max-w-xs gap-3 pb-safe">
-                        <button onClick={restart} className="w-full py-4 bg-violet-500 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-violet-400 transition-all active:scale-95 shadow-lg shadow-violet-500/20 text-sm">
-                            Jugar de nuevo
-                        </button>
-                        <button onClick={goBack} className="w-full py-4 text-zinc-500 font-bold text-sm hover:text-zinc-300 transition-colors">
-                            Salir
-                        </button>
-                    </div>
-                </div>
-            );
-
-            const ex = exercises[current];
-            if (!ex) return null;
-            const progress = (current / exercises.length) * 100;
+    // ─── Render helpers ────────────────────────────────────
+    const renderPhrase = () => {
+        let wi = -1;
+        return tokenList.map((item, i) => {
+            if (!item.typable) {
+                return <span key={i} className="text-zinc-400 font-bold text-lg sm:text-xl self-end pb-1 mx-0.5">{item.t}</span>;
+            }
+            wi++;
+            const myWi = wi;
+            const word = item.t;
+            const myTyped = typed[myWi] || '';
 
             return (
-                <div className="min-h-screen-safe w-screen flex flex-col bg-zinc-950 overflow-hidden">
+                <div key={i} className="flex gap-[3px] items-end">
+                    {word.split('').map((ch, li) => {
+                        const key = `${myWi}-${li}`;
+                        const isFilled  = li < myTyped.length || done;
+                        const isCurrent = !done && myWi === wordIdx && li === letterIdx;
+                        const isHint    = hinted.has(key);
+                        const isFlash   = flashPos === key;
+                        const dispChar  = isFilled ? (myTyped[li] || ch) : '';
 
-                    {/* HEADER */}
-                    <header className="shrink-0 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between px-4 py-3 z-20"
-                            style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-                        <div className="flex items-center gap-3">
-                            <button onClick={goBack} className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 active:scale-95 transition-transform">
-                                P
-                            </button>
-                            <div className="hidden sm:block w-px h-8 bg-zinc-800 mx-1"/>
-                            <div>
-                                <h1 className="text-base font-black text-white leading-none tracking-tight">Spell the Phrase</h1>
-                                <p className="text-[10px] font-bold uppercase tracking-widest mt-1 text-violet-400">Reconstruye la oración</p>
+                        let cls = 'w-7 sm:w-8 h-9 sm:h-10 rounded-lg border-2 flex items-center justify-center font-black text-sm sm:text-base transition-all duration-100 ';
+                        if (done && isFilled)         cls += 'border-emerald-500/50 bg-emerald-950/30 text-emerald-300';
+                        else if (isFlash)             cls += 'border-rose-500 bg-rose-950/50 text-rose-300';
+                        else if (isHint && isFilled)  cls += 'border-amber-500/60 bg-amber-950/30 text-amber-300';
+                        else if (isFilled)            cls += 'border-zinc-600 bg-zinc-800 text-white';
+                        else if (isCurrent)           cls += 'border-violet-500 bg-zinc-900';
+                        else                          cls += 'border-zinc-700 bg-zinc-900';
+
+                        return (
+                            <div key={li} className={cls}>
+                                {isFilled
+                                    ? dispChar
+                                    : isCurrent
+                                        ? <span className="animate-blink text-violet-400 font-thin text-lg">|</span>
+                                        : null}
                             </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <span className="text-zinc-500 font-bold text-sm tabular-nums">{current + 1} / {exercises.length}</span>
-                            <button onClick={copyStudentLink} title="Copiar link de alumno" className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs transition-all active:scale-95 ${copied ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 border border-zinc-700'}`}>
-                                <Link2 size={13} />
-                                {copied ? '¡Copiado!' : 'Link alumno'}
-                            </button>
-                            <button onClick={restart} className="p-2 text-zinc-600 hover:text-zinc-300 transition-colors rounded-xl hover:bg-zinc-800 active:scale-95">
-                                <RefreshCw size={16} />
-                            </button>
-                        </div>
-                    </header>
-
-                    {/* PROGRESS BAR */}
-                    <div className="w-full h-1 bg-zinc-900 shrink-0">
-                        <div className="h-full bg-violet-500 transition-all duration-500 ease-out" style={{ width: `${progress}%` }} />
-                    </div>
-
-                    {/* MAIN */}
-                    <div className="flex-1 flex flex-col items-center w-full max-w-lg mx-auto px-4 py-5 sm:py-8 gap-5 min-h-0">
-
-                        {/* SCORE STREAK */}
-                        <div className="shrink-0 flex items-center gap-2">
-                            <CheckCircle2 size={14} className="text-emerald-500" />
-                            <span className="text-emerald-500 font-black text-sm tabular-nums">{score}</span>
-                            <span className="text-zinc-700 text-xs font-bold">correctas</span>
-                        </div>
-
-                        {/* SPANISH PROMPT */}
-                        <div className="shrink-0 w-full">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-3 text-center">Traduce al inglés</p>
-                            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 sm:p-6 text-center shadow-inner">
-                                <p className="text-2xl sm:text-3xl font-black text-white leading-snug">{ex.spanish}</p>
-                            </div>
-                        </div>
-
-                        {/* ANSWER AREA */}
-                        <div className="shrink-0 w-full flex flex-col gap-2">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-600 text-center">Tu respuesta</p>
-                            <div
-                                key={shakeKey}
-                                className={`w-full min-h-[72px] border-2 rounded-2xl p-3 flex flex-wrap gap-2 items-center justify-center transition-colors duration-200 ${
-                                    feedback === 'correct'   ? 'border-emerald-500/50 bg-emerald-950/20 animate-pop' :
-                                    feedback === 'incorrect' ? 'border-rose-500/50 bg-rose-950/20 animate-shake' :
-                                    answer.length > 0       ? 'border-zinc-700 bg-zinc-950' :
-                                                              'border-zinc-800 border-dashed bg-zinc-950'
-                                }`}
-                            >
-                                {answer.length === 0 ? (
-                                    <p className="text-zinc-700 text-sm font-medium select-none">Toca las palabras de abajo</p>
-                                ) : (
-                                    answer.map(token => (
-                                        <button
-                                            key={token.key}
-                                            onClick={() => handleAnswerTap(token)}
-                                            disabled={!!feedback}
-                                            className={`px-3 py-2 rounded-xl font-bold text-sm sm:text-base transition-all active:scale-95 border ${
-                                                feedback === 'correct'
-                                                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 cursor-default'
-                                                    : feedback === 'incorrect'
-                                                    ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
-                                                    : 'bg-zinc-800 border-zinc-700 text-white hover:bg-zinc-700'
-                                            }`}
-                                        >
-                                            {token.text}
-                                        </button>
-                                    ))
-                                )}
-                            </div>
-
-                            {/* INLINE FEEDBACK */}
-                            <div className={`text-center h-5 transition-opacity duration-200 ${feedback ? 'opacity-100' : 'opacity-0'}`}>
-                                {feedback === 'correct' && (
-                                    <span className="text-emerald-400 font-black text-xs uppercase tracking-widest">¡Correcto! ✓</span>
-                                )}
-                                {feedback === 'incorrect' && (
-                                    <span className="text-rose-400 font-black text-xs uppercase tracking-widest">Revisa el orden</span>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* TOKEN BANK */}
-                        <div className="flex-1 w-full flex flex-col justify-start min-h-0">
-                            <div className="flex flex-wrap gap-2 justify-center">
-                                {bank.map(token => (
-                                    <button
-                                        key={token.key}
-                                        onClick={() => handleBankTap(token)}
-                                        disabled={!!feedback}
-                                        className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 active:scale-95 border border-zinc-700 text-white rounded-xl font-bold text-sm sm:text-base transition-all disabled:opacity-40 animate-pop"
-                                    >
-                                        {token.text}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* ACTION BUTTONS */}
-                        {feedback === 'incorrect' && (
-                            <div className="shrink-0 w-full flex gap-3 pb-safe animate-in slide-in-from-bottom-4 fade-in duration-200">
-                                <button onClick={handleRetry} className="flex-1 py-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-2xl font-black uppercase tracking-widest text-xs sm:text-sm transition-all active:scale-95 border border-zinc-700">
-                                    Reintentar
-                                </button>
-                                <button onClick={handleSkip} className="flex-1 py-4 bg-zinc-900 hover:bg-zinc-800 text-zinc-500 border border-zinc-800 rounded-2xl font-black uppercase tracking-widest text-xs sm:text-sm transition-all active:scale-95 flex items-center justify-center gap-1">
-                                    Saltar <ChevronRight size={14} />
-                                </button>
-                            </div>
-                        )}
-                        {feedback !== 'incorrect' && <div className="shrink-0 pb-safe h-1" />}
-
-                    </div>
+                        );
+                    })}
                 </div>
             );
-        }
+        });
+    };
 
-        const root = createRoot(document.getElementById('root'));
-        root.render(<SpellThePhraseApp />);
-    </script>
+    // ─── Screens ──────────────────────────────────────────
+    if (loading) return (
+        <div className="min-h-safe w-screen flex items-center justify-center bg-zinc-950">
+            <div className="flex flex-col items-center gap-4">
+                <div className="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin"/>
+                <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">Cargando...</p>
+            </div>
+        </div>
+    );
+
+    if (gameState === 'victory') return (
+        <div className="min-h-safe w-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-center">
+            <div className="w-24 h-24 bg-amber-500/10 border border-amber-500/20 rounded-full flex items-center justify-center mb-6">
+                <span className="text-5xl">🏆</span>
+            </div>
+            <h2 className="text-3xl font-black text-white mb-2">¡Completado!</h2>
+            <p className="text-zinc-400 mb-1 text-lg">
+                Aciertos: <span className="text-emerald-400 font-black">{score}</span>
+                <span className="text-zinc-600"> / {exercises.length}</span>
+            </p>
+            <p className="text-zinc-500 text-sm mb-10">Monedas: <span className="text-amber-400 font-bold">{coins} 🪙</span></p>
+            <div className="flex flex-col w-full max-w-xs gap-3 pb-safe">
+                <button onClick={restart} className="w-full py-4 bg-violet-500 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-violet-400 transition-all active:scale-95 text-sm">
+                    Jugar de nuevo
+                </button>
+                <button onClick={goBack} className="w-full py-4 text-zinc-500 font-bold text-sm hover:text-zinc-300 transition-colors">
+                    Salir
+                </button>
+            </div>
+        </div>
+    );
+
+    if (!ex) return null;
+    const progress  = (current / exercises.length) * 100;
+    const hintGlows = consErrors >= 3 && !done;
+
+    return (
+        <div className="min-h-safe w-screen flex flex-col bg-zinc-950 overflow-hidden">
+
+            {/* HEADER */}
+            <header className="shrink-0 sticky top-0 z-20 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between px-4 py-3"
+                    style={{fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                <div className="flex items-center gap-3">
+                    <button onClick={goBack} className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 active:scale-95 transition-transform">P</button>
+                    <div className="hidden sm:block w-px h-8 bg-zinc-800"/>
+                    <div>
+                        <h1 className="text-base font-black text-white leading-none tracking-tight">Spell the Phrase</h1>
+                        <p className="text-[10px] font-bold uppercase tracking-widest mt-1 text-violet-400">Escribe la oración</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-3">
+                    <span className="text-amber-400 font-black text-sm tabular-nums">{coins} 🪙</span>
+                    <span className="text-emerald-500 font-bold text-sm tabular-nums">{score} ✓</span>
+                    <span className="text-zinc-600 font-bold text-sm tabular-nums">{current+1}/{exercises.length}</span>
+                    <button onClick={restart} title="Reiniciar" className="p-2 text-zinc-600 hover:text-zinc-300 transition-colors rounded-xl hover:bg-zinc-800 active:scale-95 text-base font-bold">↺</button>
+                </div>
+            </header>
+
+            {/* PROGRESS */}
+            <div className="w-full h-1 bg-zinc-900 shrink-0">
+                <div className="h-full bg-violet-500 transition-all duration-500" style={{width:`${progress}%`}}/>
+            </div>
+
+            {/* MAIN */}
+            <div className="flex-1 flex flex-col items-center w-full max-w-2xl mx-auto px-4 py-6 gap-5 min-h-0 overflow-hidden">
+
+                {/* SPANISH */}
+                <div className="shrink-0 w-full">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-2 text-center">Traduce al inglés</p>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 text-center shadow-inner">
+                        <p className="text-2xl sm:text-3xl font-black text-white leading-snug">{ex.spanish}</p>
+                    </div>
+                </div>
+
+                {/* LETTER BOXES */}
+                <div className="shrink-0 w-full">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-2 text-center">Tu respuesta</p>
+                    <div
+                        key={shakeKey}
+                        className={`w-full min-h-[84px] border-2 rounded-2xl p-4 flex flex-wrap gap-x-3 gap-y-3 items-end justify-center transition-colors duration-150 ${
+                            done        ? 'border-emerald-500/40 bg-emerald-950/10 animate-pop' :
+                            flashPos    ? 'border-rose-500/30 bg-rose-950/10 animate-shake'     :
+                                          'border-zinc-800 bg-zinc-950'
+                        }`}
+                    >
+                        {renderPhrase()}
+                    </div>
+                    <div className={`text-center mt-2 h-5 transition-opacity duration-200 ${done ? 'opacity-100' : 'opacity-0'}`}>
+                        <span className="text-emerald-400 font-black text-xs uppercase tracking-widest">¡Correcto! +5 🪙</span>
+                    </div>
+                </div>
+
+                {!done && (
+                    <p className="shrink-0 text-zinc-700 text-[10px] font-bold uppercase tracking-widest">
+                        Escribe con tu teclado · Borrar: ←
+                    </p>
+                )}
+
+                <div className="flex-1"/>
+
+                {/* BOTTOM BUTTONS */}
+                <div className="shrink-0 w-full flex gap-3 pb-safe">
+                    <button
+                        onClick={handleHint}
+                        disabled={coins < 2 || done}
+                        className={`flex-1 py-4 rounded-2xl font-black uppercase tracking-widest text-xs sm:text-sm transition-all active:scale-95 border ${
+                            hintGlows
+                                ? 'bg-amber-500/20 border-amber-500 text-amber-300 animate-pulse-amber'
+                                : coins >= 2 && !done
+                                    ? 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+                                    : 'bg-zinc-900 border-zinc-800 text-zinc-700 cursor-not-allowed'
+                        }`}
+                    >
+                        Pista -2 🪙
+                    </button>
+                    <button
+                        onClick={handleSkip}
+                        className="flex-1 py-4 bg-zinc-900 hover:bg-zinc-800 text-zinc-500 border border-zinc-800 rounded-2xl font-black uppercase tracking-widest text-xs sm:text-sm transition-all active:scale-95"
+                    >
+                        {done ? 'Siguiente →' : 'Saltar'}
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    );
+}
+
+const root = createRoot(document.getElementById('root'));
+root.render(<STP/>);
+</script>
 </body>
 </html>

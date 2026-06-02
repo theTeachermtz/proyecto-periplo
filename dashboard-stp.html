@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spell the Phrase Builder | Periplo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
+    <script type="importmap">{"imports":{"react":"https://esm.sh/react@18.2.0","react-dom/client":"https://esm.sh/react-dom@18.2.0/client","lucide-react":"https://esm.sh/lucide-react@0.263.1","firebase/app":"https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js","firebase/firestore":"https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"}}</script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="periplo-config.js"></script>
+    <script src="periplo-ai.js"></script>
+    <script src="periplo-taxonomy.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
+        body{font-family:'Plus Jakarta Sans',sans-serif;height:100dvh;overflow:hidden;}
+        .scroll-panel::-webkit-scrollbar{width:5px}.scroll-panel::-webkit-scrollbar-thumb{background:#3f3f46;border-radius:4px}
+        @keyframes popIn{0%{opacity:0;transform:scale(0.95)}100%{opacity:1;transform:scale(1)}}
+        .animate-popIn{animation:popIn 0.2s ease-out forwards;}
+    </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100"><div id="root"></div>
+<script type="text/babel" data-type="module">
+import React,{useState,useEffect,useRef,useMemo,useCallback} from 'react';
+import {createRoot} from 'react-dom/client';
+import {initializeApp} from 'firebase/app';
+import {getFirestore,collection,addDoc,doc,getDoc,setDoc,serverTimestamp} from 'firebase/firestore';
+import {Save,Loader2,Zap,Tags,X,ChevronRight,Trash2,Plus,RotateCcw,GripVertical} from 'lucide-react';
+
+const app = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
+const db  = getFirestore(app);
+const AI  = window.PERIPLO_AI;
+const ApiKeyBar = AI.createApiKeyBar(React);
+const {NEW_LEVELS, NEW_CATS} = window.PERIPLO_TAXONOMY;
+
+const urlParams   = new URLSearchParams(window.location.search);
+const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001';
+const QUIZZES_PATH= `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
+const BACK_URL    = (urlParams.get('uid')||'').includes('anita') ? 'index-es.html' : 'index.html';
+
+// ─── Vocabulary Packs ──────────────────────────────────────────────────────────
+// Structure: level → category → [{id, title, words[]}]
+const PACKS = {
+basic:{
+  grammar:[
+    {id:'Modal Verbs',title:'Modal Verbs',words:["can","could","should","must","may","might","would","will","have to","be able to","ought to","shall"]},
+    {id:'Present Simple',title:'Present Simple',words:["do","does","don't","doesn't","always","never","usually","often","sometimes","every day","rarely"]},
+    {id:'Present Continuous',title:'Present Continuous',words:["am","is","are","now","right now","currently","still","at the moment","today","this week"]},
+    {id:'Past Simple',title:'Past Simple',words:["did","didn't","was","were","yesterday","last week","ago","last year","last night","last month"]},
+    {id:'Future Going To',title:'Future (Going to)',words:["going to","tomorrow","next week","soon","later","tonight","next month","this weekend","next year","gonna"]},
+    {id:'Prepositions',title:'Prepositions',words:["in","on","at","under","over","between","behind","next to","in front of","above","below","beside"]},
+    {id:'Object Pronouns',title:'Object Pronouns',words:["me","you","him","her","it","us","them"]},
+    {id:'Quantifiers',title:'Quantifiers',words:["some","any","much","many","a lot of","a few","a little","several","enough","most","all","half"]},
+    {id:'Possessives',title:'Possessive Pronouns',words:["my","your","his","her","its","our","their","mine","yours","his","hers","ours","theirs"]},
+    {id:'WH Questions',title:'WH Questions',words:["What","Where","When","Who","Why","How","Which","How much","How many","How often","What time","How long"]}
+  ],
+  verbs:[
+    {id:'VP1',title:'VP1 — Daily Routine',words:["wake up","shower","prepare","take","get","start","work","help","send","leave","make","do","go","sleep","buy","visit","walk","see"]},
+    {id:'VP2',title:'VP2 — Home & Communication',words:["agree","arrive","say","tell","speak","talk","rest","write","read","call","answer","meet","find","eat","drink","cook","clean","wash","use","brush"]},
+    {id:'VP3',title:'VP3 — Travel & Adventure',words:["open","confirm","continue","change","fix","forget","remember","watch","travel","teach","stay","move","return","cancel","book","come","fall","lose"]},
+    {id:'VP4',title:'VP4 — Feelings & Reactions',words:["complain","explain","recommend","promise","discuss","receive","deliver","order","build","repair","manage","support","celebrate","sing","understand","learn","listen","laugh","cry","finish","know"]},
+    {id:'VP5',title:'VP5 — Action & Strategy',words:["dream","complete","report","solve","submit","suggest","warn","choose","plan","repeat","relax","compare","pay","show","save","increase","reduce","reach","pass","carry"]},
+    {id:'VP6',title:'VP6 — Social & Relationships',words:["think","believe","feel","want","need","love","hate","prefer","hope","enjoy","decide","allow","prevent","protect","perform","develop","grow","replace","run","hide"]},
+    {id:'VP7',title:'VP7 — Social & Science',words:["invite","accept","refuse","admit","deny","offer","demand","advise","encourage","describe","identify","realize","recognize","suppose","guess","measure","connect","succeed","fail"]},
+    {id:'VP8',title:'VP8 — Corporate & Economy',words:["hire","fire","earn","spend","invest","promote","retire","resign","produce","distribute","negotiate","persuade","represent","regulate","govern","vote","compete","win","gain"]},
+    {id:'VP9',title:'VP9 — Medical & Health',words:["cure","heal","suffer","recover","examine","treat","board","land","take off","reserve","check in","check out","explore","guide","escape","survive","greet","introduce","forgive","praise"]}
+  ],
+  nouns:[
+    {id:'NP1',title:'NP1 — Modern Nomad',words:["laptop","charger","backpack","passport","ticket","airport","flight","hotel","map","tourist","luggage","subway","train","station","camera","phone","wifi","suitcase"]},
+    {id:'NP2',title:'NP2 — Home & Daily Life',words:["menu","waiter","bill","tip","coffee","bread","meat","fish","salad","soup","dessert","fork","knife","plate","glass","kitchen","bedroom","bathroom"]},
+    {id:'NP3',title:'NP3 — Travel & Places',words:["office","desk","meeting","schedule","colleague","boss","customer","task","project","report","salary","career","company","deadline","email","contract","team","client"]},
+    {id:'NP4',title:'NP4 — Emotions & Mind',words:["traffic","highway","sidewalk","neighborhood","downtown","building","passenger","route","delay","engine","crowd","bridge","corner","bus","taxi","metro","street","block"]},
+    {id:'NP5',title:'NP5 — Weekend Getaway',words:["outfit","shirt","jacket","dress","shoes","boots","hat","belt","scarf","size","pocket","button","store","mall","price","receipt","discount","fashion"]}
+  ],
+  adjectives:[
+    {id:'AP1',title:'AP1 — Personality & Looks',words:["tall","short","young","old","beautiful","strong","smart","funny","serious","lazy","hardworking","shy","outgoing","polite","rude","brave","careful","honest"]},
+    {id:'AP2',title:'AP2 — Feelings & State',words:["happy","sad","angry","calm","tired","energetic","hungry","sick","healthy","nervous","relaxed","confused","proud","lonely","upset","glad","grateful","jealous"]},
+    {id:'AP3',title:'AP3 — Places & Vibes',words:["big","small","clean","dirty","safe","dangerous","quiet","noisy","crowded","empty","cheap","expensive","near","far","open","closed","modern","traditional","warm","cold"]},
+    {id:'AP4',title:'AP4 — The -ed/-ing Trap',words:["bored","boring","interested","interesting","excited","exciting","confused","confusing","surprised","surprising","frightened","frightening","annoyed","annoying","exhausted","exhausting","amazed","amazing"]}
+  ]
+},
+advanced:{
+  grammar:[
+    {id:'Past Simple Adv',title:'Past Simple',words:["didn't","wasn't","weren't","when","already","just","at that time","all day","ago","last"]},
+    {id:'Past Continuous',title:'Past Continuous',words:["was","were","wasn't","weren't","when","while","at that moment","all day long","in the middle of","happening"]},
+    {id:'Was Going To',title:'Was Going To',words:["was going to","were going to","was about to","planned to","intended to","supposed to","hoped to","wasn't going to","were about to"]},
+    {id:'Second Conditional',title:'Second Conditional',words:["if I were","could","would","imaginary","unlikely","I wish","what if","suppose","in that case","hypothetical"]},
+    {id:'Used To',title:'Used To',words:["used to","didn't use to","did you use to","I used to","she used to","they used to","we didn't use to","never used to","always used to"]},
+    {id:'Comparatives',title:'Comparatives & Superlatives',words:["than","more...than","less...than","as...as","much more","a lot better","slightly bigger","the most","the least","one of the best","by far","ever"]},
+    {id:'Relative Clauses',title:'Relative Clauses',words:["who","which","that","where","when","whose","whom","the man who","the book which","the place where","the person whose"]},
+    {id:'Modals Present',title:'Modals (Deduction)',words:["might","could","may","can't have","must have","should have","would have","might not"]}
+  ],
+  verbs:[
+    {id:'Regular -ed',title:'Regular Verbs (-ed)',words:["asked","cooked","danced","finished","fixed","helped","looked","practiced","reached","stopped","walked","washed","arrived","called","changed","cleaned","explained","followed","improved","learned","moved","opened","played","returned","traveled","used"]},
+    {id:'Irregular A-F',title:'Irregular A–F',words:["be/was/been","become/became","begin/began","bite/bit","blow/blew","break/broke","bring/brought","build/built","buy/bought","catch/caught","choose/chose","come/came","cost/cost","cut/cut","do/did/done","draw/drew","drink/drank","drive/drove","eat/ate","fall/fell","feed/fed","feel/felt","fight/fought","find/found","fly/flew","forget/forgot"]},
+    {id:'Irregular G-R',title:'Irregular G–R',words:["get/got","give/gave","go/went","grow/grew","have/had","hear/heard","hide/hid","hold/held","hurt/hurt","keep/kept","know/knew","leave/left","lose/lost","make/made","mean/meant","meet/met","pay/paid","put/put","read/read","ride/rode","ring/rang","run/ran"]},
+    {id:'Irregular S-Z',title:'Irregular S–Z',words:["say/said","see/saw","sell/sold","send/sent","show/showed","sing/sang","sit/sat","sleep/slept","speak/spoke","stand/stood","steal/stole","swim/swam","take/took","teach/taught","tell/told","think/thought","throw/threw","understand/understood","wake/woke","wear/wore","win/won","write/wrote"]},
+    {id:'Phrasal Verbs 1',title:'Phrasal Verbs (Set 1)',words:["look into","come across","turn down","put off","bring up","carry out","break down","figure out","give up","hold on","keep up","let down","make up","pick out","point out","rule out","set up","show off","sort out","stand out"]},
+    {id:'Phrasal Verbs 2',title:'Phrasal Verbs (Set 2)',words:["take over","turn out","work out","back up","blow up","call off","check out","come up with","cut down","drop off","get away with","go through","look forward to","put up with","run out of","take after","throw away","turn up","wear out","wrap up"]}
+  ],
+  nouns:[
+    {id:'NP A1',title:'NP A1 — Success & Failure',words:["goal","achievement","failure","success","challenge","opportunity","strategy","effort","result","progress","performance","competition","winner","loser","prize","reward","skill","talent"]},
+    {id:'NP A2',title:'NP A2 — Truth & Lies',words:["truth","lie","rumor","fact","evidence","proof","accusation","confession","denial","trust","secret","mystery","conspiracy","scandal","reputation","credibility","doubt","belief"]},
+    {id:'NP A3',title:'NP A3 — Media & Entertainment',words:["series","episode","channel","platform","streaming","content","audience","review","rating","celebrity","influencer","viral","trend","network","broadcast","podcast","documentary","headline"]},
+    {id:'NP A4',title:'NP A4 — Regrets & Turning Points',words:["regret","mistake","decision","consequence","turning point","opportunity","lesson","change","path","moment","choice","situation","outcome","impact","memory","experience","realization","transformation"]}
+  ]
+},
+pro:{
+  grammar:[
+    {id:'Present Perfect',title:'Present Perfect',words:["have done","has been","haven't seen","hasn't arrived","just","already","yet","ever","since","for","recently","so far"]},
+    {id:'Past Perfect',title:'Past Perfect',words:["had finished","had already left","had been","hadn't arrived","by the time","before","after","when","once","until then"]},
+    {id:'Third Conditional',title:'Third Conditional',words:["if I had known","would have gone","could have been","wouldn't have happened","if she had studied","they could have won","should have told","if it had rained"]},
+    {id:'Mixed Conditionals',title:'Mixed Conditionals',words:["if I had studied I would be","if she were braver she would have","if they had saved they would own","if I spoke French I would have gotten"]},
+    {id:'Passive Voice',title:'Passive Voice',words:["is made","was built","are sold","were found","has been done","had been sent","will be finished","being repaired","get paid","got fired","being used"]},
+    {id:'Present Perfect Continuous',title:'Pres. Perf. Continuous',words:["have been working","has been living","had been waiting","have been studying","how long have you been","she's been cooking","since morning","for hours","all day long"]},
+    {id:'Reported Speech',title:'Reported Speech',words:["he said that","she told me","they mentioned","asked whether","wanted to know","explained that","admitted that","claimed that","denied that","suggested that"]},
+    {id:'Inversions',title:'Inversion & Cleft',words:["never have I","rarely does she","not only did he","hardly had they","little did I know","under no circumstances","it was X who","what I need is","what matters is","the reason why"]}
+  ],
+  verbs:[
+    {id:'Advanced Collocations',title:'Advanced Collocations',words:["make a decision","take responsibility","pay attention","catch someone's eye","do someone a favor","give someone a hand","keep a promise","lose your temper","make an effort","reach a conclusion","run a risk","set a goal","break a habit","come to terms","draw a conclusion","face the consequences","gain experience","hold a grudge","make progress","take into account"]},
+    {id:'Idioms 1',title:'Idioms & Expressions (1)',words:["bite the bullet","burn bridges","cost an arm and a leg","get cold feet","hit the nail on the head","in the same boat","jump the gun","keep your chin up","let the cat out of the bag","miss the boat","pull someone's leg","ring a bell","spill the beans","the ball is in your court","throw in the towel","under the radar","beat around the bush","break a leg","every cloud has a silver lining","get out of hand"]},
+    {id:'Idioms 2',title:'Idioms & Expressions (2)',words:["go back to the drawing board","kill two birds with one stone","play it by ear","sit tight","take it with a grain of salt","actions speak louder than words","better late than never","easy come easy go","great minds think alike","knowledge is power","no news is good news","out of sight out of mind","practice makes perfect","silence is golden","time is money","what goes around comes around","where there's a will there's a way","curiosity killed the cat","haste makes waste"]}
+  ],
+  nouns:[
+    {id:'NP P1',title:'NP P1 — Law & Politics',words:["trial","court","judge","jury","lawyer","lawsuit","verdict","sentence","crime","suspect","witness","evidence","election","campaign","candidate","debate","policy","law","treaty","reform","authority","citizenship"]},
+    {id:'NP P2',title:'NP P2 — Finance & Economy',words:["economy","market","stock","share","asset","liability","investment","profit","loss","revenue","expense","budget","deficit","debt","loan","mortgage","interest","inflation","currency","exchange","trade","poverty","wealth"]},
+    {id:'NP P3',title:'NP P3 — Science & Discovery',words:["hypothesis","experiment","evidence","conclusion","theory","discovery","research","data","analysis","observation","measurement","variable","result","phenomenon","innovation","technology","breakthrough","laboratory"]}
+  ]
+}
+};
+
+// ─── Dashboard Component ───────────────────────────────────────────────────────
+const Dashboard = () => {
+    // IA
+    const [apiKey,          setApiKey]          = useState('');
+    const [selectedModel,   setSelectedModel]   = useState('');
+    const [availableModels, setAvailableModels] = useState([]);
+    const [isLoadingModels, setIsLoadingModels] = useState(false);
+
+    // Edit mode
+    const [editingId, setEditingId] = useState(null);
+    const [isLoading, setIsLoading] = useState(false);
+
+    // Left panel — pack selection
+    const [level,        setLevel]        = useState('basic');
+    const [category,     setCategory]     = useState('grammar');
+    const [addedPacks,   setAddedPacks]   = useState(new Set());  // pack ids
+    const [excludedWords,setExcludedWords]= useState(new Set());  // "packId::word"
+    const [phraseCount,  setPhraseCount]  = useState(15);
+
+    // Right panel — generated phrases
+    const [phrases,      setPhrases]      = useState([]);  // [{spanish, english_tokens}]
+    const [isGenerating, setIsGenerating] = useState(false);
+    const [abortCtrl,    setAbortCtrl]    = useState(null);
+
+    // Save modal (taxonomy)
+    const [showSaveModal,setShowSaveModal]= useState(false);
+    const [saveLevels,   setSaveLevels]  = useState([]);
+    const [saveCats,     setSaveCats]    = useState([]);
+    const [saveTopics,   setSaveTopics]  = useState([]);
+    const [isSaving,     setIsSaving]    = useState(false);
+    const [titleInput,   setTitleInput]  = useState('');
+
+    // Title auto-gen
+    const autoTitle = useMemo(() => {
+        if (addedPacks.size === 0) return 'Spell the Phrase';
+        const names = [...addedPacks].map(pid => {
+            for (const cat of Object.values(PACKS[level] || {}))
+                for (const p of cat) if (p.id === pid) return p.title;
+            return pid;
+        });
+        return names.slice(0,2).join(' + ') + (names.length > 2 ? ` +${names.length-2}` : '');
+    }, [addedPacks, level]);
+
+    // Load saved key
+    useEffect(() => {
+        const k = AI.loadKey();
+        if (k) { setApiKey(k); fetchModels(k); }
+    }, []);
+
+    // Edit mode
+    useEffect(() => {
+        const eid = urlParams.get('id');
+        if (!eid) return;
+        setIsLoading(true);
+        (async () => {
+            try {
+                const snap = await getDoc(doc(db, QUIZZES_PATH, eid));
+                if (snap.exists()) {
+                    const d = snap.data();
+                    setEditingId(eid);
+                    setTitleInput(d.title || '');
+                    setPhrases(d.phrases || []);
+                    setSaveLevels(d.level ? [d.level] : []);
+                    setSaveCats(d.category ? [d.category] : []);
+                    setSaveTopics(d.topic ? [d.topic] : []);
+                }
+            } catch(e) { alert(e.message); }
+            setIsLoading(false);
+        })();
+    }, []);
+
+    const fetchModels = async (k = apiKey) => {
+        if (!k) return;
+        setIsLoadingModels(true);
+        try {
+            const m = await AI.fetchModels(k);
+            setAvailableModels(m);
+            setSelectedModel(AI.pickPreferredModel(m));
+        } catch(e) {}
+        setIsLoadingModels(false);
+    };
+
+    // ─── Pack word pool ────────────────────────────────────
+    const allWords = useMemo(() => {
+        const result = [];
+        for (const pid of addedPacks) {
+            const packs = Object.values(PACKS[level] || {}).flat();
+            const pack = packs.find(p => p.id === pid);
+            if (pack) result.push(...pack.words.map(w => ({pack: pid, word: w, key: `${pid}::${w}`})));
+        }
+        return result;
+    }, [addedPacks, level]);
+
+    const includedWords = useMemo(() => allWords.filter(w => !excludedWords.has(w.key)).map(w => w.word), [allWords, excludedWords]);
+
+    const togglePack = (pid) => {
+        setAddedPacks(prev => {
+            const n = new Set(prev);
+            if (n.has(pid)) {
+                n.delete(pid);
+                // remove exclusions for this pack
+                setExcludedWords(ex => {
+                    const ne = new Set(ex);
+                    for (const k of ne) if (k.startsWith(pid+'::')) ne.delete(k);
+                    return ne;
+                });
+            } else {
+                n.add(pid);
+            }
+            return n;
+        });
+    };
+
+    const toggleWord = (key) => {
+        setExcludedWords(prev => {
+            const n = new Set(prev);
+            if (n.has(key)) n.delete(key); else n.add(key);
+            return n;
+        });
+    };
+
+    // ─── Generate ──────────────────────────────────────────
+    const handleGenerate = async () => {
+        if (!apiKey || isGenerating || includedWords.length === 0) return;
+        const ctrl = new AbortController();
+        setAbortCtrl(ctrl);
+        setIsGenerating(true);
+
+        const wordSample = includedWords.length > 40
+            ? includedWords.sort(() => Math.random()-0.5).slice(0, 40)
+            : includedWords;
+
+        const prompt = `You are an English teacher creating translation exercises for Spanish speakers.
+Generate exactly ${phraseCount} sentence pairs for a "Spell the Phrase" game.
+Each sentence must use one or more of these English words/structures: ${wordSample.join(', ')}.
+Sentences should be natural, diverse in structure, and appropriate for language learners.
+Vary sentence length (3–9 words) and mix statement, question, and negative forms.
+
+Return ONLY a valid JSON object like:
+{"phrases":[{"spanish":"Tengo hambre.","english_tokens":["I","am","hungry","."]},{"spanish":"¿Puedes ayudarme?","english_tokens":["Can","you","help","me","?"]}]}
+
+Rules for english_tokens:
+- Each word is a separate token
+- Punctuation (.?!,) is its own token at the end
+- Contractions stay together: "don't", "I'm", "she's"
+- Capitalize first word of sentence
+- No token should be empty`;
+
+        try {
+            const raw = await AI.callGemini({apiKey, model: selectedModel, prompt, signal: ctrl.signal, json: true});
+            const parsed = AI.extractJSON(raw);
+            if (parsed?.phrases?.length) {
+                setPhrases(parsed.phrases);
+            } else {
+                alert('La IA no devolvió frases válidas. Intenta de nuevo.');
+            }
+        } catch(e) {
+            if (e.name !== 'AbortError') alert('Error: ' + e.message);
+        }
+        setIsGenerating(false);
+        setAbortCtrl(null);
+    };
+
+    const handleAbort = () => { abortCtrl?.abort(); setIsGenerating(false); };
+
+    // ─── Phrase editing ────────────────────────────────────
+    const updatePhrase = (idx, field, val) => {
+        setPhrases(prev => prev.map((p,i) => i===idx ? {...p, [field]: val} : p));
+    };
+
+    const updateTokens = (idx, val) => {
+        // re-tokenize on edit: split by space, keep punctuation as last token if needed
+        const tokens = val.split(/\s+/).filter(Boolean);
+        updatePhrase(idx, 'english_tokens', tokens);
+        updatePhrase(idx, '_raw', val);
+    };
+
+    const removePhrase = (idx) => setPhrases(prev => prev.filter((_,i) => i!==idx));
+
+    const addPhrase = () => setPhrases(prev => [...prev, {spanish:'', english_tokens:[], _raw:''}]);
+
+    // ─── Save ──────────────────────────────────────────────
+    const canSave = phrases.length >= 3 && phrases.every(p => p.spanish && p.english_tokens?.length);
+
+    const handleSave = async () => {
+        if (!canSave) return;
+        if (saveLevels.length === 0 || saveCats.length === 0) { setShowSaveModal(true); return; }
+        setIsSaving(true);
+        try {
+            const cleanPhrases = phrases.map(({_raw, ...p}) => p);
+            const payload = {
+                type:       'SPELLPHRASE',
+                title:      titleInput || autoTitle,
+                level:      saveLevels[0] || '',
+                category:   saveCats[0] || '',
+                topic:      saveTopics[0] || '',
+                phrases:    cleanPhrases,
+                isDeleted:  false,
+                parentPath: QUIZZES_PATH,
+                updatedAt:  serverTimestamp(),
+            };
+            if (editingId) {
+                await setDoc(doc(db, QUIZZES_PATH, editingId), payload, {merge: true});
+            } else {
+                payload.createdAt = serverTimestamp();
+                await addDoc(collection(db, QUIZZES_PATH), payload);
+            }
+            window.location.href = BACK_URL;
+        } catch(e) { alert(e.message); }
+        setIsSaving(false);
+    };
+
+    const toggleSel = (arr, set, val) => set(arr.includes(val) ? arr.filter(v=>v!==val) : [...arr, val]);
+
+    // ─── Render ────────────────────────────────────────────
+    if (isLoading) return (
+        <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-zinc-500">
+            <Loader2 className="animate-spin mr-2"/> Cargando...
+        </div>
+    );
+
+    const catPacks = PACKS[level]?.[category] || [];
+
+    return (
+        <div className="h-[100dvh] flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden" style={{fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+
+            {/* HEADER */}
+            <header className="shrink-0 sticky top-0 z-20 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between px-6 py-3">
+                <div className="flex items-center gap-4">
+                    <button onClick={() => window.location.href = BACK_URL} className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 hover:opacity-80 transition-opacity">P</button>
+                    <div className="hidden sm:block w-px h-8 bg-zinc-800"/>
+                    <div>
+                        <h1 className="text-lg font-black text-white leading-none tracking-tight">Spell the Phrase</h1>
+                        <p className="text-[10px] font-bold uppercase tracking-widest mt-1 text-violet-400">Constructor de frases</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-3">
+                    <ApiKeyBar
+                        variant="compact"
+                        accentBtn="bg-violet-600 hover:bg-violet-500 text-white"
+                        apiKey={apiKey}
+                        setApiKey={k => { setApiKey(k); if(k) AI.saveKey(k); else AI.clearKey(); }}
+                        models={availableModels}
+                        selectedModel={selectedModel}
+                        setSelectedModel={setSelectedModel}
+                        isLoading={isLoadingModels}
+                        onFetch={() => fetchModels()}
+                        onClear={() => { AI.clearKey(); setApiKey(''); setAvailableModels([]); }}
+                    />
+                    <button
+                        onClick={() => canSave ? (saveLevels.length && saveCats.length ? handleSave() : setShowSaveModal(true)) : null}
+                        disabled={!canSave || isSaving}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl font-black text-sm transition-all ${canSave && !isSaving ? 'bg-violet-600 hover:bg-violet-500 text-white active:scale-95' : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'}`}
+                    >
+                        {isSaving ? <Loader2 size={14} className="animate-spin"/> : <Save size={14}/>}
+                        {isSaving ? 'Guardando…' : 'Guardar'}
+                    </button>
+                </div>
+            </header>
+
+            {/* PANELS */}
+            <div className="flex-1 flex overflow-hidden">
+
+                {/* ──── LEFT PANEL ──── */}
+                <div className="w-[340px] shrink-0 border-r border-zinc-800 flex flex-col overflow-hidden">
+
+                    {/* Level tabs */}
+                    <div className="shrink-0 flex border-b border-zinc-800">
+                        {Object.keys(PACKS).map(lvl => (
+                            <button key={lvl} onClick={() => { setLevel(lvl); setAddedPacks(new Set()); setExcludedWords(new Set()); }}
+                                className={`flex-1 py-2.5 text-xs font-black uppercase tracking-widest transition-colors ${level===lvl ? 'text-violet-400 border-b-2 border-violet-500' : 'text-zinc-600 hover:text-zinc-400'}`}>
+                                {lvl}
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Category tabs */}
+                    <div className="shrink-0 flex gap-1 p-2 border-b border-zinc-800 flex-wrap">
+                        {Object.keys(PACKS[level]||{}).map(cat => (
+                            <button key={cat} onClick={() => setCategory(cat)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${category===cat ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>
+                                {cat}
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Pack list */}
+                    <div className="flex-1 overflow-y-auto scroll-panel p-3 space-y-1.5">
+                        {catPacks.map(pack => {
+                            const active = addedPacks.has(pack.id);
+                            return (
+                                <button key={pack.id} onClick={() => togglePack(pack.id)}
+                                    className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-bold transition-all border ${active ? 'bg-violet-600/20 border-violet-500/50 text-violet-200' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200'}`}>
+                                    {active && <span className="text-violet-400 mr-1.5">✓</span>}
+                                    {pack.title}
+                                    <span className="text-[10px] font-normal ml-1.5 opacity-50">{pack.words.length} words</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    {/* Word chips */}
+                    {allWords.length > 0 && (
+                        <div className="shrink-0 border-t border-zinc-800 p-3 max-h-[180px] overflow-y-auto scroll-panel">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-2">
+                                Palabras incluidas ({includedWords.length}/{allWords.length})
+                                <button onClick={() => setExcludedWords(new Set())} className="ml-2 text-violet-500 hover:text-violet-400">reset</button>
+                            </p>
+                            <div className="flex flex-wrap gap-1">
+                                {allWords.map(({key, word}) => {
+                                    const excluded = excludedWords.has(key);
+                                    return (
+                                        <button key={key} onClick={() => toggleWord(key)}
+                                            className={`px-2 py-0.5 rounded-md text-xs font-bold transition-all border ${excluded ? 'bg-zinc-900 border-zinc-700 text-zinc-600 line-through' : 'bg-violet-600/20 border-violet-500/40 text-violet-300 hover:bg-violet-600/30'}`}>
+                                            {word}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Generate controls */}
+                    <div className="shrink-0 border-t border-zinc-800 p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-zinc-500">Frases a generar: <span className="text-white">{phraseCount}</span></span>
+                            <input type="range" min="5" max="30" value={phraseCount} onChange={e=>setPhraseCount(+e.target.value)}
+                                className="w-24 accent-violet-500"/>
+                        </div>
+                        {!isGenerating ? (
+                            <button onClick={handleGenerate}
+                                disabled={!apiKey || !selectedModel || includedWords.length === 0}
+                                className={`w-full py-3 rounded-xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-2 transition-all active:scale-95 ${apiKey && selectedModel && includedWords.length > 0 ? 'bg-violet-600 hover:bg-violet-500 text-white' : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'}`}>
+                                <Zap size={14}/> Generar con IA
+                            </button>
+                        ) : (
+                            <button onClick={handleAbort}
+                                className="w-full py-3 rounded-xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-2 bg-rose-600/20 border border-rose-600/40 text-rose-400 hover:bg-rose-600/30 transition-all">
+                                <X size={14}/> Cancelar
+                            </button>
+                        )}
+                        {isGenerating && (
+                            <p className="text-xs text-zinc-500 text-center flex items-center justify-center gap-1">
+                                <Loader2 size={12} className="animate-spin"/> Generando frases…
+                            </p>
+                        )}
+                    </div>
+                </div>
+
+                {/* ──── RIGHT PANEL ──── */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+
+                    {/* Title input */}
+                    <div className="shrink-0 flex items-center gap-3 px-5 py-3 border-b border-zinc-800">
+                        <input
+                            value={titleInput || autoTitle}
+                            onChange={e => setTitleInput(e.target.value)}
+                            placeholder="Título de la actividad"
+                            className="flex-1 bg-transparent text-white font-black text-sm placeholder:text-zinc-600 outline-none"
+                        />
+                        <span className="text-xs text-zinc-600 font-bold">{phrases.length} frases</span>
+                        <button onClick={addPhrase} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs font-bold transition-all">
+                            <Plus size={12}/> Agregar
+                        </button>
+                    </div>
+
+                    {/* Phrase list */}
+                    <div className="flex-1 overflow-y-auto scroll-panel p-4 space-y-2">
+                        {phrases.length === 0 && (
+                            <div className="flex flex-col items-center justify-center h-full text-center gap-3">
+                                <p className="text-zinc-600 font-bold text-sm">Selecciona packs de la izquierda y genera con IA</p>
+                                <p className="text-zinc-700 text-xs">O agrega frases manualmente con el botón + Agregar</p>
+                            </div>
+                        )}
+                        {phrases.map((phrase, idx) => {
+                            const tokenStr = phrase._raw !== undefined ? phrase._raw : (phrase.english_tokens||[]).join(' ');
+                            return (
+                                <div key={idx} className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 group hover:border-zinc-700 transition-colors">
+                                    <div className="flex gap-2 items-start">
+                                        <span className="shrink-0 mt-2 text-zinc-700 text-xs font-bold w-5 text-right">{idx+1}</span>
+                                        <div className="flex-1 space-y-1.5">
+                                            <input
+                                                value={phrase.spanish}
+                                                onChange={e => updatePhrase(idx, 'spanish', e.target.value)}
+                                                placeholder="Español..."
+                                                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white font-bold placeholder:text-zinc-600 outline-none focus:border-violet-500 transition-colors"
+                                            />
+                                            <input
+                                                value={tokenStr}
+                                                onChange={e => updateTokens(idx, e.target.value)}
+                                                onBlur={e => {
+                                                    const tokens = e.target.value.split(/\s+/).filter(Boolean);
+                                                    setPhrases(prev => prev.map((p,i) => i===idx ? {...p, english_tokens: tokens, _raw: undefined} : p));
+                                                }}
+                                                placeholder="English tokens separated by spaces..."
+                                                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-zinc-300 font-mono placeholder:text-zinc-600 outline-none focus:border-violet-500 transition-colors"
+                                            />
+                                        </div>
+                                        <button onClick={() => removePhrase(idx)}
+                                            className="shrink-0 mt-1 p-1.5 text-zinc-700 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all">
+                                            <Trash2 size={14}/>
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {/* Save bar */}
+                    <div className="shrink-0 border-t border-zinc-800 px-5 py-3 flex items-center justify-between">
+                        <p className={`text-xs font-bold ${canSave ? 'text-emerald-500' : 'text-zinc-600'}`}>
+                            {canSave ? `${phrases.length} frases listas para guardar` : phrases.length < 3 ? 'Mínimo 3 frases' : 'Todas las frases necesitan español e inglés'}
+                        </p>
+                        <button
+                            onClick={() => canSave ? (saveLevels.length && saveCats.length ? handleSave() : setShowSaveModal(true)) : null}
+                            disabled={!canSave || isSaving}
+                            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-black text-sm transition-all ${canSave && !isSaving ? 'bg-violet-600 hover:bg-violet-500 text-white active:scale-95' : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'}`}>
+                            {isSaving ? <Loader2 size={14} className="animate-spin"/> : <Save size={14}/>}
+                            {isSaving ? 'Guardando…' : editingId ? 'Actualizar' : 'Guardar'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* ── TAXONOMY MODAL ── */}
+            {showSaveModal && (
+                <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-xl p-6 shadow-2xl max-h-[85vh] flex flex-col animate-popIn">
+                        <div className="flex justify-between items-center mb-5 shrink-0">
+                            <h2 className="text-lg font-black flex items-center gap-2 text-white"><Tags size={18} className="text-indigo-400"/> Clasificar actividad</h2>
+                            <button onClick={() => setShowSaveModal(false)} className="text-zinc-500 hover:text-white p-2 rounded-full hover:bg-zinc-800 transition"><X size={18}/></button>
+                        </div>
+                        <div className="space-y-6 overflow-y-auto scroll-panel flex-1 pr-1">
+                            {/* Nivel */}
+                            <div>
+                                <label className="block text-xs font-black text-indigo-400 uppercase tracking-widest mb-2">1. Nivel</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {NEW_LEVELS.map(lvl => (
+                                        <button key={lvl} onClick={() => toggleSel(saveLevels, setSaveLevels, lvl)}
+                                            className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveLevels.includes(lvl) ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-indigo-500 hover:text-indigo-300'}`}>
+                                            {lvl}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            {/* Categoría */}
+                            <div>
+                                <label className="block text-xs font-black text-emerald-400 uppercase tracking-widest mb-2">2. Categoría</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {NEW_CATS.map(c => (
+                                        <button key={c.id} onClick={() => toggleSel(saveCats, setSaveCats, c.id)}
+                                            className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveCats.includes(c.id) ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-emerald-500 hover:text-emerald-300'}`}>
+                                            {c.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            {/* Título */}
+                            <div>
+                                <label className="block text-xs font-black text-violet-400 uppercase tracking-widest mb-2">3. Título (opcional)</label>
+                                <input value={titleInput} onChange={e=>setTitleInput(e.target.value)}
+                                    placeholder={autoTitle}
+                                    className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-2.5 text-white font-bold text-sm outline-none focus:border-violet-500 transition-colors placeholder:text-zinc-600"/>
+                            </div>
+                        </div>
+                        <div className="shrink-0 mt-5 flex gap-3">
+                            <button onClick={() => setShowSaveModal(false)} className="flex-1 py-3 bg-zinc-800 text-zinc-400 rounded-xl font-bold text-sm hover:bg-zinc-700 transition-all">Cancelar</button>
+                            <button
+                                onClick={() => { setShowSaveModal(false); handleSave(); }}
+                                disabled={saveLevels.length === 0 || saveCats.length === 0}
+                                className={`flex-1 py-3 rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all ${saveLevels.length && saveCats.length ? 'bg-violet-600 hover:bg-violet-500 text-white active:scale-95' : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'}`}>
+                                <Save size={14}/> Guardar actividad
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const root = createRoot(document.getElementById('root'));
+root.render(<Dashboard/>);
+</script>
+</body>
+</html>
