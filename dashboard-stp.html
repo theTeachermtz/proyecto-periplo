@@ -19,6 +19,7 @@
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="periplo-ai.js"></script>
+    <script src="periplo-taxonomy.js"></script>
     <link rel="stylesheet" href="periplo.css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
@@ -60,6 +61,9 @@
     const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
 
     const genId = () => Math.random().toString(36).slice(2, 9);
+
+    // Taxonomía estándar (mismo modal que match / lotería / etc.)
+    const { NEW_LEVELS, NEW_CATS } = window.PERIPLO_TAXONOMY;
 
     // ── Curriculum (grammar + verbs por nivel) ───────────────────────────────────
     const CURRICULUM = {
@@ -155,6 +159,13 @@
         const [savedId,   setSavedId]   = useState(QUIZ_ID);
         const [showModal, setShowModal] = useState(false);
         const [loading,   setLoading]   = useState(!!QUIZ_ID);
+
+        // Taxonomía (Clasificar para index.html)
+        const [showTaxModal, setShowTaxModal] = useState(false);
+        const [saveLevels,   setSaveLevels]   = useState([]);
+        const [saveCats,     setSaveCats]     = useState([]);
+        const [saveTopics,   setSaveTopics]   = useState([]);
+        const toggleSel = (arr, set, val) => set(arr.includes(val) ? arr.filter(v => v !== val) : [...arr, val]);
         const [copied,    setCopied]    = useState(false);
 
         // API state
@@ -191,6 +202,9 @@
                     if (snap.exists()) {
                         const d = snap.data();
                         setTitle(d.title || '');
+                        setSaveLevels(d.tags?.levels     || []);
+                        setSaveCats(d.tags?.categories    || []);
+                        setSaveTopics(d.tags?.topics      || []);
                         const exs = (d.content?.exercises || []).map(e => ({
                             ...e, id: e.id || genId(),
                             // backward compat: old format had english_tokens
@@ -312,16 +326,27 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
         const removeExercise = (idx) => setExercises(prev => prev.filter((_, i) => i !== idx));
         const clearAll       = ()    => { if (confirm('¿Vaciar todos los ejercicios?')) setExercises([]); };
 
+        // Paso 1: el botón Guardar pide la taxonomía si falta (igual que los demás dashboards)
+        const requestSave = () => {
+            if (!title.trim()) { alert('Ponle un título al mazo'); return; }
+            const valid = exercises.filter(e => e.spanish.trim() && e.blank_part?.trim()).length;
+            if (!valid) { alert('Agrega al menos un ejercicio completo'); return; }
+            if (saveLevels.length === 0 || saveCats.length === 0) { setShowTaxModal(true); return; }
+            handleSave();
+        };
+
         const handleSave = async () => {
             if (!title.trim()) { alert('Ponle un título al mazo'); return; }
             const toSave = exercises
                 .filter(e => e.spanish.trim() && e.blank_part?.trim())
                 .map(({ ...rest }) => rest);
             if (!toSave.length) { alert('Agrega al menos un ejercicio completo'); return; }
+            setShowTaxModal(false);
             setSaving(true);
             try {
                 const payload = {
                     title: title.trim(), type: 'SPELL_PHRASE',
+                    tags: { levels: saveLevels, categories: saveCats, topics: saveTopics },
                     content: { exercises: toSave }, cardCount: toSave.length,
                     uid: TEACHER_UID, updatedAt: serverTimestamp()
                 };
@@ -638,7 +663,7 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
                                     </button>
                                 )}
                                 <button
-                                    onClick={handleSave}
+                                    onClick={requestSave}
                                     disabled={saving}
                                     className="flex items-center gap-2 px-4 py-2 bg-violet-500 hover:bg-violet-400 text-white rounded-xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-violet-500/20 disabled:opacity-60"
                                 >
@@ -701,6 +726,53 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
                         </div>
                     </div>
                 </div>
+
+                {/* ── TAXONOMY MODAL (Clasificar) ─────────────────────────────────── */}
+                {showTaxModal && (
+                    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] max-w-xl w-full p-6 flex flex-col gap-5 shadow-2xl fade-in max-h-[85vh]">
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-lg font-black text-white">Clasificar actividad</h3>
+                                <button onClick={() => setShowTaxModal(false)} className="text-zinc-500 hover:text-white text-sm font-bold">✕</button>
+                            </div>
+                            <div className="flex flex-col gap-5 overflow-y-auto custom-scrollbar pr-1">
+                                {/* Nivel */}
+                                <div>
+                                    <label className="block text-xs font-black text-indigo-400 uppercase tracking-widest mb-2">1. Nivel</label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {NEW_LEVELS.map(lvl => (
+                                            <button key={lvl} onClick={() => toggleSel(saveLevels, setSaveLevels, lvl)}
+                                                className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveLevels.includes(lvl) ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-indigo-500 hover:text-indigo-300'}`}>
+                                                {lvl}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                {/* Categoría */}
+                                <div>
+                                    <label className="block text-xs font-black text-emerald-400 uppercase tracking-widest mb-2">2. Categoría</label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {NEW_CATS.map(cat => (
+                                            <button key={cat.id} onClick={() => toggleSel(saveCats, setSaveCats, cat.id)}
+                                                className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveCats.includes(cat.id) ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-emerald-500 hover:text-emerald-300'}`}>
+                                                {cat.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex gap-3">
+                                <button onClick={() => setShowTaxModal(false)}
+                                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-sm">Cancelar</button>
+                                <button onClick={handleSave}
+                                    disabled={saveLevels.length === 0 || saveCats.length === 0}
+                                    className={`flex-1 py-3 rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all ${saveLevels.length && saveCats.length ? 'bg-violet-500 hover:bg-violet-400 text-white active:scale-95' : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'}`}>
+                                    <Save size={14} /> Guardar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* ── POST-SAVE MODAL ─────────────────────────────────────────────── */}
                 {showModal && savedId && (
