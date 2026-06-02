@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Spell the Phrase | Periplo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' };
+        document.documentElement.classList.add('dark');
+    </script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="stylesheet" href="periplo.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow: hidden; overscroll-behavior-y: none; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom, 20px); }
+        .min-h-screen-safe { min-height: 100vh; min-height: -webkit-fill-available; }
+        @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
+        .animate-shake { animation: shake 0.35s ease both; }
+        @keyframes pop { 0%{transform:scale(0.85);opacity:0} 100%{transform:scale(1);opacity:1} }
+        .animate-pop { animation: pop 0.18s ease both; }
+    </style>
+</head>
+<body class="text-zinc-100">
+    <div id="root"></div>
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useCallback, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { RefreshCw, CheckCircle2, XCircle, Trophy, ChevronRight } from 'lucide-react';
+
+        const shuffle = (arr) => {
+            const a = [...arr];
+            for (let i = a.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [a[i], a[j]] = [a[j], a[i]];
+            }
+            return a;
+        };
+
+        const buildTokens = (tokens) =>
+            tokens.map((text, i) => ({ text, key: `${text}-${i}` }));
+
+        export default function SpellThePhraseApp() {
+            const [exercises, setExercises]   = useState([]);
+            const [loading, setLoading]       = useState(true);
+            const [current, setCurrent]       = useState(0);
+            const [gameState, setGameState]   = useState('playing');
+            const [bank, setBank]             = useState([]);
+            const [answer, setAnswer]         = useState([]);
+            const [feedback, setFeedback]     = useState(null); // null | 'correct' | 'incorrect'
+            const [score, setScore]           = useState(0);
+            const [shakeKey, setShakeKey]     = useState(0);
+            const advanceTimer = useRef(null);
+
+            const goBack = () => {
+                window.location.href = document.referrer?.includes('index') ? document.referrer : 'index-es.html';
+            };
+
+            const initExercise = useCallback((ex) => {
+                setBank(shuffle(buildTokens(ex.english_tokens)));
+                setAnswer([]);
+                setFeedback(null);
+            }, []);
+
+            useEffect(() => {
+                fetch('spell-the-phrase.json')
+                    .then(r => r.json())
+                    .then(data => {
+                        setExercises(data);
+                        initExercise(data[0]);
+                        setLoading(false);
+                    })
+                    .catch(e => { console.error(e); setLoading(false); });
+            }, []);
+
+            // Auto-verify when all tokens are placed
+            useEffect(() => {
+                const ex = exercises[current];
+                if (!ex || feedback || answer.length !== ex.english_tokens.length) return;
+
+                const isCorrect = answer.map(t => t.text).join(' ') === ex.english_tokens.join(' ');
+
+                if (isCorrect) {
+                    setFeedback('correct');
+                    setScore(s => s + 1);
+                    advanceTimer.current = setTimeout(() => {
+                        doAdvance(current, exercises);
+                    }, 1100);
+                } else {
+                    setFeedback('incorrect');
+                    setShakeKey(k => k + 1);
+                }
+            }, [answer]);
+
+            useEffect(() => () => clearTimeout(advanceTimer.current), []);
+
+            const doAdvance = (cur, exs) => {
+                const next = cur + 1;
+                if (next >= exs.length) {
+                    setGameState('victory');
+                } else {
+                    setCurrent(next);
+                    initExercise(exs[next]);
+                }
+            };
+
+            const handleSkip = () => {
+                clearTimeout(advanceTimer.current);
+                doAdvance(current, exercises);
+            };
+
+            const handleRetry = () => initExercise(exercises[current]);
+
+            const handleBankTap = (token) => {
+                if (feedback) return;
+                setBank(prev => prev.filter(t => t.key !== token.key));
+                setAnswer(prev => [...prev, token]);
+            };
+
+            const handleAnswerTap = (token) => {
+                if (feedback) return;
+                setAnswer(prev => prev.filter(t => t.key !== token.key));
+                setBank(prev => [...prev, token]);
+            };
+
+            const restart = () => {
+                clearTimeout(advanceTimer.current);
+                setCurrent(0);
+                setScore(0);
+                setGameState('playing');
+                if (exercises.length > 0) initExercise(exercises[0]);
+            };
+
+            if (loading) return (
+                <div className="min-h-screen-safe w-screen flex items-center justify-center bg-zinc-950">
+                    <div className="flex flex-col items-center gap-4">
+                        <div className="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin"></div>
+                        <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">Cargando...</p>
+                    </div>
+                </div>
+            );
+
+            if (gameState === 'victory') return (
+                <div className="min-h-screen-safe w-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500">
+                    <div className="w-24 h-24 bg-amber-500/10 border border-amber-500/20 rounded-full flex items-center justify-center mb-6 shadow-inner">
+                        <Trophy size={48} className="text-amber-500" />
+                    </div>
+                    <h2 className="text-3xl sm:text-4xl font-black text-white mb-2">¡Completado!</h2>
+                    <p className="text-zinc-400 mb-1 text-lg">
+                        Aciertos: <span className="text-emerald-400 font-black">{score}</span>
+                        <span className="text-zinc-600"> / {exercises.length}</span>
+                    </p>
+                    <p className="text-zinc-600 text-sm mb-10 font-medium">Reconstruiste {exercises.length} oraciones en inglés.</p>
+                    <div className="flex flex-col w-full max-w-xs gap-3 pb-safe">
+                        <button onClick={restart} className="w-full py-4 bg-violet-500 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-violet-400 transition-all active:scale-95 shadow-lg shadow-violet-500/20 text-sm">
+                            Jugar de nuevo
+                        </button>
+                        <button onClick={goBack} className="w-full py-4 text-zinc-500 font-bold text-sm hover:text-zinc-300 transition-colors">
+                            Salir
+                        </button>
+                    </div>
+                </div>
+            );
+
+            const ex = exercises[current];
+            if (!ex) return null;
+            const progress = (current / exercises.length) * 100;
+
+            return (
+                <div className="min-h-screen-safe w-screen flex flex-col bg-zinc-950 overflow-hidden">
+
+                    {/* HEADER */}
+                    <header className="shrink-0 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between px-4 py-3 z-20"
+                            style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                        <div className="flex items-center gap-3">
+                            <button onClick={goBack} className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 active:scale-95 transition-transform">
+                                P
+                            </button>
+                            <div className="hidden sm:block w-px h-8 bg-zinc-800 mx-1"/>
+                            <div>
+                                <h1 className="text-base font-black text-white leading-none tracking-tight">Spell the Phrase</h1>
+                                <p className="text-[10px] font-bold uppercase tracking-widest mt-1 text-violet-400">Reconstruye la oración</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <span className="text-zinc-500 font-bold text-sm tabular-nums">{current + 1} / {exercises.length}</span>
+                            <button onClick={restart} className="p-2 text-zinc-600 hover:text-zinc-300 transition-colors rounded-xl hover:bg-zinc-800 active:scale-95">
+                                <RefreshCw size={16} />
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* PROGRESS BAR */}
+                    <div className="w-full h-1 bg-zinc-900 shrink-0">
+                        <div className="h-full bg-violet-500 transition-all duration-500 ease-out" style={{ width: `${progress}%` }} />
+                    </div>
+
+                    {/* MAIN */}
+                    <div className="flex-1 flex flex-col items-center w-full max-w-lg mx-auto px-4 py-5 sm:py-8 gap-5 min-h-0">
+
+                        {/* SCORE STREAK */}
+                        <div className="shrink-0 flex items-center gap-2">
+                            <CheckCircle2 size={14} className="text-emerald-500" />
+                            <span className="text-emerald-500 font-black text-sm tabular-nums">{score}</span>
+                            <span className="text-zinc-700 text-xs font-bold">correctas</span>
+                        </div>
+
+                        {/* SPANISH PROMPT */}
+                        <div className="shrink-0 w-full">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-3 text-center">Traduce al inglés</p>
+                            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 sm:p-6 text-center shadow-inner">
+                                <p className="text-2xl sm:text-3xl font-black text-white leading-snug">{ex.spanish}</p>
+                            </div>
+                        </div>
+
+                        {/* ANSWER AREA */}
+                        <div className="shrink-0 w-full flex flex-col gap-2">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-600 text-center">Tu respuesta</p>
+                            <div
+                                key={shakeKey}
+                                className={`w-full min-h-[72px] border-2 rounded-2xl p-3 flex flex-wrap gap-2 items-center justify-center transition-colors duration-200 ${
+                                    feedback === 'correct'   ? 'border-emerald-500/50 bg-emerald-950/20 animate-pop' :
+                                    feedback === 'incorrect' ? 'border-rose-500/50 bg-rose-950/20 animate-shake' :
+                                    answer.length > 0       ? 'border-zinc-700 bg-zinc-950' :
+                                                              'border-zinc-800 border-dashed bg-zinc-950'
+                                }`}
+                            >
+                                {answer.length === 0 ? (
+                                    <p className="text-zinc-700 text-sm font-medium select-none">Toca las palabras de abajo</p>
+                                ) : (
+                                    answer.map(token => (
+                                        <button
+                                            key={token.key}
+                                            onClick={() => handleAnswerTap(token)}
+                                            disabled={!!feedback}
+                                            className={`px-3 py-2 rounded-xl font-bold text-sm sm:text-base transition-all active:scale-95 border ${
+                                                feedback === 'correct'
+                                                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 cursor-default'
+                                                    : feedback === 'incorrect'
+                                                    ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                                                    : 'bg-zinc-800 border-zinc-700 text-white hover:bg-zinc-700'
+                                            }`}
+                                        >
+                                            {token.text}
+                                        </button>
+                                    ))
+                                )}
+                            </div>
+
+                            {/* INLINE FEEDBACK */}
+                            <div className={`text-center h-5 transition-opacity duration-200 ${feedback ? 'opacity-100' : 'opacity-0'}`}>
+                                {feedback === 'correct' && (
+                                    <span className="text-emerald-400 font-black text-xs uppercase tracking-widest">¡Correcto! ✓</span>
+                                )}
+                                {feedback === 'incorrect' && (
+                                    <span className="text-rose-400 font-black text-xs uppercase tracking-widest">Revisa el orden</span>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* TOKEN BANK */}
+                        <div className="flex-1 w-full flex flex-col justify-start min-h-0">
+                            <div className="flex flex-wrap gap-2 justify-center">
+                                {bank.map(token => (
+                                    <button
+                                        key={token.key}
+                                        onClick={() => handleBankTap(token)}
+                                        disabled={!!feedback}
+                                        className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 active:scale-95 border border-zinc-700 text-white rounded-xl font-bold text-sm sm:text-base transition-all disabled:opacity-40 animate-pop"
+                                    >
+                                        {token.text}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* ACTION BUTTONS */}
+                        {feedback === 'incorrect' && (
+                            <div className="shrink-0 w-full flex gap-3 pb-safe animate-in slide-in-from-bottom-4 fade-in duration-200">
+                                <button onClick={handleRetry} className="flex-1 py-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-2xl font-black uppercase tracking-widest text-xs sm:text-sm transition-all active:scale-95 border border-zinc-700">
+                                    Reintentar
+                                </button>
+                                <button onClick={handleSkip} className="flex-1 py-4 bg-zinc-900 hover:bg-zinc-800 text-zinc-500 border border-zinc-800 rounded-2xl font-black uppercase tracking-widest text-xs sm:text-sm transition-all active:scale-95 flex items-center justify-center gap-1">
+                                    Saltar <ChevronRight size={14} />
+                                </button>
+                            </div>
+                        )}
+                        {feedback !== 'incorrect' && <div className="shrink-0 pb-safe h-1" />}
+
+                    </div>
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<SpellThePhraseApp />);
+    </script>
+</body>
+</html>
