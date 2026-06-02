@@ -22,7 +22,7 @@
     <link rel="stylesheet" href="periplo.css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
-        html, body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow-y: auto; }
+        html, body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; height: 100%; overflow: hidden; }
         button, a { user-select: none; -webkit-user-select: none; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
@@ -31,15 +31,15 @@
     </style>
 </head>
 <body class="text-zinc-100 dark">
-<div id="root"></div>
+<div id="root" style="height:100%"></div>
 <script type="text/babel" data-type="module">
-    import React, { useState, useEffect, useRef } from 'react';
+    import React, { useState, useEffect, useRef, useMemo } from 'react';
     import { createRoot } from 'react-dom/client';
     import { initializeApp } from 'firebase/app';
     import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
     import {
         Plus, Trash2, Save, Link2, RefreshCw, Sparkles,
-        ChevronDown, ChevronUp, Copy, ExternalLink, CheckCircle2, ImageIcon
+        Copy, ExternalLink, CheckCircle2, ShoppingCart
     } from 'lucide-react';
 
     const FIREBASE_CONFIG = {
@@ -51,58 +51,26 @@
         appId: "1:236795998392:web:0da24b4f018611b55c844d"
     };
     const app = initializeApp(FIREBASE_CONFIG);
-    const db = getFirestore(app);
+    const db  = getFirestore(app);
 
-    const urlParams = new URLSearchParams(window.location.search);
-    const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001';
-    const QUIZ_ID     = urlParams.get('id')  || null;
-    const BACK_URL    = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html' : 'index.html';
+    const urlParams    = new URLSearchParams(window.location.search);
+    const TEACHER_UID  = urlParams.get('uid') || 'teacher_builder_001';
+    const QUIZ_ID      = urlParams.get('id')  || null;
+    const BACK_URL     = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html' : 'index.html';
     const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
-
-    // ── Image compression ────────────────────────────────────────────────────────
-    const compressImage = (file) => new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const img = new window.Image();
-            img.onload = () => {
-                const MAX = 320;
-                const s = Math.min(MAX / img.width, MAX / img.height, 1);
-                const c = document.createElement('canvas');
-                c.width = img.width * s; c.height = img.height * s;
-                c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-                resolve(c.toDataURL('image/jpeg', 0.6));
-            };
-            img.src = e.target.result;
-        };
-        reader.readAsDataURL(file);
-    });
-
-    const compressBase64 = (b64, mime = 'image/jpeg') => new Promise((resolve) => {
-        const img = new window.Image();
-        img.onload = () => {
-            const MAX = 320;
-            const s = Math.min(MAX / img.width, MAX / img.height, 1);
-            const c = document.createElement('canvas');
-            c.width = img.width * s; c.height = img.height * s;
-            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-            resolve(c.toDataURL('image/jpeg', 0.6));
-        };
-        img.src = `data:${mime};base64,${b64}`;
-    });
 
     const genId    = () => Math.random().toString(36).slice(2, 9);
     const tokenize = (str) => str.trim().split(/\s+/).filter(Boolean);
-    const newEx    = () => ({ id: genId(), spanish: '', english: '', english_tokens: [], emoji: '', imageData: null });
 
-    // ── Curriculum data ──────────────────────────────────────────────────────────
+    // ── Curriculum (grammar + verbs por nivel) ───────────────────────────────────
     const CURRICULUM = {
       basic: {
         label: 'Basic',
         grammar: [
-          { id: 'Modal Verbs',         words: ['can','could','should','must','may','might','would','have to','be able to'] },
-          { id: 'Present Simple',      words: ['do','does',"don't","doesn't",'always','never','usually','often','sometimes'] },
-          { id: 'Present Continuous',  words: ['am','is','are','now','right now','at the moment','currently','still'] },
-          { id: 'Future (Going to)',   words: ['going to','tomorrow','next week','soon','later','tonight','plan','intend'] },
+          { id: 'Modal Verbs',        words: ['can','could','should','must','may','might','would','have to','be able to'] },
+          { id: 'Present Simple',     words: ['do','does',"don't","doesn't",'always','never','usually','often','sometimes'] },
+          { id: 'Present Continuous', words: ['am','is','are','now','right now','at the moment','currently','still'] },
+          { id: 'Future (Going to)',  words: ['going to','tomorrow','next week','soon','later','tonight','plan','intend'] },
         ],
         verbs: [
           { id: 'VP1: Daily Routine',        words: ['wake up','shower','prepare','take','pick up','start','work','help','send','attend','drive','review','sell','leave','make','do','visit','walk','feed','go','sleep','bring','buy','lend'] },
@@ -114,17 +82,6 @@
           { id: 'VP7: Social & Science',     words: ['invite','accept','refuse','admit','deny','offer','demand','advise','encourage','describe','identify','realize','recognize','suppose','guess','measure','succeed','fail'] },
           { id: 'VP8: Corporate & Economy',  words: ['hire','fire','earn','spend','invest','promote','resign','operate','produce','negotiate','persuade','convince','compete','win','gain'] },
           { id: 'VP9: Medical & Survival',   words: ['cure','heal','suffer','recover','examine','prescribe','treat','explore','guide','survive','attack','defend','greet','introduce','forgive'] },
-        ],
-        nouns: [
-          { id: 'NP1: Modern Nomad',     words: ['laptop','charger','smartphone','earbuds','backpack','passport','wallet','keys','signal','password','receipt','notebook','headphones','map','badge'] },
-          { id: 'NP2: Hungry Traveler',  words: ['meal','breakfast','lunch','dinner','snack','dessert','recipe','flavor','bowl','plate','fork','knife','spoon','mug','chef','portion','leftover'] },
-          { id: 'NP3: Daily Grind',      words: ['office','desk','meeting','schedule','colleague','boss','employee','customer','task','project','report','salary','resume','career','deadline','budget','overtime'] },
-          { id: 'NP4: Urban Chaos',      words: ['traffic','highway','crosswalk','neighborhood','downtown','skyscraper','subway','station','flight','passenger','route','delay','crowd','bridge','commute','detour'] },
-          { id: 'NP5: Weekend Getaway',  words: ['outfit','shirt','jacket','shoes','boots','luggage','suitcase','towel','hotel','hostel','destination','journey','trail','reservation','souvenir'] },
-          { id: 'NP6: Mind & Senses',    words: ['thought','idea','memory','dream','opinion','belief','doubt','feeling','emotion','mood','mind','attention','focus','imagination','curiosity','intuition','conscience'] },
-          { id: 'NP7: Society & Lab',    words: ['community','society','culture','tradition','event','protest','research','experiment','data','theory','evidence','discovery','population','survey','result','laboratory'] },
-          { id: 'NP8: Money & Power',    words: ['revenue','profit','budget','contract','stock','market','tax','investment','debt','strategy','policy','shareholder','transaction','wage','brand','penalty'] },
-          { id: 'NP9: Body & Survival',  words: ['symptom','diagnosis','treatment','prescription','surgery','wound','injury','fever','vaccine','hospital','emergency','ambulance','bandage','pulse','recovery'] },
         ]
       },
       advanced: {
@@ -143,203 +100,84 @@
           { id: 'Regular /t/ Sound',  words: ['asked','cooked','finished','fixed','helped','laughed','looked','passed','picked','pushed','reached','relaxed','stopped','walked','washed'] },
           { id: 'Regular /d/ Sound',  words: ['answered','arrived','called','changed','cleaned','enjoyed','explained','followed','improved','learned','lived','loved','moved','prepared','remembered','returned'] },
           { id: 'Regular /ɪd/ Sound', words: ['accepted','attended','avoided','completed','created','decided','ended','expected','invited','landed','needed','painted','protected','started','visited'] },
-        ],
-        nouns: [
-          { id: 'NP1: Success & Failure',        words: ['achievement','setback','milestone','breakthrough','resilience','ambition','recognition','downfall','reputation','momentum','obstacle','legacy','persistence','comeback','sacrifice'] },
-          { id: 'NP2: Truth & Lies',             words: ['deception','sincerity','integrity','allegation','transparency','manipulation','fabrication','whistleblower','propaganda','rumor','disclosure','accountability','misinformation','betrayal','denial'] },
-          { id: 'NP3: Media & Entertainment',    words: ['streaming','algorithm','franchise','narrative','celebrity','audience','platform','ratings','sequel','influencer','premiere','genre','controversy','fandom','spotlight'] },
-          { id: 'NP4: Regrets & Turning Points', words: ['regret','crossroads','opportunity','consequence','reflection','hindsight','burden','aftermath','closure','decision','realization','redemption','reconciliation','dilemma','nostalgia'] },
-          { id: 'NP5: Attraction & Identity',    words: ['attraction','obsession','personality','deal breaker','chemistry','habit','preference','identity','connection','vibe','compatibility','spark','vulnerability','boundary','attachment'] },
-          { id: 'NP6: Ambition & Competition',   words: ['benchmark','leverage','disruption','dominance','merit','hustle','contender','prestige','pursuit','edge','incentive','summit','turnaround','quota','promotion'] },
-          { id: 'NP7: Mystery & Crime',          words: ['suspect','testimony','alibi','motive','forensics','verdict','perpetrator','witness','accomplice','surveillance','conspiracy','evidence','interrogation','corruption','detective'] },
-          { id: 'NP8: Systems & Society',        words: ['institution','hierarchy','bureaucracy','inequality','legislation','oversight','reform','coalition','authority','compliance','legitimacy','policy','marginalization','governance','mobilization'] },
         ]
       },
       pro: {
         label: 'Pro',
         grammar: [
-          { id: 'Present/Past Perfect',  words: ['have done','has been','had finished',"haven't seen",'just','already','yet','have you ever'] },
-          { id: 'Perfect Continuous',    words: ['have been working','has been living','had been waiting','since morning','for hours','all day long','how long have you been'] },
-          { id: 'Third Conditional',     words: ['if I had known','would have gone','could have been','might have said',"wouldn't have happened"] },
-          { id: 'Mixed Conditionals',    words: ['if I had studied, I would be','if she were braver, she would have','if he had trained, he would be'] },
+          { id: 'Present/Past Perfect', words: ['have done','has been','had finished',"haven't seen",'just','already','yet','have you ever'] },
+          { id: 'Perfect Continuous',   words: ['have been working','has been living','had been waiting','since morning','for hours','all day long'] },
+          { id: 'Third Conditional',    words: ['if I had known','would have gone','could have been','might have said',"wouldn't have happened"] },
+          { id: 'Mixed Conditionals',   words: ['if I had studied, I would be','if she were braver, she would have','if he had trained, he would be'] },
         ],
         verbs: [
-          { id: 'Phrasal Verbs Pro',       words: ['look into','come across','turn down','put off','bring up','carry out','break down','figure out','give up','keep up','let down','make up','point out','set up','stand out','take over','work out','come up with','cut down','drop off'] },
-          { id: 'Idiomatic Expressions',   words: ['bite the bullet','burn bridges','cost an arm and a leg','get cold feet','hit the nail on the head','in the same boat','jump the gun','miss the boat','spill the beans','throw in the towel','beat around the bush','break a leg'] },
-          { id: 'Advanced Collocations',   words: ['make a decision','take responsibility','pay attention','keep a promise','lose your temper','make an effort','raise awareness','face the consequences','make progress','take into account','have an impact','make sense'] },
-        ],
-        nouns: [
-          { id: 'NP1: Law & Politics',    words: ['trial','court','judge','jury','lawyer','verdict','sentence','crime','suspect','witness','evidence','citizenship','election','policy','reform'] },
-          { id: 'NP2: Finance & Economy', words: ['economy','market','stock','asset','liability','investment','profit','loss','revenue','budget','deficit','debt','loan','inflation','currency'] },
-          { id: 'NP3: Collective Nouns',  words: ['flock','herd','swarm','pack','school','pride','colony','troop','bunch','bundle','batch','cluster','series','panel','committee'] },
-          { id: 'NP4: Uncountables',      words: ['advice','furniture','luggage','equipment','information','knowledge','research','progress','homework','housework','evidence','damage','jewelry','machinery','software'] },
-          { id: 'NP5: Formal & Academic', words: ['hypothesis','thesis','methodology','framework','approach','paradigm','bias','scope','phenomenon','validity','perspective','implication','notion','context','discourse'] },
+          { id: 'Phrasal Verbs Pro',      words: ['look into','come across','turn down','put off','bring up','carry out','break down','figure out','give up','keep up','let down','make up','point out','set up','stand out','take over','work out','come up with','cut down','drop off'] },
+          { id: 'Idiomatic Expressions',  words: ['bite the bullet','burn bridges','cost an arm and a leg','get cold feet','hit the nail on the head','in the same boat','jump the gun','miss the boat','spill the beans','throw in the towel','beat around the bush','break a leg'] },
+          { id: 'Advanced Collocations',  words: ['make a decision','take responsibility','pay attention','keep a promise','lose your temper','make an effort','raise awareness','face the consequences','make progress','take into account','have an impact','make sense'] },
         ]
       }
     };
 
-    // ── Token chips preview ──────────────────────────────────────────────────────
-    const TokenChips = ({ tokens }) => {
-        if (!tokens.length) return null;
-        return (
-            <div className="flex flex-wrap gap-1 mt-1.5">
-                {tokens.map((t, i) => (
-                    <span key={i} className="px-2 py-0.5 bg-violet-500/15 border border-violet-500/25 text-violet-300 rounded-lg text-xs font-bold">
-                        {t}
-                    </span>
-                ))}
-            </div>
-        );
-    };
-
-    // ── Exercise row ─────────────────────────────────────────────────────────────
-    const ExerciseRow = ({ ex, idx, onChange, onRemove, apiKey }) => {
-        const fileRef = useRef(null);
-        const [genImg, setGenImg] = useState(false);
-
-        const set = (field, val) => onChange(idx, field, val);
-
-        const handleUpload = async (file) => {
-            const c = await compressImage(file);
-            set('imageData', c);
-        };
-
-        const handleAiImage = async () => {
-            if (!apiKey) return;
-            setGenImg(true);
-            try {
-                const prompt = `Simple clean illustration, educational style, minimal background, NO text, representing: "${ex.spanish}"`;
-                const res = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`,
-                    { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ instances: [{ prompt }], parameters: { sampleCount: 1 } }) }
-                );
-                const data = await res.json();
-                if (data.predictions?.[0]?.bytesBase64Encoded) {
-                    const c = await compressBase64(data.predictions[0].bytesBase64Encoded, data.predictions[0].mimeType);
-                    set('imageData', c);
+    // ── Exercise card (display like fc.html) ────────────────────────────────────
+    const ExerciseCard = ({ ex, idx, onRemove }) => (
+        <div className="flex gap-3 items-center bg-zinc-950 border border-zinc-800 rounded-2xl p-3 group hover:border-zinc-700 transition-colors fade-in">
+            <div className="shrink-0 w-12 h-12 rounded-xl overflow-hidden bg-zinc-900 border border-zinc-800 flex items-center justify-center text-2xl">
+                {ex.imageData
+                    ? <img src={ex.imageData} className="w-full h-full object-cover" alt="" />
+                    : <span>{ex.emoji || '📝'}</span>
                 }
-            } catch (e) { console.error(e); }
-            setGenImg(false);
-        };
-
-        return (
-            <div className="flex gap-3 items-start bg-zinc-900 border border-zinc-800 rounded-2xl p-3 sm:p-4 group fade-in">
-
-                {/* Número + borrar */}
-                <div className="flex flex-col items-center gap-2 shrink-0 pt-0.5">
-                    <span className="w-7 h-7 bg-violet-500/20 text-violet-300 rounded-full flex items-center justify-center text-xs font-black tabular-nums">
-                        {idx + 1}
-                    </span>
-                    <button
-                        onClick={() => onRemove(idx)}
-                        className="w-7 h-7 rounded-full bg-zinc-800 hover:bg-rose-500/20 text-zinc-600 hover:text-rose-400 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
-                    >
-                        <Trash2 size={12} />
-                    </button>
-                </div>
-
-                {/* Emoji / Imagen */}
-                <div className="shrink-0 flex flex-col items-center gap-1.5">
-                    {ex.imageData ? (
-                        <div className="relative w-16 h-16 rounded-xl overflow-hidden border border-zinc-700 group/img shrink-0">
-                            <img src={ex.imageData} alt="" className="w-full h-full object-cover" />
-                            <div className="absolute inset-0 bg-black/70 opacity-0 group-hover/img:opacity-100 transition-opacity flex flex-col gap-1 items-center justify-center">
-                                <button onClick={() => fileRef.current?.click()} className="text-[9px] text-white font-black bg-black/60 px-2 py-1 rounded-lg">Cambiar</button>
-                                <button onClick={() => set('imageData', null)}   className="text-[9px] text-rose-400 font-black bg-black/60 px-2 py-1 rounded-lg">Quitar</button>
-                            </div>
-                        </div>
-                    ) : (
-                        <input
-                            type="text"
-                            value={ex.emoji}
-                            onChange={e => set('emoji', e.target.value)}
-                            placeholder="📝"
-                            title="Emoji de pista visual"
-                            className="w-14 h-14 bg-zinc-950 border border-zinc-800 rounded-xl text-center text-2xl outline-none focus:border-violet-500 transition-colors cursor-text"
-                            maxLength={4}
-                        />
-                    )}
-                    <div className="flex gap-1">
-                        <button
-                            onClick={handleAiImage}
-                            disabled={genImg || !apiKey}
-                            title={apiKey ? 'Generar imagen con Imagen AI' : 'Necesitas API key'}
-                            className="text-[10px] font-black px-1.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 disabled:opacity-40 transition-colors"
-                        >
-                            {genImg ? '⏳' : '✨IA'}
-                        </button>
-                        <button
-                            onClick={() => fileRef.current?.click()}
-                            className="text-[10px] font-black px-1.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 transition-colors"
-                        >
-                            📁
-                        </button>
-                    </div>
-                    <input ref={fileRef} type="file" accept="image/*" className="hidden"
-                        onChange={e => { if (e.target.files[0]) handleUpload(e.target.files[0]); e.target.value = ''; }} />
-                </div>
-
-                {/* Campos de texto */}
-                <div className="flex-1 flex flex-col gap-2 min-w-0">
-                    <input
-                        type="text"
-                        value={ex.spanish}
-                        onChange={e => set('spanish', e.target.value)}
-                        placeholder="Español — lo que ve el alumno... (ej: ¿Tienes?)"
-                        className="w-full bg-zinc-950 border border-zinc-800 focus:border-amber-500 rounded-xl px-3 py-2.5 text-sm font-bold text-white outline-none transition-colors placeholder:text-zinc-700"
-                    />
-                    <div>
-                        <input
-                            type="text"
-                            value={ex.english}
-                            onChange={e => {
-                                const v = e.target.value;
-                                onChange(idx, '__english__', v);
-                            }}
-                            placeholder="Inglés separado por espacios — (ej: Do you have ?)"
-                            className="w-full bg-zinc-950 border border-zinc-800 focus:border-violet-500 rounded-xl px-3 py-2.5 text-sm font-bold text-white outline-none transition-colors placeholder:text-zinc-700"
-                        />
-                        <TokenChips tokens={ex.english_tokens} />
-                    </div>
-                </div>
-
             </div>
-        );
-    };
+            <div className="flex-1 min-w-0">
+                <p className="text-white font-bold text-sm leading-snug">{ex.spanish}</p>
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                    {(ex.english_tokens || []).map((t, i) => (
+                        <span key={i} className="px-2 py-0.5 bg-violet-500/15 border border-violet-500/25 text-violet-300 rounded-lg text-xs font-bold">{t}</span>
+                    ))}
+                </div>
+            </div>
+            <span className="shrink-0 text-[10px] font-black text-zinc-700 tabular-nums w-5 text-right">{idx + 1}</span>
+            <button onClick={() => onRemove(idx)}
+                className="shrink-0 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-zinc-600 hover:text-rose-400 hover:bg-rose-500/10 transition-all">
+                <Trash2 size={14} />
+            </button>
+        </div>
+    );
 
-    // ── Dashboard principal ──────────────────────────────────────────────────────
+    // ── Dashboard ────────────────────────────────────────────────────────────────
     export default function DashboardSTP() {
-        const AI       = window.PERIPLO_AI;
+        const AI        = window.PERIPLO_AI;
         const ApiKeyBar = AI.createApiKeyBar(React);
 
-        const [title,    setTitle]    = useState('');
-        const [exercises, setExercises] = useState([newEx()]);
-        const [saving,   setSaving]   = useState(false);
-        const [savedId,  setSavedId]  = useState(QUIZ_ID);
+        // Exercise state
+        const [title,     setTitle]     = useState('');
+        const [exercises, setExercises] = useState([]);
+        const [saving,    setSaving]    = useState(false);
+        const [savedId,   setSavedId]   = useState(QUIZ_ID);
         const [showModal, setShowModal] = useState(false);
-        const [loading,  setLoading]  = useState(!!QUIZ_ID);
-        const [copied,   setCopied]   = useState(false);
+        const [loading,   setLoading]   = useState(!!QUIZ_ID);
+        const [copied,    setCopied]    = useState(false);
 
+        // API state
         const [apiKey,          setApiKey]          = useState('');
         const [availableModels, setAvailableModels] = useState([]);
         const [selectedModel,   setSelectedModel]   = useState('');
         const [loadingModels,   setLoadingModels]   = useState(false);
         const [generating,      setGenerating]      = useState(false);
-        const [aiTopic,         setAiTopic]         = useState('');
-        const [aiCount,         setAiCount]         = useState(10);
-        const [showAiPanel,     setShowAiPanel]     = useState(false);
         const abortRef = useRef(null);
 
-        const [showCurrPanel,    setShowCurrPanel]    = useState(false);
-        const [currLevel,        setCurrLevel]        = useState('');
-        const [currCatView,      setCurrCatView]      = useState('verbs');
-        const [currGrammarPacks, setCurrGrammarPacks] = useState([]);
-        const [currVerbPacks,    setCurrVerbPacks]    = useState([]);
-        const [currNounPacks,    setCurrNounPacks]    = useState([]);
+        // Ingredient state
+        const [level,             setLevel]             = useState('basic');
+        const [activeTab,         setActiveTab]         = useState('grammar');
+        const [selectedGrammar,   setSelectedGrammar]   = useState('');   // single-select
+        const [selectedVerbPacks, setSelectedVerbPacks] = useState([]);   // multi-select
+        const [useCustomVerbs,    setUseCustomVerbs]    = useState(false);
+        const [customVerbs,       setCustomVerbs]       = useState('');
+        const [aiTopic,           setAiTopic]           = useState('');
+        const [aiCount,           setAiCount]           = useState(10);
 
-        const togglePack = (arr, setArr, id) =>
-            setArr(arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id]);
+        // Manual add
+        const [manualEs, setManualEs] = useState('');
+        const [manualEn, setManualEn] = useState('');
 
         useEffect(() => {
             const k = AI.loadKey();
@@ -351,11 +189,10 @@
                         const d = snap.data();
                         setTitle(d.title || '');
                         const exs = (d.content?.exercises || []).map(e => ({
-                            ...e,
-                            id:      e.id || genId(),
+                            ...e, id: e.id || genId(),
                             english: (e.english_tokens || []).join(' ')
                         }));
-                        setExercises(exs.length ? exs : [newEx()]);
+                        setExercises(exs);
                     }
                     setLoading(false);
                 })
@@ -373,57 +210,46 @@
             setLoadingModels(false);
         };
 
-        const updateExercise = (idx, field, val) => {
-            setExercises(prev => {
-                const next = [...prev];
-                if (field === '__english__') {
-                    next[idx] = { ...next[idx], english: val, english_tokens: tokenize(val) };
-                } else {
-                    next[idx] = { ...next[idx], [field]: val };
-                }
-                return next;
-            });
-        };
+        const toggleVerbPack = (id) =>
+            setSelectedVerbPacks(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
         const generateWithAI = async () => {
             if (!apiKey || !selectedModel) return;
             setGenerating(true);
             abortRef.current = new AbortController();
 
-            // Build curriculum context block from selected packs
-            let curriculumBlock = '';
-            const totalSelected = currGrammarPacks.length + currVerbPacks.length + currNounPacks.length;
-            if (currLevel && totalSelected > 0) {
+            const gramPack = selectedGrammar
+                ? CURRICULUM[level].grammar.find(g => g.id === selectedGrammar)
+                : null;
+
+            const verbWords = useCustomVerbs
+                ? customVerbs.split(/[,\n]+/).map(v => v.trim()).filter(Boolean)
+                : selectedVerbPacks.flatMap(id =>
+                    CURRICULUM[level].verbs.find(v => v.id === id)?.words || []
+                  );
+
+            let currBlock = '';
+            if (gramPack || verbWords.length) {
                 const parts = [];
-                if (currGrammarPacks.length > 0) {
-                    const words = currGrammarPacks.flatMap(id => CURRICULUM[currLevel].grammar.find(g => g.id === id)?.words || []);
-                    parts.push(`ESTRUCTURAS GRAMATICALES (${currGrammarPacks.join(' + ')}): ${words.join(', ')}`);
-                }
-                if (currVerbPacks.length > 0) {
-                    const words = currVerbPacks.flatMap(id => CURRICULUM[currLevel].verbs.find(v => v.id === id)?.words || []);
-                    parts.push(`VERBOS (${currVerbPacks.join(' + ')}): ${words.join(', ')}`);
-                }
-                if (currNounPacks.length > 0) {
-                    const words = currNounPacks.flatMap(id => CURRICULUM[currLevel].nouns.find(n => n.id === id)?.words || []);
-                    parts.push(`SUSTANTIVOS (${currNounPacks.join(' + ')}): ${words.join(', ')}`);
-                }
-                curriculumBlock = `\n\nCONTEXTO CURRICULAR (obligatorio):\n${parts.join('\n')}\n\nINSTRUCCIÓN ESPECIAL: Usa los verbos listados conjugados con las estructuras gramaticales seleccionadas. El sujeto en inglés debe ser siempre explícito (I, you, she, we, they...) aunque en español sea implícito. Varía los sujetos entre los ejercicios.`;
+                if (gramPack)        parts.push(`ESTRUCTURA GRAMATICAL — ${gramPack.id}: ${gramPack.words.join(', ')}`);
+                if (verbWords.length) parts.push(`VERBOS A USAR: ${verbWords.join(', ')}`);
+                currBlock = `\n\nCONTEXTO CURRICULAR (obligatorio):\n${parts.join('\n')}\n\nINSTRUCCIÓN: Usa los verbos listados conjugados con la estructura gramatical. El sujeto en inglés siempre debe ser explícito (I, you, she, we, they...) aunque en español sea implícito. Varía sujetos — no todos "I".`;
             }
 
             const prompt = `Eres un generador de contenido pedagógico para Periplo, plataforma de idiomas para hispanohablantes aprendiendo inglés.
 
 Genera exactamente ${aiCount} ejercicios de reconstrucción de oraciones. El alumno ve la frase en español y debe ordenar los tokens en inglés en el orden correcto.
 
-Tema / contexto: ${aiTopic || 'frases cotidianas de alto impacto'}${curriculumBlock}
+Tema / contexto: ${aiTopic || 'frases cotidianas de alto impacto'}${currBlock}
 
-REGLAS ESTRICTAS:
-- Los signos de puntuación son tokens separados (ej: "?" o "." van solos al final)
+REGLAS:
+- Puntuación como tokens separados (ej: "?" o "." solos al final)
 - Máximo 9 tokens por ejercicio
-- Enfatiza contrastes ES→EN: sujetos implícitos en español que son explícitos en inglés (I, you, it, we), auxiliares (do, does, have, can, is), negaciones (don't, doesn't, can't)
-- emoji: un solo emoji visual que sirva como pista de contexto
+- Sujeto explícito en inglés (I, you, she, we...) aunque en español sea implícito
+- emoji: un solo emoji visual como pista de contexto
 - Oraciones de uso real, no artificiales
 
-Responde ÚNICAMENTE con un array JSON sin markdown ni explicación:
+Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
 [{"spanish":"...","english_tokens":["...","..."],"emoji":"..."}]`;
 
             try {
@@ -439,8 +265,9 @@ Responde ÚNICAMENTE con un array JSON sin markdown ni explicación:
                         emoji: e.emoji || '',
                         imageData: null
                     }));
-                    setExercises(prev => [...prev.filter(e => e.spanish.trim()), ...added]);
-                    setShowAiPanel(false);
+                    setExercises(prev => [...prev, ...added]);
+                    if (!title && selectedGrammar)
+                        setTitle(`${selectedGrammar} — ${level.charAt(0).toUpperCase() + level.slice(1)}`);
                 }
             } catch (e) {
                 if (e.name !== 'AbortError') console.error(e);
@@ -448,68 +275,78 @@ Responde ÚNICAMENTE con un array JSON sin markdown ni explicación:
             setGenerating(false);
         };
 
+        const addManual = () => {
+            if (!manualEs.trim() || !manualEn.trim()) return;
+            setExercises(prev => [...prev, {
+                id: genId(),
+                spanish: manualEs.trim(),
+                english: manualEn.trim(),
+                english_tokens: tokenize(manualEn),
+                emoji: '',
+                imageData: null
+            }]);
+            setManualEs(''); setManualEn('');
+        };
+
+        const removeExercise = (idx) => setExercises(prev => prev.filter((_, i) => i !== idx));
+        const clearAll       = ()    => { if (confirm('¿Vaciar todos los ejercicios?')) setExercises([]); };
+
         const handleSave = async () => {
             if (!title.trim()) { alert('Ponle un título al mazo'); return; }
             const toSave = exercises
-                .filter(e => e.spanish.trim() && e.english_tokens.length > 0)
+                .filter(e => e.spanish.trim() && e.english_tokens.length)
                 .map(({ english, ...rest }) => rest);
-            if (!toSave.length) { alert('Agrega al menos un ejercicio completo (español + inglés)'); return; }
-
+            if (!toSave.length) { alert('Agrega al menos un ejercicio completo'); return; }
             setSaving(true);
-            const payload = {
-                title: title.trim(),
-                type: 'SPELL_PHRASE',
-                content: { exercises: toSave },
-                cardCount: toSave.length,
-                uid: TEACHER_UID,
-                updatedAt: serverTimestamp()
-            };
             try {
+                const payload = {
+                    title: title.trim(), type: 'SPELL_PHRASE',
+                    content: { exercises: toSave }, cardCount: toSave.length,
+                    uid: TEACHER_UID, updatedAt: serverTimestamp()
+                };
                 let id = savedId;
                 if (id) {
                     await updateDoc(doc(db, QUIZZES_PATH, id), payload);
                 } else {
                     const ref = await addDoc(collection(db, QUIZZES_PATH), payload);
-                    id = ref.id;
-                    setSavedId(id);
+                    id = ref.id; setSavedId(id);
                     window.history.replaceState({}, '', `?id=${id}&uid=${TEACHER_UID}`);
                 }
                 setShowModal(true);
-            } catch (e) {
-                console.error(e);
-                alert('Error guardando. Verifica la conexión.');
-            }
+            } catch (e) { console.error(e); alert('Error guardando.'); }
             setSaving(false);
         };
 
         const studentLink = savedId
             ? `${window.location.origin}/spell-the-phrase.html?id=${savedId}&uid=${TEACHER_UID}`
             : '';
-
         const copyLink = () => {
             navigator.clipboard.writeText(studentLink).then(() => {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
+                setCopied(true); setTimeout(() => setCopied(false), 2000);
             });
         };
 
+        const validCount = exercises.filter(e => e.spanish.trim() && e.english_tokens.length).length;
+
+        const autoTitle = useMemo(() => {
+            if (title) return title;
+            if (selectedGrammar) return `${selectedGrammar} — ${CURRICULUM[level].label}`;
+            return 'Nuevo Spell the Phrase';
+        }, [title, selectedGrammar, level]);
+
         if (loading) return (
-            <div className="min-h-screen w-screen flex items-center justify-center bg-zinc-950">
-                <div className="w-10 h-10 border-4 border-violet-500 border-t-transparent rounded-full animate-spin"></div>
+            <div style={{height:'100%'}} className="flex items-center justify-center bg-zinc-950">
+                <div className="w-10 h-10 border-4 border-violet-500 border-t-transparent rounded-full animate-spin" />
             </div>
         );
 
-        const validCount = exercises.filter(e => e.spanish.trim() && e.english_tokens.length).length;
-
         return (
-            <div className="bg-zinc-950" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+            <div className="flex flex-col bg-zinc-950" style={{ height: '100%', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
 
-                {/* HEADER */}
-                <header className="sticky top-0 z-30 bg-zinc-950 border-b border-zinc-800 flex items-center gap-3 px-4 sm:px-6 py-3">
-                    <button
-                        onClick={() => { window.location.href = BACK_URL; }}
-                        className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 shrink-0 hover:bg-indigo-500 transition-colors active:scale-95"
-                    >
+                {/* ── HEADER ─────────────────────────────────────────────────────── */}
+                <header className="bg-zinc-950 border-b border-zinc-800 flex items-center gap-3 px-4 sm:px-6 py-3 shrink-0 z-10">
+                    <button onClick={() => { window.location.href = BACK_URL; }}
+                        className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 hover:bg-indigo-500 transition-colors shrink-0">
                         P
                     </button>
                     <div className="hidden sm:block w-px h-8 bg-zinc-800 shrink-0" />
@@ -517,8 +354,7 @@ Responde ÚNICAMENTE con un array JSON sin markdown ni explicación:
                         <h1 className="text-base font-black text-white leading-none tracking-tight">Spell the Phrase</h1>
                         <p className="text-[10px] font-bold uppercase tracking-widest mt-1 text-violet-400">Editor de mazos</p>
                     </div>
-
-                    <div className="flex-1 flex justify-end items-center gap-2 min-w-0">
+                    <div className="flex-1 flex justify-end items-center gap-2">
                         <ApiKeyBar
                             variant="compact"
                             accentBtn="bg-violet-500 hover:bg-violet-400 text-white"
@@ -531,294 +367,269 @@ Responde ÚNICAMENTE con un array JSON sin markdown ni explicación:
                             onFetch={fetchModels}
                             onClear={() => { setAvailableModels([]); setSelectedModel(''); AI.clearKey(); setApiKey(''); }}
                         />
-                        {savedId && (
-                            <button
-                                onClick={() => setShowModal(true)}
-                                className="hidden sm:flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-xs transition-colors border border-zinc-700 shrink-0"
-                            >
-                                <Link2 size={13} /> Link alumno
-                            </button>
-                        )}
-                        <button
-                            onClick={handleSave}
-                            disabled={saving}
-                            className="flex items-center gap-2 px-4 py-2.5 bg-violet-500 hover:bg-violet-400 text-white rounded-xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-violet-500/20 disabled:opacity-60 shrink-0"
-                        >
-                            {saving
-                                ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</>
-                                : <><Save size={14} /> Guardar</>
-                            }
-                        </button>
                     </div>
                 </header>
 
-                {/* BODY */}
-                <div className="max-w-3xl w-full mx-auto px-4 sm:px-6 py-6 flex flex-col gap-5">
+                {/* ── TWO-PANEL BODY ──────────────────────────────────────────────── */}
+                <div className="flex flex-1 overflow-hidden">
 
-                    {/* TÍTULO */}
-                    <input
-                        type="text"
-                        value={title}
-                        onChange={e => setTitle(e.target.value)}
-                        placeholder="Título del mazo... (ej: Present Perfect — Cotidiano)"
-                        className="w-full bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-2xl px-5 py-4 text-lg font-black text-white outline-none transition-colors placeholder:text-zinc-700"
-                    />
+                    {/* ── LEFT: Ingredient selector ──────────────────────────────── */}
+                    <div className="w-full md:w-[42%] xl:w-[38%] border-b md:border-b-0 md:border-r border-zinc-800 flex flex-col bg-zinc-950 h-[45%] md:h-full">
 
-                    {/* PANEL IA */}
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-                        <button
-                            onClick={() => setShowAiPanel(p => !p)}
-                            className="w-full flex items-center justify-between px-5 py-4 hover:bg-zinc-800/40 transition-colors"
-                        >
-                            <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 bg-amber-500/10 rounded-xl flex items-center justify-center">
-                                    <Sparkles size={16} className="text-amber-400" />
+                        <div className="p-4 border-b border-zinc-800 shrink-0">
+                            <h2 className="font-black text-sm flex items-center gap-2 text-white">
+                                <Sparkles size={15} className="text-amber-400" />
+                                Ingredientes
+                            </h2>
+                            <p className="text-[10px] text-zinc-500 font-bold mt-0.5">Gramática + Verbos → Generar</p>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 space-y-5 custom-scrollbar">
+
+                            {/* Level */}
+                            <div>
+                                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Nivel</label>
+                                <div className="flex gap-1.5">
+                                    {Object.entries(CURRICULUM).map(([lv, cv]) => (
+                                        <button key={lv}
+                                            onClick={() => {
+                                                setLevel(lv);
+                                                setSelectedGrammar('');
+                                                setSelectedVerbPacks([]);
+                                                setUseCustomVerbs(false);
+                                            }}
+                                            className={`px-4 py-2 rounded-xl font-black text-sm transition-all border-2 ${level === lv ? 'bg-violet-600 border-violet-600 text-white' : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-violet-500/50 hover:text-violet-300'}`}
+                                        >{cv.label}</button>
+                                    ))}
                                 </div>
-                                <span className="font-black text-white text-sm">Generar ejercicios con IA</span>
                             </div>
-                            {showAiPanel
-                                ? <ChevronUp size={16} className="text-zinc-500" />
-                                : <ChevronDown size={16} className="text-zinc-500" />
-                            }
-                        </button>
 
-                        {showAiPanel && (
-                            <div className="px-5 pb-5 border-t border-zinc-800 flex flex-col gap-4 pt-4">
-
-                                {/* Curriculum picker */}
-                                <div className="bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden">
-                                    <button
-                                        onClick={() => setShowCurrPanel(p => !p)}
-                                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-zinc-900/50 transition-colors"
-                                    >
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-base leading-none">📚</span>
-                                            <span className="text-zinc-300 text-sm font-bold">Selección curricular</span>
-                                            {(currGrammarPacks.length + currVerbPacks.length + currNounPacks.length) > 0 && (
-                                                <span className="px-2 py-0.5 bg-violet-500/20 text-violet-300 rounded-full text-[10px] font-black leading-none">
-                                                    {currGrammarPacks.length + currVerbPacks.length + currNounPacks.length} packs
-                                                </span>
-                                            )}
-                                        </div>
-                                        {showCurrPanel
-                                            ? <ChevronUp size={14} className="text-zinc-600" />
-                                            : <ChevronDown size={14} className="text-zinc-600" />
-                                        }
-                                    </button>
-
-                                    {showCurrPanel && (
-                                        <div className="border-t border-zinc-800">
-
-                                            {/* Level */}
-                                            <div className="p-3 border-b border-zinc-800/60 flex flex-col gap-2">
-                                                <span className="text-zinc-600 text-[10px] font-black uppercase tracking-widest">Nivel</span>
-                                                <div className="flex gap-1.5">
-                                                    {Object.entries(CURRICULUM).map(([lv, cv]) => (
-                                                        <button key={lv}
-                                                            onClick={() => {
-                                                                setCurrLevel(lv === currLevel ? '' : lv);
-                                                                setCurrGrammarPacks([]); setCurrVerbPacks([]); setCurrNounPacks([]);
-                                                                setCurrCatView('verbs');
-                                                            }}
-                                                            className={`px-4 py-2 rounded-xl font-black text-xs transition-all border-2 ${currLevel === lv ? 'bg-violet-600 border-violet-600 text-white' : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-violet-500/50 hover:text-violet-300'}`}
-                                                        >
-                                                            {cv.label}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-
-                                            {currLevel && (<>
-                                                {/* Category tabs */}
-                                                <div className="flex border-b border-zinc-800/60">
-                                                    {[
-                                                        { id: 'grammar', label: 'Gramática', count: currGrammarPacks.length, color: 'text-emerald-400' },
-                                                        { id: 'verbs',   label: 'Verbos',    count: currVerbPacks.length,    color: 'text-blue-400' },
-                                                        { id: 'nouns',   label: 'Sustantivos', count: currNounPacks.length,  color: 'text-amber-400' },
-                                                    ].map(cat => (
-                                                        <button key={cat.id}
-                                                            onClick={() => setCurrCatView(cat.id)}
-                                                            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-black transition-colors border-b-2 ${currCatView === cat.id ? 'border-violet-500 text-white bg-zinc-900/40' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
-                                                        >
-                                                            {cat.label}
-                                                            {cat.count > 0 && (
-                                                                <span className="w-4 h-4 rounded-full bg-violet-500 text-white text-[9px] font-black flex items-center justify-center">
-                                                                    {cat.count}
-                                                                </span>
-                                                            )}
-                                                        </button>
-                                                    ))}
-                                                </div>
-
-                                                {/* Pack list */}
-                                                <div className="p-3 flex flex-col gap-1.5 max-h-52 overflow-y-auto custom-scrollbar">
-                                                    {currCatView === 'grammar' && CURRICULUM[currLevel].grammar.map(pack => {
-                                                        const isOn = currGrammarPacks.includes(pack.id);
-                                                        return (
-                                                            <button key={pack.id}
-                                                                onClick={() => togglePack(currGrammarPacks, setCurrGrammarPacks, pack.id)}
-                                                                className={`w-full text-left px-3 py-2.5 rounded-xl border-2 font-bold text-sm transition-all active:scale-[0.99] ${isOn ? 'bg-emerald-500/10 border-emerald-500 text-emerald-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
-                                                            >
-                                                                <div className="flex items-center justify-between">
-                                                                    <span>{pack.id}</span>
-                                                                    <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isOn ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-600'}`}>
-                                                                        {isOn ? '✓ activo' : `+${pack.words.length} palabras`}
-                                                                    </span>
-                                                                </div>
-                                                            </button>
-                                                        );
-                                                    })}
-                                                    {currCatView === 'verbs' && CURRICULUM[currLevel].verbs.map(pack => {
-                                                        const isOn = currVerbPacks.includes(pack.id);
-                                                        return (
-                                                            <button key={pack.id}
-                                                                onClick={() => togglePack(currVerbPacks, setCurrVerbPacks, pack.id)}
-                                                                className={`w-full text-left px-3 py-2.5 rounded-xl border-2 font-bold text-sm transition-all active:scale-[0.99] ${isOn ? 'bg-blue-500/10 border-blue-500 text-blue-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
-                                                            >
-                                                                <div className="flex items-center justify-between">
-                                                                    <span>{pack.id}</span>
-                                                                    <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isOn ? 'bg-blue-500/20 text-blue-400' : 'bg-zinc-800 text-zinc-600'}`}>
-                                                                        {isOn ? '✓ activo' : `+${pack.words.length} verbos`}
-                                                                    </span>
-                                                                </div>
-                                                            </button>
-                                                        );
-                                                    })}
-                                                    {currCatView === 'nouns' && CURRICULUM[currLevel].nouns.map(pack => {
-                                                        const isOn = currNounPacks.includes(pack.id);
-                                                        return (
-                                                            <button key={pack.id}
-                                                                onClick={() => togglePack(currNounPacks, setCurrNounPacks, pack.id)}
-                                                                className={`w-full text-left px-3 py-2.5 rounded-xl border-2 font-bold text-sm transition-all active:scale-[0.99] ${isOn ? 'bg-amber-500/10 border-amber-500 text-amber-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
-                                                            >
-                                                                <div className="flex items-center justify-between">
-                                                                    <span>{pack.id}</span>
-                                                                    <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isOn ? 'bg-amber-500/20 text-amber-400' : 'bg-zinc-800 text-zinc-600'}`}>
-                                                                        {isOn ? '✓ activo' : `+${pack.words.length} nouns`}
-                                                                    </span>
-                                                                </div>
-                                                            </button>
-                                                        );
-                                                    })}
-                                                </div>
-
-                                                {/* Selected chips */}
-                                                {(currGrammarPacks.length + currVerbPacks.length + currNounPacks.length) > 0 && (
-                                                    <div className="px-3 pb-3 pt-1 border-t border-zinc-800/60 flex flex-wrap gap-1.5">
-                                                        {currGrammarPacks.map(id => (
-                                                            <button key={id} onClick={() => togglePack(currGrammarPacks, setCurrGrammarPacks, id)}
-                                                                className="flex items-center gap-1 px-2 py-1 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded-full text-[10px] font-bold hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/30 transition-colors">
-                                                                🔤 {id} <span className="opacity-60">✕</span>
-                                                            </button>
-                                                        ))}
-                                                        {currVerbPacks.map(id => (
-                                                            <button key={id} onClick={() => togglePack(currVerbPacks, setCurrVerbPacks, id)}
-                                                                className="flex items-center gap-1 px-2 py-1 bg-blue-500/15 text-blue-300 border border-blue-500/30 rounded-full text-[10px] font-bold hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/30 transition-colors">
-                                                                ⚡ {id} <span className="opacity-60">✕</span>
-                                                            </button>
-                                                        ))}
-                                                        {currNounPacks.map(id => (
-                                                            <button key={id} onClick={() => togglePack(currNounPacks, setCurrNounPacks, id)}
-                                                                className="flex items-center gap-1 px-2 py-1 bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded-full text-[10px] font-bold hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/30 transition-colors">
-                                                                🗂 {id} <span className="opacity-60">✕</span>
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </>)}
-                                        </div>
-                                    )}
+                            {/* Category tabs */}
+                            <div>
+                                <div className="flex gap-1 bg-zinc-900 rounded-xl p-1 mb-3">
+                                    {[
+                                        { id: 'grammar', label: '🔤 Gramática' },
+                                        { id: 'verbs',   label: '⚡ Verbos' },
+                                    ].map(tab => (
+                                        <button key={tab.id}
+                                            onClick={() => setActiveTab(tab.id)}
+                                            className={`flex-1 py-2 rounded-lg text-xs font-black transition-all ${activeTab === tab.id ? 'bg-zinc-800 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}
+                                        >{tab.label}</button>
+                                    ))}
                                 </div>
 
-                                <p className="text-zinc-500 text-xs font-medium">Contexto adicional (opcional si ya seleccionaste currículo).</p>
-                                <input
-                                    type="text"
-                                    value={aiTopic}
-                                    onChange={e => setAiTopic(e.target.value)}
-                                    placeholder="ej: situaciones de trabajo, viajes, vida cotidiana..."
-                                    className="w-full bg-zinc-950 border border-zinc-800 focus:border-amber-500 rounded-xl px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-zinc-700 font-medium"
-                                />
-                                <div className="flex items-center gap-3 flex-wrap">
-                                    <div className="flex items-center gap-1.5 shrink-0">
-                                        <span className="text-zinc-500 text-xs font-bold mr-1">Cantidad:</span>
+                                {/* Grammar — single-select */}
+                                {activeTab === 'grammar' && (
+                                    <div className="flex flex-col gap-1.5">
+                                        {CURRICULUM[level].grammar.map(pack => {
+                                            const isOn = selectedGrammar === pack.id;
+                                            return (
+                                                <button key={pack.id}
+                                                    onClick={() => setSelectedGrammar(isOn ? '' : pack.id)}
+                                                    className={`w-full text-left p-3 rounded-xl border-2 font-bold text-sm transition-all active:scale-[0.98] ${isOn ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
+                                                >
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-2">
+                                                            {isOn && <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />}
+                                                            <span>{pack.id}</span>
+                                                        </div>
+                                                        <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isOn ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-600'}`}>
+                                                            {isOn ? '✓ activo' : `${pack.words.length} estr.`}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+
+                                {/* Verbs — multi-select + Otros */}
+                                {activeTab === 'verbs' && (
+                                    <div className="flex flex-col gap-1.5">
+                                        {CURRICULUM[level].verbs.map(pack => {
+                                            const isOn = selectedVerbPacks.includes(pack.id);
+                                            return (
+                                                <button key={pack.id}
+                                                    onClick={() => toggleVerbPack(pack.id)}
+                                                    className={`w-full text-left p-3 rounded-xl border-2 font-bold text-sm transition-all active:scale-[0.98] ${isOn ? 'bg-blue-600/20 border-blue-500 text-blue-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
+                                                >
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-2">
+                                                            {isOn && <CheckCircle2 size={14} className="text-blue-400 shrink-0" />}
+                                                            <span>{pack.id}</span>
+                                                        </div>
+                                                        <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isOn ? 'bg-blue-500/20 text-blue-400' : 'bg-zinc-800 text-zinc-600'}`}>
+                                                            {isOn ? '✓' : `+${pack.words.length}`}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+
+                                        {/* Otros — custom verbs */}
+                                        <button
+                                            onClick={() => setUseCustomVerbs(p => !p)}
+                                            className={`w-full text-left p-3 rounded-xl border-2 font-bold text-sm transition-all ${useCustomVerbs ? 'bg-amber-600/20 border-amber-500 text-amber-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                {useCustomVerbs && <CheckCircle2 size={14} className="text-amber-400 shrink-0" />}
+                                                Otros (personalizado)
+                                            </div>
+                                        </button>
+
+                                        {useCustomVerbs && (
+                                            <textarea
+                                                value={customVerbs}
+                                                onChange={e => setCustomVerbs(e.target.value)}
+                                                placeholder={'Escribe o pega verbos separados por coma o Enter:\ngo, see, want, need, decide...\n\nO pega tu lista directamente.'}
+                                                rows={5}
+                                                className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-sm text-white outline-none transition-colors placeholder:text-zinc-700 font-medium resize-none custom-scrollbar"
+                                            />
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Topic + count + generate */}
+                            <div className="border-t border-zinc-800 pt-4 flex flex-col gap-3">
+                                <div>
+                                    <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Tema / Contexto (opcional)</label>
+                                    <input
+                                        type="text"
+                                        value={aiTopic}
+                                        onChange={e => setAiTopic(e.target.value)}
+                                        placeholder="ej: trabajo en oficina, viaje a México..."
+                                        className="w-full bg-zinc-900 border border-zinc-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-sm text-white outline-none transition-colors placeholder:text-zinc-700 font-medium"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Cantidad</label>
+                                    <div className="flex gap-1.5">
                                         {[5, 10, 15, 20].map(n => (
                                             <button key={n} onClick={() => setAiCount(n)}
-                                                className={`w-9 h-8 rounded-lg font-black text-sm transition-colors ${aiCount === n ? 'bg-amber-500 text-black' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>
+                                                className={`flex-1 py-2 rounded-xl font-black text-sm transition-colors ${aiCount === n ? 'bg-amber-500 text-black' : 'bg-zinc-900 text-zinc-400 border border-zinc-700 hover:border-zinc-500'}`}>
                                                 {n}
                                             </button>
                                         ))}
                                     </div>
-                                    <button
-                                        onClick={generateWithAI}
-                                        disabled={generating || !apiKey || !selectedModel}
-                                        className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-400 text-black rounded-xl font-black text-sm transition-all active:scale-95 disabled:opacity-50 min-w-[160px]"
-                                    >
-                                        {generating
-                                            ? <><RefreshCw size={14} className="animate-spin" /> Generando...</>
-                                            : <><Sparkles size={14} /> Generar {aiCount} ejercicios</>
-                                        }
-                                    </button>
                                 </div>
+                                <button
+                                    onClick={generateWithAI}
+                                    disabled={generating || !apiKey || !selectedModel}
+                                    className="w-full flex items-center justify-center gap-2 py-3.5 bg-amber-500 hover:bg-amber-400 text-black rounded-xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-amber-500/20 disabled:opacity-50"
+                                >
+                                    {generating
+                                        ? <><RefreshCw size={16} className="animate-spin" /> Generando...</>
+                                        : <><Sparkles size={16} /> Generar {aiCount} ejercicios</>
+                                    }
+                                </button>
                                 {!apiKey && (
-                                    <p className="text-amber-500/70 text-xs font-bold text-center">
-                                        ⚠️ Agrega tu API key de Gemini en el header para usar la IA
-                                    </p>
+                                    <p className="text-amber-500/70 text-[11px] font-bold text-center">⚠️ Agrega tu API key de Gemini en el header</p>
                                 )}
                             </div>
-                        )}
+                        </div>
                     </div>
 
-                    {/* LISTA DE EJERCICIOS */}
-                    <div className="flex flex-col gap-3">
-                        <div className="flex items-center justify-between">
-                            <h2 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                                Ejercicios{' '}
-                                <span className="text-violet-400">{validCount}</span>
-                                {exercises.length !== validCount && (
-                                    <span className="text-zinc-700"> / {exercises.length} filas</span>
+                    {/* ── RIGHT: Exercise cards ───────────────────────────────────── */}
+                    <div className="flex-1 flex flex-col overflow-hidden bg-zinc-900 h-[55%] md:h-full">
+
+                        {/* Right header: title input + actions */}
+                        <div className="p-4 border-b border-zinc-800 flex items-center gap-3 shrink-0 bg-zinc-950/50">
+                            <div className="flex-1 min-w-0">
+                                <input
+                                    type="text"
+                                    value={title}
+                                    onChange={e => setTitle(e.target.value)}
+                                    placeholder={autoTitle}
+                                    className="w-full bg-transparent outline-none text-white font-black text-base placeholder:text-zinc-600"
+                                />
+                                <div className="flex gap-1 mt-1.5 flex-wrap">
+                                    {selectedGrammar && (
+                                        <span className="text-[9px] font-black bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-md border border-emerald-500/30">🔤 {selectedGrammar}</span>
+                                    )}
+                                    {selectedVerbPacks.map(id => (
+                                        <span key={id} className="text-[9px] font-black bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-md border border-blue-500/30">⚡ {id}</span>
+                                    ))}
+                                    {useCustomVerbs && customVerbs && (
+                                        <span className="text-[9px] font-black bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-md border border-amber-500/30">📝 Verbos personalizados</span>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                                {exercises.length > 0 && (
+                                    <button onClick={clearAll}
+                                        className="p-2 bg-rose-500/10 text-rose-400 rounded-xl hover:bg-rose-500/20 transition-colors">
+                                        <Trash2 size={16} />
+                                    </button>
                                 )}
-                            </h2>
-                            <span className="text-[10px] text-zinc-700 font-medium hidden sm:block">
-                                Inglés separado por espacios → tokens automáticos
-                            </span>
+                                <div className={`px-3 py-2 rounded-xl text-sm font-black border text-center min-w-[56px] ${validCount >= 5 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>
+                                    {validCount}
+                                    <p className="text-[8px] uppercase font-bold opacity-70">{validCount >= 5 ? '¡Listo!' : 'Total'}</p>
+                                </div>
+                                {savedId && (
+                                    <button onClick={() => setShowModal(true)}
+                                        className="hidden sm:flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-xs transition-colors border border-zinc-700">
+                                        <Link2 size={13} /> Link
+                                    </button>
+                                )}
+                                <button
+                                    onClick={handleSave}
+                                    disabled={saving}
+                                    className="flex items-center gap-2 px-4 py-2 bg-violet-500 hover:bg-violet-400 text-white rounded-xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-violet-500/20 disabled:opacity-60"
+                                >
+                                    {saving
+                                        ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</>
+                                        : <><Save size={14} /> Guardar</>
+                                    }
+                                </button>
+                            </div>
                         </div>
 
-                        {exercises.map((ex, idx) => (
-                            <ExerciseRow
-                                key={ex.id}
-                                ex={ex}
-                                idx={idx}
-                                onChange={updateExercise}
-                                onRemove={(i) => setExercises(prev => prev.filter((_, j) => j !== i))}
-                                apiKey={apiKey}
-                            />
-                        ))}
+                        {/* Cards area */}
+                        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
 
-                        <button
-                            onClick={() => setExercises(prev => [...prev, newEx()])}
-                            className="w-full py-4 border-2 border-dashed border-zinc-800 hover:border-violet-500/40 rounded-2xl text-zinc-600 hover:text-violet-400 font-bold text-sm transition-all flex items-center justify-center gap-2"
-                        >
-                            <Plus size={16} /> Agregar ejercicio
-                        </button>
+                            {/* Manual add row */}
+                            <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-3 flex gap-2 items-end mb-4">
+                                <div className="flex-1">
+                                    <label className="text-[9px] font-black text-zinc-500 uppercase block mb-1">Español</label>
+                                    <input value={manualEs} onChange={e => setManualEs(e.target.value)}
+                                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-amber-500 text-white placeholder:text-zinc-700"
+                                        placeholder="¿Puedes ayudarme?" />
+                                </div>
+                                <div className="flex-1">
+                                    <label className="text-[9px] font-black text-zinc-500 uppercase block mb-1">Inglés (con espacios)</label>
+                                    <input value={manualEn} onChange={e => setManualEn(e.target.value)}
+                                        onKeyDown={e => e.key === 'Enter' && addManual()}
+                                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-violet-500 text-white placeholder:text-zinc-700"
+                                        placeholder="Can you help me ?" />
+                                </div>
+                                <button onClick={addManual} disabled={!manualEs || !manualEn}
+                                    className="bg-violet-500 hover:bg-violet-400 disabled:opacity-40 text-white p-2 rounded-lg transition-colors">
+                                    <Plus size={18} />
+                                </button>
+                            </div>
+
+                            {/* Exercise cards */}
+                            {exercises.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center text-zinc-600 py-16">
+                                    <ShoppingCart size={40} className="mb-3 opacity-40" />
+                                    <p className="font-bold text-sm">Sin ejercicios todavía</p>
+                                    <p className="text-xs mt-1 text-center max-w-xs opacity-70">
+                                        Selecciona gramática + verbos en el panel izquierdo y presiona Generar.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col gap-2 pb-6">
+                                    {exercises.map((ex, idx) => (
+                                        <ExerciseCard key={ex.id} ex={ex} idx={idx} onRemove={removeExercise} />
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
-
-                    {/* SAVE BOTTOM (mobile redundant but handy) */}
-                    <div className="pb-8">
-                        <button
-                            onClick={handleSave}
-                            disabled={saving}
-                            className="w-full py-4 bg-violet-500 hover:bg-violet-400 text-white rounded-2xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-violet-500/20 disabled:opacity-60 flex items-center justify-center gap-2"
-                        >
-                            {saving
-                                ? <><RefreshCw size={15} className="animate-spin" /> Guardando...</>
-                                : <><Save size={15} /> Guardar mazo ({validCount} ejercicios)</>
-                            }
-                        </button>
-                    </div>
-
                 </div>
 
-                {/* MODAL POST-SAVE */}
+                {/* ── POST-SAVE MODAL ─────────────────────────────────────────────── */}
                 {showModal && savedId && (
                     <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
                         <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] max-w-sm w-full p-6 flex flex-col items-center gap-4 shadow-2xl fade-in">
@@ -829,29 +640,20 @@ Responde ÚNICAMENTE con un array JSON sin markdown ni explicación:
                                 <h3 className="text-xl font-black text-white mb-1">¡Guardado!</h3>
                                 <p className="text-zinc-500 text-sm font-medium">{validCount} ejercicios listos.</p>
                             </div>
-
                             <div className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-3 flex items-center gap-2">
                                 <span className="flex-1 text-[11px] text-zinc-400 font-mono truncate">{studentLink}</span>
-                                <button
-                                    onClick={copyLink}
-                                    className={`shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg font-black text-xs transition-all ${copied ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}
-                                >
+                                <button onClick={copyLink}
+                                    className={`shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg font-black text-xs transition-all ${copied ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}>
                                     {copied ? <><CheckCircle2 size={12} /> ¡Copiado!</> : <><Copy size={12} /> Copiar</>}
                                 </button>
                             </div>
-
                             <div className="flex gap-3 w-full">
-                                <a
-                                    href={studentLink}
-                                    target="_blank"
-                                    className="flex-1 flex items-center justify-center gap-2 py-3 bg-violet-500 hover:bg-violet-400 text-white rounded-xl font-black text-sm transition-all active:scale-95"
-                                >
+                                <a href={studentLink} target="_blank"
+                                    className="flex-1 flex items-center justify-center gap-2 py-3 bg-violet-500 hover:bg-violet-400 text-white rounded-xl font-black text-sm transition-all">
                                     <ExternalLink size={14} /> Abrir juego
                                 </a>
-                                <button
-                                    onClick={() => setShowModal(false)}
-                                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-sm transition-all"
-                                >
+                                <button onClick={() => setShowModal(false)}
+                                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-sm">
                                     Cerrar
                                 </button>
                             </div>
