@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard · Spell the Phrase | Periplo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' };</script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="periplo-ai.js"></script>
+    <link rel="stylesheet" href="periplo.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
+        html, body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; }
+        button, a { user-select: none; -webkit-user-select: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.2s ease-out; }
+    </style>
+</head>
+<body class="text-zinc-100 dark">
+<div id="root"></div>
+<script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useRef } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { initializeApp } from 'firebase/app';
+    import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
+    import {
+        Plus, Trash2, Save, Link2, RefreshCw, Sparkles,
+        ChevronDown, ChevronUp, Copy, ExternalLink, CheckCircle2, ImageIcon
+    } from 'lucide-react';
+
+    const FIREBASE_CONFIG = {
+        apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+        authDomain: "proyecto-periplo.firebaseapp.com",
+        projectId: "proyecto-periplo",
+        storageBucket: "proyecto-periplo.firebasestorage.app",
+        messagingSenderId: "236795998392",
+        appId: "1:236795998392:web:0da24b4f018611b55c844d"
+    };
+    const app = initializeApp(FIREBASE_CONFIG);
+    const db = getFirestore(app);
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001';
+    const QUIZ_ID     = urlParams.get('id')  || null;
+    const BACK_URL    = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html' : 'index.html';
+    const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
+
+    // ── Image compression ────────────────────────────────────────────────────────
+    const compressImage = (file) => new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const img = new window.Image();
+            img.onload = () => {
+                const MAX = 320;
+                const s = Math.min(MAX / img.width, MAX / img.height, 1);
+                const c = document.createElement('canvas');
+                c.width = img.width * s; c.height = img.height * s;
+                c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                resolve(c.toDataURL('image/jpeg', 0.6));
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    });
+
+    const compressBase64 = (b64, mime = 'image/jpeg') => new Promise((resolve) => {
+        const img = new window.Image();
+        img.onload = () => {
+            const MAX = 320;
+            const s = Math.min(MAX / img.width, MAX / img.height, 1);
+            const c = document.createElement('canvas');
+            c.width = img.width * s; c.height = img.height * s;
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            resolve(c.toDataURL('image/jpeg', 0.6));
+        };
+        img.src = `data:${mime};base64,${b64}`;
+    });
+
+    const genId    = () => Math.random().toString(36).slice(2, 9);
+    const tokenize = (str) => str.trim().split(/\s+/).filter(Boolean);
+    const newEx    = () => ({ id: genId(), spanish: '', english: '', english_tokens: [], emoji: '', imageData: null });
+
+    // ── Token chips preview ──────────────────────────────────────────────────────
+    const TokenChips = ({ tokens }) => {
+        if (!tokens.length) return null;
+        return (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+                {tokens.map((t, i) => (
+                    <span key={i} className="px-2 py-0.5 bg-violet-500/15 border border-violet-500/25 text-violet-300 rounded-lg text-xs font-bold">
+                        {t}
+                    </span>
+                ))}
+            </div>
+        );
+    };
+
+    // ── Exercise row ─────────────────────────────────────────────────────────────
+    const ExerciseRow = ({ ex, idx, onChange, onRemove, apiKey }) => {
+        const fileRef = useRef(null);
+        const [genImg, setGenImg] = useState(false);
+
+        const set = (field, val) => onChange(idx, field, val);
+
+        const handleUpload = async (file) => {
+            const c = await compressImage(file);
+            set('imageData', c);
+        };
+
+        const handleAiImage = async () => {
+            if (!apiKey) return;
+            setGenImg(true);
+            try {
+                const prompt = `Simple clean illustration, educational style, minimal background, NO text, representing: "${ex.spanish}"`;
+                const res = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`,
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ instances: [{ prompt }], parameters: { sampleCount: 1 } }) }
+                );
+                const data = await res.json();
+                if (data.predictions?.[0]?.bytesBase64Encoded) {
+                    const c = await compressBase64(data.predictions[0].bytesBase64Encoded, data.predictions[0].mimeType);
+                    set('imageData', c);
+                }
+            } catch (e) { console.error(e); }
+            setGenImg(false);
+        };
+
+        return (
+            <div className="flex gap-3 items-start bg-zinc-900 border border-zinc-800 rounded-2xl p-3 sm:p-4 group fade-in">
+
+                {/* Número + borrar */}
+                <div className="flex flex-col items-center gap-2 shrink-0 pt-0.5">
+                    <span className="w-7 h-7 bg-violet-500/20 text-violet-300 rounded-full flex items-center justify-center text-xs font-black tabular-nums">
+                        {idx + 1}
+                    </span>
+                    <button
+                        onClick={() => onRemove(idx)}
+                        className="w-7 h-7 rounded-full bg-zinc-800 hover:bg-rose-500/20 text-zinc-600 hover:text-rose-400 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                    >
+                        <Trash2 size={12} />
+                    </button>
+                </div>
+
+                {/* Emoji / Imagen */}
+                <div className="shrink-0 flex flex-col items-center gap-1.5">
+                    {ex.imageData ? (
+                        <div className="relative w-16 h-16 rounded-xl overflow-hidden border border-zinc-700 group/img shrink-0">
+                            <img src={ex.imageData} alt="" className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-black/70 opacity-0 group-hover/img:opacity-100 transition-opacity flex flex-col gap-1 items-center justify-center">
+                                <button onClick={() => fileRef.current?.click()} className="text-[9px] text-white font-black bg-black/60 px-2 py-1 rounded-lg">Cambiar</button>
+                                <button onClick={() => set('imageData', null)}   className="text-[9px] text-rose-400 font-black bg-black/60 px-2 py-1 rounded-lg">Quitar</button>
+                            </div>
+                        </div>
+                    ) : (
+                        <input
+                            type="text"
+                            value={ex.emoji}
+                            onChange={e => set('emoji', e.target.value)}
+                            placeholder="📝"
+                            title="Emoji de pista visual"
+                            className="w-14 h-14 bg-zinc-950 border border-zinc-800 rounded-xl text-center text-2xl outline-none focus:border-violet-500 transition-colors cursor-text"
+                            maxLength={4}
+                        />
+                    )}
+                    <div className="flex gap-1">
+                        <button
+                            onClick={handleAiImage}
+                            disabled={genImg || !apiKey}
+                            title={apiKey ? 'Generar imagen con Imagen AI' : 'Necesitas API key'}
+                            className="text-[10px] font-black px-1.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 disabled:opacity-40 transition-colors"
+                        >
+                            {genImg ? '⏳' : '✨IA'}
+                        </button>
+                        <button
+                            onClick={() => fileRef.current?.click()}
+                            className="text-[10px] font-black px-1.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 transition-colors"
+                        >
+                            📁
+                        </button>
+                    </div>
+                    <input ref={fileRef} type="file" accept="image/*" className="hidden"
+                        onChange={e => { if (e.target.files[0]) handleUpload(e.target.files[0]); e.target.value = ''; }} />
+                </div>
+
+                {/* Campos de texto */}
+                <div className="flex-1 flex flex-col gap-2 min-w-0">
+                    <input
+                        type="text"
+                        value={ex.spanish}
+                        onChange={e => set('spanish', e.target.value)}
+                        placeholder="Español — lo que ve el alumno... (ej: ¿Tienes?)"
+                        className="w-full bg-zinc-950 border border-zinc-800 focus:border-amber-500 rounded-xl px-3 py-2.5 text-sm font-bold text-white outline-none transition-colors placeholder:text-zinc-700"
+                    />
+                    <div>
+                        <input
+                            type="text"
+                            value={ex.english}
+                            onChange={e => {
+                                const v = e.target.value;
+                                onChange(idx, '__english__', v);
+                            }}
+                            placeholder="Inglés separado por espacios — (ej: Do you have ?)"
+                            className="w-full bg-zinc-950 border border-zinc-800 focus:border-violet-500 rounded-xl px-3 py-2.5 text-sm font-bold text-white outline-none transition-colors placeholder:text-zinc-700"
+                        />
+                        <TokenChips tokens={ex.english_tokens} />
+                    </div>
+                </div>
+
+            </div>
+        );
+    };
+
+    // ── Dashboard principal ──────────────────────────────────────────────────────
+    export default function DashboardSTP() {
+        const AI       = window.PERIPLO_AI;
+        const ApiKeyBar = AI.createApiKeyBar(React);
+
+        const [title,    setTitle]    = useState('');
+        const [exercises, setExercises] = useState([newEx()]);
+        const [saving,   setSaving]   = useState(false);
+        const [savedId,  setSavedId]  = useState(QUIZ_ID);
+        const [showModal, setShowModal] = useState(false);
+        const [loading,  setLoading]  = useState(!!QUIZ_ID);
+        const [copied,   setCopied]   = useState(false);
+
+        const [apiKey,          setApiKey]          = useState('');
+        const [availableModels, setAvailableModels] = useState([]);
+        const [selectedModel,   setSelectedModel]   = useState('');
+        const [loadingModels,   setLoadingModels]   = useState(false);
+        const [generating,      setGenerating]      = useState(false);
+        const [aiTopic,         setAiTopic]         = useState('');
+        const [aiCount,         setAiCount]         = useState(10);
+        const [showAiPanel,     setShowAiPanel]     = useState(false);
+        const abortRef = useRef(null);
+
+        useEffect(() => {
+            const k = AI.loadKey();
+            if (k) setApiKey(k);
+            if (!QUIZ_ID) { setLoading(false); return; }
+            getDoc(doc(db, QUIZZES_PATH, QUIZ_ID))
+                .then(snap => {
+                    if (snap.exists()) {
+                        const d = snap.data();
+                        setTitle(d.title || '');
+                        const exs = (d.content?.exercises || []).map(e => ({
+                            ...e,
+                            id:      e.id || genId(),
+                            english: (e.english_tokens || []).join(' ')
+                        }));
+                        setExercises(exs.length ? exs : [newEx()]);
+                    }
+                    setLoading(false);
+                })
+                .catch(() => setLoading(false));
+        }, []);
+
+        const fetchModels = async () => {
+            if (!apiKey) return;
+            setLoadingModels(true);
+            try {
+                const m = await AI.fetchModels(apiKey);
+                setAvailableModels(m);
+                setSelectedModel(AI.pickPreferredModel(m));
+            } catch (e) { console.error(e); }
+            setLoadingModels(false);
+        };
+
+        const updateExercise = (idx, field, val) => {
+            setExercises(prev => {
+                const next = [...prev];
+                if (field === '__english__') {
+                    next[idx] = { ...next[idx], english: val, english_tokens: tokenize(val) };
+                } else {
+                    next[idx] = { ...next[idx], [field]: val };
+                }
+                return next;
+            });
+        };
+
+        const generateWithAI = async () => {
+            if (!apiKey || !selectedModel) return;
+            setGenerating(true);
+            abortRef.current = new AbortController();
+
+            const prompt = `Eres un generador de contenido pedagógico para Periplo, plataforma de idiomas para hispanohablantes aprendiendo inglés.
+
+Genera exactamente ${aiCount} ejercicios de reconstrucción de oraciones. El alumno ve la frase en español y debe ordenar los tokens en inglés en el orden correcto.
+
+Tema / gramática objetivo: ${aiTopic || 'frases cotidianas de alto impacto — sujetos explícitos, auxiliares, present perfect'}
+
+REGLAS ESTRICTAS:
+- Los signos de puntuación son tokens separados (ej: "?" o "." van solos al final)
+- Máximo 9 tokens por ejercicio
+- Enfatiza contrastes ES→EN: sujetos implícitos en español que son explícitos en inglés (I, you, it, we), auxiliares (do, does, have, can, is), negaciones (don't, doesn't, can't)
+- emoji: un solo emoji visual que sirva como pista de contexto
+- Oraciones de uso real, no artificiales
+
+Responde ÚNICAMENTE con un array JSON sin markdown ni explicación:
+[{"spanish":"...","english_tokens":["...","..."],"emoji":"..."}]`;
+
+            try {
+                const raw = await AI.callGemini({ apiKey, model: selectedModel, prompt, signal: abortRef.current.signal });
+                const match = raw.match(/\[[\s\S]*?\]/);
+                if (match) {
+                    const parsed = JSON.parse(match[0]);
+                    const added = parsed.map(e => ({
+                        id: genId(),
+                        spanish: e.spanish || '',
+                        english: (e.english_tokens || []).join(' '),
+                        english_tokens: e.english_tokens || [],
+                        emoji: e.emoji || '',
+                        imageData: null
+                    }));
+                    setExercises(prev => [...prev.filter(e => e.spanish.trim()), ...added]);
+                    setShowAiPanel(false);
+                }
+            } catch (e) {
+                if (e.name !== 'AbortError') console.error(e);
+            }
+            setGenerating(false);
+        };
+
+        const handleSave = async () => {
+            if (!title.trim()) { alert('Ponle un título al mazo'); return; }
+            const toSave = exercises
+                .filter(e => e.spanish.trim() && e.english_tokens.length > 0)
+                .map(({ english, ...rest }) => rest);
+            if (!toSave.length) { alert('Agrega al menos un ejercicio completo (español + inglés)'); return; }
+
+            setSaving(true);
+            const payload = {
+                title: title.trim(),
+                type: 'SPELL_PHRASE',
+                content: { exercises: toSave },
+                cardCount: toSave.length,
+                uid: TEACHER_UID,
+                updatedAt: serverTimestamp()
+            };
+            try {
+                let id = savedId;
+                if (id) {
+                    await updateDoc(doc(db, QUIZZES_PATH, id), payload);
+                } else {
+                    const ref = await addDoc(collection(db, QUIZZES_PATH), payload);
+                    id = ref.id;
+                    setSavedId(id);
+                    window.history.replaceState({}, '', `?id=${id}&uid=${TEACHER_UID}`);
+                }
+                setShowModal(true);
+            } catch (e) {
+                console.error(e);
+                alert('Error guardando. Verifica la conexión.');
+            }
+            setSaving(false);
+        };
+
+        const studentLink = savedId
+            ? `${window.location.origin}/spell-the-phrase.html?id=${savedId}&uid=${TEACHER_UID}`
+            : '';
+
+        const copyLink = () => {
+            navigator.clipboard.writeText(studentLink).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+            });
+        };
+
+        if (loading) return (
+            <div className="min-h-screen w-screen flex items-center justify-center bg-zinc-950">
+                <div className="w-10 h-10 border-4 border-violet-500 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+        );
+
+        const validCount = exercises.filter(e => e.spanish.trim() && e.english_tokens.length).length;
+
+        return (
+            <div className="min-h-screen bg-zinc-950 flex flex-col" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+
+                {/* HEADER */}
+                <header className="sticky top-0 z-30 bg-zinc-950 border-b border-zinc-800 flex items-center gap-3 px-4 sm:px-6 py-3">
+                    <button
+                        onClick={() => { window.location.href = BACK_URL; }}
+                        className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 shrink-0 hover:bg-indigo-500 transition-colors active:scale-95"
+                    >
+                        P
+                    </button>
+                    <div className="hidden sm:block w-px h-8 bg-zinc-800 shrink-0" />
+                    <div className="shrink-0">
+                        <h1 className="text-base font-black text-white leading-none tracking-tight">Spell the Phrase</h1>
+                        <p className="text-[10px] font-bold uppercase tracking-widest mt-1 text-violet-400">Editor de mazos</p>
+                    </div>
+
+                    <div className="flex-1 flex justify-end items-center gap-2 min-w-0">
+                        <ApiKeyBar
+                            variant="compact"
+                            accentBtn="bg-violet-500 hover:bg-violet-400 text-white"
+                            apiKey={apiKey}
+                            setApiKey={(k) => { setApiKey(k); AI.saveKey(k); }}
+                            models={availableModels}
+                            selectedModel={selectedModel}
+                            setSelectedModel={setSelectedModel}
+                            isLoading={loadingModels}
+                            onFetch={fetchModels}
+                            onClear={() => { setAvailableModels([]); setSelectedModel(''); AI.clearKey(); setApiKey(''); }}
+                        />
+                        {savedId && (
+                            <button
+                                onClick={() => setShowModal(true)}
+                                className="hidden sm:flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-xs transition-colors border border-zinc-700 shrink-0"
+                            >
+                                <Link2 size={13} /> Link alumno
+                            </button>
+                        )}
+                        <button
+                            onClick={handleSave}
+                            disabled={saving}
+                            className="flex items-center gap-2 px-4 py-2.5 bg-violet-500 hover:bg-violet-400 text-white rounded-xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-violet-500/20 disabled:opacity-60 shrink-0"
+                        >
+                            {saving
+                                ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</>
+                                : <><Save size={14} /> Guardar</>
+                            }
+                        </button>
+                    </div>
+                </header>
+
+                {/* BODY */}
+                <div className="flex-1 max-w-3xl w-full mx-auto px-4 sm:px-6 py-6 flex flex-col gap-5">
+
+                    {/* TÍTULO */}
+                    <input
+                        type="text"
+                        value={title}
+                        onChange={e => setTitle(e.target.value)}
+                        placeholder="Título del mazo... (ej: Present Perfect — Cotidiano)"
+                        className="w-full bg-zinc-900 border border-zinc-800 focus:border-violet-500 rounded-2xl px-5 py-4 text-lg font-black text-white outline-none transition-colors placeholder:text-zinc-700"
+                    />
+
+                    {/* PANEL IA */}
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+                        <button
+                            onClick={() => setShowAiPanel(p => !p)}
+                            className="w-full flex items-center justify-between px-5 py-4 hover:bg-zinc-800/40 transition-colors"
+                        >
+                            <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 bg-amber-500/10 rounded-xl flex items-center justify-center">
+                                    <Sparkles size={16} className="text-amber-400" />
+                                </div>
+                                <span className="font-black text-white text-sm">Generar ejercicios con IA</span>
+                            </div>
+                            {showAiPanel
+                                ? <ChevronUp size={16} className="text-zinc-500" />
+                                : <ChevronDown size={16} className="text-zinc-500" />
+                            }
+                        </button>
+
+                        {showAiPanel && (
+                            <div className="px-5 pb-5 border-t border-zinc-800 flex flex-col gap-3 pt-4">
+                                <p className="text-zinc-500 text-xs font-medium">Describe el tema o gramática que quieres practicar.</p>
+                                <input
+                                    type="text"
+                                    value={aiTopic}
+                                    onChange={e => setAiTopic(e.target.value)}
+                                    placeholder="ej: present perfect, preguntas con Do/Does, negaciones con don't, sujeto implícito..."
+                                    className="w-full bg-zinc-950 border border-zinc-800 focus:border-amber-500 rounded-xl px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-zinc-700 font-medium"
+                                />
+                                <div className="flex items-center gap-3 flex-wrap">
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                        <span className="text-zinc-500 text-xs font-bold mr-1">Cantidad:</span>
+                                        {[5, 10, 15, 20].map(n => (
+                                            <button key={n} onClick={() => setAiCount(n)}
+                                                className={`w-9 h-8 rounded-lg font-black text-sm transition-colors ${aiCount === n ? 'bg-amber-500 text-black' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>
+                                                {n}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <button
+                                        onClick={generateWithAI}
+                                        disabled={generating || !apiKey || !selectedModel}
+                                        className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-400 text-black rounded-xl font-black text-sm transition-all active:scale-95 disabled:opacity-50 min-w-[160px]"
+                                    >
+                                        {generating
+                                            ? <><RefreshCw size={14} className="animate-spin" /> Generando...</>
+                                            : <><Sparkles size={14} /> Generar {aiCount} ejercicios</>
+                                        }
+                                    </button>
+                                </div>
+                                {!apiKey && (
+                                    <p className="text-amber-500/70 text-xs font-bold text-center">
+                                        ⚠️ Agrega tu API key de Gemini en el header para usar la IA
+                                    </p>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* LISTA DE EJERCICIOS */}
+                    <div className="flex flex-col gap-3">
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                Ejercicios{' '}
+                                <span className="text-violet-400">{validCount}</span>
+                                {exercises.length !== validCount && (
+                                    <span className="text-zinc-700"> / {exercises.length} filas</span>
+                                )}
+                            </h2>
+                            <span className="text-[10px] text-zinc-700 font-medium hidden sm:block">
+                                Inglés separado por espacios → tokens automáticos
+                            </span>
+                        </div>
+
+                        {exercises.map((ex, idx) => (
+                            <ExerciseRow
+                                key={ex.id}
+                                ex={ex}
+                                idx={idx}
+                                onChange={updateExercise}
+                                onRemove={(i) => setExercises(prev => prev.filter((_, j) => j !== i))}
+                                apiKey={apiKey}
+                            />
+                        ))}
+
+                        <button
+                            onClick={() => setExercises(prev => [...prev, newEx()])}
+                            className="w-full py-4 border-2 border-dashed border-zinc-800 hover:border-violet-500/40 rounded-2xl text-zinc-600 hover:text-violet-400 font-bold text-sm transition-all flex items-center justify-center gap-2"
+                        >
+                            <Plus size={16} /> Agregar ejercicio
+                        </button>
+                    </div>
+
+                    {/* SAVE BOTTOM (mobile redundant but handy) */}
+                    <div className="pb-8">
+                        <button
+                            onClick={handleSave}
+                            disabled={saving}
+                            className="w-full py-4 bg-violet-500 hover:bg-violet-400 text-white rounded-2xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-violet-500/20 disabled:opacity-60 flex items-center justify-center gap-2"
+                        >
+                            {saving
+                                ? <><RefreshCw size={15} className="animate-spin" /> Guardando...</>
+                                : <><Save size={15} /> Guardar mazo ({validCount} ejercicios)</>
+                            }
+                        </button>
+                    </div>
+
+                </div>
+
+                {/* MODAL POST-SAVE */}
+                {showModal && savedId && (
+                    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] max-w-sm w-full p-6 flex flex-col items-center gap-4 shadow-2xl fade-in">
+                            <div className="w-14 h-14 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center justify-center">
+                                <CheckCircle2 size={28} className="text-emerald-400" />
+                            </div>
+                            <div className="text-center">
+                                <h3 className="text-xl font-black text-white mb-1">¡Guardado!</h3>
+                                <p className="text-zinc-500 text-sm font-medium">{validCount} ejercicios listos.</p>
+                            </div>
+
+                            <div className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-3 flex items-center gap-2">
+                                <span className="flex-1 text-[11px] text-zinc-400 font-mono truncate">{studentLink}</span>
+                                <button
+                                    onClick={copyLink}
+                                    className={`shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg font-black text-xs transition-all ${copied ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}
+                                >
+                                    {copied ? <><CheckCircle2 size={12} /> ¡Copiado!</> : <><Copy size={12} /> Copiar</>}
+                                </button>
+                            </div>
+
+                            <div className="flex gap-3 w-full">
+                                <a
+                                    href={studentLink}
+                                    target="_blank"
+                                    className="flex-1 flex items-center justify-center gap-2 py-3 bg-violet-500 hover:bg-violet-400 text-white rounded-xl font-black text-sm transition-all active:scale-95"
+                                >
+                                    <ExternalLink size={14} /> Abrir juego
+                                </a>
+                                <button
+                                    onClick={() => setShowModal(false)}
+                                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-sm transition-all"
+                                >
+                                    Cerrar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+            </div>
+        );
+    }
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<DashboardSTP />);
+</script>
+</body>
+</html>
