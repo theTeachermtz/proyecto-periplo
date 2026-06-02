@@ -7,7 +7,7 @@ window.PERIPLO_TAXONOMY = (() => {
         basic: {
             grammar:     ["Modal Verbs","Present Simple","Present Continuous","Future (Going to)","Otro"],
             verbs:       ["Pack 1: Daily Routine","Pack 2: Home & Communication","Pack 3: Travel & Conflict","Pack 4: Business & Emotion","Pack 5: Action & Strategy","Pack 6: Thoughts & Senses","Pack 7: Social & Science","Pack 8: Corporate & Economy","Pack 9: Medical & Survival","Otro"],
-            nouns:       ["Pack 1: Modern Nomad","Pack 2: Hungry Traveler","Pack 3: Daily Grind","Pack 4: Urban Chaos","Pack 5: Weekend Getaway","Otro"],
+            nouns:       ["Pack 1: Modern Nomad","Pack 2: Hungry Traveler","Pack 3: Daily Grind","Pack 4: Urban Chaos","Pack 5: Weekend Getaway","Pack 6: Mind & Senses","Pack 7: Society & Lab","Pack 8: Money & Power","Pack 9: Body & Survival","Otro"],
             adjectives:  ["Pack 1: Personality & Looks","Pack 2: Feelings & State","Pack 3: Places & Vibes","Pack 4: The -ed/-ing Trap","Pack 5: Opinions & Taste","Otro"],
             key_structs: ["WH Questions","FANBOYS & Correlative","Subordinating Conj.","Prep. Time","Prep. Place","Prep. Movement & Other","Possessive & Object Pron.","Quantifiers","Frequency Adverbs","Otro"],
             otro:        ["Otro"]
@@ -15,7 +15,7 @@ window.PERIPLO_TAXONOMY = (() => {
         advanced: {
             grammar:     ["Past Simple","Second Conditional","Past Continuous","Past Future Intention","Otro"],
             verbs:       ["Irregular A-F","Irregular G-M","Irregular R-S","Irregular T-W","Regular /t/ Sound","Regular /d/ Sound","Regular /ɪd/ Sound","Otro"],
-            nouns:       ["Pack 1: Success & Failure","Pack 2: Truth & Lies","Pack 3: Media & Ent.","Pack 4: Compound Nouns","Pack 5: Env. & Science","Otro"],
+            nouns:       ["Pack 1: Success & Failure","Pack 2: Truth & Lies","Pack 3: Media & Entertainment","Pack 4: Regrets & Turning Points","Pack 5: Attraction & Identity","Pack 6: Ambition & Competition","Pack 7: Mystery & Crime","Pack 8: Systems & Society","Otro"],
             adjectives:  ["Short Comparatives","Long Comparatives","Irregular Comparatives","Superlatives","Otro"],
             key_structs: ["Used to / Use to","Comparative Rules","Superlative Rules","Idiomatic Expressions","Possessive Nouns","Relative Clauses","Modals of Possibility","Passive Voice","Otro"],
             otro:        ["Otro"]

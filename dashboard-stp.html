@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard · Spell the Phrase | Periplo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' };</script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="periplo-ai.js"></script>
+    <link rel="stylesheet" href="periplo.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
+        html, body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; height: 100%; overflow: hidden; }
+        button, a { user-select: none; -webkit-user-select: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.2s ease-out; }
+    </style>
+</head>
+<body class="text-zinc-100 dark">
+<div id="root" style="height:100%"></div>
+<script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useRef, useMemo } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { initializeApp } from 'firebase/app';
+    import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
+    import {
+        Plus, Trash2, Save, Link2, RefreshCw, Sparkles,
+        Copy, ExternalLink, CheckCircle2, ShoppingCart
+    } from 'lucide-react';
+
+    const FIREBASE_CONFIG = {
+        apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+        authDomain: "proyecto-periplo.firebaseapp.com",
+        projectId: "proyecto-periplo",
+        storageBucket: "proyecto-periplo.firebasestorage.app",
+        messagingSenderId: "236795998392",
+        appId: "1:236795998392:web:0da24b4f018611b55c844d"
+    };
+    const app = initializeApp(FIREBASE_CONFIG);
+    const db  = getFirestore(app);
+
+    const urlParams    = new URLSearchParams(window.location.search);
+    const TEACHER_UID  = urlParams.get('uid') || 'teacher_builder_001';
+    const QUIZ_ID      = urlParams.get('id')  || null;
+    const BACK_URL     = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html' : 'index.html';
+    const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
+
+    const genId = () => Math.random().toString(36).slice(2, 9);
+
+    // ── Curriculum (grammar + verbs por nivel) ───────────────────────────────────
+    const CURRICULUM = {
+      basic: {
+        label: 'Basic',
+        grammar: [
+          { id: 'Modal Verbs',        words: ['can','could','should','must','may','might','would','have to','be able to'] },
+          { id: 'Present Simple',     words: ['do','does',"don't","doesn't",'always','never','usually','often','sometimes'] },
+          { id: 'Present Continuous', words: ['am','is','are','now','right now','at the moment','currently','still'] },
+          { id: 'Future (Going to)',  words: ['going to','tomorrow','next week','soon','later','tonight','plan','intend'] },
+        ],
+        verbs: [
+          { id: 'VP1: Daily Routine',        words: ['wake up','shower','prepare','take','pick up','get','start','work','help','send','attend','drive','fill up','review','sell','upload','download','leave','make','do','visit','walk','own','feed','go','see','sleep','bring','buy','lend'] },
+          { id: 'VP2: Home & Communication', words: ['get in','get out','agree','dance','arrive','practice','say','tell','speak','talk','rest','close','write','read','call','answer','wait for','meet','check','find','look for','eat','drink','cook','clean','wash','turn on','turn off','use','brush'] },
+          { id: 'VP3: Travel & Conflict',    words: ['open','confirm','continue','improve','change','navigate','fix','lose','find out','forget','remember','watch','rain','travel','teach','stay','move','return','cancel','pack','depart','tour','worry','trust','join','share','avoid','book','imagine','come'] },
+          { id: 'VP4: Business & Emotion',   words: ['complain','request','explain','recommend','let know','collect','sign','promise','discuss','receive','deliver','order','build','repair','design','manage','organize','support','follow','verify','celebrate','sing','understand','learn','listen','laugh','cry','borrow','finish','know'] },
+          { id: 'VP5: Action & Strategy',    words: ['dream','complete','report','solve','submit','suggest','warn','wonder','choose','plan','repeat','accomplish','relax','compare','park','plug','carry','pay','switch','push','pull','show','save','raise','go down','increase','reduce','hand','reach','pass'] },
+          { id: 'VP6: Thoughts & Senses',    words: ['think','believe','feel','want','need','love','hate','prefer','hope','enjoy','decide','allow','prevent','protect','handle','perform','develop','grow','replace','throw','catch','sit','stand','jump','run','hide','taste','smell','touch','bite'] },
+          { id: 'VP7: Social & Science',     words: ['invite','accept','refuse','admit','deny','offer','demand','advise','encourage','mention','describe','identify','realize','recognize','suppose','guess','measure','weigh','fit','suit','match','fill','empty','burn','freeze','melt','mix','connect','beat','fail'] },
+          { id: 'VP8: Corporate & Economy',  words: ['hire','fire','earn','spend','invest','owe','promote','retire','resign','operate','produce','manufacture','distribute','store','export','import','inspect','negotiate','persuade','convince','represent','regulate','govern','vote','resolve','cooperate','compete','win','criticize','gain'] },
+          { id: 'VP9: Medical & Survival',   words: ['cure','heal','suffer','bleed','recover','examine','diagnose','prescribe','treat','board','land','take off','reserve','accommodate','check in','check out','explore','guide','wander','escape','survive','attack','defend','fight','greet','introduce','appreciate','forgive','praise'] },
+        ]
+      },
+      advanced: {
+        label: 'Advanced',
+        grammar: [
+          { id: 'Past Simple',           words: ['did',"didn't",'was','were','yesterday','last week','ago','went','saw','had','became','thought'] },
+          { id: 'Second Conditional',    words: ['if I were','would','could','might','I wish','what if','suppose','hypothetical','unreal'] },
+          { id: 'Past Continuous',       words: ['was','were',"wasn't","weren't",'while','when','at that time','all day','happening','in the middle of'] },
+          { id: 'Past Future Intention', words: ['was going to','were going to','was about to','planned to','intended to','supposed to','hoped to','meant to'] },
+        ],
+        verbs: [
+          { id: 'Irregular A-F',      words: ['be/was/been','become/became','begin/began','break/broke','bring/brought','build/built','buy/bought','come/came','do/did/done','drive/drove','eat/ate','fall/fell','feel/felt','find/found','fly/flew','forget/forgot'] },
+          { id: 'Irregular G-M',      words: ['get/got','give/gave','go/went','grow/grew','have/had','hear/heard','know/knew','leave/left','lose/lost','make/made','meet/met','pay/paid','read/read','ride/rode','ring/rang'] },
+          { id: 'Irregular R-S',      words: ['run/ran','say/said','see/saw','sell/sold','send/sent','sit/sat','sleep/slept','speak/spoke','spend/spent','stand/stood','steal/stole','swim/swam','take/took','teach/taught','tell/told','think/thought'] },
+          { id: 'Irregular T-W',      words: ['throw/threw','understand/understood','wake/woke','wear/wore','win/won','write/wrote'] },
+          { id: 'Regular /t/ Sound',  words: ['asked','cooked','finished','fixed','helped','laughed','looked','passed','picked','pushed','reached','relaxed','stopped','walked','washed'] },
+          { id: 'Regular /d/ Sound',  words: ['answered','arrived','called','changed','cleaned','enjoyed','explained','followed','improved','learned','lived','loved','moved','prepared','remembered','returned'] },
+          { id: 'Regular /ɪd/ Sound', words: ['accepted','attended','avoided','completed','created','decided','ended','expected','invited','landed','needed','painted','protected','started','visited'] },
+        ]
+      },
+      pro: {
+        label: 'Pro',
+        grammar: [
+          { id: 'Present/Past Perfect', words: ['have done','has been','had finished',"haven't seen",'just','already','yet','have you ever'] },
+          { id: 'Perfect Continuous',   words: ['have been working','has been living','had been waiting','since morning','for hours','all day long'] },
+          { id: 'Third Conditional',    words: ['if I had known','would have gone','could have been','might have said',"wouldn't have happened"] },
+          { id: 'Mixed Conditionals',   words: ['if I had studied, I would be','if she were braver, she would have','if he had trained, he would be'] },
+        ],
+        verbs: [
+          { id: 'Phrasal Verbs Pro',      words: ['look into','come across','turn down','put off','bring up','carry out','break down','figure out','give up','keep up','let down','make up','point out','set up','stand out','take over','work out','come up with','cut down','drop off'] },
+          { id: 'Idiomatic Expressions',  words: ['bite the bullet','burn bridges','cost an arm and a leg','get cold feet','hit the nail on the head','in the same boat','jump the gun','miss the boat','spill the beans','throw in the towel','beat around the bush','break a leg'] },
+          { id: 'Advanced Collocations',  words: ['make a decision','take responsibility','pay attention','keep a promise','lose your temper','make an effort','raise awareness','face the consequences','make progress','take into account','have an impact','make sense'] },
+        ]
+      }
+    };
+
+    // ── Exercise card (display like fc.html) ────────────────────────────────────
+    const ExerciseCard = ({ ex, idx, onRemove }) => (
+        <div className="flex gap-3 items-center bg-zinc-950 border border-zinc-800 rounded-2xl p-3 group hover:border-zinc-700 transition-colors fade-in">
+            <div className="shrink-0 w-12 h-12 rounded-xl overflow-hidden bg-zinc-900 border border-zinc-800 flex items-center justify-center text-2xl">
+                {ex.imageData
+                    ? <img src={ex.imageData} className="w-full h-full object-cover" alt="" />
+                    : <span>{ex.emoji || '📝'}</span>
+                }
+            </div>
+            <div className="flex-1 min-w-0">
+                <p className="text-white font-bold text-sm leading-snug">{ex.spanish}</p>
+                <div className="flex flex-wrap gap-1 mt-1.5 items-center">
+                    <span className="px-2 py-0.5 bg-emerald-500/15 border border-emerald-500/25 text-emerald-300 rounded-lg text-xs font-bold">✏️ {ex.blank_part}</span>
+                    {ex.given_part && (
+                        <span className="px-2 py-0.5 bg-zinc-700/50 border border-zinc-700 text-zinc-400 rounded-lg text-xs font-bold">🎁 {ex.given_part}</span>
+                    )}
+                </div>
+            </div>
+            <span className="shrink-0 text-[10px] font-black text-zinc-700 tabular-nums w-5 text-right">{idx + 1}</span>
+            <button onClick={() => onRemove(idx)}
+                className="shrink-0 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-zinc-600 hover:text-rose-400 hover:bg-rose-500/10 transition-all">
+                <Trash2 size={14} />
+            </button>
+        </div>
+    );
+
+    // ── Dashboard ────────────────────────────────────────────────────────────────
+    export default function DashboardSTP() {
+        const AI        = window.PERIPLO_AI;
+        const ApiKeyBar = AI.createApiKeyBar(React);
+
+        // Exercise state
+        const [title,     setTitle]     = useState('');
+        const [exercises, setExercises] = useState([]);
+        const [saving,    setSaving]    = useState(false);
+        const [savedId,   setSavedId]   = useState(QUIZ_ID);
+        const [showModal, setShowModal] = useState(false);
+        const [loading,   setLoading]   = useState(!!QUIZ_ID);
+        const [copied,    setCopied]    = useState(false);
+
+        // API state
+        const [apiKey,          setApiKey]          = useState('');
+        const [availableModels, setAvailableModels] = useState([]);
+        const [selectedModel,   setSelectedModel]   = useState('');
+        const [loadingModels,   setLoadingModels]   = useState(false);
+        const [generating,      setGenerating]      = useState(false);
+        const abortRef = useRef(null);
+
+        // Ingredient state — grammar and verbs have independent levels
+        const [grammarLevel,      setGrammarLevel]      = useState('basic');
+        const [verbLevel,         setVerbLevel]         = useState('basic');
+        const [activeTab,         setActiveTab]         = useState('grammar');
+        const [selectedGrammars,  setSelectedGrammars]  = useState([]);   // multi-select
+        const [selectedVerbPacks, setSelectedVerbPacks] = useState([]);   // multi-select
+        const [excludedWords,     setExcludedWords]     = useState(new Set());
+        const [useCustomVerbs,    setUseCustomVerbs]    = useState(false);
+        const [customVerbs,       setCustomVerbs]       = useState('');
+        const [aiTopic,           setAiTopic]           = useState('');
+        const [aiCount,           setAiCount]           = useState(10);
+
+        // Manual add
+        const [manualEs,    setManualEs]    = useState('');
+        const [manualBlank, setManualBlank] = useState('');
+        const [manualGiven, setManualGiven] = useState('');
+
+        useEffect(() => {
+            const k = AI.loadKey();
+            if (k) setApiKey(k);
+            if (!QUIZ_ID) { setLoading(false); return; }
+            getDoc(doc(db, QUIZZES_PATH, QUIZ_ID))
+                .then(snap => {
+                    if (snap.exists()) {
+                        const d = snap.data();
+                        setTitle(d.title || '');
+                        const exs = (d.content?.exercises || []).map(e => ({
+                            ...e, id: e.id || genId(),
+                            // backward compat: old format had english_tokens
+                            blank_part: e.blank_part || (e.english_tokens || []).join(' '),
+                            given_part: e.given_part || ''
+                        }));
+                        setExercises(exs);
+                    }
+                    setLoading(false);
+                })
+                .catch(() => setLoading(false));
+        }, []);
+
+        const fetchModels = async () => {
+            if (!apiKey) return;
+            setLoadingModels(true);
+            try {
+                const m = await AI.fetchModels(apiKey);
+                setAvailableModels(m);
+                setSelectedModel(AI.pickPreferredModel(m));
+            } catch (e) { console.error(e); }
+            setLoadingModels(false);
+        };
+
+        const toggleGrammarPack = (id) =>
+            setSelectedGrammars(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+        const toggleVerbPack = (id) =>
+            setSelectedVerbPacks(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+        const toggleWord = (w) => setExcludedWords(prev => {
+            const next = new Set(prev);
+            if (next.has(w)) next.delete(w); else next.add(w);
+            return next;
+        });
+
+        // Derived word pools
+        const grammarWordPool = Object.values(CURRICULUM)
+            .flatMap(lvl => lvl.grammar)
+            .filter(p => selectedGrammars.includes(p.id))
+            .flatMap(p => p.words);
+
+        const verbWordPool = useCustomVerbs
+            ? []
+            : selectedVerbPacks.flatMap(id =>
+                CURRICULUM[verbLevel].verbs.find(v => v.id === id)?.words || []
+              );
+
+        const activeGrammarWords = grammarWordPool.filter(w => !excludedWords.has(w));
+        const activeVerbWords    = useCustomVerbs
+            ? customVerbs.split(/[,\n]+/).map(v => v.trim()).filter(Boolean)
+            : verbWordPool.filter(w => !excludedWords.has(w));
+
+        const generateWithAI = async () => {
+            if (!apiKey || !selectedModel) return;
+            setGenerating(true);
+            abortRef.current = new AbortController();
+
+            let currBlock = '';
+            if (activeGrammarWords.length || activeVerbWords.length) {
+                const parts = [];
+                if (activeGrammarWords.length) parts.push(`ESTRUCTURA GRAMATICAL (${selectedGrammars.join(' + ')}): ${activeGrammarWords.join(', ')}`);
+                if (activeVerbWords.length)    parts.push(`VERBOS A USAR: ${activeVerbWords.join(', ')}`);
+                currBlock = `\n\nCONTEXTO CURRICULAR (obligatorio):\n${parts.join('\n')}\n\nINSTRUCCIÓN: Usa los verbos listados conjugados con la estructura gramatical. Sujeto explícito en inglés (I, you, she, we...). Varía sujetos — no todos "I".`;
+            }
+
+            const prompt = `Eres un generador de contenido pedagógico para Periplo, plataforma de idiomas para hispanohablantes aprendiendo inglés.
+
+Genera exactamente ${aiCount} ejercicios "Fill the Phrase". El alumno ve la frase en español y TECLEA la parte gramatical (blank_part). El complemento se muestra (given_part).
+
+Tema / contexto: ${aiTopic || 'frases cotidianas de alto impacto'}${currBlock}
+
+REGLAS:
+- blank_part: SOLO la estructura gramatical objetivo (máx 4 palabras). Ej: "I was working", "She would have known", "They used to", "If I had studied"
+- given_part: el complemento/resto de la oración. Ej: "at the office.", "about that.", "go there every day."
+- Sujeto siempre explícito en inglés (I, you, she...) aunque en español sea implícito. Varía sujetos.
+- emoji: un solo emoji visual como pista de contexto
+- Oraciones naturales de uso real
+
+Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
+[{"spanish":"...","blank_part":"...","given_part":"...","emoji":"..."}]`;
+
+            try {
+                const raw = await AI.callGemini({ apiKey, model: selectedModel, prompt, signal: abortRef.current.signal });
+                const match = raw.match(/\[[\s\S]*\]/);
+                if (match) {
+                    const parsed = JSON.parse(match[0]);
+                    const added = parsed.map(e => ({
+                        id: genId(),
+                        spanish: e.spanish || '',
+                        blank_part: e.blank_part || '',
+                        given_part: e.given_part || '',
+                        emoji: e.emoji || '',
+                        imageData: null
+                    }));
+                    setExercises(prev => [...prev, ...added]);
+                    if (!title && selectedGrammars.length)
+                        setTitle(`${selectedGrammars.join(' + ')} — ${CURRICULUM[grammarLevel].label}`);
+                }
+            } catch (e) {
+                if (e.name !== 'AbortError') console.error(e);
+            }
+            setGenerating(false);
+        };
+
+        const addManual = () => {
+            if (!manualEs.trim() || !manualBlank.trim()) return;
+            setExercises(prev => [...prev, {
+                id: genId(),
+                spanish: manualEs.trim(),
+                blank_part: manualBlank.trim(),
+                given_part: manualGiven.trim(),
+                emoji: '',
+                imageData: null
+            }]);
+            setManualEs(''); setManualBlank(''); setManualGiven('');
+        };
+
+        const removeExercise = (idx) => setExercises(prev => prev.filter((_, i) => i !== idx));
+        const clearAll       = ()    => { if (confirm('¿Vaciar todos los ejercicios?')) setExercises([]); };
+
+        const handleSave = async () => {
+            if (!title.trim()) { alert('Ponle un título al mazo'); return; }
+            const toSave = exercises
+                .filter(e => e.spanish.trim() && e.blank_part?.trim())
+                .map(({ ...rest }) => rest);
+            if (!toSave.length) { alert('Agrega al menos un ejercicio completo'); return; }
+            setSaving(true);
+            try {
+                const payload = {
+                    title: title.trim(), type: 'SPELL_PHRASE',
+                    content: { exercises: toSave }, cardCount: toSave.length,
+                    uid: TEACHER_UID, updatedAt: serverTimestamp()
+                };
+                let id = savedId;
+                if (id) {
+                    await updateDoc(doc(db, QUIZZES_PATH, id), payload);
+                } else {
+                    const ref = await addDoc(collection(db, QUIZZES_PATH), payload);
+                    id = ref.id; setSavedId(id);
+                    window.history.replaceState({}, '', `?id=${id}&uid=${TEACHER_UID}`);
+                }
+                setShowModal(true);
+            } catch (e) { console.error(e); alert('Error guardando.'); }
+            setSaving(false);
+        };
+
+        const studentLink = savedId
+            ? `${window.location.origin}/spell-the-phrase.html?id=${savedId}&uid=${TEACHER_UID}`
+            : '';
+        const copyLink = () => {
+            navigator.clipboard.writeText(studentLink).then(() => {
+                setCopied(true); setTimeout(() => setCopied(false), 2000);
+            });
+        };
+
+        const validCount = exercises.filter(e => e.spanish.trim() && e.blank_part?.trim()).length;
+
+        const autoTitle = useMemo(() => {
+            if (title) return title;
+            if (selectedGrammars.length) return `${selectedGrammars.join(' + ')} — ${CURRICULUM[grammarLevel].label}`;
+            return 'Nuevo Spell the Phrase';
+        }, [title, selectedGrammars, grammarLevel]);
+
+        if (loading) return (
+            <div style={{height:'100%'}} className="flex items-center justify-center bg-zinc-950">
+                <div className="w-10 h-10 border-4 border-violet-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+        );
+
+        return (
+            <div className="flex flex-col bg-zinc-950" style={{ height: '100%', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+
+                {/* ── HEADER ─────────────────────────────────────────────────────── */}
+                <header className="bg-zinc-950 border-b border-zinc-800 flex items-center gap-3 px-4 sm:px-6 py-3 shrink-0 z-10">
+                    <button onClick={() => { window.location.href = BACK_URL; }}
+                        className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 hover:bg-indigo-500 transition-colors shrink-0">
+                        P
+                    </button>
+                    <div className="hidden sm:block w-px h-8 bg-zinc-800 shrink-0" />
+                    <div className="shrink-0">
+                        <h1 className="text-base font-black text-white leading-none tracking-tight">Spell the Phrase</h1>
+                        <p className="text-[10px] font-bold uppercase tracking-widest mt-1 text-violet-400">Editor de mazos</p>
+                    </div>
+                    <div className="flex-1 flex justify-end items-center gap-2">
+                        <ApiKeyBar
+                            variant="compact"
+                            accentBtn="bg-violet-500 hover:bg-violet-400 text-white"
+                            apiKey={apiKey}
+                            setApiKey={(k) => { setApiKey(k); AI.saveKey(k); }}
+                            models={availableModels}
+                            selectedModel={selectedModel}
+                            setSelectedModel={setSelectedModel}
+                            isLoading={loadingModels}
+                            onFetch={fetchModels}
+                            onClear={() => { setAvailableModels([]); setSelectedModel(''); AI.clearKey(); setApiKey(''); }}
+                        />
+                    </div>
+                </header>
+
+                {/* ── TWO-PANEL BODY ──────────────────────────────────────────────── */}
+                <div className="flex flex-1 overflow-hidden">
+
+                    {/* ── LEFT: Ingredient selector ──────────────────────────────── */}
+                    <div className="w-full md:w-[42%] xl:w-[38%] border-b md:border-b-0 md:border-r border-zinc-800 flex flex-col bg-zinc-950 h-[45%] md:h-full">
+
+                        <div className="p-4 border-b border-zinc-800 shrink-0">
+                            <h2 className="font-black text-sm flex items-center gap-2 text-white">
+                                <Sparkles size={15} className="text-amber-400" />
+                                Ingredientes
+                            </h2>
+                            <p className="text-[10px] text-zinc-500 font-bold mt-0.5">Gramática + Verbos → Generar</p>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 space-y-5 custom-scrollbar">
+
+                            {/* Category tabs */}
+                            <div>
+                                <div className="flex gap-1 bg-zinc-900 rounded-xl p-1 mb-3">
+                                    {[
+                                        { id: 'grammar', label: '🔤 Gramática' },
+                                        { id: 'verbs',   label: '⚡ Verbos' },
+                                    ].map(tab => (
+                                        <button key={tab.id}
+                                            onClick={() => setActiveTab(tab.id)}
+                                            className={`flex-1 py-2 rounded-lg text-xs font-black transition-all ${activeTab === tab.id ? 'bg-zinc-800 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}
+                                        >{tab.label}</button>
+                                    ))}
+                                </div>
+
+                                {/* Grammar — multi-select */}
+                                {activeTab === 'grammar' && (
+                                    <div className="flex flex-col gap-1.5">
+                                        <div className="flex gap-1 mb-1">
+                                            {Object.entries(CURRICULUM).map(([lv, cv]) => (
+                                                <button key={lv}
+                                                    onClick={() => setGrammarLevel(lv)}
+                                                    className={`flex-1 py-1.5 rounded-lg font-black text-xs transition-all border ${grammarLevel === lv ? 'bg-emerald-600/25 border-emerald-500/50 text-emerald-300' : 'bg-zinc-900 border-zinc-700 text-zinc-500 hover:text-zinc-300'}`}
+                                                >{cv.label}</button>
+                                            ))}
+                                        </div>
+                                        {CURRICULUM[grammarLevel].grammar.map(pack => {
+                                            const isOn = selectedGrammars.includes(pack.id);
+                                            return (
+                                                <button key={pack.id}
+                                                    onClick={() => {
+                                                        const adding = !selectedGrammars.includes(pack.id);
+                                                        toggleGrammarPack(pack.id);
+                                                        if (adding) setExcludedWords(prev => { const n = new Set(prev); pack.words.forEach(w => n.delete(w)); return n; });
+                                                    }}
+                                                    className={`w-full text-left p-3 rounded-xl border-2 font-bold text-sm transition-all active:scale-[0.98] ${isOn ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
+                                                >
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-2">
+                                                            {isOn && <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />}
+                                                            <span>{pack.id}</span>
+                                                        </div>
+                                                        <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isOn ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-600'}`}>
+                                                            {isOn ? '✓' : `${pack.words.length}`}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+
+                                {/* Verbs — multi-select + Otros */}
+                                {activeTab === 'verbs' && (
+                                    <div className="flex flex-col gap-1.5">
+                                        <div className="flex gap-1 mb-1">
+                                            {Object.entries(CURRICULUM).map(([lv, cv]) => (
+                                                <button key={lv}
+                                                    onClick={() => { setVerbLevel(lv); setSelectedVerbPacks([]); setUseCustomVerbs(false); }}
+                                                    className={`flex-1 py-1.5 rounded-lg font-black text-xs transition-all border ${verbLevel === lv ? 'bg-blue-600/25 border-blue-500/50 text-blue-300' : 'bg-zinc-900 border-zinc-700 text-zinc-500 hover:text-zinc-300'}`}
+                                                >{cv.label}</button>
+                                            ))}
+                                        </div>
+                                        {CURRICULUM[verbLevel].verbs.map(pack => {
+                                            const isOn = selectedVerbPacks.includes(pack.id);
+                                            return (
+                                                <button key={pack.id}
+                                                    onClick={() => {
+                                                        const adding = !selectedVerbPacks.includes(pack.id);
+                                                        toggleVerbPack(pack.id);
+                                                        if (adding) setExcludedWords(prev => { const n = new Set(prev); pack.words.forEach(w => n.delete(w)); return n; });
+                                                    }}
+                                                    className={`w-full text-left p-3 rounded-xl border-2 font-bold text-sm transition-all active:scale-[0.98] ${isOn ? 'bg-blue-600/20 border-blue-500 text-blue-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
+                                                >
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-2">
+                                                            {isOn && <CheckCircle2 size={14} className="text-blue-400 shrink-0" />}
+                                                            <span>{pack.id}</span>
+                                                        </div>
+                                                        <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isOn ? 'bg-blue-500/20 text-blue-400' : 'bg-zinc-800 text-zinc-600'}`}>
+                                                            {isOn ? '✓' : `+${pack.words.length}`}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+
+                                        {/* Otros — custom verbs */}
+                                        <button
+                                            onClick={() => setUseCustomVerbs(p => !p)}
+                                            className={`w-full text-left p-3 rounded-xl border-2 font-bold text-sm transition-all ${useCustomVerbs ? 'bg-amber-600/20 border-amber-500 text-amber-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                {useCustomVerbs && <CheckCircle2 size={14} className="text-amber-400 shrink-0" />}
+                                                Otros (personalizado)
+                                            </div>
+                                        </button>
+
+                                        {useCustomVerbs && (
+                                            <textarea
+                                                value={customVerbs}
+                                                onChange={e => setCustomVerbs(e.target.value)}
+                                                placeholder={'Escribe o pega verbos separados por coma o Enter:\ngo, see, want, need, decide...\n\nO pega tu lista directamente.'}
+                                                rows={5}
+                                                className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-sm text-white outline-none transition-colors placeholder:text-zinc-700 font-medium resize-none custom-scrollbar"
+                                            />
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* ── Word pool ──────────────────────────────────────── */}
+                            {(grammarWordPool.length > 0 || verbWordPool.length > 0) && (
+                                <div className="border border-zinc-800 rounded-xl p-3">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                                            Palabras al prompt — {activeGrammarWords.length + activeVerbWords.length} activas
+                                            {excludedWords.size > 0 && <span className="text-rose-500/70 ml-1">· {excludedWords.size} excluidas</span>}
+                                        </span>
+                                        {excludedWords.size > 0 && (
+                                            <button onClick={() => setExcludedWords(new Set())}
+                                                className="text-[9px] font-bold text-zinc-600 hover:text-zinc-400 transition-colors">
+                                                restaurar
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1 max-h-40 overflow-y-auto custom-scrollbar">
+                                        {grammarWordPool.map(w => {
+                                            const off = excludedWords.has(w);
+                                            return (
+                                                <button key={'g-' + w} onClick={() => toggleWord(w)}
+                                                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-all select-none ${off ? 'bg-zinc-800/60 text-zinc-600 line-through' : 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:border-emerald-500/60'}`}>
+                                                    {w}
+                                                </button>
+                                            );
+                                        })}
+                                        {verbWordPool.map(w => {
+                                            const off = excludedWords.has(w);
+                                            return (
+                                                <button key={'v-' + w} onClick={() => toggleWord(w)}
+                                                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-all select-none ${off ? 'bg-zinc-800/60 text-zinc-600 line-through' : 'bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:border-blue-500/60'}`}>
+                                                    {w}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Topic + count + generate */}
+                            <div className="border-t border-zinc-800 pt-4 flex flex-col gap-3">
+                                <div>
+                                    <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Tema / Contexto (opcional)</label>
+                                    <input
+                                        type="text"
+                                        value={aiTopic}
+                                        onChange={e => setAiTopic(e.target.value)}
+                                        placeholder="ej: trabajo en oficina, viaje a México..."
+                                        className="w-full bg-zinc-900 border border-zinc-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-sm text-white outline-none transition-colors placeholder:text-zinc-700 font-medium"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Cantidad</label>
+                                    <div className="flex gap-1.5">
+                                        {[5, 10, 15, 20].map(n => (
+                                            <button key={n} onClick={() => setAiCount(n)}
+                                                className={`flex-1 py-2 rounded-xl font-black text-sm transition-colors ${aiCount === n ? 'bg-amber-500 text-black' : 'bg-zinc-900 text-zinc-400 border border-zinc-700 hover:border-zinc-500'}`}>
+                                                {n}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={generateWithAI}
+                                    disabled={generating || !apiKey || !selectedModel}
+                                    className="w-full flex items-center justify-center gap-2 py-3.5 bg-amber-500 hover:bg-amber-400 text-black rounded-xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-amber-500/20 disabled:opacity-50"
+                                >
+                                    {generating
+                                        ? <><RefreshCw size={16} className="animate-spin" /> Generando...</>
+                                        : <><Sparkles size={16} /> Generar {aiCount} ejercicios</>
+                                    }
+                                </button>
+                                {!apiKey && (
+                                    <p className="text-amber-500/70 text-[11px] font-bold text-center">⚠️ Agrega tu API key de Gemini en el header</p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* ── RIGHT: Exercise cards ───────────────────────────────────── */}
+                    <div className="flex-1 flex flex-col overflow-hidden bg-zinc-900 h-[55%] md:h-full">
+
+                        {/* Right header: title input + actions */}
+                        <div className="p-4 border-b border-zinc-800 flex items-center gap-3 shrink-0 bg-zinc-950/50">
+                            <div className="flex-1 min-w-0">
+                                <input
+                                    type="text"
+                                    value={title}
+                                    onChange={e => setTitle(e.target.value)}
+                                    placeholder={autoTitle}
+                                    className="w-full bg-transparent outline-none text-white font-black text-base placeholder:text-zinc-600"
+                                />
+                                <div className="flex gap-1 mt-1.5 flex-wrap">
+                                    {selectedGrammars.map(id => (
+                                        <span key={id} className="text-[9px] font-black bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-md border border-emerald-500/30">🔤 {id} ({CURRICULUM[grammarLevel].label})</span>
+                                    ))}
+                                    {selectedVerbPacks.map(id => (
+                                        <span key={id} className="text-[9px] font-black bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-md border border-blue-500/30">⚡ {id} ({CURRICULUM[verbLevel].label})</span>
+                                    ))}
+                                    {useCustomVerbs && customVerbs && (
+                                        <span className="text-[9px] font-black bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-md border border-amber-500/30">📝 Verbos personalizados</span>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                                {exercises.length > 0 && (
+                                    <button onClick={clearAll}
+                                        className="p-2 bg-rose-500/10 text-rose-400 rounded-xl hover:bg-rose-500/20 transition-colors">
+                                        <Trash2 size={16} />
+                                    </button>
+                                )}
+                                <div className={`px-3 py-2 rounded-xl text-sm font-black border text-center min-w-[56px] ${validCount >= 5 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>
+                                    {validCount}
+                                    <p className="text-[8px] uppercase font-bold opacity-70">{validCount >= 5 ? '¡Listo!' : 'Total'}</p>
+                                </div>
+                                {savedId && (
+                                    <button onClick={() => setShowModal(true)}
+                                        className="hidden sm:flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-xs transition-colors border border-zinc-700">
+                                        <Link2 size={13} /> Link
+                                    </button>
+                                )}
+                                <button
+                                    onClick={handleSave}
+                                    disabled={saving}
+                                    className="flex items-center gap-2 px-4 py-2 bg-violet-500 hover:bg-violet-400 text-white rounded-xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-violet-500/20 disabled:opacity-60"
+                                >
+                                    {saving
+                                        ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</>
+                                        : <><Save size={14} /> Guardar</>
+                                    }
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Cards area */}
+                        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+
+                            {/* Manual add row */}
+                            <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-3 flex flex-col gap-2 mb-4">
+                                <div>
+                                    <label className="text-[9px] font-black text-zinc-500 uppercase block mb-1">Español</label>
+                                    <input value={manualEs} onChange={e => setManualEs(e.target.value)}
+                                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-amber-500 text-white placeholder:text-zinc-700"
+                                        placeholder="¿Puedes ayudarme?" />
+                                </div>
+                                <div className="flex gap-2 items-end">
+                                    <div className="flex-1">
+                                        <label className="text-[9px] font-black text-emerald-600 uppercase block mb-1">✏️ Parte a teclear</label>
+                                        <input value={manualBlank} onChange={e => setManualBlank(e.target.value)}
+                                            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-emerald-500 text-white placeholder:text-zinc-700"
+                                            placeholder="Can you help" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <label className="text-[9px] font-black text-zinc-500 uppercase block mb-1">🎁 Complemento (dado)</label>
+                                        <input value={manualGiven} onChange={e => setManualGiven(e.target.value)}
+                                            onKeyDown={e => e.key === 'Enter' && addManual()}
+                                            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-zinc-500 text-white placeholder:text-zinc-700"
+                                            placeholder="me?" />
+                                    </div>
+                                    <button onClick={addManual} disabled={!manualEs || !manualBlank}
+                                        className="bg-violet-500 hover:bg-violet-400 disabled:opacity-40 text-white p-2 rounded-lg transition-colors shrink-0">
+                                        <Plus size={18} />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Exercise cards */}
+                            {exercises.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center text-zinc-600 py-16">
+                                    <ShoppingCart size={40} className="mb-3 opacity-40" />
+                                    <p className="font-bold text-sm">Sin ejercicios todavía</p>
+                                    <p className="text-xs mt-1 text-center max-w-xs opacity-70">
+                                        Selecciona gramática + verbos en el panel izquierdo y presiona Generar.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col gap-2 pb-6">
+                                    {exercises.map((ex, idx) => (
+                                        <ExerciseCard key={ex.id} ex={ex} idx={idx} onRemove={removeExercise} />
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* ── POST-SAVE MODAL ─────────────────────────────────────────────── */}
+                {showModal && savedId && (
+                    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] max-w-sm w-full p-6 flex flex-col items-center gap-4 shadow-2xl fade-in">
+                            <div className="w-14 h-14 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center justify-center">
+                                <CheckCircle2 size={28} className="text-emerald-400" />
+                            </div>
+                            <div className="text-center">
+                                <h3 className="text-xl font-black text-white mb-1">¡Guardado!</h3>
+                                <p className="text-zinc-500 text-sm font-medium">{validCount} ejercicios listos.</p>
+                            </div>
+                            <div className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-3 flex items-center gap-2">
+                                <span className="flex-1 text-[11px] text-zinc-400 font-mono truncate">{studentLink}</span>
+                                <button onClick={copyLink}
+                                    className={`shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-lg font-black text-xs transition-all ${copied ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}>
+                                    {copied ? <><CheckCircle2 size={12} /> ¡Copiado!</> : <><Copy size={12} /> Copiar</>}
+                                </button>
+                            </div>
+                            <div className="flex gap-3 w-full">
+                                <a href={studentLink} target="_blank"
+                                    className="flex-1 flex items-center justify-center gap-2 py-3 bg-violet-500 hover:bg-violet-400 text-white rounded-xl font-black text-sm transition-all">
+                                    <ExternalLink size={14} /> Abrir juego
+                                </a>
+                                <button onClick={() => setShowModal(false)}
+                                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-sm">
+                                    Cerrar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+            </div>
+        );
+    }
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<DashboardSTP />);
+</script>
+</body>
+</html>
