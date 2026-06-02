@@ -59,8 +59,7 @@
     const BACK_URL     = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html' : 'index.html';
     const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
 
-    const genId    = () => Math.random().toString(36).slice(2, 9);
-    const tokenize = (str) => str.trim().split(/\s+/).filter(Boolean);
+    const genId = () => Math.random().toString(36).slice(2, 9);
 
     // ── Curriculum (grammar + verbs por nivel) ───────────────────────────────────
     const CURRICULUM = {
@@ -129,10 +128,11 @@
             </div>
             <div className="flex-1 min-w-0">
                 <p className="text-white font-bold text-sm leading-snug">{ex.spanish}</p>
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                    {(ex.english_tokens || []).map((t, i) => (
-                        <span key={i} className="px-2 py-0.5 bg-violet-500/15 border border-violet-500/25 text-violet-300 rounded-lg text-xs font-bold">{t}</span>
-                    ))}
+                <div className="flex flex-wrap gap-1 mt-1.5 items-center">
+                    <span className="px-2 py-0.5 bg-emerald-500/15 border border-emerald-500/25 text-emerald-300 rounded-lg text-xs font-bold">✏️ {ex.blank_part}</span>
+                    {ex.given_part && (
+                        <span className="px-2 py-0.5 bg-zinc-700/50 border border-zinc-700 text-zinc-400 rounded-lg text-xs font-bold">🎁 {ex.given_part}</span>
+                    )}
                 </div>
             </div>
             <span className="shrink-0 text-[10px] font-black text-zinc-700 tabular-nums w-5 text-right">{idx + 1}</span>
@@ -165,8 +165,9 @@
         const [generating,      setGenerating]      = useState(false);
         const abortRef = useRef(null);
 
-        // Ingredient state
-        const [level,             setLevel]             = useState('basic');
+        // Ingredient state — grammar and verbs have independent levels
+        const [grammarLevel,      setGrammarLevel]      = useState('basic');
+        const [verbLevel,         setVerbLevel]         = useState('basic');
         const [activeTab,         setActiveTab]         = useState('grammar');
         const [selectedGrammar,   setSelectedGrammar]   = useState('');   // single-select
         const [selectedVerbPacks, setSelectedVerbPacks] = useState([]);   // multi-select
@@ -176,8 +177,9 @@
         const [aiCount,           setAiCount]           = useState(10);
 
         // Manual add
-        const [manualEs, setManualEs] = useState('');
-        const [manualEn, setManualEn] = useState('');
+        const [manualEs,    setManualEs]    = useState('');
+        const [manualBlank, setManualBlank] = useState('');
+        const [manualGiven, setManualGiven] = useState('');
 
         useEffect(() => {
             const k = AI.loadKey();
@@ -190,7 +192,9 @@
                         setTitle(d.title || '');
                         const exs = (d.content?.exercises || []).map(e => ({
                             ...e, id: e.id || genId(),
-                            english: (e.english_tokens || []).join(' ')
+                            // backward compat: old format had english_tokens
+                            blank_part: e.blank_part || (e.english_tokens || []).join(' '),
+                            given_part: e.given_part || ''
                         }));
                         setExercises(exs);
                     }
@@ -218,39 +222,40 @@
             setGenerating(true);
             abortRef.current = new AbortController();
 
+            // Grammar and verbs use their own independent levels
             const gramPack = selectedGrammar
-                ? CURRICULUM[level].grammar.find(g => g.id === selectedGrammar)
+                ? CURRICULUM[grammarLevel].grammar.find(g => g.id === selectedGrammar)
                 : null;
 
             const verbWords = useCustomVerbs
                 ? customVerbs.split(/[,\n]+/).map(v => v.trim()).filter(Boolean)
                 : selectedVerbPacks.flatMap(id =>
-                    CURRICULUM[level].verbs.find(v => v.id === id)?.words || []
+                    CURRICULUM[verbLevel].verbs.find(v => v.id === id)?.words || []
                   );
 
             let currBlock = '';
             if (gramPack || verbWords.length) {
                 const parts = [];
-                if (gramPack)        parts.push(`ESTRUCTURA GRAMATICAL — ${gramPack.id}: ${gramPack.words.join(', ')}`);
+                if (gramPack)         parts.push(`ESTRUCTURA GRAMATICAL — ${gramPack.id}: ${gramPack.words.join(', ')}`);
                 if (verbWords.length) parts.push(`VERBOS A USAR: ${verbWords.join(', ')}`);
-                currBlock = `\n\nCONTEXTO CURRICULAR (obligatorio):\n${parts.join('\n')}\n\nINSTRUCCIÓN: Usa los verbos listados conjugados con la estructura gramatical. El sujeto en inglés siempre debe ser explícito (I, you, she, we, they...) aunque en español sea implícito. Varía sujetos — no todos "I".`;
+                currBlock = `\n\nCONTEXTO CURRICULAR (obligatorio):\n${parts.join('\n')}\n\nINSTRUCCIÓN: Usa los verbos listados conjugados con la estructura gramatical. Sujeto explícito en inglés (I, you, she, we...). Varía sujetos — no todos "I".`;
             }
 
             const prompt = `Eres un generador de contenido pedagógico para Periplo, plataforma de idiomas para hispanohablantes aprendiendo inglés.
 
-Genera exactamente ${aiCount} ejercicios de reconstrucción de oraciones. El alumno ve la frase en español y debe ordenar los tokens en inglés en el orden correcto.
+Genera exactamente ${aiCount} ejercicios "Fill the Phrase". El alumno ve la frase en español y TECLEA la parte gramatical (blank_part). El complemento se muestra (given_part).
 
 Tema / contexto: ${aiTopic || 'frases cotidianas de alto impacto'}${currBlock}
 
 REGLAS:
-- Puntuación como tokens separados (ej: "?" o "." solos al final)
-- Máximo 9 tokens por ejercicio
-- Sujeto explícito en inglés (I, you, she, we...) aunque en español sea implícito
+- blank_part: SOLO la estructura gramatical objetivo (máx 4 palabras). Ej: "I was working", "She would have known", "They used to", "If I had studied"
+- given_part: el complemento/resto de la oración. Ej: "at the office.", "about that.", "go there every day."
+- Sujeto siempre explícito en inglés (I, you, she...) aunque en español sea implícito. Varía sujetos.
 - emoji: un solo emoji visual como pista de contexto
-- Oraciones de uso real, no artificiales
+- Oraciones naturales de uso real
 
 Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
-[{"spanish":"...","english_tokens":["...","..."],"emoji":"..."}]`;
+[{"spanish":"...","blank_part":"...","given_part":"...","emoji":"..."}]`;
 
             try {
                 const raw = await AI.callGemini({ apiKey, model: selectedModel, prompt, signal: abortRef.current.signal });
@@ -260,14 +265,14 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
                     const added = parsed.map(e => ({
                         id: genId(),
                         spanish: e.spanish || '',
-                        english: (e.english_tokens || []).join(' '),
-                        english_tokens: e.english_tokens || [],
+                        blank_part: e.blank_part || '',
+                        given_part: e.given_part || '',
                         emoji: e.emoji || '',
                         imageData: null
                     }));
                     setExercises(prev => [...prev, ...added]);
                     if (!title && selectedGrammar)
-                        setTitle(`${selectedGrammar} — ${level.charAt(0).toUpperCase() + level.slice(1)}`);
+                        setTitle(`${selectedGrammar} — ${CURRICULUM[grammarLevel].label}`);
                 }
             } catch (e) {
                 if (e.name !== 'AbortError') console.error(e);
@@ -276,16 +281,16 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
         };
 
         const addManual = () => {
-            if (!manualEs.trim() || !manualEn.trim()) return;
+            if (!manualEs.trim() || !manualBlank.trim()) return;
             setExercises(prev => [...prev, {
                 id: genId(),
                 spanish: manualEs.trim(),
-                english: manualEn.trim(),
-                english_tokens: tokenize(manualEn),
+                blank_part: manualBlank.trim(),
+                given_part: manualGiven.trim(),
                 emoji: '',
                 imageData: null
             }]);
-            setManualEs(''); setManualEn('');
+            setManualEs(''); setManualBlank(''); setManualGiven('');
         };
 
         const removeExercise = (idx) => setExercises(prev => prev.filter((_, i) => i !== idx));
@@ -294,8 +299,8 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
         const handleSave = async () => {
             if (!title.trim()) { alert('Ponle un título al mazo'); return; }
             const toSave = exercises
-                .filter(e => e.spanish.trim() && e.english_tokens.length)
-                .map(({ english, ...rest }) => rest);
+                .filter(e => e.spanish.trim() && e.blank_part?.trim())
+                .map(({ ...rest }) => rest);
             if (!toSave.length) { alert('Agrega al menos un ejercicio completo'); return; }
             setSaving(true);
             try {
@@ -326,13 +331,13 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
             });
         };
 
-        const validCount = exercises.filter(e => e.spanish.trim() && e.english_tokens.length).length;
+        const validCount = exercises.filter(e => e.spanish.trim() && e.blank_part?.trim()).length;
 
         const autoTitle = useMemo(() => {
             if (title) return title;
-            if (selectedGrammar) return `${selectedGrammar} — ${CURRICULUM[level].label}`;
+            if (selectedGrammar) return `${selectedGrammar} — ${CURRICULUM[grammarLevel].label}`;
             return 'Nuevo Spell the Phrase';
-        }, [title, selectedGrammar, level]);
+        }, [title, selectedGrammar, grammarLevel]);
 
         if (loading) return (
             <div style={{height:'100%'}} className="flex items-center justify-center bg-zinc-950">
@@ -386,24 +391,6 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
 
                         <div className="flex-1 overflow-y-auto p-4 space-y-5 custom-scrollbar">
 
-                            {/* Level */}
-                            <div>
-                                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Nivel</label>
-                                <div className="flex gap-1.5">
-                                    {Object.entries(CURRICULUM).map(([lv, cv]) => (
-                                        <button key={lv}
-                                            onClick={() => {
-                                                setLevel(lv);
-                                                setSelectedGrammar('');
-                                                setSelectedVerbPacks([]);
-                                                setUseCustomVerbs(false);
-                                            }}
-                                            className={`px-4 py-2 rounded-xl font-black text-sm transition-all border-2 ${level === lv ? 'bg-violet-600 border-violet-600 text-white' : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-violet-500/50 hover:text-violet-300'}`}
-                                        >{cv.label}</button>
-                                    ))}
-                                </div>
-                            </div>
-
                             {/* Category tabs */}
                             <div>
                                 <div className="flex gap-1 bg-zinc-900 rounded-xl p-1 mb-3">
@@ -421,7 +408,15 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
                                 {/* Grammar — single-select */}
                                 {activeTab === 'grammar' && (
                                     <div className="flex flex-col gap-1.5">
-                                        {CURRICULUM[level].grammar.map(pack => {
+                                        <div className="flex gap-1 mb-1">
+                                            {Object.entries(CURRICULUM).map(([lv, cv]) => (
+                                                <button key={lv}
+                                                    onClick={() => { setGrammarLevel(lv); setSelectedGrammar(''); }}
+                                                    className={`flex-1 py-1.5 rounded-lg font-black text-xs transition-all border ${grammarLevel === lv ? 'bg-emerald-600/25 border-emerald-500/50 text-emerald-300' : 'bg-zinc-900 border-zinc-700 text-zinc-500 hover:text-zinc-300'}`}
+                                                >{cv.label}</button>
+                                            ))}
+                                        </div>
+                                        {CURRICULUM[grammarLevel].grammar.map(pack => {
                                             const isOn = selectedGrammar === pack.id;
                                             return (
                                                 <button key={pack.id}
@@ -446,7 +441,15 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
                                 {/* Verbs — multi-select + Otros */}
                                 {activeTab === 'verbs' && (
                                     <div className="flex flex-col gap-1.5">
-                                        {CURRICULUM[level].verbs.map(pack => {
+                                        <div className="flex gap-1 mb-1">
+                                            {Object.entries(CURRICULUM).map(([lv, cv]) => (
+                                                <button key={lv}
+                                                    onClick={() => { setVerbLevel(lv); setSelectedVerbPacks([]); setUseCustomVerbs(false); }}
+                                                    className={`flex-1 py-1.5 rounded-lg font-black text-xs transition-all border ${verbLevel === lv ? 'bg-blue-600/25 border-blue-500/50 text-blue-300' : 'bg-zinc-900 border-zinc-700 text-zinc-500 hover:text-zinc-300'}`}
+                                                >{cv.label}</button>
+                                            ))}
+                                        </div>
+                                        {CURRICULUM[verbLevel].verbs.map(pack => {
                                             const isOn = selectedVerbPacks.includes(pack.id);
                                             return (
                                                 <button key={pack.id}
@@ -545,10 +548,10 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
                                 />
                                 <div className="flex gap-1 mt-1.5 flex-wrap">
                                     {selectedGrammar && (
-                                        <span className="text-[9px] font-black bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-md border border-emerald-500/30">🔤 {selectedGrammar}</span>
+                                        <span className="text-[9px] font-black bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-md border border-emerald-500/30">🔤 {selectedGrammar} ({CURRICULUM[grammarLevel].label})</span>
                                     )}
                                     {selectedVerbPacks.map(id => (
-                                        <span key={id} className="text-[9px] font-black bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-md border border-blue-500/30">⚡ {id}</span>
+                                        <span key={id} className="text-[9px] font-black bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-md border border-blue-500/30">⚡ {id} ({CURRICULUM[verbLevel].label})</span>
                                     ))}
                                     {useCustomVerbs && customVerbs && (
                                         <span className="text-[9px] font-black bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-md border border-amber-500/30">📝 Verbos personalizados</span>
@@ -589,24 +592,32 @@ Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
                         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
 
                             {/* Manual add row */}
-                            <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-3 flex gap-2 items-end mb-4">
-                                <div className="flex-1">
+                            <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-3 flex flex-col gap-2 mb-4">
+                                <div>
                                     <label className="text-[9px] font-black text-zinc-500 uppercase block mb-1">Español</label>
                                     <input value={manualEs} onChange={e => setManualEs(e.target.value)}
                                         className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-amber-500 text-white placeholder:text-zinc-700"
                                         placeholder="¿Puedes ayudarme?" />
                                 </div>
-                                <div className="flex-1">
-                                    <label className="text-[9px] font-black text-zinc-500 uppercase block mb-1">Inglés (con espacios)</label>
-                                    <input value={manualEn} onChange={e => setManualEn(e.target.value)}
-                                        onKeyDown={e => e.key === 'Enter' && addManual()}
-                                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-violet-500 text-white placeholder:text-zinc-700"
-                                        placeholder="Can you help me ?" />
+                                <div className="flex gap-2 items-end">
+                                    <div className="flex-1">
+                                        <label className="text-[9px] font-black text-emerald-600 uppercase block mb-1">✏️ Parte a teclear</label>
+                                        <input value={manualBlank} onChange={e => setManualBlank(e.target.value)}
+                                            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-emerald-500 text-white placeholder:text-zinc-700"
+                                            placeholder="Can you help" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <label className="text-[9px] font-black text-zinc-500 uppercase block mb-1">🎁 Complemento (dado)</label>
+                                        <input value={manualGiven} onChange={e => setManualGiven(e.target.value)}
+                                            onKeyDown={e => e.key === 'Enter' && addManual()}
+                                            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-zinc-500 text-white placeholder:text-zinc-700"
+                                            placeholder="me?" />
+                                    </div>
+                                    <button onClick={addManual} disabled={!manualEs || !manualBlank}
+                                        className="bg-violet-500 hover:bg-violet-400 disabled:opacity-40 text-white p-2 rounded-lg transition-colors shrink-0">
+                                        <Plus size={18} />
+                                    </button>
                                 </div>
-                                <button onClick={addManual} disabled={!manualEs || !manualEn}
-                                    className="bg-violet-500 hover:bg-violet-400 disabled:opacity-40 text-white p-2 rounded-lg transition-colors">
-                                    <Plus size={18} />
-                                </button>
                             </div>
 
                             {/* Exercise cards */}
