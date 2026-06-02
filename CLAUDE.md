@@ -387,6 +387,137 @@ Nunca construir el dashboard antes del renderer. El renderer define el formato d
 - **Word pool con chips excluibles:** Al seleccionar un pack, sus palabras aparecen como chips individuales (emerald = grammar, blue = verbs). Clic en un chip → se excluye del prompt (visualización con line-through). Útil para quitar palabras específicas antes de generar.
 - **Las palabras del plan de estudio vienen de los CSV** en `lesson plans/` (Verb Mastery, Noun Mastery, etc.) y se mantienen sincronizadas — no inventar listas a mano.
 
+### Sistema de moldes — cómo construir un nuevo dashboard
+
+Todo dashboard nuevo (o refactor de uno existente) se describe con un **código de 3 caracteres**: `Mold · Currículo · PostSave`. Este código define el 90% de las decisiones de arquitectura antes de escribir una sola línea.
+
+**Formato:** `[Layout][Currículo][PostSave]` — ej. `PAH`, `KCM`, `CCM`
+
+#### Dimensión 1 — Mold (layout, 1ª letra)
+
+| Código | Nombre | Descripción | ApiKeyBar convention | Ejemplos |
+|---|---|---|---|---|
+| **P** | Panel | Dos paneles fijos lado a lado. `height: 100dvh; overflow: hidden`. Panel izquierdo = configuración / input; panel derecho = preview / output en tiempo real. | `variant="compact"` en el header (siempre visible) | bg, pc, reading, hgs, listening, stp |
+| **K** | BulkReview | Página única, dos vistas: `'bulk'` (edición masiva — textareas por columna) y `'review'` (revisión ítem a ítem — tabs o filas expandidas). Editar un quiz existente carga los datos y salta directamente a `'review'`. | `variant="compact"` en sección colapsable del header | wc, tt, ne |
+| **T** | Table | Scroll único. Tabla o lista siempre visible con acciones inline por fila (editar, eliminar, reordenar). Para bancos grandes de ítems simples (2-4 campos por ítem). | `variant="modal"` dentro de modal "IA Assist" | lm, lot |
+| **C** | Cards | Scroll único. Tarjetas expandidas en columna — cada card muestra todos sus campos visibles. Para ítems con estructura rica (6+ campos por ítem). | `variant="modal"` dentro de modal "IA Assist" | fc, recuerdalo-es |
+| **X** | Slides | Caso único: presentations. Editor de diapositivas con tipos de slide heterogéneos. | `variant="modal"` en sección colapsable bajo el header | presentations |
+
+> **Cómo elegir el Mold:**
+> - ¿El teacher necesita ver un preview en tiempo real mientras configura? → **P**
+> - ¿El contenido son listas paralelas que conviene capturar en bloque antes de revisar? → **K**
+> - ¿Son filas simples en cantidad alta (>20 ítems)? → **T**
+> - ¿Cada ítem tiene estructura rica y merece su propio espacio de edición? → **C**
+
+#### Dimensión 2 — Currículo (2ª letra)
+
+Cómo entra el contenido al sistema de IA y edición:
+
+| Código | Nombre | Qué hace el teacher | Qué recibe la IA | Chips excluibles | Ejemplos |
+|---|---|---|---|---|---|
+| **A** | Taxonomía → IA | Elige nivel / categoría / tema en el modal de taxonomía | Labels de texto ("Past Simple", "VP3") — IA inventa el contenido desde cero | No | bg, pc |
+| **B** | CSV → chips | Elige nivel/categoría → aparecen chips con palabras exactas del CSV; puede excluir chips individuales | Lista exacta de palabras del plan de estudio | Sí (emerald = grammar, blue = verbs) | match, stp |
+| **C** | Entrada directa | Escribe, pega o edita el contenido directamente; teacher es el autor primario | Texto libre / contexto escrito por el teacher; IA asiste en borradores | No | reading, hgs, listening, tt, ne, wc, lm, lot, fc, recuerdalo-es |
+
+#### Dimensión 3 — PostSave (3ª letra)
+
+Qué pasa después de guardar exitosamente en Firestore:
+
+| Código | Comportamiento | Cuándo usarlo |
+|---|---|---|
+| **H** | Regresa al hub (`index.html` o `index-es.html`) | Default — teacher ya tiene el quiz guardado y puede lanzarlo desde el hub |
+| **M** | Abre modal de preview con botón al renderer (`juego.html?id=...`) | Cuando el teacher quiere verificar el resultado antes de ir al hub |
+| **R** | Navega directo al renderer (`juego.html?id=...&uid=...`) | Cuando el flujo típico es guardar → usar en clase de inmediato |
+
+#### Mapa de los 15 dashboards existentes
+
+| Dashboard | Código | Mold | Currículo | PostSave | Notas clave |
+|---|---|---|---|---|---|
+| `dashboard-bg.html` | **PAH** | Panel | Taxonomía→IA | Hub | Board games / Jeopardy / Connect4 |
+| `dashboard-pc.html` | **PAH** | Panel | Taxonomía→IA | Hub | Phone Chat — grammar tabs hardcoded (sin taxonomy modal) |
+| `dashboard-match.html` | **PBH** | Panel | CSV→chips | Hub | Match pairs — chips excluibles |
+| `dashboard-stp.html` | **PBM** | Panel | CSV→chips | Modal | Spell the Phrase — packs grammar/verbs + chips excluibles para IA, edición directa por ejercicio; modal preview con link de alumno |
+| `dashboard-reading.html` | **PCH** | Panel | Directa | Hub | Free text → fill-in + WH questions |
+| `dashboard-hgs.html` | **PCH** | Panel | Directa | Hub | 8 sub-tipos en un doc; UID default: `teacher_anita_001` |
+| `dashboard-listening.html` | **PCR** | Panel | Directa | Renderer | Transcript paste + clip extraction; va directo al renderer |
+| `dashboard-tt.html` | **KCH** | BulkReview | Directa | Hub | 4 categorías FIJAS; taxonomía OLD (deprecada) |
+| `dashboard-ne.html` | **KCH** | BulkReview | Directa | Hub | 4 categorías definidas por teacher; taxonomía OLD (deprecada) |
+| `dashboard-wc.html` | **KCM** | BulkReview | Directa | Modal | Dual: Word Cascade + Word Buildings; modal preview con 2 botones |
+| `dashboard-lm.html` | **TCH** | Table | Directa | Hub | LingoMatch — tabla de oraciones / pares |
+| `dashboard-lot.html` | **TCR** | Table | Directa | Renderer | 54 cards; sirve ambas ramas vía `?uid=` |
+| `dashboard-fc.html` | **CCM** | Cards | Directa | Modal | Flashcards/Memorama/Anagram/Emojispell — 4 juegos, 1 banco |
+| `dashboard-recuerdalo-es.html` | **CCM** | Cards | Directa | Modal | Cultural cards — UID anita hardcoded; imagen drag-and-drop |
+| `dashboard-presentations.html` | **X** | Slides | — | Hub | Único: slides heterogéneos; Imagen 4 API |
+
+#### Kit estándar — aplica a todos los molds
+
+Todo dashboard nuevo debe incluir esto sin excepción:
+
+**Imports en el `<head>`:**
+```html
+<script src="periplo-config.js"></script>
+<script src="periplo-ai.js"></script>
+<script src="periplo-taxonomy.js"></script>  <!-- o periplo-taxonomy-es.js para rama ES -->
+<!-- React + ReactDOM Babel standalone + Tailwind CDN -->
+```
+
+**Variables globales (fuera del componente React):**
+```javascript
+const AI = window.PERIPLO_AI;
+const ApiKeyBar = AI.createApiKeyBar(React);
+const urlParams = new URLSearchParams(window.location.search);
+const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001'; // 'teacher_anita_001' para rama ES
+const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
+const BACK_URL = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html' : 'index.html';
+```
+
+**Estado mínimo del componente:**
+- `apiKey`, `selectedModel`, `availableModels` — para IA
+- `isGenerating`, `abortController` — para cancelar generación en curso
+- Edit mode: detectar `?id=` en URL → cargar doc → poblar estado del formulario
+
+**Funciones obligatorias:**
+- `fetchModels()` — llama `AI.fetchModels(apiKey)` al cargar si hay key guardada en localStorage
+- `handleSave()` — valida → `setDoc` (edit) o `addDoc` (nuevo) → incluye `parentPath` + `serverTimestamp()` → ejecuta post-save action (H/M/R)
+- `goBack()` — `window.location.href = BACK_URL`
+
+**Modal de taxonomía (versión estándar — NEW):**
+- Botones multi-select, 3 pasos: Nivel → Categoría → Tema
+- Guardar BLOQUEADO hasta que level Y category estén seleccionados (topic es opcional)
+- Campos guardados en Firestore: dentro de `tags` → `tags.levels`, `tags.categories`, `tags.topics`
+- Fuente: `window.PERIPLO_TAXONOMY` (rama inglés) o `window.PERIPLO_TAXONOMY_ES` (rama español)
+
+**Estructura mínima del doc en Firestore:**
+```javascript
+{
+  type: 'TIPO_DEL_JUEGO',       // string constante, ej: 'WORDPACK', 'TALKTIME', 'SPELL_PHRASE'
+  title: string,
+  tags: {                       // OBLIGATORIO — index.html lee SOLO de aquí para filtrar/clasificar
+    levels:     [string],       // ej: ['B1', 'B2']
+    categories: [string],       // ej: ['vocab', 'grammar']
+    topics:     [string],       // ej: ['Modal Verbs'] — puede estar vacío
+  },
+  isDeleted: false,
+  parentPath: QUIZZES_PATH,
+  createdAt: serverTimestamp(),
+  updatedAt: serverTimestamp(),
+  // ...campos específicos del juego
+}
+```
+
+> **Regla crítica:** `index.html` lee `q.tags.levels`, `q.tags.categories`, `q.tags.topics` para asignar carpeta, nivel y etiqueta. Si el doc no tiene `tags`, el quiz aparece como "Sin Clasificar" y sin filtros. Nunca guardar a top-level `level`/`category`/`topic`.
+
+**Banner Periplo:** estructura estándar (ver sección "Banner estándar Periplo") — `bg-zinc-950`, badge P indigo, `sticky top-0 z-20`.
+
+#### Patrones deprecados — no replicar en dashboards nuevos
+
+| Patrón | Dónde existe | Reemplazar con |
+|---|---|---|
+| **Taxonomía OLD** (dropdowns `<select>`, single-select, 3 niveles en cascada) | `dashboard-tt.html`, `dashboard-ne.html` | Modal nuevo: botones, multi-select, 3 pasos |
+| **Floating KeyRound button** (botón `🔑` esquina inferior izquierda que abre modal de key) | `dashboard-tt.html`, `dashboard-ne.html` | `ApiKeyBar variant="compact"` en el header del mold K |
+| **TEACHER_UID hardcoded** sin URL param | `dashboard-pc.html`, `dashboard-recuerdalo-es.html` | `urlParams.get('uid') \|\| 'fallback_uid'` siempre |
+| **Firebase config hardcoded** en el archivo del dashboard | Varios dashboards antiguos | `<script src="periplo-config.js"></script>` + `initializeApp(window.PERIPLO_FIREBASE_CONFIG)` |
+
 ---
 
 ## Módulo compartido `periplo-ai.js` (IA Assistant)
