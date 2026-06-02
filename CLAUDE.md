@@ -361,6 +361,34 @@ const BACK_URL = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html
 
 ---
 
+## Tipos de dashboard y patrón de construcción
+
+### Patrón renderer → dashboard (regla de oro)
+
+Todo juego sigue este orden de construcción, siempre:
+
+1. **Renderer** (`juego.html`) — primero. Demo funcional que acepta `?id=` param y carga de Firestore (o fallback JSON). Es lo que el alumno y el teacher usan en clase.
+2. **Dashboard** (`dashboard-juego.html`) — después. Editor que construye el question bank / word bank que el renderer consume. Se accede desde el hub (`index.html`) en `+ Actividad`.
+
+Nunca construir el dashboard antes del renderer. El renderer define el formato de datos en Firestore — el dashboard lo respeta. El dashboard es solo el constructor del contenido.
+
+### Tipos de dashboard (granularidad del currículo)
+
+| Tipo | Ejemplo | Qué inyecta al prompt | Chips individuales |
+|---|---|---|---|
+| **A — Tema general** | `dashboard-bg.html`, `dashboard-uno.html` | Etiquetas: "Modal Verbs", "VP3" — sin palabras exactas | No |
+| **B — Curriculum detallado** | `dashboard-match.html`, `dashboard-stp.html` | Listado exacto de palabras del plan de estudio | Sí — cada palabra excluible individualmente |
+| **C — Sin currículo** | `dashboard-reading.html`, `dashboard-listening.html` | Solo texto libre / tema | N/A |
+
+### Comportamiento estándar de un dashboard Tipo B
+
+- **Dos canastas independientes:** Grammar (selector de nivel propio) + Verbs/Vocab (selector de nivel propio). Cambiar el nivel de una canasta no afecta a la otra ni borra su selección.
+- **Multi-select en ambas canastas:** Se pueden combinar varios grammar packs (ej: Third Conditional + Mixed Conditionals) y varios verb packs (ej: Irregular A-F + Irregular G-M) en la misma generación.
+- **Word pool con chips excluibles:** Al seleccionar un pack, sus palabras aparecen como chips individuales (emerald = grammar, blue = verbs). Clic en un chip → se excluye del prompt (visualización con line-through). Útil para quitar palabras específicas antes de generar.
+- **Las palabras del plan de estudio vienen de los CSV** en `lesson plans/` (Verb Mastery, Noun Mastery, etc.) y se mantienen sincronizadas — no inventar listas a mano.
+
+---
+
 ## Módulo compartido `periplo-ai.js` (IA Assistant)
 
 **TODA la lógica del "IA Assistant" (API key de Gemini) vive en un solo archivo: `periplo-ai.js`.** Igual que `periplo-config.js` y `periplo-taxonomy.js`, se carga con `<script src>` y expone `window.PERIPLO_AI`. Los 19 dashboards lo consumen — **un cambio se hace una sola vez aquí, no archivo por archivo.**
