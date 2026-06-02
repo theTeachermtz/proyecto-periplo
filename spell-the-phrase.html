@@ -24,12 +24,12 @@
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; overflow: hidden; overscroll-behavior-y: none; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
         .pb-safe { padding-bottom: env(safe-area-inset-bottom, 20px); }
         .min-h-screen-safe { min-height: 100vh; min-height: -webkit-fill-available; }
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
         @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-8px)} 60%{transform:translateX(8px)} }
         .animate-shake { animation: shake 0.3s ease both; }
         @keyframes pop { 0%{transform:scale(0.8);opacity:0} 100%{transform:scale(1);opacity:1} }
         .animate-pop { animation: pop 0.15s ease both; }
-        @keyframes slideUp { from{transform:translateY(8px);opacity:0} to{transform:translateY(0);opacity:1} }
-        .slide-up { animation: slideUp 0.2s ease both; }
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
         .animate-blink { animation: blink 1s step-end infinite; }
         @keyframes pulseAmber { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0)} 50%{box-shadow:0 0 0 8px rgba(245,158,11,0.35)} }
@@ -60,12 +60,17 @@
     const urlParams   = new URLSearchParams(window.location.search);
     const QUIZ_ID     = urlParams.get('id')  || null;
     const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001';
+    const STUDENT     = urlParams.get('student') === 'true';  // modo alumno: sin acceso al hub
 
     // ── Economía de monedas ──────────────────────────────────────────────
-    const START_COINS   = 10;
-    const REWARD_CORRECT = 5;
-    const HINT_COST      = 2;
-    const ERRORS_TO_HINT = 3;  // errores seguidos → ilumina la pista
+    const START_COINS    = 10;
+    const REWARD_CORRECT  = 5;
+    const HINT_COST       = 2;
+    const ERRORS_TO_HINT  = 3;  // errores seguidos → ilumina la pista
+
+    // Una letra es "auto" (pre-dada) si no es a-z: apóstrofes (don't, aren't),
+    // guiones, puntuación. Se muestran marcadas desde el inicio y NO se teclean.
+    const isAuto = (ch) => !/[a-zA-Z]/.test(ch);
 
     // ── Audio (WebAudio, sin assets) ─────────────────────────────────────
     const beep = (freq, dur, type = 'square', vol = 0.2) => {
@@ -82,14 +87,9 @@
     const playError   = () => beep(155, 0.18, 'square', 0.22);
     const playCorrect = () => { beep(523, 0.13, 'sine', 0.2); setTimeout(() => beep(659, 0.18, 'sine', 0.2), 120); };
 
-    // Índice global del primer slot de cada palabra
-    const computeWordSlotStarts = (blankPart) => {
-        const words = blankPart.split(' ');
-        const starts = [];
-        let count = 0;
-        for (const w of words) { starts.push(count); count += w.length; }
-        return starts;
-    };
+    const getBlankPart = (ex) => ex?.blank_part || (ex?.english_tokens || []).join(' ') || '';
+    const getGivenPart = (ex) => ex?.given_part || '';
+    const answerText   = (ex) => [getBlankPart(ex), getGivenPart(ex)].filter(Boolean).join(' ');
 
     export default function SpellThePhraseApp() {
         const [exercises, setExercises] = useState([]);
@@ -99,26 +99,24 @@
         const [coins, setCoins]         = useState(START_COINS);
         const [score, setScore]         = useState(0);
 
-        const [typedChars, setTypedChars]   = useState([]); // letras correctas aceptadas (case canónico)
-        const [hinted, setHinted]           = useState(new Set()); // índices revelados con pista
-        const [consErrors, setConsErrors]   = useState(0);
-        const [flashPos, setFlashPos]       = useState(null); // índice de slot parpadeando en rojo
-        const [done, setDone]               = useState(false);
-        const [shakeKey, setShakeKey]       = useState(0);
+        const [typedCount, setTypedCount] = useState(0);          // letras tecleables ya escritas
+        const [hinted, setHinted]         = useState(new Set());  // índices tecleables revelados con pista
+        const [consErrors, setConsErrors] = useState(0);
+        const [flashTi, setFlashTi]       = useState(null);       // índice tecleable parpadeando rojo
+        const [done, setDone]             = useState(false);
+        const [shakeKey, setShakeKey]     = useState(0);
 
         const advanceTimer = useRef(null);
 
         const goBack = () => {
+            if (STUDENT) return; // el alumno nunca va al hub
             window.location.href = document.referrer?.includes('index') ? document.referrer : 'index.html';
         };
 
-        const getBlankPart = (ex) => ex?.blank_part || (ex?.english_tokens || []).join(' ') || '';
-        const getGivenPart = (ex) => ex?.given_part || '';
-
         const resetExercise = useCallback(() => {
             clearTimeout(advanceTimer.current);
-            setTypedChars([]); setHinted(new Set()); setConsErrors(0);
-            setFlashPos(null); setDone(false);
+            setTypedCount(0); setHinted(new Set()); setConsErrors(0);
+            setFlashTi(null); setDone(false);
         }, []);
 
         useEffect(() => {
@@ -145,10 +143,22 @@
         const ex = exercises[current];
         const blankPart = ex ? getBlankPart(ex) : '';
 
-        // Letras esperadas (sin espacios, conservando el case real para mostrarlo)
-        const expectedChars = useMemo(() => blankPart.replace(/\s/g, '').split(''), [blankPart]);
-        const totalSlots = expectedChars.length;
-        const pos = typedChars.length;
+        // Modelo de slots: palabras → letras, marcando auto (pre-dadas) vs tecleables
+        const model = useMemo(() => {
+            const words = blankPart.split(' ');
+            let ti = 0;
+            const grouped = words.map(w => w.split('').map(ch => {
+                const auto = isAuto(ch);
+                const slot = { ch, auto, ti: auto ? -1 : ti };
+                if (!auto) ti++;
+                return slot;
+            }));
+            const typeable = [];
+            grouped.forEach(w => w.forEach(s => { if (!s.auto) typeable.push(s.ch); }));
+            return { grouped, typeable, total: ti };
+        }, [blankPart]);
+
+        const total = model.total;
 
         const doAdvance = useCallback(() => {
             const next = current + 1;
@@ -156,25 +166,23 @@
             else setCurrent(next);
         }, [current, exercises.length]);
 
-        const completePhrase = useCallback((finalTyped) => {
-            setTypedChars(finalTyped);
+        const completePhrase = useCallback(() => {
             setDone(true);
             setScore(s => s + 1);
             setCoins(c => c + REWARD_CORRECT);
             playCorrect();
-            advanceTimer.current = setTimeout(doAdvance, 1500);
+            advanceTimer.current = setTimeout(doAdvance, 1600);
         }, [doAdvance]);
 
-        // Aceptar la siguiente letra correcta (por teclado o por pista)
+        // Acepta la siguiente letra correcta (teclado o pista)
         const acceptNext = useCallback((viaHint) => {
-            const expected = expectedChars[pos];
-            if (expected === undefined) return;
-            const next = [...typedChars, expected];
+            if (typedCount >= total) return;
             setConsErrors(0);
-            if (viaHint) setHinted(prev => new Set([...prev, pos]));
-            if (next.length >= totalSlots) completePhrase(next);
-            else setTypedChars(next);
-        }, [expectedChars, pos, typedChars, totalSlots, completePhrase]);
+            if (viaHint) setHinted(prev => new Set([...prev, typedCount]));
+            const next = typedCount + 1;
+            setTypedCount(next);
+            if (next >= total) completePhrase();
+        }, [typedCount, total, completePhrase]);
 
         // Teclado
         useEffect(() => {
@@ -183,34 +191,34 @@
                 const k = e.key;
                 if (k === 'Backspace') {
                     e.preventDefault();
-                    if (pos > 0) {
-                        const removed = pos - 1;
-                        setTypedChars(prev => prev.slice(0, -1));
+                    if (typedCount > 0) {
+                        const removed = typedCount - 1;
+                        setTypedCount(c => c - 1);
                         setHinted(prev => { const n = new Set(prev); n.delete(removed); return n; });
                         setConsErrors(0);
                     }
                     return;
                 }
-                if (k.length !== 1 || !/[a-zA-Z']/.test(k)) return;
+                if (k.length !== 1 || !/[a-zA-Z]/.test(k)) return;
                 e.preventDefault();
-                const expected = expectedChars[pos];
+                const expected = model.typeable[typedCount];
                 if (expected === undefined) return;
                 if (k.toLowerCase() === expected.toLowerCase()) {
                     acceptNext(false);
                 } else {
                     playError();
                     setShakeKey(n => n + 1);
-                    setFlashPos(pos);
-                    setTimeout(() => setFlashPos(null), 320);
+                    setFlashTi(typedCount);
+                    setTimeout(() => setFlashTi(null), 320);
                     setConsErrors(n => n + 1);
                 }
             };
             window.addEventListener('keydown', handler);
             return () => window.removeEventListener('keydown', handler);
-        }, [ex, done, gameState, pos, expectedChars, acceptNext]);
+        }, [ex, done, gameState, typedCount, total, model, acceptNext]);
 
         const handleHint = () => {
-            if (done || coins < HINT_COST || pos >= totalSlots) return;
+            if (done || coins < HINT_COST || typedCount >= total) return;
             setCoins(c => c - HINT_COST);
             acceptNext(true);
         };
@@ -230,24 +238,49 @@
         );
 
         if (gameState === 'victory') return (
-            <div className="min-h-screen-safe w-screen bg-zinc-950 flex flex-col items-center justify-center p-6 text-center">
-                <div className="w-24 h-24 bg-amber-500/10 border border-amber-500/20 rounded-full flex items-center justify-center mb-6">
-                    <Trophy size={48} className="text-amber-500" />
+            <div className="min-h-screen-safe w-screen bg-zinc-950 flex flex-col">
+                {/* Top */}
+                <div className="shrink-0 flex flex-col items-center text-center px-6 pt-8 pb-4">
+                    <div className="w-16 h-16 bg-amber-500/10 border border-amber-500/20 rounded-full flex items-center justify-center mb-3">
+                        <Trophy size={32} className="text-amber-500" />
+                    </div>
+                    <h2 className="text-2xl font-black text-white mb-1">¡Completado!</h2>
+                    <p className="text-zinc-400 text-sm">
+                        Aciertos: <span className="text-emerald-400 font-black">{score}</span>
+                        <span className="text-zinc-600"> / {exercises.length}</span>
+                        <span className="text-zinc-700 mx-2">·</span>
+                        <span className="text-amber-400 font-bold">{coins} 🪙</span>
+                    </p>
                 </div>
-                <h2 className="text-3xl font-black text-white mb-2">¡Completado!</h2>
-                <p className="text-zinc-400 mb-1 text-lg">
-                    Aciertos: <span className="text-emerald-400 font-black">{score}</span>
-                    <span className="text-zinc-600"> / {exercises.length}</span>
-                </p>
-                <p className="text-zinc-500 text-sm mb-10 font-medium">Monedas: <span className="text-amber-400 font-bold">{coins} 🪙</span></p>
-                <div className="flex flex-col w-full max-w-xs gap-3 pb-safe">
+
+                {/* Review list */}
+                <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar w-full max-w-lg mx-auto px-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-2 sticky top-0 bg-zinc-950 py-1">Repaso de frases</p>
+                    <div className="flex flex-col gap-2 pb-4">
+                        {exercises.map((e, i) => (
+                            <div key={i} className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 flex items-center gap-3">
+                                <span className="text-2xl shrink-0">{e.emoji || '📝'}</span>
+                                <div className="min-w-0">
+                                    <p className="text-zinc-400 text-xs font-medium truncate">{e.spanish}</p>
+                                    <p className="text-white font-black text-sm leading-snug">{answerText(e)}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Bottom */}
+                <div className="shrink-0 w-full max-w-xs mx-auto px-4 pt-3 flex flex-col gap-3 pb-safe">
+                    <p className="text-center text-zinc-500 text-xs font-bold">Para salir, solo cierra esta pestaña de tu navegador.</p>
                     <button onClick={restart}
-                        className="w-full py-4 bg-violet-500 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-violet-400 transition-all active:scale-95 shadow-lg shadow-violet-500/20 text-sm">
+                        className="w-full py-3.5 bg-violet-500 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-violet-400 transition-all active:scale-95 shadow-lg shadow-violet-500/20 text-sm">
                         Jugar de nuevo
                     </button>
-                    <button onClick={goBack} className="w-full py-4 text-zinc-500 font-bold text-sm hover:text-zinc-300 transition-colors">
-                        Salir
-                    </button>
+                    {!STUDENT && (
+                        <button onClick={goBack} className="w-full py-2 text-zinc-500 font-bold text-sm hover:text-zinc-300 transition-colors">
+                            Salir al hub
+                        </button>
+                    )}
                 </div>
             </div>
         );
@@ -255,11 +288,9 @@
         if (!ex) return null;
 
         const givenPart = getGivenPart(ex);
-        const words = blankPart.split(' ');
-        const wordSlotStarts = computeWordSlotStarts(blankPart);
         const progress = (current / exercises.length) * 100;
         const hintGlows = consErrors >= ERRORS_TO_HINT && !done;
-        const hintDisabled = done || coins < HINT_COST || pos >= totalSlots;
+        const hintDisabled = done || coins < HINT_COST || typedCount >= total;
 
         return (
             <div className="min-h-screen-safe w-screen flex flex-col bg-zinc-950 overflow-hidden">
@@ -268,10 +299,15 @@
                 <header className="shrink-0 sticky top-0 z-20 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between px-4 py-3"
                         style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                     <div className="flex items-center gap-3">
-                        <button onClick={goBack}
-                            className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 active:scale-95 transition-transform">
-                            P
-                        </button>
+                        {/* En modo alumno la P es solo logo, sin acción */}
+                        {STUDENT ? (
+                            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20">P</div>
+                        ) : (
+                            <button onClick={goBack}
+                                className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 active:scale-95 transition-transform">
+                                P
+                            </button>
+                        )}
                         <div className="hidden sm:block w-px h-8 bg-zinc-800 mx-1"/>
                         <div>
                             <h1 className="text-base font-black text-white leading-none tracking-tight">Spell the Phrase</h1>
@@ -285,10 +321,13 @@
                             <span className="font-black text-sm tabular-nums">{score}</span>
                         </div>
                         <span className="text-zinc-600 font-bold text-sm tabular-nums">{current + 1}/{exercises.length}</span>
-                        <button onClick={restart}
-                            className="p-2 text-zinc-600 hover:text-zinc-300 transition-colors rounded-xl hover:bg-zinc-800 active:scale-95">
-                            <RefreshCw size={16} />
-                        </button>
+                        {/* En modo alumno también ocultamos reiniciar global (no es navegación, pero evita confusión) */}
+                        {!STUDENT && (
+                            <button onClick={restart}
+                                className="p-2 text-zinc-600 hover:text-zinc-300 transition-colors rounded-xl hover:bg-zinc-800 active:scale-95">
+                                <RefreshCw size={16} />
+                            </button>
+                        )}
                     </div>
                 </header>
 
@@ -317,19 +356,27 @@
                     <div className="shrink-0 w-full" key={shakeKey}>
                         <p className="text-[10px] font-black uppercase tracking-widest text-zinc-600 mb-3 text-center">Tu respuesta</p>
                         <div className={`flex flex-wrap items-end justify-center gap-x-4 gap-y-3 px-2 py-4 rounded-2xl border transition-colors duration-200
-                            ${done           ? 'border-emerald-500/40 bg-emerald-950/20 animate-pop' :
-                              flashPos !== null ? 'border-rose-500/40 bg-rose-950/20 animate-shake' :
-                                                  'border-zinc-800 bg-zinc-900/50'}`}>
+                            ${done             ? 'border-emerald-500/40 bg-emerald-950/20 animate-pop' :
+                              flashTi !== null ? 'border-rose-500/40 bg-rose-950/20 animate-shake' :
+                                                 'border-zinc-800 bg-zinc-900/50'}`}>
 
-                            {words.map((word, wi) => (
+                            {model.grouped.map((word, wi) => (
                                 <div key={wi} className="flex gap-1 items-end">
-                                    {word.split('').map((ch, ci) => {
-                                        const si = wordSlotStarts[wi] + ci;
-                                        const filled  = si < typedChars.length || done;
-                                        const isCur   = !done && si === pos;
-                                        const isHint  = hinted.has(si);
-                                        const isFlash = flashPos === si;
-                                        const dispCh  = filled ? (typedChars[si] ?? ch) : '';
+                                    {word.map((slot, ci) => {
+                                        // Slot pre-dado (apóstrofe, guion, puntuación): marcado desde el inicio
+                                        if (slot.auto) {
+                                            return (
+                                                <span key={ci}
+                                                    className="letter-slot inline-flex items-center justify-center w-5 h-10 text-lg font-black text-zinc-500">
+                                                    {slot.ch}
+                                                </span>
+                                            );
+                                        }
+                                        const ti      = slot.ti;
+                                        const filled  = ti < typedCount || done;
+                                        const isCur   = !done && ti === typedCount;
+                                        const isHint  = hinted.has(ti);
+                                        const isFlash = flashTi === ti;
 
                                         let cls = 'letter-slot inline-flex items-center justify-center w-7 h-10 rounded-lg border-2 text-sm font-black uppercase ';
                                         if (done && filled)        cls += 'border-emerald-500/50 bg-emerald-950/30 text-emerald-300';
@@ -342,7 +389,7 @@
                                         return (
                                             <span key={ci} className={cls}>
                                                 {filled
-                                                    ? dispCh
+                                                    ? slot.ch
                                                     : isCur
                                                         ? <span className="animate-blink text-violet-400 font-thin text-base">|</span>
                                                         : ''}
@@ -365,8 +412,8 @@
                     </div>
 
                     {!done && (
-                        <p className="shrink-0 text-zinc-700 text-[10px] font-bold uppercase tracking-widest">
-                            Escribe con tu teclado · Borrar: ←
+                        <p className="shrink-0 text-zinc-700 text-[10px] font-bold uppercase tracking-widest text-center">
+                            Escribe con tu teclado · Borrar: ← · Los apóstrofes ya vienen puestos
                         </p>
                     )}
 
