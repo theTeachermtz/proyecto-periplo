@@ -663,6 +663,41 @@ Todos los renderers (tanto inglés como `-es`) usan el mismo banner sticky en la
 
 ---
 
+## Estándares obligatorios de TODO renderer (juego)
+
+Aplican a todos los juegos nuevos y se deben ir aplicando a los existentes. Referencia viva: `flashcards.html` (instrucciones) y `spell-the-phrase.html` (los tres juntos).
+
+### 1. Pantalla de instrucciones (`gameState === 'welcome'`)
+
+Todo juego abre en una pantalla de instrucciones antes de jugar — nunca arranca directo.
+
+- Estado inicial `gameState = 'welcome'`; botón "Entendido, ¡A jugar!" → `startGame()` → `'playing'`.
+- Tarjeta centrada: ícono en cuadro de color, título **"Instrucciones de la dinámica"**, 3–4 filas (emoji grande + texto corto explicando la mecánica, monedas/puntaje, ayudas).
+- El botón vive en una franja inferior con `pb-safe`.
+- **Bonus crítico en móvil:** el tap del botón "Entendido" es un *gesto de usuario* — aprovecharlo para enfocar el input de captura (iOS solo abre el teclado tras un gesto).
+
+### 2. Safe area (iOS notch + barra inferior)
+
+- `<meta viewport ... viewport-fit=cover>` siempre.
+- Utils en el `<style>`: `.pt-safe { padding-top: env(safe-area-inset-top) }` y `.pb-safe { padding-bottom: env(safe-area-inset-bottom, 20px) }`.
+- `pt-safe` en el header sticky (que el notch no tape la P/título).
+- `pb-safe` en CUALQUIER fila de botones pegada abajo (acción, victoria, welcome) — si no, la barra de gestos de iOS los tapa.
+
+### 3. Input de captura para teclado en móvil (juegos que se teclean)
+
+Sin un `<input>` enfocado, iOS/Android **no abren el teclado**. Patrón:
+
+- Un `<input class="capture-input">` transparente (`opacity:0`, `font-size:16px` para no hacer zoom iOS, `caret-color:transparent`) posicionado `absolute inset-0` **encima del área de respuesta**; los elementos visuales debajo llevan `pointer-events-none` para que el tap caiga en el input.
+- Captura con `onChange` (lee `e.target.value`, procesa el último carácter, luego `e.target.value=''`) — funciona en móvil. Borrar: `onKeyDown` Backspace (desktop) + `e.nativeEvent.inputType === 'deleteContentBackward'` (móvil).
+- `autoCapitalize/autoCorrect/autoComplete="off"`, `spellCheck={false}`, `inputMode="text"`.
+- Re-enfocar (`focusInput()`) tras cada gesto: `onClick` del contenedor, tras pista/saltar, al cambiar de ítem. **No** poner `disabled` al input entre ítems (deshabilitarlo cierra el teclado en iOS).
+
+### 4. Modo alumno (`?student=true`)
+
+Cuando el link lleva `student=true`, el alumno **no puede llegar al hub de ninguna forma**: la badge P es un `<div>` (no botón), se ocultan reinicios globales y el "Salir al hub". En la pantalla final, en vez de "Salir", instrucción: **"Para salir, solo cierra esta pestaña de tu navegador."** `index.html` ya añade `student=true` al link de alumno.
+
+---
+
 ## Script de imágenes — Cultural Cards + Flashcards
 
 `scripts/update-images.js` — Node.js script que busca imágenes reales en Wikipedia/Commons y las guarda comprimidas en Firebase. Sirve para **dos cosas**: las cultural cards de `recuerdalo` y las imágenes de los mazos de **flashcards** (sustituyen a los emojis para dar el look premium).
