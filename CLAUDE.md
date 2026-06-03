@@ -8,13 +8,15 @@
 
 Periplo es una plataforma de idiomas en línea. Todo lo que existe — juegos, planes, cursos, talleres — es Periplo. Tiene **tres ramas activas** que se construyen en paralelo:
 
-| Rama | Qué es | Idioma enseñado | Estado |
+| Rama | Quién la opera | Idioma enseñado | Estado |
 |---|---|---|---|
-| **Curso de Inglés** | Clases en vivo 60 min, grupos de 4 alumnos + teacher | Inglés | Activo — currículo documentado |
-| **Curso de Español** | Clases en vivo, misma arquitectura que inglés | Español | En construcción — alimenta Holy Guac |
-| **Holy Guacamole** | Spanish Club semanal (1 vez/semana) | Español | Activo — talleres temáticos |
+| **Curso de Inglés** | Israel | Inglés | Activo — currículo documentado |
+| **Curso de Español** | Anita | Español | Activo — avanza en paralelo con Holy Guac |
+| **Holy Guacamole** | Israel | Español | Activo — talleres semanales los sábados |
 
-**Relación entre ramas:** El Curso de Español y Holy Guacamole se construyen juntos al mismo tiempo. El Curso de Español genera el contenido académico (vocab, gramática, lecturas); Holy Guacamole es la aplicación práctica semanal, más ligera y temática, que consume ese mismo contenido. No son lo mismo pero son interdependientes.
+**Relación entre las ramas de español:** El Curso de Español (Anita) y Holy Guacamole (Israel) son prácticamente la misma plataforma aplicada a ritmos y temas ligeramente distintos. No se sincronizan semana a semana pero comparten todos los juegos y el mismo stack técnico.
+
+**Relación inglés ↔ español en el código:** Las dos ramas se construyen juntas y se alimentan mutuamente. Un feature puede nacer en cualquiera de las dos y luego portarse a la otra. Ejemplos reales: las flashcards con imágenes llegaron primero a los archivos `-es` (propuesta de Anita) y luego Israel las pasó a los archivos sin marca; `spell-the-phrase.html` nació en la rama inglés y eventualmente existirá `spell-the-phrase-es.html`. **Regla de paridad:** todo juego que existe en una rama debe tener (o tendrá) su equivalente en la otra.
 
 ---
 
@@ -361,6 +363,34 @@ const BACK_URL = (urlParams.get('uid') || '').includes('anita') ? 'index-es.html
 
 ---
 
+## Ciclo de vida de un juego nuevo
+
+Cada juego nuevo en Periplo sigue exactamente estos 4 pasos, en orden:
+
+```
+1. Renderer con mock      juego.html con datos hardcodeados en el JS — funciona sin Firestore
+2. Dashboard builder      dashboard-juego.html — crea/edita el doc en Firestore con el schema que el renderer espera
+3. Conectar renderer      reemplazar mock por carga Firestore (?id=, ?uid=) usando el patrón estándar
+4. Agregar al hub         entry en index.html y/o index-es.html según aplique
+```
+
+### Regla de dashboards compartidos
+
+No es "un dashboard por renderer". La relación correcta es **un dashboard por schema de datos**:
+
+| Situación | Decisión |
+|---|---|
+| El nuevo juego consume el mismo schema que uno existente | Reusar el dashboard existente |
+| El nuevo juego tiene un schema propio (campos distintos) | Crear `dashboard-juego.html` nuevo |
+
+Ejemplos: `anagram`, `memorama`, `emojispell`, `flashcards` — cuatro renderers distintos, todos consumen `WORDPACK`, todos usan `dashboard-fc.html`. `spell-the-phrase` tiene su propio schema `SPELL_PHRASE`, tiene `dashboard-stp.html` propio.
+
+### Regla de paridad inglés ↔ español
+
+Todo juego que existe en una rama debe tener (o tendrá) su equivalente en la otra. Si creas `juego.html` para inglés, eventualmente existirá `juego-es.html`. Si el dashboard usa datos del currículo de inglés, habrá un `dashboard-juego-es.html` que apunte a `teacher_anita_001`. La paridad no es bloqueante — un juego puede vivir en una sola rama mientras se construye el equivalente.
+
+---
+
 ## Tipos de dashboard y patrón de construcción
 
 ### Patrón renderer → dashboard (regla de oro)
@@ -696,6 +726,203 @@ Sin un `<input>` enfocado, iOS/Android **no abren el teclado**. Patrón:
 ### 4. Modo alumno (`?student=true`)
 
 Cuando el link lleva `student=true`, el alumno **no puede llegar al hub de ninguna forma**: la badge P es un `<div>` (no botón), se ocultan reinicios globales y el "Salir al hub". En la pantalla final, en vez de "Salir", instrucción: **"Para salir, solo cierra esta pestaña de tu navegador."** `index.html` ya añade `student=true` al link de alumno.
+
+---
+
+## Componentes de UI — snippets de referencia
+
+Estos son los patrones visuales reales que existen en Periplo. Úsalos textualmente — no inventar variantes nuevas sin consultar a Israel.
+
+### Hoja de estilos compartida
+
+Todo renderer y dashboard nuevo importa `periplo.css` **antes** del `<style>` inline:
+
+```html
+<link rel="stylesheet" href="periplo.css">
+```
+
+`periplo.css` provee: fuente Plus Jakarta Sans, body base, safe area (`.pt-safe`, `.pb-safe`, `.min-h-screen-safe`), `.capture-input`, `.card-texture`, `.custom-scrollbar`, `.backface-hidden`, `.rotate-y-180`, `.transform-style-3d`, `.perspective-1000`, y animaciones (`.animate-shake`, `.fade-in`, `.animate-pop`, `.animate-float`, `.zoom-in-95`, `.slide-in-from-top-4`, `.animate-spin-slow`, `.particle`).
+
+**No redefinir estas clases en `<style>` inline** — si el archivo ya importa `periplo.css`, eliminar las definiciones duplicadas.
+
+---
+
+### Modal overlay (dashboard)
+
+```jsx
+{showModal && (
+    <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-2xl p-6 shadow-2xl max-h-[90vh] flex flex-col">
+
+            {/* Header del modal */}
+            <div className="flex justify-between items-center mb-6 shrink-0">
+                <h2 className="text-xl font-black text-white flex items-center gap-2">
+                    <IconComponent className="text-sky-400"/> Título del Modal
+                </h2>
+                <button onClick={() => setShowModal(false)}
+                        className="text-zinc-500 hover:text-white p-2 rounded-full hover:bg-zinc-800 transition">
+                    <X size={20}/>
+                </button>
+            </div>
+
+            {/* Contenido scrolleable */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-6">
+                {/* ...contenido... */}
+            </div>
+
+            {/* Botón de acción principal — siempre al fondo, fuera del scroll */}
+            <button onClick={handleAction}
+                    disabled={!canProceed}
+                    className="w-full mt-6 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:bg-zinc-800 disabled:cursor-not-allowed text-white py-4 rounded-xl font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 shrink-0">
+                <Save size={18}/> Confirmar y Guardar
+            </button>
+        </div>
+    </div>
+)}
+```
+
+**Variante pequeña** (`max-w-sm`) — para confirmaciones y éxito post-guardado:
+
+```jsx
+<div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm p-6 shadow-2xl">
+        <div className="text-center mb-6">
+            <div className="w-16 h-16 bg-emerald-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4 text-3xl">✅</div>
+            <h2 className="text-xl font-black text-white">¡Guardado!</h2>
+            <p className="text-zinc-400 text-sm mt-1 font-medium">"{title}"</p>
+        </div>
+        {/* botones de acción */}
+    </div>
+</div>
+```
+
+---
+
+### Botones
+
+| Variante | Clases Tailwind |
+|---|---|
+| **Primario** (acción principal) | `bg-sky-600 hover:bg-sky-500 text-white py-4 rounded-xl font-black uppercase tracking-widest shadow-lg transition-transform active:scale-95` |
+| **Primario disabled** | agregar `disabled:opacity-50 disabled:bg-zinc-800 disabled:cursor-not-allowed` |
+| **Secundario** (acción alternativa) | `bg-zinc-800 hover:bg-zinc-700 text-white py-3 rounded-xl font-bold transition-colors` |
+| **Ghost / cancel** | `text-zinc-500 font-bold text-sm hover:text-zinc-300 transition-colors` |
+| **Peligroso** (eliminar) | `bg-red-900/30 hover:bg-red-900/60 text-red-400 hover:text-red-300 border border-red-900/50 rounded-xl transition-colors` |
+| **Chip seleccionable — activo** | `px-4 py-2 rounded-xl font-bold text-sm border-2 bg-sky-600 border-sky-600 text-white shadow-md` |
+| **Chip seleccionable — inactivo** | `px-4 py-2 rounded-xl font-bold text-sm border-2 bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-sky-500 hover:text-sky-300 transition-all` |
+
+---
+
+### Pantalla de instrucciones (`gameState === 'welcome'`)
+
+```jsx
+<div className="min-h-screen-safe w-screen bg-zinc-950 flex flex-col items-center justify-center p-4 pt-safe fade-in">
+    <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-[2rem] shadow-2xl flex flex-col overflow-hidden">
+
+        {/* Ícono + título */}
+        <div className="p-6 sm:p-8 flex-1">
+            <div className="w-16 h-16 bg-sky-500/20 rounded-2xl flex items-center justify-center mb-6 text-3xl mx-auto">
+                🎯
+            </div>
+            <h2 className="text-2xl font-black text-white text-center mb-1">Instrucciones de la dinámica</h2>
+            <p className="text-zinc-500 text-sm text-center mb-6">Nombre del juego</p>
+
+            {/* Filas de instrucción — 3 a 4 máximo */}
+            <div className="space-y-3">
+                {[
+                    { emoji: "👁️", text: "Descripción mecánica principal" },
+                    { emoji: "🪙", text: "Cómo se ganan monedas o puntos" },
+                    { emoji: "💡", text: "Cómo funciona la ayuda / pista" },
+                ].map(({ emoji, text }) => (
+                    <div key={text} className="flex items-start gap-3 bg-zinc-800/50 rounded-xl p-3">
+                        <span className="text-xl shrink-0">{emoji}</span>
+                        <p className="text-zinc-300 text-sm font-medium">{text}</p>
+                    </div>
+                ))}
+            </div>
+        </div>
+
+        {/* Botón de inicio — franja inferior con pb-safe */}
+        <div className="p-4 sm:p-6 bg-zinc-950/50 border-t border-zinc-800/50 shrink-0 pb-safe">
+            <button onClick={startGame}
+                    className="w-full py-4 bg-sky-500 hover:bg-sky-400 text-black font-black rounded-2xl text-sm uppercase tracking-widest transition-all active:scale-95 shadow-lg hover:shadow-sky-500/30">
+                Entendido, ¡A jugar!
+            </button>
+        </div>
+    </div>
+</div>
+```
+
+---
+
+### Stats banner (durante el juego)
+
+```jsx
+<div className="shrink-0 w-full flex items-center justify-between px-4 py-2 bg-zinc-900/50 border-b border-zinc-800/50">
+    {/* Progreso */}
+    <span className="text-xs font-black text-zinc-500 uppercase tracking-widest">
+        {current + 1} / {total}
+    </span>
+
+    {/* Monedas */}
+    <div className="flex items-center gap-1.5 bg-zinc-800 rounded-full px-3 py-1">
+        <span className="text-base">🪙</span>
+        <span className="text-sm font-black text-white">{coins}</span>
+    </div>
+
+    {/* Botón pausa / salir */}
+    <button onClick={handlePause} className="text-zinc-500 hover:text-white transition-colors p-1">
+        <Pause size={18}/>
+    </button>
+</div>
+```
+
+---
+
+### Pantalla de victoria (`gameState === 'victory'`)
+
+```jsx
+<div className="min-h-screen-safe w-screen bg-zinc-950 flex flex-col pt-safe fade-in">
+
+    {/* Contenido centrado */}
+    <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-8">
+        <div className="text-6xl mb-4">🏆</div>
+        <h2 className="text-3xl sm:text-4xl font-black text-white mb-2">¡Completado!</h2>
+        <p className="text-base text-zinc-500 mb-2">Resumen del desempeño</p>
+        {/* Stats de la sesión (coins, aciertos, etc.) */}
+    </div>
+
+    {/* Botones — franja inferior con pb-safe */}
+    <div className="shrink-0 w-full max-w-xs mx-auto px-4 pt-3 flex flex-col gap-3 pb-safe">
+        <button onClick={restartGame}
+                className="w-full py-4 bg-sky-500 text-black rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-sky-400 shadow-lg hover:shadow-sky-500/30 transition-all active:scale-95">
+            Jugar de nuevo
+        </button>
+        {!STUDENT && (
+            <button onClick={goBack}
+                    className="w-full py-2 text-zinc-500 font-bold text-sm hover:text-zinc-300 transition-colors">
+                Salir al hub
+            </button>
+        )}
+        {STUDENT && (
+            <p className="text-center text-zinc-500 text-xs font-bold">
+                Para salir, solo cierra esta pestaña de tu navegador.
+            </p>
+        )}
+    </div>
+</div>
+```
+
+---
+
+### Estado vacío (empty state)
+
+```jsx
+<div className="flex flex-col items-center justify-center py-16 text-center px-4">
+    <div className="text-5xl mb-4">📭</div>
+    <h3 className="text-lg font-black text-zinc-400 mb-1">Sin contenido todavía</h3>
+    <p className="text-zinc-600 text-sm max-w-xs">Descripción de qué hacer para agregar contenido.</p>
+</div>
+```
 
 ---
 

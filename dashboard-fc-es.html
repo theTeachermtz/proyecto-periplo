@@ -72,6 +72,7 @@
             const [magiaModal, setMagiaModal]   = useState(false);
             const [omniPrompt, setOmniPrompt]   = useState("");
             const [targetCount, setTargetCount] = useState(15);
+            const [generatingImg, setGeneratingImg] = useState(null);
 
             const [apiKey, setApiKey]                   = useState("");
             const [availableModels, setAvailableModels] = useState([]);
@@ -120,6 +121,79 @@
 
             const addRow    = () => setCards([...cards, { id: Date.now(), wordEs: '', wordEn: '', emojis: '', exampleEs: '' }]);
             const removeRow = (id) => { if (cards.length > 1) setCards(cards.filter(c => c.id !== id)); };
+
+            // Comprime imagen subida por el usuario a JPEG ~320px (<1MB Firestore)
+            const compressImage = (file) => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = e => {
+                    const img = document.createElement('img');
+                    img.onload = () => {
+                        const max = 320;
+                        let { width, height } = img;
+                        if (width > height) { if (width > max) { height = height * max / width; width = max; } }
+                        else { if (height > max) { width = width * max / height; height = max; } }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width; canvas.height = height;
+                        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+                        resolve(canvas.toDataURL('image/jpeg', 0.6));
+                    };
+                    img.onerror = reject;
+                    img.src = e.target.result;
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+
+            const handleImageUpload = async (idx, file) => {
+                if (!file) return;
+                try {
+                    const dataUrl = await compressImage(file);
+                    const n = [...cards]; n[idx].imageData = dataUrl; setCards(n);
+                } catch (err) { alert('No se pudo procesar la imagen: ' + err.message); }
+            };
+
+            const removeImage = (idx) => { const n = [...cards]; delete n[idx].imageData; setCards(n); };
+
+            // Comprime base64 de la IA a JPEG ~320px
+            const compressBase64 = (base64, mime) => new Promise((resolve, reject) => {
+                const img = document.createElement('img');
+                img.onload = () => {
+                    const max = 320;
+                    let { width, height } = img;
+                    if (width > height) { if (width > max) { height = height * max / width; width = max; } }
+                    else { if (height > max) { width = width * max / height; height = max; } }
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width; canvas.height = height;
+                    canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL('image/jpeg', 0.6));
+                };
+                img.onerror = reject;
+                img.src = `data:${mime || 'image/png'};base64,${base64}`;
+            });
+
+            const IMG_STYLE = "Clear, friendly educational illustration. Vibrant colors, simple clean composition that represents the meaning. ";
+            const generateImageAI = async (idx) => {
+                if (!apiKey.trim()) { setMagiaModal(true); return alert("⚠️ Ingresa tu API Key (botón IA Assist) primero."); }
+                const c = cards[idx];
+                const concept = (c.exampleEs || c.wordEs || '').trim();
+                if (!concept) return alert("Esta tarjeta no tiene palabra ni oración de ejemplo para ilustrar.");
+                setGeneratingImg(idx);
+                try {
+                    const prompt = IMG_STYLE + `Illustrate this Spanish concept: "${concept}". Focus on the meaning of "${c.wordEs}".`;
+                    const res = await fetch(
+                        `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey.trim()}`,
+                        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ instances: [{ prompt }], parameters: { sampleCount: 1, aspectRatio: '1:1' } }) }
+                    );
+                    if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.error?.message || `HTTP ${res.status}`); }
+                    const data = await res.json();
+                    const b64 = data.predictions?.[0]?.bytesBase64Encoded;
+                    if (!b64) throw new Error("La API no devolvió imagen.");
+                    const dataUrl = await compressBase64(b64, data.predictions[0].mimeType);
+                    const n = [...cards]; n[idx].imageData = dataUrl; setCards(n);
+                } catch (err) { alert("Error generando imagen IA: " + err.message); }
+                finally { setGeneratingImg(null); }
+            };
 
             const fetchModels = async () => {
                 if (!apiKey) return alert("Ingresa tu API Key primero");
@@ -460,13 +534,41 @@ Respond ONLY with a valid JSON with this exact structure, no extra text, no mark
                                 )}
 
                                 <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-                                    {/* EMOJI */}
+                                    {/* EMOJI / IMAGEN */}
                                     <div className="md:col-span-2 flex flex-col">
-                                        <label className="text-[10px] font-bold text-zinc-500 uppercase mb-1 pl-1">Emojis</label>
-                                        <input value={c.emojis}
-                                            onChange={e => { const n = [...cards]; n[idx].emojis = e.target.value; setCards(n); }}
-                                            placeholder="🚀✨"
-                                            className="w-full bg-zinc-950 p-3 rounded-xl border border-zinc-800 text-2xl text-center outline-none focus:border-orange-500 h-full"/>
+                                        <label className="text-[10px] font-bold text-zinc-500 uppercase mb-1 pl-1">{c.imageData ? 'Imagen' : 'Emojis'}</label>
+                                        {generatingImg === idx ? (
+                                            <div className="w-full h-full min-h-[80px] rounded-xl border border-violet-500/40 bg-violet-500/10 flex flex-col items-center justify-center gap-2">
+                                                <Loader2 size={22} className="animate-spin text-violet-400"/>
+                                                <span className="text-[9px] font-black uppercase tracking-widest text-violet-400">Generando…</span>
+                                            </div>
+                                        ) : c.imageData ? (
+                                            <div className="relative group/img w-full h-full min-h-[60px] rounded-xl overflow-hidden border border-zinc-800">
+                                                <img src={c.imageData} alt="" className="w-full h-full object-cover"/>
+                                                <div className="absolute inset-0 bg-black/70 opacity-0 group-hover/img:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1.5">
+                                                    <button onClick={() => generateImageAI(idx)} className="text-[10px] font-black uppercase text-violet-300 hover:text-violet-200 flex items-center gap-1"><Sparkles size={11}/> IA</button>
+                                                    <label className="cursor-pointer text-[10px] font-black uppercase text-sky-400 hover:text-sky-300">
+                                                        Cambiar
+                                                        <input type="file" accept="image/*" className="hidden" onChange={e => handleImageUpload(idx, e.target.files[0])}/>
+                                                    </label>
+                                                    <button onClick={() => removeImage(idx)} className="text-[10px] font-black uppercase text-rose-400 hover:text-rose-300">Quitar</button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="flex flex-col gap-1 h-full">
+                                                <input value={c.emojis}
+                                                    onChange={e => { const n = [...cards]; n[idx].emojis = e.target.value; setCards(n); }}
+                                                    placeholder="🚀✨"
+                                                    className="w-full bg-zinc-950 p-3 rounded-xl border border-zinc-800 text-2xl text-center outline-none focus:border-orange-500 flex-1"/>
+                                                <div className="flex gap-1">
+                                                    <button onClick={() => generateImageAI(idx)} className="flex-1 text-center text-[9px] font-bold uppercase text-violet-400 hover:text-violet-300 transition-colors py-1 flex items-center justify-center gap-1"><Sparkles size={10}/> IA</button>
+                                                    <label className="flex-1 cursor-pointer text-center text-[9px] font-bold uppercase text-zinc-500 hover:text-orange-400 transition-colors py-1">
+                                                        Subir
+                                                        <input type="file" accept="image/*" className="hidden" onChange={e => handleImageUpload(idx, e.target.files[0])}/>
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
 
                                     {/* ESPAÑOL E INGLÉS */}
