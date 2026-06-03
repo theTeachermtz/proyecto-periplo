@@ -60,6 +60,7 @@
             const [showApiInput, setShowApiInput] = useState(false);
             const [isGenerating, setIsGenerating] = useState(false);
             const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
+            const [isTranslating, setIsTranslating] = useState(false);
             const [isSaving, setIsSaving] = useState(false);
             const [editingId, setEditingId] = useState(null);
             const [generatingImg, setGeneratingImg] = useState(null);
@@ -130,6 +131,31 @@
             const getWordCount = (text) => {
                 if (!text) return 0;
                 return text.trim().split(/\s+/).filter(word => word.length > 0).length;
+            };
+
+            const extractBlanks = (text) => {
+                if (!text) return [];
+                const matches = text.match(/\[([^\]]+)\]/g) || [];
+                return [...new Set(matches.map(m => m.slice(1, -1)))];
+            };
+
+            const generateTranslations = async (storyIdx) => {
+                if (!apiKey.trim()) { setShowApiInput(true); return alert("Ingresa tu API Key primero."); }
+                const blanks = extractBlanks(stories[storyIdx].text);
+                if (blanks.length === 0) return alert("No hay palabras en el Word Bank todavía.");
+                setIsTranslating(true);
+                try {
+                    const prompt = `Translate these English words/phrases to Spanish (brief, 1-4 words each). Return ONLY a valid JSON object, no extra text.
+Words: ${JSON.stringify(blanks)}
+Format: {"word1": "traducción1", "word2": "traducción2"}`;
+                    let resultText = await AI.callGemini({ apiKey, model: selectedModel, prompt });
+                    resultText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
+                    const parsed = JSON.parse(resultText);
+                    const ns = [...stories];
+                    ns[storyIdx].translations = { ...(ns[storyIdx].translations || {}), ...parsed };
+                    setStories(ns);
+                } catch (err) { alert("Error generando traducciones: " + err.message); }
+                finally { setIsTranslating(false); }
             };
 
             const compressImage = (file) => new Promise((resolve, reject) => {
@@ -738,6 +764,46 @@
 
                                     {/* EL COMPONENTE MAGICO DE LOS HUECOS */}
                                     {renderInteractiveBlankSelector()}
+
+                                    {/* TRADUCCIONES DEL WORD BANK */}
+                                    <div className="mb-8 border-t border-slate-200 dark:border-zinc-800 pt-6">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Traducciones del Word Bank</label>
+                                            <button
+                                                onClick={() => generateTranslations(editingStoryIdx)}
+                                                disabled={isTranslating}
+                                                className="bg-violet-100 dark:bg-violet-900/50 text-violet-700 dark:text-violet-400 px-3 py-1.5 rounded-lg flex items-center gap-2 hover:bg-violet-200 dark:hover:bg-violet-900/80 transition-colors font-bold text-sm shadow-sm disabled:opacity-50"
+                                            >
+                                                {isTranslating ? <Loader2 className="animate-spin" size={16}/> : <Sparkles size={16}/>} IA: Traducir todo
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-slate-500 dark:text-zinc-500 mb-4 leading-relaxed">
+                                            El alumno puede ver estas traducciones como referencia desde el Word Bank — sin conexión extra. Edita cualquiera a mano.
+                                        </p>
+                                        {extractBlanks(stories[editingStoryIdx].text).length === 0 ? (
+                                            <p className="text-sm text-slate-400 italic">No hay palabras en el Word Bank todavía.</p>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                {extractBlanks(stories[editingStoryIdx].text).map(word => (
+                                                    <div key={word} className="flex items-center gap-3">
+                                                        <span className="font-bold text-sm text-indigo-600 dark:text-indigo-400 w-40 shrink-0 truncate">{word}</span>
+                                                        <span className="text-slate-300 dark:text-zinc-600">→</span>
+                                                        <input
+                                                            value={stories[editingStoryIdx].translations?.[word] || ''}
+                                                            onChange={e => {
+                                                                const ns = [...stories];
+                                                                if (!ns[editingStoryIdx].translations) ns[editingStoryIdx].translations = {};
+                                                                ns[editingStoryIdx].translations[word] = e.target.value;
+                                                                setStories(ns);
+                                                            }}
+                                                            placeholder="traducción..."
+                                                            className="flex-1 bg-slate-50 dark:bg-zinc-950 p-2 rounded-lg outline-none border border-slate-200 dark:border-zinc-800 focus:border-indigo-500 text-sm"
+                                                        />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
 
                                     <div className="mb-8 p-4 bg-amber-50 dark:bg-amber-900/10 border-l-4 border-amber-400 rounded-r-xl">
                                         <label className="text-xs font-bold text-amber-600 dark:text-amber-500 uppercase tracking-widest mb-1 block">Did You Know? (Fun Fact)</label>
