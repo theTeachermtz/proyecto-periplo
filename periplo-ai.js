@@ -72,7 +72,8 @@ window.PERIPLO_AI = (() => {
         const generationConfig = { temperature, maxOutputTokens };
         if (json) generationConfig.responseMimeType = 'application/json';
 
-        const res = await fetch(`${BASE}/${model}:generateContent?key=${apiKey.trim()}`, {
+        const effectiveModel = (model && model.trim()) ? model.trim() : DEFAULT_MODEL;
+        const res = await fetch(`${BASE}/${effectiveModel}:generateContent?key=${apiKey.trim()}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig }),
