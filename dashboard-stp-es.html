@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard · Escribe la Frase | Periplo Español</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' };</script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="periplo-ai.js"></script>
+    <script src="periplo-taxonomy-es.js"></script>
+    <link rel="stylesheet" href="periplo.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
+        html, body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; height: 100%; overflow: hidden; }
+        button, a { user-select: none; -webkit-user-select: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.2s ease-out; }
+    </style>
+</head>
+<body class="text-zinc-100 dark">
+<div id="root" style="height:100%"></div>
+<script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useRef, useMemo } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { initializeApp } from 'firebase/app';
+    import { getFirestore, collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
+    import {
+        Plus, Trash2, Save, Link2, RefreshCw, Sparkles,
+        ExternalLink, CheckCircle2, ShoppingCart, Pencil, Check
+    } from 'lucide-react';
+
+    const FIREBASE_CONFIG = {
+        apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",
+        authDomain: "proyecto-periplo.firebaseapp.com",
+        projectId: "proyecto-periplo",
+        storageBucket: "proyecto-periplo.firebasestorage.app",
+        messagingSenderId: "236795998392",
+        appId: "1:236795998392:web:0da24b4f018611b55c844d"
+    };
+    const app = initializeApp(FIREBASE_CONFIG);
+    const db  = getFirestore(app);
+
+    const urlParams    = new URLSearchParams(window.location.search);
+    const TEACHER_UID  = urlParams.get('uid') || 'teacher_anita_001';
+    const QUIZ_ID      = urlParams.get('id')  || null;
+    const BACK_URL     = 'index-es.html';
+    const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
+
+    const genId = () => Math.random().toString(36).slice(2, 9);
+
+    const { NEW_LEVELS, NEW_CATS, MACRO_SKILLS, getAllTopicsForCategory } = window.PERIPLO_TAXONOMY_ES;
+
+    // ── Currículo de español para angloparlantes ─────────────────────────────────
+    const CURRICULUM = {
+      principiante: {
+        label: 'Principiante',
+        grammar: [
+          { id: 'Ser vs Estar',       words: ['soy','eres','es','somos','son','estoy','estás','está','estamos','están'] },
+          { id: 'Presente Regular',   words: ['hablo','hablas','habla','como','comes','vivo','vives','siempre','nunca','a veces','todos los días'] },
+          { id: 'Artículos y Género', words: ['el','la','los','las','un','una','unos','unas','este','esta','ese','esa'] },
+          { id: 'Hay / Tener',        words: ['hay','tiene','tienen','tengo','tienes','no hay','¿hay?','necesito','quiero'] },
+        ],
+        verbs: [
+          { id: 'Verbos -AR esenciales',   words: ['hablar','caminar','trabajar','cocinar','bailar','cantar','estudiar','ayudar','comprar','necesitar','escuchar','preguntar','contestar','buscar','usar','llamar','llegar','empezar','terminar','descansar'] },
+          { id: 'Verbos -ER/-IR esenciales', words: ['comer','beber','leer','vender','correr','vivir','escribir','abrir','subir','recibir','salir','venir','poner','tener','hacer','ser','estar','ir','ver','dar'] },
+        ]
+      },
+      intermedio: {
+        label: 'Intermedio',
+        grammar: [
+          { id: 'Pretérito Indefinido', words: ['hablé','comí','viví','fue','tuve','hice','dije','vine','puse','ayer','la semana pasada','hace un mes','el año pasado'] },
+          { id: 'Pretérito Imperfecto', words: ['hablaba','comía','vivía','era','tenía','hacía','cuando','siempre','antes','de niño','todos los días','normalmente'] },
+          { id: 'Futuro Simple',        words: ['hablaré','comeré','viviré','será','tendré','haré','mañana','la próxima semana','pronto','algún día','en el futuro'] },
+          { id: 'Condicional Simple',   words: ['hablaría','comería','viviría','sería','tendría','haría','si pudiera','me gustaría','querría','podría','debería'] },
+        ],
+        verbs: [
+          { id: 'Irregulares comunes', words: ['ir','ser','tener','hacer','poder','querer','saber','venir','decir','ver','dar','traer','poner','salir','oír','conocer','seguir','jugar','dormir','pedir'] },
+          { id: 'Verbos reflexivos',   words: ['levantarse','ducharse','vestirse','llamarse','sentirse','acordarse','olvidarse','irse','quedarse','ponerse','despertarse','acostarse','divertirse','aburrirse','preocuparse'] },
+        ]
+      },
+      avanzado: {
+        label: 'Avanzado',
+        grammar: [
+          { id: 'Presente Subjuntivo', words: ['que hable','que coma','que viva','espero que','quiero que','ojalá','es importante que','dudo que','no creo que','busco a alguien que'] },
+          { id: 'Pretérito Perfecto',  words: ['he hablado','has comido','ha vivido','hemos ido','han llegado','ya','todavía no','alguna vez','nunca','esta semana'] },
+          { id: 'Por vs Para',         words: ['por eso','por favor','para ti','para mañana','por la mañana','para que','por culpa de','para siempre','por supuesto','gracias por'] },
+          { id: 'Imperativo',          words: ['habla','come','vive','hablen','no hables','hazlo','ven aquí','dame','dime','escúchame','siéntate','espera','mira'] },
+        ],
+        verbs: [
+          { id: 'Expresiones de valor', words: ['darse cuenta de','llevar a cabo','tener en cuenta','a pesar de','sin embargo','es decir','por lo tanto','en cuanto a','además de','a partir de','de hecho','por ejemplo'] },
+          { id: 'Locuciones verbales',  words: ['echar de menos','tener ganas de','ponerse de acuerdo','darse prisa','hacer caso','tomar en serio','perder el tiempo','hacer falta','dar cuenta de','caer bien'] },
+        ]
+      }
+    };
+
+    // ── Exercise card ────────────────────────────────────────────────────────────
+    const ExerciseCard = ({ ex, idx, onRemove, onUpdate }) => {
+        const [editing, setEditing] = React.useState(false);
+
+        if (editing) return (
+            <div className="bg-zinc-950 border-2 border-orange-500/50 rounded-2xl p-3 flex flex-col gap-2 fade-in">
+                <div className="flex items-center gap-2">
+                    <input value={ex.emoji || ''} onChange={e => onUpdate(idx, { emoji: e.target.value })}
+                        className="w-12 shrink-0 bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-center text-xl outline-none focus:border-orange-500"
+                        placeholder="📝" maxLength={4} />
+                    <input value={ex.english} onChange={e => onUpdate(idx, { english: e.target.value })}
+                        className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-sky-500 text-white"
+                        placeholder="English prompt" />
+                </div>
+                <div className="flex gap-2 items-end">
+                    <div className="flex-1">
+                        <label className="text-[9px] font-black text-orange-500 uppercase block mb-1">✏️ Parte a teclear (español)</label>
+                        <input value={ex.blank_part} onChange={e => onUpdate(idx, { blank_part: e.target.value })}
+                            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-orange-500 text-white" />
+                    </div>
+                    <div className="flex-1">
+                        <label className="text-[9px] font-black text-zinc-500 uppercase block mb-1">🎁 Complemento (dado)</label>
+                        <input value={ex.given_part || ''} onChange={e => onUpdate(idx, { given_part: e.target.value })}
+                            onKeyDown={e => e.key === 'Enter' && setEditing(false)}
+                            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-zinc-500 text-white" />
+                    </div>
+                    <button onClick={() => setEditing(false)}
+                        className="bg-emerald-500 hover:bg-emerald-400 text-white p-2 rounded-lg transition-colors shrink-0" title="Listo">
+                        <Check size={18} />
+                    </button>
+                </div>
+            </div>
+        );
+
+        return (
+            <div className="flex gap-3 items-center bg-zinc-950 border border-zinc-800 rounded-2xl p-3 group hover:border-zinc-700 transition-colors fade-in">
+                <div className="shrink-0 w-12 h-12 rounded-xl overflow-hidden bg-zinc-900 border border-zinc-800 flex items-center justify-center text-2xl">
+                    {ex.imageData
+                        ? <img src={ex.imageData} className="w-full h-full object-cover" alt="" />
+                        : <span>{ex.emoji || '📝'}</span>
+                    }
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="text-sky-400 font-bold text-xs leading-snug truncate">{ex.english}</p>
+                    <div className="flex flex-wrap gap-1 mt-1.5 items-center">
+                        <span className="px-2 py-0.5 bg-orange-500/15 border border-orange-500/25 text-orange-300 rounded-lg text-xs font-bold">✏️ {ex.blank_part}</span>
+                        {ex.given_part && (
+                            <span className="px-2 py-0.5 bg-zinc-700/50 border border-zinc-700 text-zinc-400 rounded-lg text-xs font-bold">🎁 {ex.given_part}</span>
+                        )}
+                    </div>
+                </div>
+                <span className="shrink-0 text-[10px] font-black text-zinc-700 tabular-nums w-5 text-right">{idx + 1}</span>
+                <button onClick={() => setEditing(true)}
+                    className="shrink-0 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-zinc-600 hover:text-orange-400 hover:bg-orange-500/10 transition-all" title="Editar">
+                    <Pencil size={14} />
+                </button>
+                <button onClick={() => onRemove(idx)}
+                    className="shrink-0 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-zinc-600 hover:text-rose-400 hover:bg-rose-500/10 transition-all" title="Eliminar">
+                    <Trash2 size={14} />
+                </button>
+            </div>
+        );
+    };
+
+    // ── Dashboard ────────────────────────────────────────────────────────────────
+    export default function DashboardSTPEs() {
+        const AI        = window.PERIPLO_AI;
+        const ApiKeyBar = AI.createApiKeyBar(React);
+
+        const [title,     setTitle]     = useState('');
+        const [exercises, setExercises] = useState([]);
+        const [saving,    setSaving]    = useState(false);
+        const [savedId,   setSavedId]   = useState(QUIZ_ID);
+        const [showModal, setShowModal] = useState(false);
+        const [loading,   setLoading]   = useState(!!QUIZ_ID);
+
+        const [showTaxModal, setShowTaxModal] = useState(false);
+        const [saveLevels,   setSaveLevels]   = useState([]);
+        const [saveCats,     setSaveCats]     = useState([]);
+        const [saveTopics,   setSaveTopics]   = useState([]);
+        const toggleSel = (arr, set, val) => set(arr.includes(val) ? arr.filter(v => v !== val) : [...arr, val]);
+
+        const [apiKey,          setApiKey]          = useState('');
+        const [availableModels, setAvailableModels] = useState([]);
+        const [selectedModel,   setSelectedModel]   = useState('');
+        const [loadingModels,   setLoadingModels]   = useState(false);
+        const [generating,      setGenerating]      = useState(false);
+        const abortRef = useRef(null);
+
+        const [grammarLevel,      setGrammarLevel]      = useState('principiante');
+        const [verbLevel,         setVerbLevel]         = useState('principiante');
+        const [activeTab,         setActiveTab]         = useState('grammar');
+        const [selectedGrammars,  setSelectedGrammars]  = useState([]);
+        const [selectedVerbPacks, setSelectedVerbPacks] = useState([]);
+        const [excludedWords,     setExcludedWords]     = useState(new Set());
+        const [useCustomVerbs,    setUseCustomVerbs]    = useState(false);
+        const [customVerbs,       setCustomVerbs]       = useState('');
+        const [aiTopic,           setAiTopic]           = useState('');
+        const [aiCount,           setAiCount]           = useState(10);
+
+        const [manualEn,    setManualEn]    = useState('');
+        const [manualBlank, setManualBlank] = useState('');
+        const [manualGiven, setManualGiven] = useState('');
+
+        useEffect(() => {
+            const k = AI.loadKey();
+            if (k) setApiKey(k);
+            if (!QUIZ_ID) { setLoading(false); return; }
+            getDoc(doc(db, QUIZZES_PATH, QUIZ_ID))
+                .then(snap => {
+                    if (snap.exists()) {
+                        const d = snap.data();
+                        setTitle(d.title || '');
+                        setSaveLevels(d.tags?.levels    || []);
+                        setSaveCats(d.tags?.categories  || []);
+                        setSaveTopics(d.tags?.topics    || []);
+                        const exs = (d.content?.exercises || []).map(e => ({
+                            ...e, id: e.id || genId(),
+                            blank_part: e.blank_part || '',
+                            given_part: e.given_part || ''
+                        }));
+                        setExercises(exs);
+                    }
+                    setLoading(false);
+                })
+                .catch(() => setLoading(false));
+        }, []);
+
+        const fetchModels = async () => {
+            if (!apiKey) return;
+            setLoadingModels(true);
+            try {
+                const m = await AI.fetchModels(apiKey);
+                setAvailableModels(m);
+                setSelectedModel(AI.pickPreferredModel(m));
+            } catch (e) { console.error(e); }
+            setLoadingModels(false);
+        };
+
+        const toggleGrammarPack = (id) =>
+            setSelectedGrammars(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+        const toggleVerbPack = (id) =>
+            setSelectedVerbPacks(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+        const toggleWord = (w) => setExcludedWords(prev => {
+            const next = new Set(prev);
+            if (next.has(w)) next.delete(w); else next.add(w);
+            return next;
+        });
+
+        const grammarWordPool = Object.values(CURRICULUM)
+            .flatMap(lvl => lvl.grammar)
+            .filter(p => selectedGrammars.includes(p.id))
+            .flatMap(p => p.words);
+
+        const verbWordPool = useCustomVerbs
+            ? []
+            : selectedVerbPacks.flatMap(id =>
+                CURRICULUM[verbLevel].verbs.find(v => v.id === id)?.words || []
+              );
+
+        const activeGrammarWords = grammarWordPool.filter(w => !excludedWords.has(w));
+        const activeVerbWords    = useCustomVerbs
+            ? customVerbs.split(/[,\n]+/).map(v => v.trim()).filter(Boolean)
+            : verbWordPool.filter(w => !excludedWords.has(w));
+
+        const generateWithAI = async () => {
+            if (!apiKey || !selectedModel) return;
+            setGenerating(true);
+            abortRef.current = new AbortController();
+
+            let currBlock = '';
+            if (activeGrammarWords.length || activeVerbWords.length) {
+                const parts = [];
+                if (activeGrammarWords.length) parts.push(`ESTRUCTURA GRAMATICAL (${selectedGrammars.join(' + ')}): ${activeGrammarWords.join(', ')}`);
+                if (activeVerbWords.length)    parts.push(`VERBOS A USAR: ${activeVerbWords.join(', ')}`);
+                currBlock = `\n\nCONTEXTO CURRICULAR (obligatorio):\n${parts.join('\n')}\n\nINSTRUCCIÓN: Usa los verbos listados conjugados con la estructura gramatical. Sujeto explícito en español. Varía sujetos — no todos "yo".`;
+            }
+
+            const prompt = `Eres un generador de contenido pedagógico para Periplo, plataforma de español para angloparlantes.
+
+Genera exactamente ${aiCount} ejercicios "Escribe la Frase". El alumno ve la frase en INGLÉS y TECLEA la parte en español (blank_part). El complemento se muestra (given_part).
+
+Tema / contexto: ${aiTopic || 'frases cotidianas de alto impacto en español'}${currBlock}
+
+REGLAS:
+- english: la frase en INGLÉS que el alumno ve como pista. Debe ser natural y corresponder exactamente a la frase en español.
+- blank_part: SOLO la estructura gramatical objetivo en ESPAÑOL (máx 4 palabras). Ej: "Yo estaba trabajando", "Ella habría sabido", "¿Tienes ganas de"
+- given_part: el complemento/resto de la oración en español. Ej: "en la oficina.", "sobre eso.", "ir al cine?"
+- Sujeto siempre explícito en español. Varía sujetos (no todos "yo").
+- VARÍA EL TIPO DE ORACIÓN: mezcla afirmativas, negativas, preguntas sí/no y preguntas QU- (Qué/Dónde/Cuándo/Por qué/Cómo/Quién). Que NO todas sean afirmativas.
+- emoji: un solo emoji visual como pista de contexto
+- Oraciones naturales de uso real en español latinoamericano
+
+Responde ÚNICAMENTE con array JSON sin markdown ni explicación:
+[{"english":"...","blank_part":"...","given_part":"...","emoji":"..."}]`;
+
+            try {
+                const raw = await AI.callGemini({ apiKey, model: selectedModel, prompt, signal: abortRef.current.signal });
+                const match = raw.match(/\[[\s\S]*\]/);
+                if (match) {
+                    const parsed = JSON.parse(match[0]);
+                    const added = parsed.map(e => ({
+                        id: genId(),
+                        english:    e.english    || '',
+                        blank_part: e.blank_part || '',
+                        given_part: e.given_part || '',
+                        emoji:      e.emoji      || '',
+                        imageData:  null
+                    }));
+                    setExercises(prev => [...prev, ...added]);
+                    if (!title && selectedGrammars.length)
+                        setTitle(`${selectedGrammars.join(' + ')} — ${CURRICULUM[grammarLevel].label}`);
+                }
+            } catch (e) {
+                if (e.name !== 'AbortError') console.error(e);
+            }
+            setGenerating(false);
+        };
+
+        const addManual = () => {
+            if (!manualEn.trim() || !manualBlank.trim()) return;
+            setExercises(prev => [...prev, {
+                id: genId(),
+                english:    manualEn.trim(),
+                blank_part: manualBlank.trim(),
+                given_part: manualGiven.trim(),
+                emoji: '',
+                imageData: null
+            }]);
+            setManualEn(''); setManualBlank(''); setManualGiven('');
+        };
+
+        const removeExercise = (idx) => setExercises(prev => prev.filter((_, i) => i !== idx));
+        const updateExercise = (idx, patch) => setExercises(prev => prev.map((e, i) => i === idx ? { ...e, ...patch } : e));
+        const clearAll       = () => { if (confirm('¿Vaciar todos los ejercicios?')) setExercises([]); };
+
+        const requestSave = () => {
+            if (!title.trim()) { alert('Ponle un título al mazo'); return; }
+            const valid = exercises.filter(e => e.english?.trim() && e.blank_part?.trim()).length;
+            if (!valid) { alert('Agrega al menos un ejercicio completo'); return; }
+            if (saveLevels.length === 0 || saveCats.length === 0) { setShowTaxModal(true); return; }
+            handleSave();
+        };
+
+        const handleSave = async () => {
+            if (!title.trim()) { alert('Ponle un título al mazo'); return; }
+            const toSave = exercises
+                .filter(e => e.english?.trim() && e.blank_part?.trim())
+                .map(({ ...rest }) => rest);
+            if (!toSave.length) { alert('Agrega al menos un ejercicio completo'); return; }
+            setShowTaxModal(false);
+            setSaving(true);
+            try {
+                const payload = {
+                    title: title.trim(), type: 'SPELL_PHRASE_ES',
+                    tags: { levels: saveLevels, categories: saveCats, topics: saveTopics },
+                    content: { exercises: toSave }, cardCount: toSave.length,
+                    uid: TEACHER_UID, updatedAt: serverTimestamp()
+                };
+                let id = savedId;
+                if (id) {
+                    await updateDoc(doc(db, QUIZZES_PATH, id), payload);
+                } else {
+                    const ref = await addDoc(collection(db, QUIZZES_PATH), payload);
+                    id = ref.id; setSavedId(id);
+                    window.history.replaceState({}, '', `?id=${id}&uid=${TEACHER_UID}`);
+                }
+                setShowModal(true);
+            } catch (e) { console.error(e); alert('Error guardando.'); }
+            setSaving(false);
+        };
+
+        const validCount = exercises.filter(e => e.english?.trim() && e.blank_part?.trim()).length;
+
+        const autoTitle = useMemo(() => {
+            if (title) return title;
+            if (selectedGrammars.length) return `${selectedGrammars.join(' + ')} — ${CURRICULUM[grammarLevel].label}`;
+            return 'Nuevo Escribe la Frase';
+        }, [title, selectedGrammars, grammarLevel]);
+
+        if (loading) return (
+            <div style={{height:'100%'}} className="flex items-center justify-center bg-zinc-950">
+                <div className="w-10 h-10 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+        );
+
+        return (
+            <div className="flex flex-col bg-zinc-950" style={{ height: '100%', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+
+                {/* HEADER */}
+                <header className="bg-zinc-950 border-b border-zinc-800 flex items-center gap-3 px-4 sm:px-6 py-3 shrink-0 z-10">
+                    <button onClick={() => { window.location.href = BACK_URL; }}
+                        className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 hover:bg-indigo-500 transition-colors shrink-0">
+                        P
+                    </button>
+                    <div className="hidden sm:block w-px h-8 bg-zinc-800 shrink-0" />
+                    <div className="shrink-0">
+                        <h1 className="text-base font-black text-white leading-none tracking-tight">Escribe la Frase 🇲🇽</h1>
+                        <p className="text-[10px] font-bold uppercase tracking-widest mt-1 text-orange-400">Editor de mazos · Español</p>
+                    </div>
+                    <div className="flex-1 flex justify-end items-center gap-2">
+                        <ApiKeyBar
+                            variant="compact"
+                            accentBtn="bg-orange-500 hover:bg-orange-400 text-white"
+                            apiKey={apiKey}
+                            setApiKey={(k) => { setApiKey(k); AI.saveKey(k); }}
+                            models={availableModels}
+                            selectedModel={selectedModel}
+                            setSelectedModel={setSelectedModel}
+                            isLoading={loadingModels}
+                            onFetch={fetchModels}
+                            onClear={() => { setAvailableModels([]); setSelectedModel(''); AI.clearKey(); setApiKey(''); }}
+                        />
+                    </div>
+                </header>
+
+                {/* TWO-PANEL BODY */}
+                <div className="flex flex-1 overflow-hidden">
+
+                    {/* LEFT: Ingredient selector */}
+                    <div className="w-full md:w-[42%] xl:w-[38%] border-b md:border-b-0 md:border-r border-zinc-800 flex flex-col bg-zinc-950 h-[45%] md:h-full">
+
+                        <div className="p-4 border-b border-zinc-800 shrink-0">
+                            <h2 className="font-black text-sm flex items-center gap-2 text-white">
+                                <Sparkles size={15} className="text-amber-400" />
+                                Ingredientes
+                            </h2>
+                            <p className="text-[10px] text-zinc-500 font-bold mt-0.5">Gramática + Verbos → Generar</p>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 space-y-5 custom-scrollbar">
+
+                            <div>
+                                <div className="flex gap-1 bg-zinc-900 rounded-xl p-1 mb-3">
+                                    {[
+                                        { id: 'grammar', label: '🔤 Gramática' },
+                                        { id: 'verbs',   label: '⚡ Verbos' },
+                                    ].map(tab => (
+                                        <button key={tab.id}
+                                            onClick={() => setActiveTab(tab.id)}
+                                            className={`flex-1 py-2 rounded-lg text-xs font-black transition-all ${activeTab === tab.id ? 'bg-zinc-800 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}
+                                        >{tab.label}</button>
+                                    ))}
+                                </div>
+
+                                {activeTab === 'grammar' && (
+                                    <div className="flex flex-col gap-1.5">
+                                        <div className="flex gap-1 mb-1">
+                                            {Object.entries(CURRICULUM).map(([lv, cv]) => (
+                                                <button key={lv}
+                                                    onClick={() => setGrammarLevel(lv)}
+                                                    className={`flex-1 py-1.5 rounded-lg font-black text-xs transition-all border ${grammarLevel === lv ? 'bg-orange-600/25 border-orange-500/50 text-orange-300' : 'bg-zinc-900 border-zinc-700 text-zinc-500 hover:text-zinc-300'}`}
+                                                >{cv.label}</button>
+                                            ))}
+                                        </div>
+                                        {CURRICULUM[grammarLevel].grammar.map(pack => {
+                                            const isOn = selectedGrammars.includes(pack.id);
+                                            return (
+                                                <button key={pack.id}
+                                                    onClick={() => {
+                                                        const adding = !selectedGrammars.includes(pack.id);
+                                                        toggleGrammarPack(pack.id);
+                                                        if (adding) setExcludedWords(prev => { const n = new Set(prev); pack.words.forEach(w => n.delete(w)); return n; });
+                                                    }}
+                                                    className={`w-full text-left p-3 rounded-xl border-2 font-bold text-sm transition-all active:scale-[0.98] ${isOn ? 'bg-orange-600/20 border-orange-500 text-orange-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
+                                                >
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-2">
+                                                            {isOn && <CheckCircle2 size={14} className="text-orange-400 shrink-0" />}
+                                                            <span>{pack.id}</span>
+                                                        </div>
+                                                        <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isOn ? 'bg-orange-500/20 text-orange-400' : 'bg-zinc-800 text-zinc-600'}`}>
+                                                            {isOn ? '✓' : `${pack.words.length}`}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+
+                                {activeTab === 'verbs' && (
+                                    <div className="flex flex-col gap-1.5">
+                                        <div className="flex gap-1 mb-1">
+                                            {Object.entries(CURRICULUM).map(([lv, cv]) => (
+                                                <button key={lv}
+                                                    onClick={() => { setVerbLevel(lv); setSelectedVerbPacks([]); setUseCustomVerbs(false); }}
+                                                    className={`flex-1 py-1.5 rounded-lg font-black text-xs transition-all border ${verbLevel === lv ? 'bg-sky-600/25 border-sky-500/50 text-sky-300' : 'bg-zinc-900 border-zinc-700 text-zinc-500 hover:text-zinc-300'}`}
+                                                >{cv.label}</button>
+                                            ))}
+                                        </div>
+                                        {CURRICULUM[verbLevel].verbs.map(pack => {
+                                            const isOn = selectedVerbPacks.includes(pack.id);
+                                            return (
+                                                <button key={pack.id}
+                                                    onClick={() => {
+                                                        const adding = !selectedVerbPacks.includes(pack.id);
+                                                        toggleVerbPack(pack.id);
+                                                        if (adding) setExcludedWords(prev => { const n = new Set(prev); pack.words.forEach(w => n.delete(w)); return n; });
+                                                    }}
+                                                    className={`w-full text-left p-3 rounded-xl border-2 font-bold text-sm transition-all active:scale-[0.98] ${isOn ? 'bg-sky-600/20 border-sky-500 text-sky-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
+                                                >
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-2">
+                                                            {isOn && <CheckCircle2 size={14} className="text-sky-400 shrink-0" />}
+                                                            <span>{pack.id}</span>
+                                                        </div>
+                                                        <span className={`text-[10px] px-2 py-0.5 rounded font-black ${isOn ? 'bg-sky-500/20 text-sky-400' : 'bg-zinc-800 text-zinc-600'}`}>
+                                                            {isOn ? '✓' : `+${pack.words.length}`}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+
+                                        <button
+                                            onClick={() => setUseCustomVerbs(p => !p)}
+                                            className={`w-full text-left p-3 rounded-xl border-2 font-bold text-sm transition-all ${useCustomVerbs ? 'bg-amber-600/20 border-amber-500 text-amber-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'}`}
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                {useCustomVerbs && <CheckCircle2 size={14} className="text-amber-400 shrink-0" />}
+                                                Otros (personalizado)
+                                            </div>
+                                        </button>
+
+                                        {useCustomVerbs && (
+                                            <textarea
+                                                value={customVerbs}
+                                                onChange={e => setCustomVerbs(e.target.value)}
+                                                placeholder={'Escribe o pega verbos separados por coma o Enter:\nhablar, comer, ir, tener...\n\nO pega tu lista directamente.'}
+                                                rows={5}
+                                                className="w-full bg-zinc-950 border border-zinc-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-sm text-white outline-none transition-colors placeholder:text-zinc-700 font-medium resize-none custom-scrollbar"
+                                            />
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Word pool */}
+                            {(grammarWordPool.length > 0 || verbWordPool.length > 0) && (
+                                <div className="border border-zinc-800 rounded-xl p-3">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                                            Palabras al prompt — {activeGrammarWords.length + activeVerbWords.length} activas
+                                            {excludedWords.size > 0 && <span className="text-rose-500/70 ml-1">· {excludedWords.size} excluidas</span>}
+                                        </span>
+                                        {excludedWords.size > 0 && (
+                                            <button onClick={() => setExcludedWords(new Set())}
+                                                className="text-[9px] font-bold text-zinc-600 hover:text-zinc-400 transition-colors">
+                                                restaurar
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1 max-h-40 overflow-y-auto custom-scrollbar">
+                                        {grammarWordPool.map(w => {
+                                            const off = excludedWords.has(w);
+                                            return (
+                                                <button key={'g-' + w} onClick={() => toggleWord(w)}
+                                                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-all select-none ${off ? 'bg-zinc-800/60 text-zinc-600 line-through' : 'bg-orange-500/15 border border-orange-500/30 text-orange-300 hover:border-orange-500/60'}`}>
+                                                    {w}
+                                                </button>
+                                            );
+                                        })}
+                                        {verbWordPool.map(w => {
+                                            const off = excludedWords.has(w);
+                                            return (
+                                                <button key={'v-' + w} onClick={() => toggleWord(w)}
+                                                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-all select-none ${off ? 'bg-zinc-800/60 text-zinc-600 line-through' : 'bg-sky-500/15 border border-sky-500/30 text-sky-300 hover:border-sky-500/60'}`}>
+                                                    {w}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Topic + count + generate */}
+                            <div className="border-t border-zinc-800 pt-4 flex flex-col gap-3">
+                                <div>
+                                    <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Tema / Contexto (opcional)</label>
+                                    <input
+                                        type="text"
+                                        value={aiTopic}
+                                        onChange={e => setAiTopic(e.target.value)}
+                                        placeholder="ej: en un restaurante, en el trabajo..."
+                                        className="w-full bg-zinc-900 border border-zinc-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-sm text-white outline-none transition-colors placeholder:text-zinc-700 font-medium"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">Cantidad</label>
+                                    <div className="flex gap-1.5">
+                                        {[5, 10, 15, 20].map(n => (
+                                            <button key={n} onClick={() => setAiCount(n)}
+                                                className={`flex-1 py-2 rounded-xl font-black text-sm transition-colors ${aiCount === n ? 'bg-amber-500 text-black' : 'bg-zinc-900 text-zinc-400 border border-zinc-700 hover:border-zinc-500'}`}>
+                                                {n}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={generateWithAI}
+                                    disabled={generating || !apiKey || !selectedModel}
+                                    className="w-full flex items-center justify-center gap-2 py-3.5 bg-amber-500 hover:bg-amber-400 text-black rounded-xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-amber-500/20 disabled:opacity-50"
+                                >
+                                    {generating
+                                        ? <><RefreshCw size={16} className="animate-spin" /> Generando...</>
+                                        : <><Sparkles size={16} /> Generar {aiCount} ejercicios</>
+                                    }
+                                </button>
+                                {!apiKey && (
+                                    <p className="text-amber-500/70 text-[11px] font-bold text-center">⚠️ Agrega tu API key de Gemini en el header</p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* RIGHT: Exercise cards */}
+                    <div className="flex-1 flex flex-col overflow-hidden bg-zinc-900 h-[55%] md:h-full">
+
+                        <div className="p-4 border-b border-zinc-800 flex items-center gap-3 shrink-0 bg-zinc-950/50">
+                            <div className="flex-1 min-w-0">
+                                <input
+                                    type="text"
+                                    value={title}
+                                    onChange={e => setTitle(e.target.value)}
+                                    placeholder={autoTitle}
+                                    className="w-full bg-transparent outline-none text-white font-black text-base placeholder:text-zinc-600"
+                                />
+                                <div className="flex gap-1 mt-1.5 flex-wrap">
+                                    {selectedGrammars.map(id => (
+                                        <span key={id} className="text-[9px] font-black bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded-md border border-orange-500/30">🔤 {id} ({CURRICULUM[grammarLevel].label})</span>
+                                    ))}
+                                    {selectedVerbPacks.map(id => (
+                                        <span key={id} className="text-[9px] font-black bg-sky-500/20 text-sky-400 px-2 py-0.5 rounded-md border border-sky-500/30">⚡ {id} ({CURRICULUM[verbLevel].label})</span>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                                {exercises.length > 0 && (
+                                    <button onClick={clearAll}
+                                        className="p-2 bg-rose-500/10 text-rose-400 rounded-xl hover:bg-rose-500/20 transition-colors">
+                                        <Trash2 size={16} />
+                                    </button>
+                                )}
+                                <div className={`px-3 py-2 rounded-xl text-sm font-black border text-center min-w-[56px] ${validCount >= 5 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-zinc-800 text-zinc-500 border-zinc-700'}`}>
+                                    {validCount}
+                                    <p className="text-[8px] uppercase font-bold opacity-70">{validCount >= 5 ? '¡Listo!' : 'Total'}</p>
+                                </div>
+                                {savedId && (
+                                    <button onClick={() => setShowModal(true)}
+                                        className="hidden sm:flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-xs transition-colors border border-zinc-700">
+                                        <Link2 size={13} /> Link
+                                    </button>
+                                )}
+                                <button
+                                    onClick={requestSave}
+                                    disabled={saving}
+                                    className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-400 text-white rounded-xl font-black text-sm transition-all active:scale-95 shadow-lg shadow-orange-500/20 disabled:opacity-60"
+                                >
+                                    {saving
+                                        ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</>
+                                        : <><Save size={14} /> Guardar</>
+                                    }
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+
+                            {/* Manual add row */}
+                            <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-3 flex flex-col gap-2 mb-4">
+                                <div>
+                                    <label className="text-[9px] font-black text-sky-400 uppercase block mb-1">English (lo que ve el alumno)</label>
+                                    <input value={manualEn} onChange={e => setManualEn(e.target.value)}
+                                        className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-sky-500 text-white placeholder:text-zinc-700"
+                                        placeholder="Can you help me?" />
+                                </div>
+                                <div className="flex gap-2 items-end">
+                                    <div className="flex-1">
+                                        <label className="text-[9px] font-black text-orange-500 uppercase block mb-1">✏️ Parte a teclear (español)</label>
+                                        <input value={manualBlank} onChange={e => setManualBlank(e.target.value)}
+                                            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-orange-500 text-white placeholder:text-zinc-700"
+                                            placeholder="¿Puedes ayudar" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <label className="text-[9px] font-black text-zinc-500 uppercase block mb-1">🎁 Complemento (dado)</label>
+                                        <input value={manualGiven} onChange={e => setManualGiven(e.target.value)}
+                                            onKeyDown={e => e.key === 'Enter' && addManual()}
+                                            className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm font-bold outline-none focus:border-zinc-500 text-white placeholder:text-zinc-700"
+                                            placeholder="me?" />
+                                    </div>
+                                    <button onClick={addManual} disabled={!manualEn || !manualBlank}
+                                        className="bg-orange-500 hover:bg-orange-400 disabled:opacity-40 text-white p-2 rounded-lg transition-colors shrink-0">
+                                        <Plus size={18} />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {exercises.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center text-zinc-600 py-16">
+                                    <ShoppingCart size={40} className="mb-3 opacity-40" />
+                                    <p className="font-bold text-sm">Sin ejercicios todavía</p>
+                                    <p className="text-xs mt-1 text-center max-w-xs opacity-70">
+                                        Selecciona gramática + verbos en el panel izquierdo y presiona Generar.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="flex flex-col gap-2 pb-6">
+                                    {exercises.map((ex, idx) => (
+                                        <ExerciseCard key={ex.id} ex={ex} idx={idx} onRemove={removeExercise} onUpdate={updateExercise} />
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* TAXONOMY MODAL */}
+                {showTaxModal && (
+                    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] max-w-xl w-full p-6 flex flex-col gap-5 shadow-2xl fade-in max-h-[85vh]">
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-lg font-black text-white">Clasificar actividad</h3>
+                                <button onClick={() => setShowTaxModal(false)} className="text-zinc-500 hover:text-white text-sm font-bold">✕</button>
+                            </div>
+                            <div className="flex flex-col gap-5 overflow-y-auto custom-scrollbar pr-1">
+                                <div>
+                                    <label className="block text-xs font-black text-orange-400 uppercase tracking-widest mb-2">1. Nivel</label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {NEW_LEVELS.map(lvl => (
+                                            <button key={lvl} onClick={() => toggleSel(saveLevels, setSaveLevels, lvl)}
+                                                className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveLevels.includes(lvl) ? 'bg-orange-600 border-orange-600 text-white' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-orange-500 hover:text-orange-300'}`}>
+                                                {lvl}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-black text-emerald-400 uppercase tracking-widest mb-2">2. Categoría</label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {NEW_CATS.map(cat => (
+                                            <button key={cat.id} onClick={() => toggleSel(saveCats, setSaveCats, cat.id)}
+                                                className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveCats.includes(cat.id) ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-emerald-500 hover:text-emerald-300'}`}>
+                                                {cat.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                {saveCats.length > 0 && saveLevels.length > 0 && (
+                                    <div className="bg-zinc-950/50 p-4 rounded-2xl border border-zinc-800 space-y-4">
+                                        <label className="block text-xs font-black text-amber-400 uppercase tracking-widest mb-1">3. Temas Específicos</label>
+                                        {saveCats.map(catId => {
+                                            if (catId === 'otro') return null;
+                                            const catLabel = NEW_CATS.find(c => c.id === catId)?.label || catId;
+                                            const topics   = getAllTopicsForCategory(catId, saveLevels);
+                                            if (topics.length === 0) return null;
+                                            return (
+                                                <div key={catId} className="bg-zinc-900/50 rounded-xl p-3 border border-zinc-800/50">
+                                                    <h4 className="text-[10px] font-black uppercase text-zinc-500 tracking-wider mb-2">{catLabel}</h4>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {topics.map(topic => (
+                                                            <button key={topic}
+                                                                onClick={() => toggleSel(saveTopics, setSaveTopics, topic)}
+                                                                className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all border ${saveTopics.includes(topic) ? 'bg-zinc-200 border-zinc-200 text-zinc-900' : 'bg-transparent border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'}`}>
+                                                                {topic}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                        {saveCats.includes('otro') && (
+                                            <div className="bg-amber-900/10 rounded-xl p-3 border border-amber-900/30">
+                                                <h4 className="text-[10px] font-black uppercase text-amber-600 tracking-wider mb-2">Macro Habilidades</h4>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {MACRO_SKILLS.map(skill => (
+                                                        <button key={skill}
+                                                            onClick={() => toggleSel(saveTopics, setSaveTopics, skill)}
+                                                            className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all border ${saveTopics.includes(skill) ? 'bg-amber-500 border-amber-500 text-zinc-900' : 'bg-transparent border-amber-900/50 text-amber-500 hover:border-amber-500'}`}>
+                                                            {skill}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="flex gap-3">
+                                <button onClick={() => setShowTaxModal(false)}
+                                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-sm">Cancelar</button>
+                                <button onClick={handleSave}
+                                    disabled={saveLevels.length === 0 || saveCats.length === 0}
+                                    className={`flex-1 py-3 rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all ${saveLevels.length && saveCats.length ? 'bg-orange-500 hover:bg-orange-400 text-white active:scale-95' : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'}`}>
+                                    <Save size={14} /> Guardar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* POST-SAVE MODAL */}
+                {showModal && savedId && (
+                    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] max-w-sm w-full p-6 flex flex-col items-center gap-4 shadow-2xl fade-in">
+                            <div className="w-14 h-14 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center justify-center text-3xl">✅</div>
+                            <div className="text-center">
+                                <h3 className="text-xl font-black text-white mb-1">¡Guardado!</h3>
+                                <p className="text-zinc-400 text-sm font-medium">"{title}"</p>
+                                <p className="text-zinc-500 text-xs mt-1">{validCount} ejercicios listos</p>
+                            </div>
+                            <div className="flex gap-3 w-full">
+                                <button onClick={() => window.location.href = `spell-the-phrase-es.html?id=${savedId}&uid=${TEACHER_UID}`}
+                                    className="flex-1 flex items-center justify-center gap-2 py-3 bg-orange-500 hover:bg-orange-400 text-white rounded-xl font-black text-sm transition-all active:scale-95">
+                                    <ExternalLink size={14} /> Abrir juego
+                                </button>
+                                <button onClick={() => window.location.href = BACK_URL}
+                                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl font-bold text-sm transition-colors">
+                                    Volver al Hub
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+            </div>
+        );
+    }
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<DashboardSTPEs />);
+</script>
+</body>
+</html>
