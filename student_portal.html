@@ -11,7 +11,8 @@
         "react":            "https://esm.sh/react@18.2.0",
         "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
         "react/jsx-runtime":"https://esm.sh/react@18.2.0/jsx-runtime",
-        "firebase/app":     "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/app":      "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/auth":     "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
         "firebase/firestore":"https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
       }
     }
@@ -101,9 +102,12 @@
 import React,{useState,useEffect,useCallback,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 import {initializeApp} from 'firebase/app';
-import {getFirestore,doc,getDoc,collection,query,where,getDocs} from 'firebase/firestore';
+import {getAuth,onAuthStateChanged,signOut} from 'firebase/auth';
+import {getFirestore,doc,updateDoc,collection,query,where,getDocs} from 'firebase/firestore';
 
-const db = getFirestore(initializeApp(window.PERIPLO_FIREBASE_CONFIG));
+const app  = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
+const auth = getAuth(app);
+const db   = getFirestore(app);
 
 /* ── LORE & ARCH ──────────────────────────────────────────── */
 const LORE={
@@ -1675,10 +1679,76 @@ function NoStudentScreen(){
                      justifyContent:'center',padding:32,textAlign:'center',background:'var(--bg)'}}>
             <div className="rf" style={{marginBottom:20}}><Rocket size={64} color="#e8a030"/></div>
             <h1 className="d" style={{fontSize:40,color:'var(--cream)',marginBottom:12}}>Periplo</h1>
-            <p style={{fontSize:13,color:'var(--muted)',marginBottom:6}}>Accede con tu link personalizado.</p>
-            <p style={{fontSize:11,color:'var(--muted2)'}}>Si no tienes uno, pídelo a tu teacher.</p>
+            <p style={{fontSize:13,color:'var(--muted)',marginBottom:6}}>Tu correo no está registrado.</p>
+            <p style={{fontSize:11,color:'var(--muted2)',marginBottom:24}}>Pídele a tu teacher que te agregue.</p>
+            <button onClick={()=>signOut(auth).then(()=>window.location.href='login.html')}
+                style={{background:'var(--sf)',border:'1px solid var(--bd)',borderRadius:14,
+                        padding:'10px 20px',color:'var(--muted)',fontFamily:'Syne,sans-serif',
+                        fontWeight:700,fontSize:12,cursor:'pointer',letterSpacing:'.08em',textTransform:'uppercase'}}>
+                Cerrar sesión
+            </button>
         </div>
     );
+}
+
+const STUDENTS_PATH='artifacts/periplo-app-v1/students';
+
+async function loadStudentData(studentSnap,setHasStudent,setReady){
+    const s={id:studentSnap.id,...studentSnap.data()};
+    const quizSnap=await getDocs(query(
+        collection(db,'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes'),
+        where('studentVisible','==',true)
+    ));
+    const allResources=quizSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const mastery=s.detailedMastery||{};
+
+    const remediation=Object.entries(mastery).flatMap(([tid,{title,skills}])=>
+        Object.entries(skills||{})
+            .filter(([,v])=>Number(v)<2)
+            .map(([skill,v])=>({
+                id:`${tid}-${skill.replace(/\s+/g,'-')}`,
+                topic:tid,topicTitle:title,skill,
+                severity:Number(v)===0?'high':'mid',
+                color:Number(v)===0?'#e8572a':'#e8a030',
+                note:`Refuerza: ${skill}`,
+                games:GAMES_BY_CAT.grammar,
+            }))
+    );
+
+    const lore=getLore(s.level);
+    const arch=getArch(s.skills||{});
+    window.PERIPLO={
+        student:{
+            id:s.id,
+            name:s.name||'Alumno',
+            firstName:(s.name||'Alumno').split(' ')[0],
+            level:s.level||'basic',
+            plan:s.plan||{classesPerWeek:3,usedThisWeek:0},
+            streak:s.streak||0,
+            xp:s.xp||0,
+            avatar:s.avatar||{emoji:'🧭',color:'#7a7060'},
+            skills:s.skills||{speaking:0,listening:0,reading:0,grammar:0,vocabulary:0,pronunciation:0},
+        },
+        module:{name:s.currentModule||null},
+        mastery,remediation,games:GAME_MAP,
+        sevLabel:{high:'Prioridad',mid:'A reforzar',low:'Casi listo'},
+        weakCount:remediation.filter(r=>r.severity==='high'||r.severity==='mid').length,
+        getLore,getArch,lore,arch,
+    };
+
+    buildLibrary(s,allResources);
+
+    window.PERIPLO.student.soloProgress=s.soloProgress||{};
+    window.PERIPLO.moduleReward=SOLO_REWARD;
+    window.PERIPLO.planetMissions=worldId=>buildSoloMissions(worldId,s);
+    window.PERIPLO.planetExtras=worldId=>{
+        const wp=(s.soloProgress||{})[worldId]||{done:0};
+        return{unlocked:wp.done>=6,items:EXTRA_TEMPLATE};
+    };
+
+    document.documentElement.style.setProperty('--lc',lore.color);
+    setHasStudent(true);
+    setReady(true);
 }
 
 function App(){
@@ -1686,81 +1756,35 @@ function App(){
     const[hasStudent,setHasStudent]=useState(false);
 
     useEffect(()=>{
-        const id=new URLSearchParams(window.location.search).get('id');
-        if(!id){setReady(true);return;}
+        const unsub=onAuthStateChanged(auth,async user=>{
+            if(!user){window.location.href='login.html';return;}
 
-        Promise.all([
-            getDoc(doc(db,'artifacts/periplo-app-v1/students',id)),
-            getDocs(query(
-                collection(db,'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes'),
-                where('studentVisible','==',true)
-            )),
-        ]).then(([snap,quizSnap])=>{
-            if(!snap.exists()){setReady(true);return;}
+            try{
+                /* Ruta rápida: buscar por UID (alumno ya registrado) */
+                let snap=await getDocs(query(
+                    collection(db,STUDENTS_PATH),where('uid','==',user.uid)
+                ));
 
-            const s={id:snap.id,...snap.data()};
-            const allResources=quizSnap.docs.map(d=>({id:d.id,...d.data()}));
-            const mastery=s.detailedMastery||{};
+                /* Fallback: buscar por email (primer acceso) */
+                if(snap.empty){
+                    snap=await getDocs(query(
+                        collection(db,STUDENTS_PATH),where('email','==',user.email)
+                    ));
+                    if(!snap.empty){
+                        /* Guardar UID para futuros accesos */
+                        await updateDoc(doc(db,STUDENTS_PATH,snap.docs[0].id),{uid:user.uid});
+                    }
+                }
 
-            /* Derivar remediation de detailedMastery */
-            const remediation=Object.entries(mastery).flatMap(([tid,{title,skills}])=>
-                Object.entries(skills||{})
-                    .filter(([,v])=>Number(v)<2)
-                    .map(([skill,v])=>({
-                        id:`${tid}-${skill.replace(/\s+/g,'-')}`,
-                        topic:tid,topicTitle:title,skill,
-                        severity:Number(v)===0?'high':'mid',
-                        color:Number(v)===0?'#e8572a':'#e8a030',
-                        note:`Refuerza: ${skill}`,
-                        games:GAMES_BY_CAT.grammar,
-                    }))
-            );
+                if(snap.empty){window.location.href='login.html';return;}
 
-            /* Construir window.PERIPLO */
-            const lore=getLore(s.level);
-            const arch=getArch(s.skills||{});
-            window.PERIPLO={
-                student:{
-                    id:s.id,
-                    name:s.name||'Alumno',
-                    firstName:(s.name||'Alumno').split(' ')[0],
-                    level:s.level||'basic',
-                    plan:s.plan||{classesPerWeek:3,usedThisWeek:0},
-                    streak:s.streak||0,
-                    xp:s.xp||0,
-                    avatar:s.avatar||{emoji:'🧭',color:'#7a7060'},
-                    skills:s.skills||{speaking:0,listening:0,reading:0,grammar:0,vocabulary:0,pronunciation:0},
-                },
-                module:{name:s.currentModule||null},
-                mastery,
-                remediation,
-                games:GAME_MAP,
-                sevLabel:{high:'Prioridad',mid:'A reforzar',low:'Casi listo'},
-                weakCount:remediation.filter(r=>r.severity==='high'||r.severity==='mid').length,
-                getLore,getArch,lore,arch,
-            };
-
-            /* Construir window.PERIPLO_LIB */
-            buildLibrary(s,allResources);
-
-            /* Datos de Solo */
-            window.PERIPLO.student.soloProgress=s.soloProgress||{};
-            window.PERIPLO.moduleReward=SOLO_REWARD;
-            window.PERIPLO.planetMissions=worldId=>buildSoloMissions(worldId,s);
-            window.PERIPLO.planetExtras=worldId=>{
-                const wp=(s.soloProgress||{})[worldId]||{done:0};
-                return{unlocked:wp.done>=6,items:EXTRA_TEMPLATE};
-            };
-
-            /* Sincronizar color de nivel con CSS */
-            document.documentElement.style.setProperty('--lc',lore.color);
-
-            setHasStudent(true);
-            setReady(true);
-        }).catch(err=>{
-            console.error('Portal load error:',err);
-            setReady(true);
+                await loadStudentData(snap.docs[0],setHasStudent,setReady);
+            }catch(err){
+                console.error('Portal load error:',err);
+                setReady(true);
+            }
         });
+        return()=>unsub();
     },[]);
 
     if(!ready) return <LoadingScreen/>;
