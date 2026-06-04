@@ -83,6 +83,11 @@
         ::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:99px;}
         /* ── OVERLAY ────────────────────────────────────────── */
         .ov{backdrop-filter:blur(14px);background:rgba(10,9,8,.88);}
+        /* ── SOLO ZOOM ──────────────────────────────────────── */
+        @keyframes zoomIn {from{opacity:0;transform:scale(.88);}to{opacity:1;transform:scale(1);}}
+        @keyframes zoomOut{from{opacity:1;transform:scale(1);}to{opacity:0;transform:scale(1.1);}}
+        .zoomin {animation:zoomIn  .32s cubic-bezier(.22,1,.36,1) both;}
+        .zoomout{animation:zoomOut .28s cubic-bezier(.4,0,1,1) both;}
         /* ── SAFE AREA ──────────────────────────────────────── */
         .pt-safe{padding-top:env(safe-area-inset-top,0px);}
         .pb-safe{padding-bottom:env(safe-area-inset-bottom,20px);}
@@ -93,7 +98,7 @@
 <body>
 <div id="root"></div>
 <script type="text/babel" data-type="module">
-import React,{useState,useEffect,useCallback} from 'react';
+import React,{useState,useEffect,useCallback,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 import {initializeApp} from 'firebase/app';
 import {getFirestore,doc,getDoc,collection,query,where,getDocs} from 'firebase/firestore';
@@ -313,11 +318,34 @@ const GAMES_BY_CAT={
     key_structs:['lingomatch','anagram','wordcascade','presentations'],
 };
 
+/* Módulos en orden canónico por nivel — para calcular "próximo" vs "disponible" */
+const MODULE_ORDER={
+    basic:   ['B1','B2','B-MIX'],
+    advanced:['A1','A2','A-MIX'],
+    pro:     ['P1','P2','P-MIX'],
+};
+/* Temas canónicos por módulo (los primeros N temas de la gramática de cada semana).
+   Sirve para saber qué temas pertenecen a módulos futuros dentro del mismo nivel. */
+const GRAMMAR_BY_MODULE={
+    B1:   ['Modal Verbs','Present Simple','Present Continuous','Future (Going to)'],
+    B2:   ['Past Simple'],   // placeholder — se expande con el currículo real
+    'B-MIX': [],
+    A1:   ['Past Simple','Second Conditional','Past Continuous','Past Future Intention'],
+    A2:   [],
+    'A-MIX':[],
+    P1:   ['Present/Past Perfect','Perfect Continuous','Third Conditional','Mixed Conditionals'],
+    P2:   [],
+    'P-MIX':[],
+};
+
 function buildLibrary(student,allResources){
     const TAX=window.PERIPLO_TAXONOMY.TAXONOMY;
     const lvlKey=student.level==='advanced'?'advanced':student.level==='pro'?'pro':'basic';
     const higherKeys=lvlKey==='basic'?['advanced','pro']:lvlKey==='advanced'?['pro']:[];
     const mastery=student.detailedMastery||{};
+    const currentMod=student.currentModule||null;
+    const modOrder=MODULE_ORDER[lvlKey]||[];
+    const currentModIdx=currentMod?modOrder.indexOf(currentMod):-1;
 
     /* Títulos de temas ya evaluados */
     const masteredTitles=new Set(Object.values(mastery).map(m=>m.title).filter(Boolean));
@@ -329,9 +357,19 @@ function buildLibrary(student,allResources){
         const currentTopics=currentNames.map((name,i)=>{
             const done=masteredTitles.has(name);
             let state;
-            if(done){state='done';}
-            else if(!foundActive){state='active';foundActive=true;}
-            else{state='open';}
+            if(done){
+                state='done';
+            } else if(!foundActive){
+                state='active';foundActive=true;
+            } else if(currentModIdx>=0){
+                /* Si hay módulo fijado: temas de módulos futuros = 'soon' */
+                const inFutureModule=modOrder.slice(currentModIdx+1).some(
+                    mod=>(GRAMMAR_BY_MODULE[mod]||[]).includes(name)
+                );
+                state=inFutureModule?'soon':'open';
+            } else{
+                state='open';
+            }
 
             const res=allResources
                 .filter(r=>(r.tags?.topics||[]).includes(name))
@@ -341,9 +379,12 @@ function buildLibrary(student,allResources){
                     title:r.title||r.content?.title||'(sin título)',
                 }));
 
+            const opensIn=state==='soon'
+                ?modOrder.slice(currentModIdx+1).find(mod=>(GRAMMAR_BY_MODULE[mod]||[]).includes(name))||'módulo siguiente'
+                :null;
             return{
                 name,order:i+1,cat:cat.id,catLabel:cat.label,color:cat.color,
-                state,opensIn:null,
+                state,opensIn,
                 games:GAMES_BY_CAT[cat.id]||[],
                 res,open:isOpen(state),
             };
@@ -997,15 +1038,503 @@ function HomeView({setTab}){
 }
 
 /* ═══════════════════════════════════════════════════════════
-   SOLO (placeholder — se construye en la siguiente etapa)
+   SOLO — DATA (currículo completo)
+═══════════════════════════════════════════════════════════ */
+const MISSION_TEMPLATE=[
+    {key:'presentation',label:'Presentación',  sub:'La explicación del tema', emoji:'📽️',color:'#d946ef'},
+    {key:'vocab_v',     label:'Flashcards',    sub:'Vocabulario · Verbos',    emoji:'🃏', color:'#0ea5e9'},
+    {key:'vocab_n',     label:'Memorama',      sub:'Vocabulario · Nouns',     emoji:'🧠', color:'#10b981'},
+    {key:'reading',     label:'Reading',       sub:'Lee y comprende',         emoji:'📖', color:'#84cc16'},
+    {key:'spell',       label:'EmojiSpell',    sub:'Deletrea sin errores',    emoji:'😎', color:'#8b5cf6'},
+    {key:'listening',   label:'Listening',     sub:'Entrena el oído',         emoji:'🎧', color:'#14b8a6'},
+];
+const EXTRA_TEMPLATE=[
+    {key:'anagram',     label:'Anagrama',      sub:'Arma las palabras',       emoji:'🔤',color:'#f43f5e'},
+    {key:'wordcascade', label:'Word Cascade',  sub:'Velocidad y escritura',   emoji:'🌊',color:'#6366f1'},
+    {key:'lingomatch',  label:'LingoMatch',    sub:'Match de estructuras',    emoji:'🔗',color:'#0ea5e9'},
+    {key:'emojispell2', label:'EmojiSpell Pro',sub:'Reto avanzado',           emoji:'😎',color:'#8b5cf6'},
+];
+const COMETA_MISSION={key:'wordbuildings',label:'Word Buildings',sub:'Construye y refuerza vocabulario',emoji:'🏢',color:'#10b981'};
+const SOLO_REWARD={label:'Misiones extra',sub:'4 retos bonus + insignia del mundo',emoji:'🎁',color:'#e8a030'};
+
+const GALAXIES=[
+  {id:'basic',label:'Basic',icon:'🌱',color:'#7fad8c',worlds:[
+    {id:'modal_verbs',   week:1, title:'Modal Verbs',          sub:'Can · Should · Must',         module:'B1',    color:'#7fad8c'},
+    {id:'pres_simple',   week:2, title:'Present Simple',       sub:'Do/Does · 3ª persona',        module:'B1',    color:'#7fad8c'},
+    {id:'pres_cont',     week:3, title:'Present Continuous',   sub:'To be + –ing',                module:'B1',    color:'#7fad8c'},
+    {id:'past_simple_b', week:4, title:'Past Simple',          sub:'Verbos regulares',            module:'B1',    color:'#7fad8c'},
+    {id:'prepositions',  week:5, title:'Prepositions',         sub:'Time · Place · Movement',     module:'B2',    color:'#8ab4c2'},
+    {id:'obj_pronouns',  week:6, title:'Object Pronouns',      sub:'Me · You · Him · Her…',       module:'B2',    color:'#8ab4c2'},
+    {id:'quantifiers',   week:7, title:'Quantifiers',          sub:'There is/are · Fillers',      module:'B2',    color:'#8ab4c2'},
+    {id:'possessives',   week:8, title:'Possessive Pronouns',  sub:'Mine · Yours · Hers…',        module:'B2',    color:'#8ab4c2'},
+    {id:'small_talk',    week:9, title:'Small Talk',           sub:'First Impressions',           module:'B-MIX', color:'#a78bfa'},
+    {id:'vida_digital',  week:10,title:'Tu Vida Digital',      sub:'Tech & Social Media',         module:'B-MIX', color:'#a78bfa'},
+    {id:'salud',         week:11,title:'Salud y Bienestar',    sub:'Health & Wellness',           module:'B-MIX', color:'#a78bfa'},
+    {id:'yo_prof',       week:12,title:'Tu Yo Profesional',    sub:'Work & Career',               module:'B-MIX', color:'#a78bfa'},
+  ]},
+  {id:'advanced',label:'Advanced',icon:'⚔️',color:'#e8a030',worlds:[
+    {id:'past_simple_a', week:1, title:'Past Simple',             sub:'Regular Verbs (–ed)',        module:'A1',    color:'#e8a030'},
+    {id:'second_cond',   week:2, title:'Second Conditional',      sub:'If + Past + Would',          module:'A1',    color:'#e8a030'},
+    {id:'past_cont',     week:3, title:'Past Continuous',         sub:'Was/Were + –ing',            module:'A1',    color:'#e8a030'},
+    {id:'was_going',     week:4, title:'Was/Were Going To',       sub:'Planes que no fueron',       module:'A1',    color:'#e8a030'},
+    {id:'used_to',       week:5, title:'Used To',                 sub:'Hábitos del pasado',         module:'A2',    color:'#f59e0b'},
+    {id:'comparatives',  week:6, title:'Comparatives',            sub:'Bigger · More complex',      module:'A2',    color:'#f59e0b'},
+    {id:'rel_clauses',   week:7, title:'Relative Clauses',        sub:'Who · Which · That',         module:'A2',    color:'#f59e0b'},
+    {id:'pres_perf_c',   week:8, title:'Present Perfect Cont.',   sub:'Has been + –ing',            module:'A2',    color:'#f59e0b'},
+    {id:'pressure_perf', week:9, title:'Pressure & Performance',  sub:'Idioms cluster',             module:'A-MIX', color:'#ef4444'},
+    {id:'success',       week:10,title:'Success & Momentum',      sub:'Idioms cluster',             module:'A-MIX', color:'#ef4444'},
+    {id:'relationships', week:11,title:'Relationships & Conflict',sub:'Idioms cluster',             module:'A-MIX', color:'#ef4444'},
+    {id:'risk',          week:12,title:'Risk & Decision',         sub:'Idioms cluster',             module:'A-MIX', color:'#ef4444'},
+  ]},
+  {id:'pro',label:'Pro',icon:'👑',color:'#8ab4c2',worlds:[
+    {id:'perf_tenses',   week:1, title:'Present/Past Perfect',    sub:'Have + Past Participle',     module:'P1',    color:'#8ab4c2'},
+    {id:'third_cond',    week:2, title:'Third Conditional',       sub:'If + Had + Would have',      module:'P1',    color:'#8ab4c2'},
+    {id:'passive',       week:3, title:'Passive Voice',           sub:'Be + Past Participle',       module:'P1',    color:'#8ab4c2'},
+    {id:'past_modals',   week:4, title:'Past Conditionals',       sub:'Should/Could/Would have',    module:'P1',    color:'#8ab4c2'},
+    {id:'rep_speech',    week:5, title:'Reported Speech',         sub:'Inversion · Cleft Sentences',module:'P2',    color:'#6366f1'},
+    {id:'gerunds',       week:6, title:'Gerunds & Infinitives',   sub:'Perfect Continuous',         module:'P2',    color:'#6366f1'},
+    {id:'entrevista',    week:7, title:'Entrevista de Trabajo',   sub:'Sobrevive la entrevista',    module:'P2',    color:'#6366f1'},
+    {id:'psicologia',    week:8, title:'Psicología',              sub:'Comportamiento Humano',      module:'P2',    color:'#6366f1'},
+    {id:'pmix_1',        week:9, title:'P Mix · Semana 1',        sub:'Integración Pro',            module:'P-MIX', color:'#14b8a6'},
+    {id:'pmix_2',        week:10,title:'P Mix · Semana 2',        sub:'Integración Pro',            module:'P-MIX', color:'#14b8a6'},
+    {id:'pmix_3',        week:11,title:'P Mix · Semana 3',        sub:'Integración Pro',            module:'P-MIX', color:'#14b8a6'},
+    {id:'pmix_4',        week:12,title:'P Mix · Semana 4',        sub:'Integración Pro',            module:'P-MIX', color:'#14b8a6'},
+  ]},
+];
+
+/* Deriva el estado de cada mundo a partir del progreso del alumno */
+function deriveSoloWorlds(galaxy,student){
+    const modOrder=MODULE_ORDER[student.level]||[];
+    const curModIdx=student.currentModule?modOrder.indexOf(student.currentModule):0;
+    const soloP=student.soloProgress||{};
+    let firstInCurMod=true;
+    return galaxy.worlds.map(w=>{
+        const worldModIdx=modOrder.indexOf(w.module);
+        const wp=soloP[w.id]||{done:0};
+        let status,progress;
+        if(wp.done>=6){status='done';progress=100;}
+        else if(worldModIdx<curModIdx){status='done';progress=100;}
+        else if(worldModIdx===curModIdx){
+            if(wp.done>0){status='active';progress=Math.round(wp.done/6*100);}
+            else if(firstInCurMod){status='active';progress=0;firstInCurMod=false;}
+            else{status='available';progress=0;}
+        }
+        else{status='locked';progress=0;}
+        return{...w,status,progress,cometa:w.week%2===0};
+    });
+}
+
+function buildSoloMissions(worldId,student){
+    const wp=(student.soloProgress||{})[worldId]||{done:0};
+    return MISSION_TEMPLATE.map((m,i)=>({
+        ...m,idx:i+1,
+        status:i<wp.done?'done':i===wp.done?'active':'locked',
+    }));
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SOLO — BOTTOM SHEET DE MISIÓN
+═══════════════════════════════════════════════════════════ */
+function SoloMissionSheet({data,onClose}){
+    if(!data) return null;
+    const{m,kind,conquered}=data;
+    const isExtra=kind==='extra', isCometa=kind==='cometa';
+    const done=!isExtra&&!isCometa&&m.status==='done';
+    const active=!isExtra&&!isCometa&&m.status==='active';
+    const locked=(isExtra&&!conquered)||(isCometa?false:(!isExtra&&m.status==='locked'));
+    const accent=m.color;
+    const eyebrow=isCometa?'Cometa · Word Buildings':isExtra?'Misión extra · Bonus':`Misión ${m.idx} · de 6`;
+    const stateText=locked?'Termina la misión anterior para desbloquear.'
+        :done?'Ya superaste esta misión. Puedes volver a jugarla.'
+        :active||isCometa||isExtra?'¡A por ella!':'';
+    const cta=locked?null
+        :done?{label:'Volver a jugar',sub:'Repaso · no baja tu progreso'}
+        :{label:isCometa?'Jugar Word Buildings':isExtra?'Jugar reto':'Empezar misión',sub:null};
+    return(
+        <div onClick={onClose} style={{position:'absolute',inset:0,zIndex:200,display:'flex',alignItems:'flex-end'}}>
+            <div className="ov" style={{position:'absolute',inset:0}}/>
+            <div onClick={e=>e.stopPropagation()} className="sheet" style={{
+                position:'relative',width:'100%',background:'var(--sf)',
+                borderTop:`1px solid ${accent}33`,borderRadius:'28px 28px 0 0',
+                padding:'14px 20px calc(20px + env(safe-area-inset-bottom,20px))',maxHeight:'82%',overflowY:'auto',
+            }}>
+                <div style={{width:40,height:4,borderRadius:9,background:'var(--bd2)',margin:'0 auto 16px'}}/>
+                <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:14}}>
+                    <div style={{width:58,height:58,borderRadius:18,flexShrink:0,
+                        background:locked?'var(--sf2)':`radial-gradient(circle at 36% 30%,${accent}55,var(--sf) 78%)`,
+                        border:`1.5px solid ${locked?'var(--bd2)':accent}`,
+                        display:'flex',alignItems:'center',justifyContent:'center',fontSize:28,
+                        filter:locked?'grayscale(.8)':'none',opacity:locked?0.7:1,position:'relative'}}>
+                        {m.emoji}
+                        {done&&<span style={{position:'absolute',bottom:-5,right:-5,width:22,height:22,borderRadius:'50%',
+                            background:accent,border:'2px solid var(--sf)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                            <Icon name="check" size={12} color="#0a0908" sw={3}/></span>}
+                        {locked&&<span style={{position:'absolute',bottom:-5,right:-5,width:22,height:22,borderRadius:'50%',
+                            background:'var(--sf2)',border:'2px solid var(--sf)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                            <Icon name="lock" size={11} color="var(--muted)"/></span>}
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                        <p className="lbl" style={{color:locked?'var(--muted)':accent,marginBottom:5}}>{eyebrow}</p>
+                        <h3 className="d" style={{fontSize:24,color:'var(--cream)',lineHeight:1.05}}>{m.label}</h3>
+                    </div>
+                    <button onClick={onClose} style={{width:34,height:34,borderRadius:11,flexShrink:0,
+                        border:'1px solid var(--bd)',background:'var(--sf2)',color:'var(--muted)',
+                        cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:17}}>✕</button>
+                </div>
+                <p style={{fontSize:13,color:'var(--muted)',lineHeight:1.5,marginBottom:16}}>{m.sub} — {stateText}</p>
+                {cta?(
+                    <button onClick={onClose} className="lift" style={{
+                        width:'100%',padding:15,borderRadius:16,border:'none',cursor:'pointer',
+                        background:accent,color:'#0a0908',fontFamily:'Syne,sans-serif',fontWeight:700,fontSize:14,
+                        display:'flex',flexDirection:'column',alignItems:'center',gap:2}}>
+                        <span style={{display:'flex',alignItems:'center',gap:8}}>
+                            <Icon name="play" size={14} color="#0a0908" fill="#0a0908" sw={0}/>{cta.label}
+                        </span>
+                        {cta.sub&&<span style={{fontFamily:'DM Sans',fontWeight:500,fontSize:9.5,opacity:.75}}>{cta.sub}</span>}
+                    </button>
+                ):(
+                    <div className="panel" style={{padding:15,borderRadius:16,display:'flex',alignItems:'center',
+                        justifyContent:'center',gap:9,borderColor:'var(--bd2)',background:'var(--sf2)',color:'var(--muted)'}}>
+                        <Icon name="lock" size={14} color="var(--muted)"/>
+                        <span className="dm" style={{fontSize:13}}>Misión bloqueada</span>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SOLO — MAPA ARCHIPIÉLAGO (12 mundos)
+═══════════════════════════════════════════════════════════ */
+const ISLE_XF=[0.26,0.72,0.34,0.74];
+const ISLE_H=90, MOD_GAP=48;
+
+function SoloIsland({n,W,onWorld}){
+    const locked=n.status==='locked', done=n.status==='done', act=n.status==='active';
+    const blob=act?'46% 54% 48% 52% / 58% 56% 44% 42%'
+        :done?'54% 46% 56% 44% / 52% 60% 40% 48%'
+        :'50% 50% 46% 54% / 56% 52% 48% 44%';
+    return(
+        <button onClick={!locked&&onWorld?()=>onWorld(n):undefined} style={{
+            position:'absolute',left:n.cx,top:n.cy,transform:'translate(-50%,-50%)',zIndex:2,
+            border:'none',background:'transparent',cursor:locked?'not-allowed':'pointer',padding:0,
+            display:'flex',flexDirection:'column',alignItems:'center',gap:7,width:116,
+        }}>
+            <div style={{
+                width:act?88:74,height:act?70:58,borderRadius:blob,position:'relative',
+                background:`radial-gradient(120% 90% at 40% 22%,${n.color}${locked?'33':'cc'} 0%,${n.color}${locked?'18':'55'} 55%,${n.color}${locked?'10':'2a'} 100%)`,
+                boxShadow:act?`0 0 0 8px ${n.color}14,0 16px 30px rgba(0,0,0,.5)`:`0 12px 24px rgba(0,0,0,.45)`,
+                opacity:locked?.6:1,display:'flex',alignItems:'center',justifyContent:'center',
+                border:`1px solid ${n.color}${locked?'30':'88'}`,
+            }}>
+                <div style={{position:'absolute',inset:0,borderRadius:blob,boxShadow:`inset 0 6px 10px ${n.color}55,inset 0 -10px 14px rgba(0,0,0,.35)`}}/>
+                <span className="dm" style={{position:'relative',fontSize:act?20:16,color:'#0a0908',textShadow:`0 1px 2px ${n.color}`}}>
+                    {done?'✓':locked?'':n.week}
+                </span>
+                {locked&&<div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    <Icon name="lock" size={16} color="var(--cream)"/>
+                </div>}
+            </div>
+            <div style={{textAlign:'center',opacity:locked?.6:1}}>
+                <p className="dm" style={{fontSize:12,color:'var(--cream)',lineHeight:1.1}}>{n.title}</p>
+                <p className="lbl" style={{fontSize:7,color:n.color,marginTop:2}}>
+                    {act?`${n.progress}% · aquí vas`:done?'Conquistada':n.status==='available'?'A la vista':'En la niebla'}
+                </p>
+            </div>
+        </button>
+    );
+}
+
+function SoloMap({worlds,student,onWorld}){
+    const ref=useRef(null);
+    const[W,setW]=useState(358);
+    useEffect(()=>{
+        const el=ref.current;if(!el)return;
+        const ro=new ResizeObserver(([e])=>setW(e.contentRect.width));
+        ro.observe(el);setW(el.clientWidth);
+        return()=>ro.disconnect();
+    },[]);
+
+    /* Calcular posiciones con gaps entre módulos */
+    let y=72, lastMod=null;
+    const positioned=worlds.map((w,i)=>{
+        const isModStart=w.module!==lastMod;
+        if(isModStart&&lastMod!==null) y+=MOD_GAP;
+        lastMod=w.module;
+        const pos={...w,cx:ISLE_XF[i%4]*W,cy:y,isModStart};
+        y+=ISLE_H;
+        return pos;
+    });
+    const H=y+72;
+    const active=positioned.find(n=>n.status==='active');
+
+    /* Ruta SVG entre islas */
+    const route=positioned.reduce((d,n,i)=>{
+        if(i===0)return`M ${n.cx} ${n.cy}`;
+        const p=positioned[i-1],my=(p.cy+n.cy)/2;
+        return`${d} C ${p.cx} ${my},${n.cx} ${my},${n.cx} ${n.cy}`;
+    },'');
+
+    /* Cometa: aparece en mundos pares (week%2===0) SOLO si están desbloqueados */
+    const cometas=positioned.filter(n=>n.cometa&&n.status!=='locked');
+
+    return(
+        <div ref={ref} style={{position:'relative',height:H,margin:'4px -8px 0',borderRadius:26,overflow:'hidden',
+            background:'radial-gradient(140% 100% at 50% 0%,#11212a 0%,#0c171d 45%,var(--bg) 100%)',
+            border:'1px solid var(--bd)'}}>
+            {/* olas */}
+            <div style={{position:'absolute',inset:0,opacity:.5,
+                background:'repeating-linear-gradient(0deg,transparent 0 26px,rgba(138,180,194,.05) 26px 27px)'}}/>
+            {/* módulo labels */}
+            {positioned.filter(n=>n.isModStart).map(n=>(
+                <div key={`lbl-${n.module}`} style={{position:'absolute',left:16,top:n.cy-40,zIndex:2}}>
+                    <span className="lbl" style={{fontSize:7.5,color:n.color,letterSpacing:'.2em'}}>{n.module}</span>
+                </div>
+            ))}
+            {/* ruta SVG */}
+            <svg width="100%" height={H} style={{position:'absolute',inset:0,zIndex:1}}>
+                <path d={route} fill="none" stroke="#8ab4c2" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="1 9" style={{opacity:.55}}/>
+            </svg>
+            {/* islas */}
+            {positioned.map(n=><SoloIsland key={n.id} n={n} W={W} onWorld={onWorld}/>)}
+            {/* cometas */}
+            {cometas.map(n=>{
+                const cx=n.cx>W/2?n.cx-80:n.cx+80, cy=n.cy-10;
+                return(
+                    <React.Fragment key={`cometa-${n.id}`}>
+                        <svg width="100%" height={H} style={{position:'absolute',inset:0,zIndex:1,pointerEvents:'none'}}>
+                            <path d={`M ${n.cx} ${n.cy} Q ${(n.cx+cx)/2} ${n.cy-30},${cx} ${cy}`}
+                                  fill="none" stroke={COMETA_MISSION.color} strokeWidth="1.5" strokeDasharray="1 6"
+                                  strokeLinecap="round" style={{opacity:.7}}/>
+                        </svg>
+                        <button onClick={()=>onWorld({...n,_cometa:true})} style={{
+                            position:'absolute',left:cx,top:cy,transform:'translate(-50%,-50%)',zIndex:3,
+                            border:'none',background:'transparent',cursor:'pointer',padding:0,
+                            display:'flex',flexDirection:'column',alignItems:'center',gap:4,width:72,
+                        }}>
+                            <div className="lift" style={{width:44,height:38,borderRadius:'50% 50% 46% 54% / 58% 54% 46% 42%',
+                                background:`radial-gradient(120% 90% at 40% 25%,${COMETA_MISSION.color}aa,${COMETA_MISSION.color}33)`,
+                                border:`1px dashed ${COMETA_MISSION.color}`,
+                                display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>🏢</div>
+                            <p className="lbl" style={{fontSize:6.5,color:COMETA_MISSION.color,textAlign:'center',lineHeight:1.2}}>Word Buildings</p>
+                        </button>
+                    </React.Fragment>
+                );
+            })}
+            {/* barca avatar */}
+            {active&&(
+                <div className="rf" style={{position:'absolute',left:active.cx+40,top:active.cy-40,
+                    transform:'translate(-50%,-50%)',zIndex:4,width:34,height:34,borderRadius:'50%',
+                    background:`${student.avatar.color}26`,border:`2px solid ${student.avatar.color}`,
+                    display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,
+                    boxShadow:`0 8px 18px ${student.avatar.color}55`}}>⛵</div>
+            )}
+        </div>
+    );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SOLO — ORBITAL DEL MUNDO (planeta + 6 lunas)
+═══════════════════════════════════════════════════════════ */
+function SoloOrbital({world,missions,student,onBack}){
+    const[sheet,setSheet]=useState(null);
+    const ref=useRef(null);
+    const[W,setW]=useState(358);
+    useEffect(()=>{
+        const el=ref.current;if(!el)return;
+        const ro=new ResizeObserver(([e])=>setW(e.contentRect.width));
+        ro.observe(el);setW(el.clientWidth);
+        return()=>ro.disconnect();
+    },[]);
+
+    const done=missions.filter(m=>m.status==='done').length;
+    const conquered=done>=6;
+    const active=missions.find(m=>m.status==='active');
+    const extras=conquered?EXTRA_TEMPLATE:[];
+
+    const cx=W/2, cy=170, rx=Math.min(W*.40,145), ry=126;
+    const moons=missions.map((m,i)=>{
+        const a=-Math.PI/2+(i/6)*Math.PI*2;
+        return{...m,x:cx+rx*Math.cos(a),y:cy+ry*Math.sin(a)};
+    });
+    const activeIdx=active?missions.findIndex(m=>m.key===active.key):-1;
+    const avPos=activeIdx>=0?{left:moons[activeIdx].x-30,top:moons[activeIdx].y-26}:{left:cx,top:cy+52};
+
+    return(
+        <div className="fu" style={{display:'flex',flexDirection:'column',gap:10}}>
+            {/* header */}
+            <div style={{padding:'8px 2px 2px'}}>
+                <button onClick={onBack} style={{display:'inline-flex',alignItems:'center',gap:7,marginBottom:12,
+                    cursor:'pointer',padding:'5px 11px 5px 8px',borderRadius:999,border:'1px solid var(--bd)',background:'var(--sf)'}}>
+                    <Icon name="chevronL" size={13} color={world.color}/>
+                    <span className="lbl" style={{fontSize:8,color:'var(--muted)'}}>Volver al archipiélago</span>
+                </button>
+                <div style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:12}}>
+                    <div>
+                        <p className="lbl" style={{color:world.color,marginBottom:5}}>Mundo · {world.module} · Stop {world.week}</p>
+                        <h1 className="d" style={{fontSize:28,color:'var(--cream)',lineHeight:1}}>{world.title}</h1>
+                    </div>
+                    {conquered
+                        ?<Pill color={world.color}><Icon name="check" size={10} color={world.color} sw={3}/> Conquistado</Pill>
+                        :<span className="dm" style={{fontSize:13,color:world.color,flexShrink:0}}>{done}/6</span>}
+                </div>
+            </div>
+            {/* orbital */}
+            <div ref={ref} style={{position:'relative',height:cy+ry+52,margin:'2px -8px 0',borderRadius:26,overflow:'hidden',
+                background:'radial-gradient(120% 90% at 50% 30%,#161526 0%,#0d0c16 55%,var(--bg) 100%)',border:'1px solid var(--bd)'}}>
+                <svg width="100%" height={cy+ry+52} style={{position:'absolute',inset:0,zIndex:1}}>
+                    <ellipse cx={cx} cy={cy} rx={rx} ry={ry} fill="none" stroke="var(--cream)" strokeWidth="1" strokeDasharray="2 7" style={{opacity:.18}}/>
+                </svg>
+                {/* planeta central */}
+                <div style={{position:'absolute',left:cx,top:cy,transform:'translate(-50%,-50%)',zIndex:2,
+                    width:90,height:90,borderRadius:'50%',
+                    background:`radial-gradient(circle at 36% 30%,${world.color}dd,${world.color}66 60%,${world.color}22)`,
+                    boxShadow:`0 0 40px ${world.color}55,inset -8px -10px 20px rgba(0,0,0,.4)`,border:`1px solid ${world.color}`,
+                    display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
+                    <span className="dm" style={{fontSize:24,color:'#0a0908'}}>{Math.round(done/6*100)}%</span>
+                    <span className="lbl" style={{fontSize:7,color:'#0a0908cc'}}>conquistado</span>
+                </div>
+                {/* lunas */}
+                {moons.map(m=>{
+                    const act=m.status==='active', isDone=m.status==='done', locked=m.status==='locked';
+                    const R=act?26:22;
+                    return(
+                        <button key={m.key} onClick={()=>setSheet({m,kind:'main',conquered})} style={{
+                            position:'absolute',left:m.x,top:m.y,transform:'translate(-50%,-50%)',zIndex:3,
+                            border:'none',background:'transparent',padding:0,cursor:locked?'not-allowed':'pointer'}}>
+                            <div style={{width:R*2,height:R*2,borderRadius:'50%',position:'relative',
+                                background:locked?'var(--sf2)':`radial-gradient(circle at 36% 30%,#fff7,${m.color} 55%,${m.color}88)`,
+                                border:`1.5px solid ${locked?'var(--bd2)':m.color}`,
+                                boxShadow:act?`0 0 0 6px ${m.color}1c,0 0 22px ${m.color}`:locked?'none':`0 0 14px ${m.color}77`,
+                                opacity:locked?.55:1,display:'flex',alignItems:'center',justifyContent:'center',fontSize:act?20:16}}>
+                                {isDone?<Icon name="check" size={15} color="#0a0908" sw={2.6}/>:locked?<Icon name="lock" size={14} color="var(--muted)"/>:m.emoji}
+                                <span className="dm" style={{position:'absolute',top:-7,left:-7,width:17,height:17,borderRadius:'50%',
+                                    background:'var(--bg)',border:`1px solid ${locked?'var(--bd2)':m.color}`,
+                                    color:locked?'var(--muted)':m.color,fontSize:9,display:'flex',alignItems:'center',justifyContent:'center'}}>{m.idx}</span>
+                            </div>
+                            {act&&<span className="lbl" style={{position:'absolute',top:R*2+2,left:'50%',transform:'translateX(-50%)',
+                                fontSize:7,color:m.color,whiteSpace:'nowrap'}}>aquí vas</span>}
+                        </button>
+                    );
+                })}
+                {/* avatar */}
+                <div className="rf" style={{position:'absolute',...avPos,transform:'translate(-50%,-50%)',zIndex:4,
+                    width:26,height:26,borderRadius:'50%',background:`${student.avatar.color}26`,border:`2px solid ${student.avatar.color}`,
+                    display:'flex',alignItems:'center',justifyContent:'center',fontSize:13}}>{student.avatar.emoji}</div>
+            </div>
+            {/* hint */}
+            <p style={{fontSize:10.5,color:'var(--muted)',textAlign:'center',padding:'0 16px',lineHeight:1.5}}>
+                {conquered?'Mundo conquistado · toca cualquier misión para volver a jugarla':'Toca una luna para ver los detalles de la misión'}
+            </p>
+            {/* misiones extra */}
+            <div>
+                <div style={{display:'flex',alignItems:'center',gap:8,margin:'0 2px 10px'}}>
+                    <span style={{fontSize:15}}>{SOLO_REWARD.emoji}</span>
+                    <span className="lbl" style={{color:conquered?SOLO_REWARD.color:'var(--muted)'}}>Misiones extra</span>
+                    <span style={{flex:1,height:1,background:'var(--bd)'}}/>
+                    {conquered
+                        ?<Pill color={SOLO_REWARD.color}>Desbloqueadas</Pill>
+                        :<Pill color="var(--muted2)" style={{borderColor:'var(--bd2)'}}><Icon name="lock" size={9} color="var(--muted)"/>{done}/6</Pill>}
+                </div>
+                {conquered?(
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10}}>
+                        {EXTRA_TEMPLATE.map(x=>(
+                            <button key={x.key} onClick={()=>setSheet({m:x,kind:'extra',conquered})} className="panel lift" style={{
+                                padding:'14px 12px',display:'flex',flexDirection:'column',gap:8,alignItems:'flex-start',
+                                cursor:'pointer',border:`1px solid ${x.color}33`,
+                                background:`linear-gradient(155deg,${x.color}12,var(--sf))`}}>
+                                <span style={{fontSize:24}}>{x.emoji}</span>
+                                <div>
+                                    <p className="dm" style={{fontSize:13,color:'var(--cream)'}}>{x.label}</p>
+                                    <p className="lbl" style={{fontSize:8,color:x.color,marginTop:2}}>{x.sub}</p>
+                                </div>
+                            </button>
+                        ))}
+                    </div>
+                ):(
+                    <div className="panel" style={{padding:16}}>
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8,marginBottom:12}}>
+                            {EXTRA_TEMPLATE.map(x=>(
+                                <div key={x.key} style={{padding:'10px 8px',borderRadius:14,border:'1px dashed var(--bd2)',
+                                    background:'var(--sf2)',display:'flex',alignItems:'center',gap:8,opacity:.6}}>
+                                    <span style={{fontSize:20,filter:'grayscale(1)'}}>{x.emoji}</span>
+                                    <p className="lbl" style={{fontSize:7,color:'var(--muted)',lineHeight:1.1}}>{x.label}</p>
+                                </div>
+                            ))}
+                        </div>
+                        <p style={{fontSize:11,color:'var(--muted)',lineHeight:1.45}}>
+                            Conquista las <strong style={{color:'var(--cream)'}}>6 misiones</strong> del mundo para desbloquear los 4 retos bonus.
+                        </p>
+                    </div>
+                )}
+            </div>
+            {/* CTA principal */}
+            {active?(
+                <button onClick={()=>setSheet({m:active,kind:'main',conquered})} className="lift" style={{
+                    marginTop:2,padding:15,borderRadius:16,border:'none',cursor:'pointer',background:active.color,color:'#0a0908',
+                    fontFamily:'Syne,sans-serif',fontWeight:700,fontSize:14,
+                    display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+                    <Icon name="play" size={14} color="#0a0908" fill="#0a0908" sw={0}/> Misión {active.idx} · {active.label}
+                </button>
+            ):(
+                <div className="panel" style={{marginTop:2,padding:15,borderRadius:16,display:'flex',alignItems:'center',
+                    justifyContent:'center',gap:9,borderColor:`${world.color}33`,
+                    background:`linear-gradient(140deg,${world.color}10,var(--sf))`}}>
+                    <Icon name="check" size={15} color={world.color} sw={2.6}/>
+                    <span className="dm" style={{fontSize:13,color:'var(--cream)'}}>Mundo completo · repasa lo que quieras</span>
+                </div>
+            )}
+            <SoloMissionSheet data={sheet} onClose={()=>setSheet(null)}/>
+        </div>
+    );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SOLO VIEW — tab completo
 ═══════════════════════════════════════════════════════════ */
 function SoloView(){
+    const student=window.PERIPLO.student;
+    const galaxy=GALAXIES.find(g=>g.id===(student.level||'basic'))||GALAXIES[0];
+    const worlds=deriveSoloWorlds(galaxy,student);
+
+    const[selectedWorld,setSelectedWorld]=useState(null);
+    const[exiting,setExiting]=useState(false);
+
+    const goBack=()=>{setExiting(true);setTimeout(()=>{setSelectedWorld(null);setExiting(false);},320);};
+
+    const handleWorld=w=>{
+        if(w.status==='locked') return;
+        setSelectedWorld(w);
+    };
+
+    if(selectedWorld){
+        const missions=buildSoloMissions(selectedWorld.id,student);
+        return(
+            <div className={exiting?'zoomout':'zoomin'}>
+                <SoloOrbital world={selectedWorld} missions={missions} student={student} onBack={goBack}/>
+            </div>
+        );
+    }
+
+    const lore=window.PERIPLO.lore;
+    const openWorlds=worlds.filter(w=>w.status!=='locked').length;
+
     return(
-        <div className="fu panel panel-lg" style={{padding:48,textAlign:'center',borderRadius:24,marginTop:8}}>
-            <p style={{fontSize:40,marginBottom:10}}>🗺️</p>
-            <p className="dm" style={{fontSize:15,color:'var(--cream)',marginBottom:6}}>Modo Solo</p>
-            <p style={{fontSize:12,color:'var(--muted)',lineHeight:1.5}}>
-                Aquí vivirá tu mapa de mundos: avanza por las escalas a tu ritmo.
+        <div className="fu" style={{display:'flex',flexDirection:'column',gap:14}}>
+            {/* header */}
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 2px 2px'}}>
+                <div>
+                    <p className="lbl" style={{color:lore.color,marginBottom:4}}>Modo Solo</p>
+                    <h1 className="d" style={{fontSize:28,color:'var(--cream)'}}>Archipiélago {galaxy.label}</h1>
+                </div>
+                <Pill color={lore.color}>{lore.icon} {lore.name}</Pill>
+            </div>
+            {/* mapa */}
+            <SoloMap worlds={worlds} student={student} onWorld={handleWorld}/>
+            {/* footer */}
+            <p style={{fontSize:11,color:'var(--muted)',textAlign:'center',padding:'2px 20px 0',lineHeight:1.5}}>
+                {openWorlds} de {worlds.length} mundos desbloqueados · navega de isla en isla a tu ritmo
             </p>
         </div>
     );
@@ -1186,7 +1715,7 @@ function App(){
                     avatar:s.avatar||{emoji:'🧭',color:'#7a7060'},
                     skills:s.skills||{speaking:0,listening:0,reading:0,grammar:0,vocabulary:0,pronunciation:0},
                 },
-                module:{name:s.currentModule||(s.level==='basic'?'Basic Foundation':s.level==='advanced'?'Advanced Foundation':'Pro Structures')},
+                module:{name:s.currentModule||null},
                 mastery,
                 remediation,
                 games:GAME_MAP,
@@ -1197,6 +1726,15 @@ function App(){
 
             /* Construir window.PERIPLO_LIB */
             buildLibrary(s,allResources);
+
+            /* Datos de Solo */
+            window.PERIPLO.student.soloProgress=s.soloProgress||{};
+            window.PERIPLO.moduleReward=SOLO_REWARD;
+            window.PERIPLO.planetMissions=worldId=>buildSoloMissions(worldId,s);
+            window.PERIPLO.planetExtras=worldId=>{
+                const wp=(s.soloProgress||{})[worldId]||{done:0};
+                return{unlocked:wp.done>=6,items:EXTRA_TEMPLATE};
+            };
 
             /* Sincronizar color de nivel con CSS */
             document.documentElement.style.setProperty('--lc',lore.color);
