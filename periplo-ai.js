@@ -88,9 +88,17 @@ window.PERIPLO_AI = (() => {
         return result.candidates?.[0]?.content?.parts?.[0]?.text || '';
     };
 
+    // ---- limpiar texto antes de JSON.parse (quita comentarios JS y trailing commas) ----
+    const sanitizeJSON = (text) => (text || '')
+        .replace(/\/\/[^\n]*/g, '')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/,(\s*[}\]])/g, '$1')
+        .trim();
+
     // ---- extraer un objeto JSON de la respuesta de la IA ----
     const extractJSON = (rawText) => {
-        const match = (rawText || '').match(/\{[\s\S]*\}/);
+        const clean = sanitizeJSON(rawText || '');
+        const match = clean.match(/\{[\s\S]*\}/);
         if (!match) throw new Error('La IA no devolvió un JSON válido.');
         return JSON.parse(match[0]);
     };
@@ -209,7 +217,7 @@ window.PERIPLO_AI = (() => {
     return {
         STORAGE_KEY, DEFAULT_MODEL,
         loadKey, saveKey, clearKey,
-        fetchModels, pickPreferredModel, callGemini, extractJSON,
+        fetchModels, pickPreferredModel, callGemini, extractJSON, sanitizeJSON,
         createApiKeyBar,
     };
 })();
