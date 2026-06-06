@@ -156,43 +156,47 @@ const MatchGame=()=>{
        Normalizamos a {id, c1:es, c2:en} que es lo que usa buildCP.
        También soporta: arrays directo, o {c1,c2}, o {es,en}, etc.
     ══════════════════════════════════════════════════ */
-    useEffect(()=>{
-        const init=async()=>{
-            if(!quizId)return;
-            try{
-                const snap=await getDoc(doc(db,'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes',quizId));
-                if(snap.exists()){
-                    const d=snap.data();setGameData(d);
-
-                    /* 1. Formato dashboard-match → content.wordPool [{id,en,es}] */
-                    if(d.content?.wordPool&&Array.isArray(d.content.wordPool)&&d.content.wordPool.length>0){
-                        const pool=d.content.wordPool.filter(p=>p.en&&p.es).map((w,i)=>({
-                            id:w.id||`w${i}`,c1:w.es,c2:w.en
-                        }));
-                        setWordPool(pool);
-                    }
-                    /* 2. Formato legacy: array directo o cualquier otro campo */
-                    else{
-                        let raw=[];
-                        if(Array.isArray(d.content))raw=d.content;
-                        else if(d.content&&typeof d.content==='object'){
-                            Object.values(d.content).forEach(v=>{if(Array.isArray(v)&&v.length>raw.length)raw=v});
+useEffect(()=>{
+        const unsub = onAuthStateChanged(auth, async (u) => {
+            if (u) {
+                // Ya hay usuario (tu cuenta o un anónimo existente), cargamos el quiz
+                if (!quizId) { setLoading(false); return; }
+                try {
+                    const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', quizId));
+                    if (snap.exists()) {
+                        const d = snap.data();
+                        setGameData(d);
+                        /* Lógica de carga de palabras... */
+                        if (d.content?.wordPool && Array.isArray(d.content.wordPool) && d.content.wordPool.length > 0) {
+                            const pool = d.content.wordPool.filter(p => p.en && p.es).map((w, i) => ({ id: w.id || `w${i}`, c1: w.es, c2: w.en }));
+                            setWordPool(pool);
+                        } else {
+                            let raw = [];
+                            if (Array.isArray(d.content)) raw = d.content;
+                            else if (d.content && typeof d.content === 'object') {
+                                Object.values(d.content).forEach(v => { if (Array.isArray(v) && v.length > raw.length) raw = v });
+                            }
+                            setWordPool(raw.map((w, i) => {
+                                const s = Object.values(w).filter(v => typeof v === 'string');
+                                return { id: w.id || `w${i}`, c1: w.c1 || w.es || w.term || w.spanish || s[0] || '???', c2: w.c2 || w.en || w.definition || w.english || s[1] || '???' };
+                            }));
                         }
-                        setWordPool(raw.map((w,i)=>{
-                            const s=Object.values(w).filter(v=>typeof v==='string');
-                            return{id:w.id||`w${i}`,c1:w.c1||w.es||w.term||w.spanish||s[0]||'???',c2:w.c2||w.en||w.definition||w.english||s[1]||'???'};
-                        }));
                     }
-                }
-                const q=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`),limit(50));
-                const lbs=await getDocs(q);
-                const allLb=lbs.docs.map(d=>({...d.data(),docId:d.id}));
-                allLb.sort((a,b)=>{if((b.crown||1)!==(a.crown||1))return(b.crown||1)-(a.crown||1);return(b.score||0)-(a.score||0)});
-                setLeaderboard(allLb.slice(0,10));
-            }catch(e){console.error(e)}
-            setLoading(false);
-        };init();
-    },[quizId]);
+                    // Cargar leaderboard
+                    const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`), limit(50));
+                    const lbs = await getDocs(q);
+                    const allLb = lbs.docs.map(d => ({ ...d.data(), docId: d.id }));
+                    allLb.sort((a, b) => (b.crown || 1) - (a.crown || 1) || (b.score || 0) - (a.score || 0));
+                    setLeaderboard(allLb.slice(0, 10));
+                } catch (e) { console.error(e); }
+                setLoading(false);
+            } else {
+                // No hay nadie, iniciamos anónimo
+                signInAnonymously(auth).catch(e => console.error("Error auth anónimo:", e));
+            }
+        });
+        return () => unsub();
+    }, [quizId]);
 
     const loadLB=async()=>{
         const q=query(collection(db,`artifacts/periplo-app-v1/quizzes/${quizId}/match-leaderboard`),limit(50));
