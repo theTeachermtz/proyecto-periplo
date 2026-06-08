@@ -103,7 +103,7 @@
         const DICE_EMOJIS = ['⚀','⚁','⚂','⚃','⚄','⚅'];
         
         // LOS 9 EMOJIS DE AVATARES
-        const AVATARS = ['🦊', '🐼', '🐯', '🐰', '🐨', '🐸', '🦄', '🐙', '🐵'];
+        const AVATARS = ['😎','🤩','🦊','🦁','🐯','🐼','🦋','🦄','🐉','🧙','🥷','🤖','👽','🐬','🦅','🎸','🏆','👑','⚡','🔥','🌙','🌈','💎','🚀','🎯','🎮','🍀','🌟','🦚','🤓'];
 
         const LingoMatch = () => {
             const [user, setUser] = useState(null);
@@ -122,7 +122,7 @@
             const [isSinglePlayer, setIsSinglePlayer] = useState(false);
             const [roomCode, setRoomCode] = useState('');
             
-            const [inputCode, setInputCode] = useState('');
+            const [inputCode, setInputCode] = useState(() => new URLSearchParams(window.location.search).get('code') || '');
             const [roomData, setRoomData] = useState(null);
             const [playerName, setPlayerName] = useState('');
             const [playerEmoji, setPlayerEmoji] = useState(AVATARS[0]); // Estado para el emoji
@@ -197,14 +197,6 @@
                 return () => unsub();
             }, [quizId]);
 
-            // ====== AUTO-SPEEDRUN (Solo para alumnos con ID que no tienen sala pendiente) ======
-            useEffect(() => {
-                if (quizData && isStudent && !pendingRoom && !modeSelected) {
-                    setIsSinglePlayer(true);
-                    setModeSelected('single');
-                    loadLeaderboardData(quizId);
-                }
-            }, [quizData, isStudent, pendingRoom, modeSelected, quizId]);
 
             // ====== ROOM LISTENER (Seguro contra ciclos infinitos) ======
             useEffect(() => {
@@ -312,21 +304,22 @@
             };
 
             const startSinglePlayer = () => {
-                if (!playerName.trim()) return alert("Escribe tu nombre o apodo.");
+                const resolvedName = playerName.trim() || localStorage.getItem('periplo_student_name') || 'Jugador';
+                setPlayerName(resolvedName);
                 const settings = quizData.content.settings || { rounds: 3, rowsPerRound: 6 };
                 const totalNeeded = settings.rounds * settings.rowsPerRound;
-                
+
                 let allPairs = [];
                 while(allPairs.length < totalNeeded) {
                     allPairs = allPairs.concat(shuffle([...quizData.content.pairs]));
                 }
                 const gp = allPairs.slice(0, totalNeeded);
-                
+
                 setRoomData({
                     gameState: 'playing', mode: 'single', settings, gamePool: gp, currentRound: 1,
                     board: generateBoardColumns(gp.slice(0, settings.rowsPerRound)),
                     matchedIds: [],
-                    players: [{ id: 'p1', name: playerName, emoji: playerEmoji, score: 0, occupied: true, uid: user?.uid }]
+                    players: [{ id: 'p1', name: resolvedName, emoji: playerEmoji, score: 0, occupied: true, uid: user?.uid }]
                 });
                 triggerSequence(['READY...', 'SET...', 'GO!'], () => setTimer(0));
             };
@@ -351,15 +344,16 @@
             };
 
             const joinRoom = async () => {
-                if (!playerName.trim()) return alert("Escribe tu nombre primero.");
+                const resolvedName = playerName.trim() || localStorage.getItem('periplo_student_name') || 'Alumno';
                 const code = inputCode.toUpperCase().trim();
                 if (code.length < 4) return alert('Código muy corto');
-                
+
                 const snap = await getDoc(doc(db, 'artifacts/periplo-app-v1/rooms', code));
                 if (snap.exists()) {
                     const data = snap.data();
                     const qSnap = await getDoc(doc(db, 'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes', data.quizId));
                     if (qSnap.exists()) {
+                        setPlayerName(resolvedName);
                         setQuizData(qSnap.data());
                         setQuizId(data.quizId);
                         setRoomCode(code);
@@ -747,39 +741,89 @@
             // ====== RENDER GUARD (Carga de QuizData si ya tenemos ID) ======
             if (quizId && !quizData) return <div className="h-[100dvh] flex items-center justify-center font-black text-indigo-500 animate-pulse text-xl uppercase tracking-widest">Conectando...</div>;
 
-            // ====== PANTALLA 2: TEACHER CHOICE (CON ID, NO ESTUDIANTE) ======
-            if (quizId && !modeSelected) return (
-                <div className="min-h-[100dvh] flex flex-col items-center justify-center py-12 px-6 bg-zinc-950 overflow-y-auto">
-                    <div className="text-center mb-8 fade-in">
-                        <h1 className="text-3xl sm:text-4xl font-black italic text-indigo-500 mb-2 tracking-tighter">LINGOMATCH <span className="text-amber-400">TRIPLE</span></h1>
-                        <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">{quizData?.title}</p>
-                    </div>
-
-                    <div className="w-full max-w-sm mb-6 fade-in" style={{ animationDelay: '0.1s' }}>
-                        <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest mb-2 text-center">Tu Avatar (por si juegas)</p>
-                        <div className="flex flex-wrap justify-center gap-2">
-                            {AVATARS.map(emo => (
-                                <button key={emo} onClick={() => setPlayerEmoji(emo)} 
-                                    className={`w-10 h-10 text-2xl flex items-center justify-center rounded-xl transition-all ${playerEmoji === emo ? 'bg-indigo-500/20 border-2 border-indigo-500 scale-110' : 'bg-zinc-800 border border-zinc-700 opacity-50 hover:opacity-100'}`}>
-                                    {emo}
+            // ====== PANTALLA 2: STUDENT JOIN vs TEACHER CHOICE ======
+            if (quizId && !modeSelected) {
+                if (isStudent) return (
+                    <div className="min-h-[100dvh] flex flex-col bg-zinc-950">
+                        <header className="shrink-0 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between px-4 py-2.5" style={{paddingTop:'max(10px,env(safe-area-inset-top))'}}>
+                            <div className="flex items-center gap-2.5">
+                                <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-sm shadow-md shadow-indigo-600/30">P</div>
+                                <div className="w-px h-5 bg-zinc-800"/>
+                                <span className="text-sm font-black text-white">🎯 LingoMatch</span>
+                            </div>
+                        </header>
+                        <div className="flex-1 flex flex-col items-center justify-center p-5 overflow-y-auto custom-scrollbar" style={{paddingBottom:'max(16px,env(safe-area-inset-bottom))'}}>
+                            <div className="w-full max-w-sm bg-zinc-900 border-2 border-indigo-500/60 rounded-[2rem] p-6 shadow-2xl text-center">
+                                <div className="text-5xl mb-3 animate-bounce" style={{display:'inline-block'}}>🎯</div>
+                                <h1 className="text-3xl font-black text-white mb-1">LingoMatch</h1>
+                                <p className="text-indigo-400 font-bold text-xs uppercase tracking-widest mb-4">Ingresa el código de sala</p>
+                                <div className="space-y-2 mb-4 text-left">
+                                    {[
+                                        { e:'👁️', t:'Tres columnas de palabras — conecta las 3 de la misma idea' },
+                                        { e:'🎲', t:'El dado multiplica tus puntos al acertar las 3' },
+                                        { e:'⚡', t:'2 de 3 correctas suma 1 pt, error suma 0' },
+                                    ].map(({e,t}) => (
+                                        <div key={e} className="flex items-start gap-2.5 bg-zinc-800/50 rounded-xl p-2.5">
+                                            <span className="text-base shrink-0">{e}</span>
+                                            <p className="text-zinc-300 text-xs font-medium text-left leading-snug">{t}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                                <input type="text" value={inputCode} onChange={e => setInputCode(e.target.value.toUpperCase())}
+                                       onKeyDown={e => e.key==='Enter' && joinRoom()}
+                                       maxLength={4} placeholder="XXXX" autoFocus
+                                       className="bg-zinc-800 text-white font-black text-center text-3xl uppercase px-4 py-4 rounded-2xl w-full border-2 border-zinc-700 outline-none focus:border-indigo-500 transition-colors tracking-widest mb-4"/>
+                                <p className="text-zinc-500 font-bold text-xs uppercase tracking-widest mb-2">Tu avatar</p>
+                                <div className="grid grid-cols-6 gap-1.5 p-3 border border-zinc-800 rounded-2xl bg-zinc-950 mb-4">
+                                    {AVATARS.map(av => (
+                                        <button key={av} onClick={() => setPlayerEmoji(av)}
+                                                className={`text-xl aspect-square rounded-xl flex items-center justify-center transition-all ${playerEmoji === av ? 'bg-indigo-600/40 ring-2 ring-indigo-400 scale-110' : 'bg-zinc-800 hover:bg-zinc-700 opacity-70 hover:opacity-100'}`}>
+                                            {av}
+                                        </button>
+                                    ))}
+                                </div>
+                                <button onClick={joinRoom} disabled={inputCode.length < 4}
+                                        className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white py-4 rounded-2xl font-black text-xl transition active:scale-95 shadow-lg">
+                                    Entrar →
                                 </button>
-                            ))}
+                            </div>
                         </div>
                     </div>
+                );
 
-                    <div className="w-full max-w-sm space-y-4 fade-in" style={{ animationDelay: '0.2s' }}>
-                        <button onClick={setupSinglePlayer} className="btn-juicy w-full bg-amber-500 text-zinc-950 font-black py-5 rounded-2xl border-amber-700 flex flex-col items-center gap-1 shadow-xl">
-                            <Timer size={32}/><span className="text-xl tracking-widest uppercase">TEST SPEEDRUN (1P)</span>
-                            <span className="text-xs font-bold opacity-80">Juega y prueba el set localmente.</span>
-                        </button>
-                        <button onClick={createRoom} className="btn-juicy w-full bg-indigo-600 text-white font-black py-5 rounded-2xl border-indigo-800 flex flex-col items-center gap-1 shadow-xl">
-                            <Users size={32}/><span className="text-xl tracking-widest uppercase">HOST ARENA (VS)</span>
-                            <span className="text-xs font-bold opacity-80">Crear sala para los alumnos.</span>
-                        </button>
+                return (
+                    <div className="min-h-[100dvh] flex flex-col items-center justify-center py-12 px-6 bg-zinc-950 overflow-y-auto">
+                        <div className="text-center mb-8 fade-in">
+                            <h1 className="text-3xl sm:text-4xl font-black italic text-indigo-500 mb-2 tracking-tighter">LINGOMATCH <span className="text-amber-400">TRIPLE</span></h1>
+                            <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">{quizData?.title}</p>
+                        </div>
+
+                        <div className="w-full max-w-sm mb-6 fade-in" style={{ animationDelay: '0.1s' }}>
+                            <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest mb-2 text-center">Tu Avatar (por si juegas)</p>
+                            <div className="grid grid-cols-6 gap-2 p-3 border border-zinc-800 rounded-2xl bg-zinc-950">
+                                {AVATARS.map(emo => (
+                                    <button key={emo} onClick={() => setPlayerEmoji(emo)}
+                                        className={`text-xl aspect-square flex items-center justify-center rounded-xl transition-all ${playerEmoji === emo ? 'bg-indigo-500/20 border-2 border-indigo-500 scale-110' : 'bg-zinc-800 border border-zinc-700 opacity-50 hover:opacity-100'}`}>
+                                        {emo}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="w-full max-w-sm space-y-4 fade-in" style={{ animationDelay: '0.2s' }}>
+                            <button onClick={setupSinglePlayer} className="btn-juicy w-full bg-amber-500 text-zinc-950 font-black py-5 rounded-2xl border-amber-700 flex flex-col items-center gap-1 shadow-xl">
+                                <Timer size={32}/><span className="text-xl tracking-widest uppercase">TEST SPEEDRUN (1P)</span>
+                                <span className="text-xs font-bold opacity-80">Juega y prueba el set localmente.</span>
+                            </button>
+                            <button onClick={createRoom} className="btn-juicy w-full bg-indigo-600 text-white font-black py-5 rounded-2xl border-indigo-800 flex flex-col items-center gap-1 shadow-xl">
+                                <Users size={32}/><span className="text-xl tracking-widest uppercase">HOST ARENA (VS)</span>
+                                <span className="text-xs font-bold opacity-80">Crear sala para los alumnos.</span>
+                            </button>
+                        </div>
+                        <button onClick={() => window.location.href='index.html'} className="mt-8 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest fade-in" style={{ animationDelay: '0.3s' }}>Volver al Hub</button>
                     </div>
-                    {!isStudent && <button onClick={() => window.location.href='index.html'} className="mt-8 text-xs font-bold text-zinc-500 hover:text-zinc-300 uppercase tracking-widest fade-in" style={{ animationDelay: '0.3s' }}>Volver al Hub</button>}
-                </div>
-            );
+                );
+            }
 
             // ====== PANTALLA 3: SINGLE PLAYER SETUP ======
             if (modeSelected === 'single' && !roomData) return (
@@ -789,7 +833,7 @@
                             <Trophy className="text-amber-400 flex-shrink-0" size={24}/>
                             <h2 className="text-lg sm:text-xl font-black uppercase italic text-white tracking-widest">Mejores Tiempos</h2>
                         </div>
-                        <div className="space-y-2 mb-6">
+                        <div className="space-y-2 mb-5">
                             {leaderboard.length === 0 ? <p className="text-center text-zinc-500 font-bold text-sm py-4">Sé el primero en dejar tu marca.</p> :
                                 leaderboard.map((l, i) => (
                                     <div key={i} className="flex justify-between items-center bg-zinc-950 p-3 rounded-xl border border-zinc-800">
@@ -802,14 +846,26 @@
                                 ))
                             }
                         </div>
-                        <input value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="TU NOMBRE / APODO"
-                            className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-3 text-center text-lg font-black uppercase outline-none focus:border-amber-500 text-white mb-4" style={{ fontSize: '16px' }}/>
-                        
+
+                        <div className="space-y-2 mb-5 border-t border-zinc-800 pt-4">
+                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest text-center mb-3">Cómo jugar</p>
+                            {[
+                                { e:'⚡', t:'Conecta las 3 palabras de la misma idea' },
+                                { e:'⏱️', t:'Cada error añade segundos a tu tiempo' },
+                                { e:'🏆', t:'Completa todos los sets con el menor tiempo posible' },
+                            ].map(({e,t}) => (
+                                <div key={e} className="flex items-start gap-2.5 bg-zinc-800/40 rounded-xl p-2.5">
+                                    <span className="text-sm shrink-0">{e}</span>
+                                    <p className="text-zinc-400 text-xs font-medium leading-snug">{t}</p>
+                                </div>
+                            ))}
+                        </div>
+
                         <p className="text-xs text-zinc-400 font-bold uppercase tracking-widest mb-2 text-center">Elige tu Avatar</p>
-                        <div className="flex flex-wrap justify-center gap-2 mb-6">
+                        <div className="grid grid-cols-6 gap-1.5 p-3 border border-zinc-800 rounded-2xl bg-zinc-950 mb-5">
                             {AVATARS.map(emo => (
-                                <button key={emo} onClick={() => setPlayerEmoji(emo)} 
-                                    className={`w-10 h-10 text-2xl flex items-center justify-center rounded-xl transition-all ${playerEmoji === emo ? 'bg-amber-500/20 border-2 border-amber-500 scale-110' : 'bg-zinc-800 border border-zinc-700 opacity-50 hover:opacity-100'}`}>
+                                <button key={emo} onClick={() => setPlayerEmoji(emo)}
+                                    className={`text-xl aspect-square flex items-center justify-center rounded-xl transition-all ${playerEmoji === emo ? 'bg-amber-500/20 border-2 border-amber-500 scale-110' : 'bg-zinc-800 hover:bg-zinc-700 opacity-50 hover:opacity-100'}`}>
                                     {emo}
                                 </button>
                             ))}
@@ -818,7 +874,7 @@
                         <button onClick={startSinglePlayer} className="btn-juicy w-full bg-emerald-500 text-white font-black py-4 rounded-xl border-emerald-700 uppercase tracking-widest text-lg flex items-center justify-center gap-2 shadow-lg">
                             <Play fill="currentColor"/> EMPEZAR
                         </button>
-                        {!isStudent && <button onClick={() => setModeSelected(null)} className="w-full text-zinc-500 font-bold text-xs mt-4 hover:text-white uppercase tracking-widest">Volver</button>}
+                        <button onClick={() => setModeSelected(null)} className="w-full text-zinc-500 font-bold text-xs mt-4 hover:text-white uppercase tracking-widest">Volver</button>
                     </div>
                 </div>
             );
