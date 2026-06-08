@@ -47,7 +47,7 @@
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, getDoc, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
         import confetti from 'canvas-confetti';
-        import { Loader2, Volume2, Lightbulb, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, Eye, X } from 'lucide-react';
+        import { Loader2, Volume2, Lightbulb, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, X } from 'lucide-react';
 
         const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
         const app = initializeApp(firebaseConfig);
@@ -98,7 +98,7 @@
         );
 
         // ====== ACTIVE BUBBLE — SENTENCE UNSCRAMBLE ======
-        const ActiveBubble = ({data, onNext, setTotalScore, isTutorial, transcriptVisible, botPlayClicked}) => {
+        const ActiveBubble = ({data, onNext, setTotalScore, isTutorial, botPlayClicked}) => {
 
             const wordList = useMemo(() => {
                 return data.expectedAnswer.trim().split(/\s+/).filter(Boolean);
@@ -115,17 +115,33 @@
                 setShuffledWords(arr);
             }, [wordList]);
 
-            const LISTEN_BONUS = Math.ceil(wordList.length * 0.5);
+            const MCQ_BONUS = Math.ceil(wordList.length * 0.5);
+            const hasMCQ = !!(data.botHint && data.distractors && data.distractors.length >= 2);
+            const mcqChoices = useMemo(() => {
+                if (!hasMCQ) return [];
+                const choices = [
+                    { text: data.botHint, isCorrect: true },
+                    { text: data.distractors[0], isCorrect: false },
+                    { text: data.distractors[1], isCorrect: false },
+                ];
+                for (let i = choices.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [choices[i], choices[j]] = [choices[j], choices[i]];
+                }
+                return choices;
+            }, [hasMCQ]);
 
             const [selectedIds, setSelectedIds] = useState([]);
             const [errorId, setErrorId] = useState(null);
             const [failedAttempts, setFailedAttempts] = useState(0);
             const [penalties, setPenalties] = useState(0);
             
-            const [phase, setPhase] = useState('waiting');
+            const [phase, setPhase] = useState(() => hasMCQ ? 'mcq' : 'waiting');
             const [stepScore, setStepScore] = useState(0);
             const [tutStep, setTutStep] = useState(isTutorial ? 0 : -1);
             const [tutPlayClicked, setTutPlayClicked] = useState(false);
+            const [mcqAnswered, setMcqAnswered] = useState(false);
+            const [mcqCorrect, setMcqCorrect] = useState(false);
 
             const userEmoji = useMemo(() => pickUserEmoji(data.expectedAnswer), [data.expectedAnswer]);
 
@@ -181,14 +197,18 @@
                 }
             };
 
+            const handleMcqAnswer = (isCorrect) => {
+                setMcqAnswered(true);
+                setMcqCorrect(isCorrect);
+                if (isCorrect) setTotalScore(prev => prev + MCQ_BONUS);
+            };
+
             const finishAnswer = () => {
                 const baseScore = wordList.length;
                 const earnedBase = Math.max(0, baseScore - penalties);
-                let totalEarned = earnedBase;
-                if(!transcriptVisible) totalEarned += LISTEN_BONUS;
-                
-                setStepScore(totalEarned);
-                setTotalScore(prev => prev + totalEarned);
+
+                setStepScore(earnedBase);
+                setTotalScore(prev => prev + earnedBase);
                 setPhase('correct');
                 confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
                 setTimeout(() => speak(data.expectedAnswer, 'en-US', 0.85), 600);
@@ -221,6 +241,48 @@
                 );
             };
 
+            if (phase === 'mcq') return (
+                <div className="flex flex-col items-end w-full space-y-2 animate-pop">
+                    <div className={`w-[95%] sm:w-[88%] p-4 rounded-2xl rounded-tr-sm ${mcqAnswered ? (mcqCorrect ? 'bg-emerald-600' : 'bg-zinc-700') : 'bg-indigo-600'}`}>
+                        {!mcqAnswered ? (
+                            <>
+                                <p className="text-white font-black text-sm mb-3">¿Qué te están diciendo?</p>
+                                <div className="space-y-2">
+                                    {mcqChoices.map((choice, i) => (
+                                        <button key={i} onClick={() => handleMcqAnswer(choice.isCorrect)}
+                                            className="w-full text-left bg-white/20 hover:bg-white/30 active:bg-white/40 text-white font-bold py-2.5 px-4 rounded-xl text-sm active:scale-95 transition-all">
+                                            {choice.text}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="text-indigo-200 text-[10px] mt-3 font-bold">+{MCQ_BONUS} pts si aciertas 🎯</p>
+                            </>
+                        ) : (
+                            <>
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-xl">{mcqCorrect ? '✅' : '❌'}</span>
+                                    <p className="text-white font-black text-sm">{mcqCorrect ? '¡Correcto!' : 'Incorrecto'}</p>
+                                    {mcqCorrect && (
+                                        <div className="flex items-center gap-1 bg-white/20 px-2 py-1 rounded-full ml-auto">
+                                            <Star size={12} className="text-amber-300"/>
+                                            <span className="text-white font-black text-xs">+{MCQ_BONUS}</span>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="bg-black/20 rounded-xl p-3 mb-3">
+                                    <p className="text-white/90 text-sm font-medium">{data.botHint}</p>
+                                </div>
+                                <button onClick={() => setPhase('playing')}
+                                    className="w-full bg-white text-indigo-700 font-black py-2.5 px-6 rounded-xl shadow-lg text-sm uppercase tracking-wider flex items-center justify-center gap-1.5 active:scale-95">
+                                    ✍️ Responder
+                                </button>
+                            </>
+                        )}
+                    </div>
+                    {renderTutorial()}
+                </div>
+            );
+
             if(phase === 'waiting') return (
                 <div className="flex flex-col items-end w-full space-y-2 animate-pop">
                     <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm">
@@ -239,7 +301,6 @@
                         <div className="flex items-center gap-2 mt-3 flex-wrap">
                             <button onClick={() => speak(data.expectedAnswer, 'en-US', 0.85)} className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-full"><Volume2 size={16}/></button>
                             <div className="flex items-center gap-1 bg-white/20 px-3 py-1.5 rounded-full"><Star size={13} className="text-amber-300"/><span className="text-white font-black text-sm">+{stepScore}</span></div>
-                            {!transcriptVisible && <span className="text-emerald-200 text-[10px] font-bold bg-white/10 px-2 py-1 rounded-full">👂 Bonus</span>}
                         </div>
                         <div className="mt-4 text-right">
                             <button onClick={onNext} className="bg-white text-emerald-700 font-black py-2.5 px-6 rounded-xl shadow-lg text-sm uppercase tracking-wider flex items-center gap-1 ml-auto active:scale-95">
@@ -262,13 +323,6 @@
                         </div>
                     )}
                     
-                    {!transcriptVisible && (
-                        <div className="flex items-center gap-2 mr-2 mb-1">
-                            <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 rounded-full border border-emerald-500/20">
-                                👂 +{LISTEN_BONUS} pts si no ves la transcripción
-                            </span>
-                        </div>
-                    )}
 
                     <div className="w-[95%] sm:w-[88%] bg-indigo-600 p-4 rounded-2xl rounded-tr-sm">
                         
@@ -346,7 +400,6 @@
             const [showTutorial, setShowTutorial] = useState(false);
             const [leaderboard, setLeaderboard] = useState([]);
             const [scoreSaved, setScoreSaved] = useState(false);
-            const [transcriptVisible, setTranscriptVisible] = useState(false);
             const [isPlayingBot, setIsPlayingBot] = useState(false);
             const [botPlayClicked, setBotPlayClicked] = useState(false);
 
@@ -379,7 +432,6 @@
             const handleNext = () => {
                 if(currentStep < chatFlow.length) {
                     setCurrentStep(prev => prev + 1);
-                    setTranscriptVisible(false);
                     setIsPlayingBot(false);
                     setBotPlayClicked(false);
                 }
@@ -392,7 +444,7 @@
                 setScreen('game');
             };
 
-            const goBackToName = () => { setScreen('name'); setCurrentStep(0); setTotalScore(0); setScoreSaved(false); setTranscriptVisible(false); setBotPlayClicked(false); };
+            const goBackToName = () => { setScreen('name'); setCurrentStep(0); setTotalScore(0); setScoreSaved(false); setBotPlayClicked(false); };
 
             const isComplete = screen === 'game' && currentStep === chatFlow.length && chatFlow.length > 0;
 
@@ -578,17 +630,8 @@
                                                 <button onClick={() => speak(data.botMessage, 'en-US', 0.85)} className="mt-1.5 text-indigo-400 hover:text-indigo-300 flex items-center gap-1 text-[11px] font-bold"><Volume2 size={12}/> Escuchar</button>
                                             </div>
                                         ) : (
-                                            <div className="bg-zinc-800 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[82%] space-y-2">
+                                            <div className="bg-zinc-800 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[82%]">
                                                 <VoiceNote text={data.botMessage} onPlay={playCurrentBot} isPlaying={isPlayingBot}/>
-                                                {!transcriptVisible ? (
-                                                    <button onClick={() => setTranscriptVisible(true)} className="text-zinc-500 hover:text-zinc-300 text-xs font-bold flex items-center gap-1">
-                                                        <Eye size={12}/> Ver transcripción
-                                                    </button>
-                                                ) : (
-                                                    <div className="bg-zinc-700/40 rounded-xl p-3 border border-zinc-600/30 animate-slide-up">
-                                                        <p className="text-zinc-200 text-sm leading-relaxed">{data.botMessage}</p>
-                                                    </div>
-                                                )}
                                             </div>
                                         )}
                                     </div>
@@ -600,7 +643,6 @@
                                             onNext={handleNext}
                                             setTotalScore={setTotalScore}
                                             isTutorial={isFirstTutorial}
-                                            transcriptVisible={transcriptVisible}
                                             botPlayClicked={botPlayClicked}
                                         />
                                     ) : isDone ? (
