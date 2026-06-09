@@ -103,7 +103,7 @@ import React,{useState,useEffect,useCallback,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 import {initializeApp} from 'firebase/app';
 import {getAuth,onAuthStateChanged,signOut} from 'firebase/auth';
-import {getFirestore,doc,updateDoc,collection,query,where,getDocs} from 'firebase/firestore';
+import {getFirestore,doc,updateDoc,collection,query,where,getDocs,onSnapshot} from 'firebase/firestore';
 
 const app  = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
 const auth = getAuth(app);
@@ -869,36 +869,207 @@ function TallerView({openDrawer}){
 }
 
 /* ═══════════════════════════════════════════════════════════
+   AGENDA — helpers
+═══════════════════════════════════════════════════════════ */
+const DAY_NUM={DOM:0,LUN:1,MAR:2,MIE:3,JUE:4,VIE:5,SAB:6};
+const DAY_ES={LUN:'Lunes',MAR:'Martes',MIE:'Miércoles',JUE:'Jueves',VIE:'Viernes',SAB:'Sábado',DOM:'Domingo'};
+
+function getEventDateTime(ev){
+    const[h,m]=(ev.time||'10:00').split(':').map(Number);
+    if(ev.date){
+        const[yr,mo,dy]=ev.date.split('-').map(Number);
+        return new Date(yr,mo-1,dy,h,m,0,0);
+    }
+    const now=new Date();
+    const target=DAY_NUM[ev.day]??1;
+    for(let i=0;i<=7;i++){
+        const c=new Date(now);
+        c.setDate(now.getDate()+i);
+        c.setHours(h,m,0,0);
+        if(c.getDay()===target&&c>now)return c;
+    }
+    const fb=new Date(now);
+    fb.setDate(now.getDate()+7);
+    fb.setHours(h,m,0,0);
+    return fb;
+}
+
+function getWeekStart(d){
+    const day=d.getDay();
+    const diff=day===0?-6:1-day;
+    const s=new Date(d);
+    s.setDate(d.getDate()+diff);
+    s.setHours(0,0,0,0);
+    return s;
+}
+
+function fmtCountdown(ms){
+    if(ms<=0)return null;
+    const min=Math.floor(ms/60000);
+    if(min<60)return`${min} min`;
+    const h=Math.floor(min/60);
+    if(h<24)return`${h}h ${min%60>0?min%60+'m':''}`.trim();
+    return`${Math.floor(h/24)}d`;
+}
+
+function fmtDay(ev,dt){
+    if(ev.date){
+        const d=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'][dt.getDay()];
+        return`${d} ${dt.getDate()} · ${ev.time}`;
+    }
+    return`${DAY_ES[ev.day]||ev.day} · ${ev.time}`;
+}
+
+/* ─── ClassCard ─── */
+function ClassCard({cls,now}){
+    const dt=cls.dt;
+    const activationMs=dt.getTime()-5*60000-now.getTime();
+    const isActive=cls.isActive;
+    const ac='#a78bfa';
+
+    if(isActive){
+        return(
+            <div className="panel" style={{border:'1.5px solid #a78bfa55',background:'linear-gradient(135deg,#a78bfa0a,#7c3aed08)',padding:'16px 18px'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+                    <div>
+                        <p className="lbl" style={{color:'#22c55e',marginBottom:2,fontSize:9}}>● CLASE ACTIVA</p>
+                        <p className="d" style={{fontSize:17,color:'var(--cream)'}}>{fmtDay(cls,dt)}</p>
+                    </div>
+                    {cls.level&&<span style={{fontSize:10,background:'#a78bfa20',color:ac,padding:'3px 9px',borderRadius:99,fontWeight:700}}>{cls.level}</span>}
+                </div>
+                {cls.meetLink?(
+                    <a href={cls.meetLink} target="_blank" rel="noopener noreferrer"
+                        style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+                            background:'#22c55e',borderRadius:12,padding:'13px',textDecoration:'none',
+                            color:'#0a160a',fontWeight:800,fontSize:14,fontFamily:'Syne,sans-serif'}}>
+                        Entrar a la clase →
+                    </a>
+                ):(
+                    <p className="dm" style={{fontSize:12,color:'var(--muted)',textAlign:'center'}}>Tu teacher compartirá el link pronto.</p>
+                )}
+            </div>
+        );
+    }
+
+    return(
+        <div className="panel" style={{padding:'14px 18px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div style={{display:'flex',flexDirection:'column',gap:5}}>
+                    <p className="dm" style={{fontSize:15,color:'var(--cream)',fontWeight:700}}>{fmtDay(cls,dt)}</p>
+                    {cls.level&&<span style={{fontSize:10,background:'#a78bfa20',color:ac,padding:'2px 8px',borderRadius:99,fontWeight:700,alignSelf:'flex-start'}}>{cls.level}</span>}
+                </div>
+                <div style={{textAlign:'right',flexShrink:0}}>
+                    <p style={{fontSize:9,fontWeight:700,color:'var(--muted)',marginBottom:2,textTransform:'uppercase',letterSpacing:'0.06em'}}>se activa en</p>
+                    <p className="d" style={{fontSize:17,color:'var(--cream)'}}>{fmtCountdown(activationMs)||'pronto'}</p>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/* ─── CompletedCard ─── */
+function CompletedCard({cls}){
+    const dt=cls.dt;
+    return(
+        <div className="panel" style={{padding:'11px 18px',opacity:0.65,display:'flex',alignItems:'center',gap:12}}>
+            <div style={{width:22,height:22,borderRadius:'50%',background:'#22c55e1a',border:'1.5px solid #22c55e55',
+                display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,fontSize:11}}>✓</div>
+            <p className="dm" style={{fontSize:13,color:'#22c55e',fontWeight:600}}>{fmtDay(cls,dt)}</p>
+            {cls.level&&<span style={{fontSize:10,marginLeft:'auto',color:'var(--muted)',fontWeight:700}}>{cls.level}</span>}
+        </div>
+    );
+}
+
+/* ═══════════════════════════════════════════════════════════
    AGENDA
 ═══════════════════════════════════════════════════════════ */
 function AgendaView(){
     const P=window.PERIPLO;
-    const{student,lore}=P;
+    const{student}=P;
+    const[events,setEvents]=useState([]);
+    const[now,setNow]=useState(new Date());
+
+    useEffect(()=>{
+        const q=query(collection(db,'artifacts/periplo-app-v1/schedule'));
+        const unsub=onSnapshot(q,snap=>{
+            setEvents(snap.docs.map(d=>({id:d.id,...d.data()})));
+        });
+        const timer=setInterval(()=>setNow(new Date()),30000);
+        return()=>{unsub();clearInterval(timer);};
+    },[]);
+
+    const sn=(student.name||'').toLowerCase().trim();
+
+    const myClasses=events
+        .filter(e=>Array.isArray(e.students)&&e.students.some(s=>s.toLowerCase().trim()===sn))
+        .map(e=>{
+            const dt=getEventDateTime(e);
+            const isCompleted=!!e.date&&now>=new Date(dt.getTime()+65*60000);
+            const isActive=!isCompleted&&now>=new Date(dt.getTime()-5*60000);
+            return{...e,dt,isCompleted,isActive};
+        })
+        .sort((a,b)=>a.dt-b.dt);
+
+    const upcoming=myClasses.filter(c=>!c.isCompleted);
+    const completed=myClasses.filter(c=>c.isCompleted);
+
+    const weekStart=getWeekStart(now);
+    const weekEnd=new Date(weekStart.getTime()+7*24*3600000);
+    const takenThisWeek=completed.filter(c=>c.dt>=weekStart&&c.dt<weekEnd).length
+        +myClasses.filter(c=>!c.isCompleted&&c.isActive===false&&c.dt<now).length;
+    const total=student.plan?.classesPerWeek||3;
+    const ac='#a78bfa';
+
     return(
         <div className="fu" style={{display:'flex',flexDirection:'column',gap:14}}>
+            {/* Hero */}
             <div className="panel-hero" style={{padding:'24px 22px',borderColor:'#a78bfa26'}}>
                 <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at 90% 0%,#a78bfa14,transparent 60%)'}}/>
                 <div style={{position:'relative'}}>
-                    <p className="lbl" style={{color:'#a78bfa',marginBottom:8}}>Tu agenda</p>
-                    <h2 className="d" style={{fontSize:30,color:'var(--cream)',marginBottom:14}}>Esta semana</h2>
-                    <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <p className="lbl" style={{color:ac,marginBottom:8}}>{P.module.name||student.level} · Tu agenda</p>
+                    <h2 className="d" style={{fontSize:28,color:'var(--cream)',marginBottom:14}}>Esta semana</h2>
+                    <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:18}}>
                         <div style={{flex:1,display:'flex',gap:5}}>
-                            {Array.from({length:student.plan.classesPerWeek||3}).map((_,i)=>(
+                            {Array.from({length:total}).map((_,i)=>(
                                 <div key={i} style={{flex:1,height:6,borderRadius:99,
-                                    background:i<(student.plan.usedThisWeek||0)?'#a78bfa':'var(--bd2)'}}/>
+                                    background:i<takenThisWeek?ac:'var(--bd2)'}}/>
                             ))}
                         </div>
-                        <span className="lbl" style={{color:'#a78bfa'}}>
-                            {student.plan.usedThisWeek||0} / {student.plan.classesPerWeek||3} clases
-                        </span>
+                        <span className="lbl" style={{color:ac}}>{takenThisWeek}/{total} clases</span>
                     </div>
+                    <button
+                        onClick={()=>window.open(`schedule.html?id=${student.id}`,'_blank')}
+                        style={{display:'flex',alignItems:'center',gap:8,background:ac,border:'none',
+                            borderRadius:14,padding:'12px 18px',color:'#1a1a2e',fontWeight:800,
+                            fontSize:14,cursor:'pointer',fontFamily:'Syne,sans-serif'}}>
+                        <Icon name="cal" size={16} color="#1a1a2e"/>
+                        Agendar clases
+                        <span style={{fontSize:16}}>→</span>
+                    </button>
                 </div>
             </div>
-            <div className="panel" style={{padding:48,textAlign:'center'}}>
-                <p style={{fontSize:36,marginBottom:8}}>📅</p>
-                <p className="dm" style={{fontSize:13,color:'var(--muted)'}}>La agenda completa estará aquí pronto.</p>
-                <p style={{fontSize:11,color:'var(--muted2)',marginTop:6}}>Pídele a tu teacher el link de la próxima clase.</p>
-            </div>
+
+            {/* Próximas */}
+            {upcoming.length===0?(
+                <div className="panel" style={{padding:'40px 20px',textAlign:'center'}}>
+                    <p style={{fontSize:32,marginBottom:8}}>📅</p>
+                    <p className="dm" style={{fontSize:13,color:'var(--muted)'}}>No tienes clases agendadas aún.</p>
+                    <p style={{fontSize:11,color:'var(--muted2)',marginTop:6}}>Usa el botón de arriba para agendar.</p>
+                </div>
+            ):(
+                <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                    <p className="lbl" style={{color:'var(--muted)',padding:'0 4px'}}>Próximas clases</p>
+                    {upcoming.map(cls=><ClassCard key={cls.id} cls={cls} now={now}/>)}
+                </div>
+            )}
+
+            {/* Tomadas */}
+            {completed.length>0&&(
+                <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                    <p className="lbl" style={{color:'var(--muted)',padding:'0 4px'}}>Clases tomadas</p>
+                    {[...completed].reverse().slice(0,5).map(cls=><CompletedCard key={cls.id} cls={cls}/>)}
+                </div>
+            )}
         </div>
     );
 }
