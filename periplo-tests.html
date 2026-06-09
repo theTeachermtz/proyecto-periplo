@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Periplo Tests | Examen</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' }; document.documentElement.classList.add('dark');</script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react":             "https://esm.sh/react@18.2.0",
+        "react-dom/client":  "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react":      "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app":      "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore":"https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="stylesheet" href="periplo.css">
+    <script src="periplo-config.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; }
+        select { background-color: #27272a !important; color: white; }
+        select option { background-color: #27272a; color: white; }
+        .pt-safe { padding-top: env(safe-area-inset-top); }
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom, 20px); }
+    </style>
+</head>
+<body class="text-zinc-100">
+<div id="root"></div>
+<script type="text/babel" data-type="module">
+    import React, { useState, useEffect } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { initializeApp } from 'firebase/app';
+    import { getFirestore, doc, getDoc } from 'firebase/firestore';
+    import { Send } from 'lucide-react';
+
+    const _app = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
+    const _db  = getFirestore(_app);
+    const urlParams   = new URLSearchParams(window.location.search);
+    const QUIZ_ID     = urlParams.get('id');
+    const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001';
+    const IS_STUDENT  = urlParams.get('student') === 'true';
+
+    const shuffle = arr => {
+        const a = [...arr];
+        for (let i = a.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [a[i], a[j]] = [a[j], a[i]];
+        }
+        return a;
+    };
+
+    const normalize = s => (s || '').toLowerCase().trim().replace(/[?.!,;:]/g, '').replace(/\s+/g, ' ');
+
+    // ── MOCK DATA ─────────────────────────────────────────────────────────────
+    const MOCK_QUIZ = {
+        title: 'Examen de Diagnóstico — A1 Foundation',
+        description: 'Past Simple · Modal Verbs · VP1–VP4',
+        timeLimit: null,
+        questions: [
+            // ── MULTIPLE CHOICE ──────────────────────────────────────────────
+            {
+                id: 'q1', type: 'multipleChoice',
+                stem: 'Choose the correct option to complete the sentence:',
+                sentence: 'She _____ to work by bus every morning.',
+                options: ['go', 'goes', 'is going', 'went'],
+                answer: 'goes'
+            },
+            {
+                id: 'q2', type: 'multipleChoice',
+                stem: 'Which sentence uses a modal verb correctly?',
+                sentence: null,
+                options: [
+                    'You must to wear a helmet.',
+                    'She can speaks three languages.',
+                    'They should study more.',
+                    'He might to call you later.'
+                ],
+                answer: 'They should study more.'
+            },
+            // ── TRUE / FALSE ─────────────────────────────────────────────────
+            {
+                id: 'q3', type: 'truefalse',
+                statement: '"He don\'t like spicy food." is grammatically correct.',
+                answer: false
+            },
+            {
+                id: 'q4', type: 'truefalse',
+                statement: '"They were watching a movie when the lights went out." uses Past Continuous correctly.',
+                answer: true
+            },
+            // ── FILL IN THE BLANK ────────────────────────────────────────────
+            {
+                id: 'q5', type: 'fillBlank',
+                before: 'I usually',
+                after: 'at 7 AM and have breakfast before work.',
+                placeholder: 'verb or phrase...',
+                answer: 'wake up',
+                acceptedAnswers: ['wake up']
+            },
+            {
+                id: 'q6', type: 'fillBlank',
+                before: 'She',
+                after: 'meat — she became vegetarian two years ago.',
+                placeholder: 'verb phrase...',
+                answer: "doesn't eat",
+                acceptedAnswers: ["doesn't eat", "does not eat"]
+            },
+            // ── UNSCRAMBLE ───────────────────────────────────────────────────
+            {
+                id: 'q7', type: 'unscramble',
+                instruction: 'Put the words in the correct order to form a question:',
+                words: ['What', 'did', 'you', 'do', 'yesterday', '?'],
+                answer: 'What did you do yesterday?',
+                acceptedAnswers: ['what did you do yesterday']
+            },
+            {
+                id: 'q8', type: 'unscramble',
+                instruction: 'Put the words in the correct order:',
+                words: ['You', 'should', 'drink', 'more', 'water', '.'],
+                answer: 'You should drink more water.',
+                acceptedAnswers: ['you should drink more water']
+            },
+            // ── MATCHING ─────────────────────────────────────────────────────
+            {
+                id: 'q9', type: 'matching',
+                instruction: 'Match each verb to its Past Simple form:',
+                pairs: [
+                    { left: 'go',   right: 'went' },
+                    { left: 'have', right: 'had'  },
+                    { left: 'take', right: 'took' },
+                    { left: 'make', right: 'made' },
+                ]
+            },
+            {
+                id: 'q10', type: 'matching',
+                instruction: 'Match each word to its meaning:',
+                pairs: [
+                    { left: 'commute',  right: 'travel to/from work'           },
+                    { left: 'deadline', right: 'the last day to finish'         },
+                    { left: 'schedule', right: 'a plan with times and activities'},
+                    { left: 'routine',  right: 'a regular set of habits'        },
+                ]
+            },
+            // ── ODD ONE OUT ──────────────────────────────────────────────────
+            {
+                id: 'q11', type: 'oddOneOut',
+                instruction: 'Which word does NOT belong in the group?',
+                options: ['always', 'usually', 'never', 'quickly'],
+                answer: 'quickly',
+                explanation: '"Quickly" is an adverb of manner. The others are adverbs of frequency.'
+            },
+            {
+                id: 'q12', type: 'oddOneOut',
+                instruction: 'Which word is NOT in the Past Simple?',
+                options: ['went', 'played', 'studied', 'goes'],
+                answer: 'goes',
+                explanation: '"Goes" is Present Simple (3rd person). The others are Past Simple forms.'
+            },
+            // ── ERROR CORRECTION ─────────────────────────────────────────────
+            {
+                id: 'q13', type: 'errorCorrection',
+                instruction: 'This sentence has one grammatical error. Find it and write the full corrected sentence:',
+                sentence: 'She work in a big hospital downtown.',
+                answer: 'She works in a big hospital downtown.',
+                hint: 'Look at subject–verb agreement.'
+            },
+            {
+                id: 'q14', type: 'errorCorrection',
+                instruction: 'This sentence has one grammatical error. Find it and write the full corrected sentence:',
+                sentence: 'Did you went to the party last night?',
+                answer: 'Did you go to the party last night?',
+                hint: 'Look at how Past Simple questions are formed.'
+            },
+            // ── OPEN ENDED ───────────────────────────────────────────────────
+            {
+                id: 'q15', type: 'openEnded',
+                prompt: 'Describe your daily routine. Use at least 5 different verbs and write a minimum of 4 complete sentences.',
+                minWords: 30
+            },
+            {
+                id: 'q16', type: 'openEnded',
+                prompt: 'What did you do last weekend? Write about 3 activities using Past Simple. Try to use time expressions like "first", "then", "after that".',
+                minWords: 25
+            },
+            // ── AUDIO + QUESTION ─────────────────────────────────────────────
+            {
+                id: 'q17', type: 'audioQuestion',
+                audioText: 'Maria wakes up at six in the morning. She makes coffee and reads the news before going to work. She usually takes the bus, but on Fridays she walks to work because she enjoys the exercise.',
+                questionText: 'How does Maria usually get to work?',
+                options: ['She drives a car.', 'She takes the bus.', 'She walks every day.', 'She takes the subway.'],
+                answer: 'She takes the bus.'
+            },
+            {
+                id: 'q18', type: 'audioQuestion',
+                audioText: "Tom couldn't come to class yesterday because he had a bad headache. His teacher said he should rest at home and drink plenty of water. Tom felt much better the next morning.",
+                questionText: 'What did the teacher recommend?',
+                options: ['Go to the hospital.', 'Take medicine.', 'Rest and drink water.', 'Call the school office.'],
+                answer: 'Rest and drink water.'
+            },
+        ]
+    };
+
+    // ── TYPE CONFIG ──────────────────────────────────────────────────────────
+    const TYPE_CFG = {
+        multipleChoice:  { label: 'Opción Múltiple',      icon: '🔤', color: 'text-sky-400'     },
+        truefalse:       { label: 'Cierto o Falso',        icon: '⚖️', color: 'text-violet-400'  },
+        fillBlank:       { label: 'Completa el Espacio',   icon: '✍️', color: 'text-amber-400'   },
+        unscramble:      { label: 'Ordena la Oración',     icon: '🔀', color: 'text-emerald-400' },
+        matching:        { label: 'Empareja',              icon: '🔗', color: 'text-orange-400'  },
+        oddOneOut:       { label: 'El Intruso',            icon: '🚫', color: 'text-rose-400'    },
+        errorCorrection: { label: 'Corrección de Errores', icon: '🔍', color: 'text-red-400'     },
+        openEnded:       { label: 'Respuesta Abierta',     icon: '📝', color: 'text-zinc-400'    },
+        audioQuestion:   { label: 'Audio + Pregunta',      icon: '🎧', color: 'text-teal-400'    },
+    };
+
+    // ── GRADER ───────────────────────────────────────────────────────────────
+    const gradeAnswer = (q, answer) => {
+        if (answer === undefined || answer === null || answer === '') return null;
+        switch (q.type) {
+            case 'multipleChoice':
+            case 'audioQuestion':
+            case 'oddOneOut':
+                return answer === q.answer ? 'correct' : 'incorrect';
+            case 'truefalse':
+                return answer === q.answer ? 'correct' : 'incorrect';
+            case 'fillBlank': {
+                const acc = (q.acceptedAnswers || [q.answer]).map(normalize);
+                return acc.includes(normalize(answer)) ? 'correct' : 'incorrect';
+            }
+            case 'unscramble': {
+                const acc = (q.acceptedAnswers || [q.answer]).map(normalize);
+                const s   = Array.isArray(answer) ? answer.join(' ') : answer;
+                return acc.includes(normalize(s)) ? 'correct' : 'incorrect';
+            }
+            case 'matching': {
+                if (!answer || typeof answer !== 'object') return null;
+                const allCorrect = q.pairs.every((pair, i) =>
+                    normalize(answer[i]) === normalize(pair.right)
+                );
+                return allCorrect ? 'correct' : 'incorrect';
+            }
+            case 'errorCorrection':
+                return normalize(answer) === normalize(q.answer) ? 'correct' : 'incorrect';
+            case 'openEnded':
+                return 'review';
+            default:
+                return null;
+        }
+    };
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // QUESTION TYPE COMPONENTS
+    // ──────────────────────────────────────────────────────────────────────────
+
+    // MULTIPLE CHOICE ─────────────────────────────────────────────────────────
+    function QMultipleChoice({ q, answer, onChange, submitted, grade }) {
+        return (
+            <div className="space-y-2">
+                {q.sentence && (
+                    <p className="text-zinc-200 font-semibold bg-zinc-800/50 border border-zinc-700 rounded-xl px-4 py-3 italic text-sm">
+                        {q.sentence}
+                    </p>
+                )}
+                {q.options.map(opt => {
+                    const sel     = answer === opt;
+                    const correct = submitted && opt === q.answer;
+                    const wrong   = submitted && sel && opt !== q.answer;
+                    return (
+                        <button key={opt} disabled={submitted} onClick={() => onChange(opt)}
+                            className={`w-full text-left px-4 py-3 rounded-xl border-2 font-medium text-sm transition-all
+                                ${correct ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300' :
+                                  wrong   ? 'border-rose-500    bg-rose-500/10    text-rose-300'    :
+                                  sel     ? 'border-sky-500     bg-sky-500/10     text-sky-300'     :
+                                            'border-zinc-700 bg-zinc-800/30 text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800/60 active:scale-[0.99]'}`}>
+                            {opt}
+                        </button>
+                    );
+                })}
+                {submitted && grade === 'incorrect' && (
+                    <p className="text-xs font-bold text-emerald-400">✅ Correcta: <span className="font-black">{q.answer}</span></p>
+                )}
+            </div>
+        );
+    }
+
+    // TRUE / FALSE ────────────────────────────────────────────────────────────
+    function QTrueFalse({ q, answer, onChange, submitted, grade }) {
+        return (
+            <div className="space-y-3">
+                <p className="text-zinc-200 font-semibold bg-zinc-800/50 border border-zinc-700 rounded-xl px-4 py-3 text-sm">
+                    {q.statement}
+                </p>
+                <div className="flex gap-3">
+                    {[{ val: true, label: '✅ Cierto', ac: 'emerald' }, { val: false, label: '❌ Falso', ac: 'rose' }].map(({ val, label, ac }) => {
+                        const sel     = answer === val;
+                        const correct = submitted && val === q.answer;
+                        const wrong   = submitted && sel && val !== q.answer;
+                        const colors  = ac === 'emerald'
+                            ? { sel: 'border-emerald-500 bg-emerald-500/20 text-emerald-300', cor: 'border-emerald-400 bg-emerald-500/25 text-emerald-200' }
+                            : { sel: 'border-rose-500 bg-rose-500/20 text-rose-300',         cor: 'border-rose-400 bg-rose-500/25 text-rose-200'           };
+                        return (
+                            <button key={String(val)} disabled={submitted} onClick={() => onChange(val)}
+                                className={`flex-1 py-4 rounded-2xl border-2 font-black text-base transition-all active:scale-95
+                                    ${correct ? colors.cor :
+                                      wrong   ? 'border-rose-500 bg-rose-500/10 text-rose-400 opacity-60' :
+                                      sel     ? colors.sel :
+                                                'border-zinc-700 bg-zinc-800/30 text-zinc-400 hover:border-zinc-500 hover:bg-zinc-800/60'}`}>
+                                {label}
+                            </button>
+                        );
+                    })}
+                </div>
+                {submitted && grade === 'incorrect' && (
+                    <p className="text-xs font-bold text-emerald-400">
+                        ✅ Correcta: <span className="font-black">{q.answer ? 'Cierto' : 'Falso'}</span>
+                    </p>
+                )}
+            </div>
+        );
+    }
+
+    // FILL IN THE BLANK ───────────────────────────────────────────────────────
+    function QFillBlank({ q, answer, onChange, submitted, grade }) {
+        return (
+            <div className="space-y-3">
+                <div className="flex items-center flex-wrap gap-x-2 gap-y-1 text-sm font-medium">
+                    <span className="text-zinc-300">{q.before}</span>
+                    <input
+                        type="text" disabled={submitted}
+                        value={answer || ''}
+                        onChange={e => onChange(e.target.value)}
+                        placeholder={q.placeholder}
+                        className={`border-b-2 border-dashed bg-transparent outline-none px-2 py-1 text-center font-bold min-w-[140px] max-w-xs transition-colors
+                            ${submitted && grade === 'correct'   ? 'border-emerald-500 text-emerald-400' :
+                              submitted && grade === 'incorrect' ? 'border-rose-500    text-rose-400'    :
+                                                                   'border-amber-500 text-amber-300 placeholder-zinc-600'}`}
+                    />
+                    <span className="text-zinc-300">{q.after}</span>
+                </div>
+                {submitted && grade === 'incorrect' && (
+                    <p className="text-xs font-bold text-emerald-400">✅ Correcta: <span className="font-black">{q.answer}</span></p>
+                )}
+            </div>
+        );
+    }
+
+    // UNSCRAMBLE ──────────────────────────────────────────────────────────────
+    function QUnscramble({ q, answer, onChange, submitted, grade }) {
+        const [shuffledOrder] = useState(() => shuffle(Array.from({ length: q.words.length }, (_, i) => i)));
+        const [inBank,  setInBank]  = useState(() => new Set(shuffledOrder));
+        const [built,   setBuilt]   = useState([]);
+
+        useEffect(() => { onChange(built.map(i => q.words[i])); }, [built]);
+
+        const addWord = (idx) => {
+            if (submitted) return;
+            setInBank(prev => { const n = new Set(prev); n.delete(idx); return n; });
+            setBuilt(prev => [...prev, idx]);
+        };
+        const removeWord = (builtPos) => {
+            if (submitted) return;
+            const wordIdx = built[builtPos];
+            setBuilt(prev => prev.filter((_, i) => i !== builtPos));
+            setInBank(prev => { const n = new Set(prev); n.add(wordIdx); return n; });
+        };
+
+        return (
+            <div className="space-y-3">
+                {/* Word bank */}
+                <div className="min-h-12 flex flex-wrap gap-2 p-3 bg-zinc-800/40 border border-zinc-700 rounded-xl">
+                    {inBank.size === q.words.length && !submitted && (
+                        <span className="text-zinc-600 text-xs self-center">Toca las palabras para armar la oración ↓</span>
+                    )}
+                    {shuffledOrder.filter(i => inBank.has(i)).map(i => (
+                        <button key={i} disabled={submitted} onClick={() => addWord(i)}
+                            className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 border border-zinc-600 rounded-lg text-sm font-bold text-zinc-100 transition-all active:scale-95 disabled:opacity-50">
+                            {q.words[i]}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Built sentence */}
+                <div className={`min-h-12 flex flex-wrap gap-2 p-3 border-2 rounded-xl transition-colors
+                    ${submitted && grade === 'correct'   ? 'border-emerald-500 bg-emerald-500/5' :
+                      submitted && grade === 'incorrect' ? 'border-rose-500    bg-rose-500/5'    :
+                                                           'border-dashed border-zinc-600 bg-zinc-800/20'}`}>
+                    {built.length === 0 && !submitted && (
+                        <span className="text-zinc-600 text-xs self-center">Tu oración aparecerá aquí...</span>
+                    )}
+                    {built.map((wordIdx, pos) => (
+                        <button key={`b${pos}`} disabled={submitted} onClick={() => removeWord(pos)}
+                            className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all active:scale-95 disabled:opacity-80
+                                ${submitted && grade === 'correct'
+                                    ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
+                                    : submitted && grade === 'incorrect'
+                                    ? 'bg-rose-500/20 border border-rose-500/40 text-rose-300'
+                                    : 'bg-emerald-600/20 border border-emerald-600/40 text-emerald-300 hover:bg-rose-500/20 hover:border-rose-500/40 hover:text-rose-300'}`}>
+                            {q.words[wordIdx]}
+                        </button>
+                    ))}
+                </div>
+
+                {submitted && grade === 'incorrect' && (
+                    <p className="text-xs font-bold text-emerald-400">✅ Correcta: <span className="font-black">{q.answer}</span></p>
+                )}
+            </div>
+        );
+    }
+
+    // MATCHING ────────────────────────────────────────────────────────────────
+    function QMatching({ q, answer, onChange, submitted, grade }) {
+        const [rightOptions] = useState(() => shuffle(q.pairs.map(p => p.right)));
+
+        return (
+            <div className="space-y-3">
+                {q.pairs.map((pair, i) => {
+                    const sel     = answer?.[i];
+                    const correct = submitted && normalize(sel) === normalize(pair.right);
+                    const wrong   = submitted && sel && !correct;
+                    return (
+                        <div key={i} className="flex items-center gap-3">
+                            <div className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white font-bold text-sm">
+                                {pair.left}
+                            </div>
+                            <span className="text-zinc-600 font-black shrink-0">→</span>
+                            <div className="flex-1 relative">
+                                <select disabled={submitted} value={sel || ''}
+                                    onChange={e => onChange({ ...answer, [i]: e.target.value })}
+                                    className={`w-full px-4 py-3 rounded-xl border-2 font-bold text-sm outline-none cursor-pointer appearance-none text-white pr-8 transition-colors
+                                        ${correct ? 'border-emerald-500 bg-emerald-500/10' :
+                                          wrong   ? 'border-rose-500    bg-rose-500/10'    :
+                                          sel     ? 'border-orange-500  bg-orange-500/10'  :
+                                                    'border-zinc-700    bg-zinc-800'}`}>
+                                    <option value="">Selecciona...</option>
+                                    {rightOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                                </select>
+                                {submitted && (
+                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm pointer-events-none">
+                                        {correct ? '✅' : wrong ? '❌' : ''}
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    );
+                })}
+                {submitted && grade === 'incorrect' && (
+                    <div className="mt-1 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-1">
+                        <p className="text-xs font-black text-emerald-400">✅ Respuestas correctas:</p>
+                        {q.pairs.map((pair, i) => (
+                            <p key={i} className="text-xs text-emerald-300">
+                                <strong>{pair.left}</strong> → {pair.right}
+                            </p>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // ODD ONE OUT ─────────────────────────────────────────────────────────────
+    function QOddOneOut({ q, answer, onChange, submitted, grade }) {
+        return (
+            <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                    {q.options.map(opt => {
+                        const sel     = answer === opt;
+                        const correct = submitted && opt === q.answer;
+                        const wrong   = submitted && sel && opt !== q.answer;
+                        return (
+                            <button key={opt} disabled={submitted} onClick={() => onChange(opt)}
+                                className={`py-3 px-4 rounded-xl border-2 font-bold text-sm transition-all active:scale-95
+                                    ${correct ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300' :
+                                      wrong   ? 'border-rose-500    bg-rose-500/10    text-rose-300'    :
+                                      sel     ? 'border-rose-400    bg-rose-500/15    text-rose-300'    :
+                                                'border-zinc-700 bg-zinc-800/30 text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800/60'}`}>
+                                {opt}
+                            </button>
+                        );
+                    })}
+                </div>
+                {submitted && (
+                    <>
+                        {grade === 'incorrect' && (
+                            <p className="text-xs font-bold text-rose-400">❌ El intruso era: <span className="font-black">"{q.answer}"</span></p>
+                        )}
+                        {q.explanation && (
+                            <p className="text-xs text-zinc-500 italic">{q.explanation}</p>
+                        )}
+                    </>
+                )}
+            </div>
+        );
+    }
+
+    // ERROR CORRECTION ────────────────────────────────────────────────────────
+    function QErrorCorrection({ q, answer, onChange, submitted, grade }) {
+        return (
+            <div className="space-y-4">
+                {/* Sentence with error */}
+                <div>
+                    <div className="flex items-start gap-2 bg-amber-500/5 border border-amber-500/30 rounded-xl px-4 py-3">
+                        <span className="text-lg shrink-0">🚨</span>
+                        <p className="text-amber-200 font-semibold italic text-sm leading-snug">{q.sentence}</p>
+                    </div>
+                    {q.hint && (
+                        <p className="text-[11px] text-zinc-500 mt-1.5 ml-1 font-medium">💡 Pista: {q.hint}</p>
+                    )}
+                </div>
+
+                {/* Response area */}
+                <div className="space-y-1.5">
+                    <p className="text-[11px] font-black text-zinc-300 uppercase tracking-widest">
+                        ✏️ Escribe la oración completa y corregida:
+                    </p>
+                    <textarea disabled={submitted} rows={2}
+                        value={answer || ''}
+                        onChange={e => onChange(e.target.value)}
+                        placeholder="Escribe aquí la oración completa con el error corregido..."
+                        className={`w-full bg-zinc-900 border-2 rounded-xl px-4 py-3 text-white font-medium resize-none outline-none text-sm transition-colors
+                            ${submitted && grade === 'correct'   ? 'border-emerald-500' :
+                              submitted && grade === 'incorrect' ? 'border-rose-500'    :
+                                                                   'border-zinc-700 focus:border-red-400'}`}
+                    />
+                    <p className="text-[10px] text-zinc-600 font-bold">
+                        Reescribe la oración entera con la corrección incluida — no solo la parte que cambias.
+                    </p>
+                </div>
+
+                {submitted && grade === 'incorrect' && (
+                    <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+                        <p className="text-xs font-black text-emerald-400 mb-0.5">✅ Oración correcta:</p>
+                        <p className="text-sm text-emerald-300 font-bold">{q.answer}</p>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // OPEN ENDED ──────────────────────────────────────────────────────────────
+    function QOpenEnded({ q, answer, onChange, submitted }) {
+        const words    = (answer || '').trim().split(/\s+/).filter(Boolean).length;
+        const hasMin   = words >= (q.minWords || 0);
+        return (
+            <div className="space-y-2">
+                <textarea disabled={submitted} rows={5}
+                    value={answer || ''}
+                    onChange={e => onChange(e.target.value)}
+                    placeholder="Escribe tu respuesta aquí..."
+                    className="w-full bg-zinc-900 border-2 border-zinc-700 focus:border-zinc-500 rounded-xl px-4 py-3 text-white font-medium resize-none outline-none text-sm transition-colors"
+                />
+                <div className="flex items-center justify-between gap-2">
+                    <p className={`text-xs font-bold ${hasMin ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                        {words} palabra{words !== 1 ? 's' : ''}
+                        {q.minWords ? ` / mínimo ${q.minWords}` : ''}
+                        {hasMin ? ' ✓' : ''}
+                    </p>
+                    {submitted && (
+                        <span className="text-[10px] font-black text-zinc-400 bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-0.5 shrink-0">
+                            📋 Revisión del teacher
+                        </span>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    // AUDIO + QUESTION ────────────────────────────────────────────────────────
+    function QAudioQuestion({ q, answer, onChange, submitted, grade }) {
+        const [playing,   setPlaying]   = useState(false);
+        const [playCount, setPlayCount] = useState(0);
+
+        const handlePlay = () => {
+            if (!window.speechSynthesis) { alert('Tu navegador no soporta audio.'); return; }
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(q.audioText);
+            u.lang = 'en-US'; u.rate = 0.82;
+            u.onstart = () => setPlaying(true);
+            u.onend   = () => { setPlaying(false); setPlayCount(c => c + 1); };
+            window.speechSynthesis.speak(u);
+        };
+        const handleStop = () => { window.speechSynthesis.cancel(); setPlaying(false); };
+
+        return (
+            <div className="space-y-4">
+                {/* Player */}
+                <div className="flex items-center gap-4 bg-teal-500/5 border border-teal-500/20 rounded-2xl px-5 py-4">
+                    <button onClick={playing ? handleStop : handlePlay}
+                        className={`w-14 h-14 rounded-2xl flex items-center justify-center text-black font-black text-2xl shrink-0 transition-all active:scale-95
+                            ${playing ? 'bg-teal-400 animate-pulse' : 'bg-teal-500 hover:bg-teal-400'}`}>
+                        {playing ? '⏹' : '▶'}
+                    </button>
+                    <div>
+                        <p className="text-teal-400 font-black text-[10px] uppercase tracking-widest mb-0.5">Audio en inglés</p>
+                        <p className="text-zinc-400 text-xs font-medium">
+                            {playing ? 'Reproduciendo...' :
+                             playCount === 0 ? 'Haz clic para escuchar' :
+                             `Reproducido ${playCount} vez${playCount !== 1 ? 'es' : ''}`}
+                        </p>
+                    </div>
+                </div>
+
+                {/* MC question */}
+                <div>
+                    <p className="text-zinc-300 font-semibold text-sm mb-3">{q.questionText}</p>
+                    <div className="space-y-2">
+                        {q.options.map(opt => {
+                            const sel     = answer === opt;
+                            const correct = submitted && opt === q.answer;
+                            const wrong   = submitted && sel && opt !== q.answer;
+                            return (
+                                <button key={opt} disabled={submitted} onClick={() => onChange(opt)}
+                                    className={`w-full text-left px-4 py-3 rounded-xl border-2 font-medium text-sm transition-all active:scale-[0.99]
+                                        ${correct ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300' :
+                                          wrong   ? 'border-rose-500    bg-rose-500/10    text-rose-300'    :
+                                          sel     ? 'border-teal-500    bg-teal-500/10    text-teal-300'    :
+                                                    'border-zinc-700 bg-zinc-800/30 text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800/60'}`}>
+                                    {opt}
+                                </button>
+                            );
+                        })}
+                    </div>
+                    {submitted && grade === 'incorrect' && (
+                        <p className="mt-2 text-xs font-bold text-emerald-400">✅ Correcta: <span className="font-black">{q.answer}</span></p>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // QUESTION CARD
+    // ──────────────────────────────────────────────────────────────────────────
+    const Q_COMPONENTS = {
+        multipleChoice:  QMultipleChoice,
+        truefalse:       QTrueFalse,
+        fillBlank:       QFillBlank,
+        unscramble:      QUnscramble,
+        matching:        QMatching,
+        oddOneOut:       QOddOneOut,
+        errorCorrection: QErrorCorrection,
+        openEnded:       QOpenEnded,
+        audioQuestion:   QAudioQuestion,
+    };
+
+    function QuestionCard({ q, index, answer, onChange, submitted }) {
+        const cfg   = TYPE_CFG[q.type] || { label: q.type, icon: '❓', color: 'text-zinc-400' };
+        const grade = submitted ? gradeAnswer(q, answer) : null;
+        const Body  = Q_COMPONENTS[q.type];
+
+        const borderColor =
+            submitted && grade === 'correct'   ? 'border-emerald-500/30' :
+            submitted && grade === 'incorrect' ? 'border-rose-500/30'    :
+            submitted && grade === 'review'    ? 'border-zinc-600/40'    :
+                                                 'border-zinc-800';
+
+        return (
+            <div className={`bg-zinc-900 border ${borderColor} rounded-2xl p-5 sm:p-6 transition-all`}>
+                {/* Header */}
+                <div className="flex items-start justify-between gap-3 mb-4">
+                    <div className="flex items-center gap-3 min-w-0">
+                        <span className="shrink-0 w-7 h-7 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-xs font-black text-zinc-400">
+                            {index + 1}
+                        </span>
+                        <div className="min-w-0">
+                            <p className={`text-[10px] font-black uppercase tracking-widest ${cfg.color}`}>
+                                {cfg.icon} {cfg.label}
+                            </p>
+                            {(q.stem || q.instruction || q.prompt) && (
+                                <p className="text-zinc-200 font-semibold text-sm mt-1 leading-snug">
+                                    {q.stem || q.instruction || q.prompt}
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                    {submitted && (
+                        <span className="shrink-0 text-lg">
+                            {grade === 'correct' ? '✅' : grade === 'incorrect' ? '❌' : '📋'}
+                        </span>
+                    )}
+                </div>
+
+                {Body
+                    ? <Body q={q} answer={answer} onChange={onChange} submitted={submitted} grade={grade} />
+                    : <p className="text-rose-400 text-sm">Tipo no soportado: {q.type}</p>
+                }
+            </div>
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // WELCOME SCREEN
+    // ──────────────────────────────────────────────────────────────────────────
+    function WelcomeScreen({ quiz, onStart }) {
+        const typeCounts = quiz.questions.reduce((acc, q) => {
+            acc[q.type] = (acc[q.type] || 0) + 1;
+            return acc;
+        }, {});
+
+        return (
+            <div className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-8">
+                <div className="w-full max-w-lg">
+                    <div className="flex items-center gap-3 mb-8">
+                        <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg shadow-indigo-600/20">P</div>
+                        <div>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">Periplo · Evaluación</p>
+                            <p className="text-xs text-zinc-500 font-medium">Responde con honestidad — es para mejorar.</p>
+                        </div>
+                    </div>
+
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 mb-6 shadow-2xl">
+                        <h1 className="text-2xl sm:text-3xl font-black text-white mb-2 leading-tight" style={{ letterSpacing: '-0.02em' }}>
+                            {quiz.title}
+                        </h1>
+                        {quiz.description && (
+                            <p className="text-zinc-400 font-medium mb-6">{quiz.description}</p>
+                        )}
+
+                        <div className="grid grid-cols-3 gap-3 mb-6">
+                            {[
+                                { val: quiz.questions.length, label: 'Preguntas' },
+                                { val: Object.keys(typeCounts).length, label: 'Tipos' },
+                                { val: quiz.timeLimit || '∞', label: quiz.timeLimit ? 'Minutos' : 'Sin límite' },
+                            ].map(({ val, label }) => (
+                                <div key={label} className="bg-zinc-800/60 rounded-2xl p-3 text-center border border-zinc-700/50">
+                                    <p className="text-2xl font-black text-white">{val}</p>
+                                    <p className="text-[10px] text-zinc-500 font-black uppercase tracking-widest">{label}</p>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="space-y-1.5">
+                            {Object.entries(typeCounts).map(([type, count]) => {
+                                const cfg = TYPE_CFG[type] || { label: type, icon: '❓', color: 'text-zinc-400' };
+                                return (
+                                    <div key={type} className="flex items-center justify-between text-xs">
+                                        <span className={`font-bold ${cfg.color}`}>{cfg.icon} {cfg.label}</span>
+                                        <span className="text-zinc-500 font-black">{count} pregunta{count !== 1 ? 's' : ''}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    <button onClick={onStart}
+                        className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black text-base uppercase tracking-widest shadow-lg shadow-indigo-600/20 transition-all active:scale-95">
+                        Comenzar Examen →
+                    </button>
+                    <p className="text-center text-zinc-600 text-xs font-medium mt-3">
+                        Puedes revisar tus respuestas antes de enviar.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST SCREEN
+    // ──────────────────────────────────────────────────────────────────────────
+    function TestScreen({ quiz, onSubmit }) {
+        const [answers,     setAnswers]     = useState({});
+        const [showConfirm, setShowConfirm] = useState(false);
+
+        const handleChange = (qId, val) =>
+            setAnswers(prev => ({ ...prev, [qId]: val }));
+
+        const isAnswered = (q) => {
+            const a = answers[q.id];
+            if (a === undefined || a === null) return false;
+            if (typeof a === 'string') return a.trim() !== '';
+            if (Array.isArray(a))      return a.length > 0;
+            if (typeof a === 'object') return Object.keys(a).length >= q.pairs?.length;
+            return true;
+        };
+
+        const answeredCount = quiz.questions.filter(isAnswered).length;
+        const unanswered    = quiz.questions.length - answeredCount;
+        const pct           = (answeredCount / quiz.questions.length) * 100;
+
+        const handleSubmitClick = () => {
+            unanswered > 0 ? setShowConfirm(true) : onSubmit(answers);
+        };
+
+        return (
+            <div className="min-h-screen flex flex-col">
+                {/* STICKY HEADER */}
+                <header className="sticky top-0 z-20 bg-zinc-950/95 backdrop-blur-sm border-b border-zinc-800 flex items-center justify-between px-4 sm:px-6 py-3 pt-safe">
+                    <div className="flex items-center gap-3 min-w-0">
+                        {!IS_STUDENT
+                            ? <button onClick={() => window.location.href = 'index.html'}
+                                className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 shrink-0">P</button>
+                            : <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20 shrink-0">P</div>
+                        }
+                        <div className="hidden sm:block w-px h-8 bg-zinc-800 mx-1 shrink-0"/>
+                        <div className="min-w-0">
+                            <h1 className="text-sm sm:text-base font-black text-white leading-none truncate max-w-[160px] sm:max-w-xs">{quiz.title}</h1>
+                            <p className="text-[9px] sm:text-[10px] font-bold text-indigo-400 uppercase tracking-widest mt-0.5">
+                                {answeredCount} / {quiz.questions.length} respondidas
+                            </p>
+                        </div>
+                    </div>
+                    <button onClick={handleSubmitClick}
+                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black text-xs sm:text-sm uppercase tracking-widest shadow-lg shadow-indigo-600/20 transition-all active:scale-95 shrink-0">
+                        <Send size={14} /> Enviar
+                    </button>
+                </header>
+
+                {/* PROGRESS BAR */}
+                <div className="w-full h-1 bg-zinc-800 shrink-0">
+                    <div className="h-1 bg-indigo-500 transition-all duration-500" style={{ width: `${pct}%` }} />
+                </div>
+
+                {/* QUESTIONS */}
+                <div className="flex-1 max-w-2xl mx-auto w-full px-4 py-6 sm:py-8 space-y-4 pb-safe">
+                    {quiz.questions.map((q, idx) => (
+                        <QuestionCard key={q.id} q={q} index={idx}
+                            answer={answers[q.id]}
+                            onChange={val => handleChange(q.id, val)}
+                            submitted={false}
+                        />
+                    ))}
+
+                    <button onClick={handleSubmitClick}
+                        className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black text-base uppercase tracking-widest shadow-lg shadow-indigo-600/20 transition-all active:scale-95 flex items-center justify-center gap-2 mt-2">
+                        <Send size={18} /> Enviar Examen
+                    </button>
+                    <p className="text-center text-zinc-600 text-xs font-medium pb-4">
+                        {unanswered > 0
+                            ? `${unanswered} pregunta${unanswered !== 1 ? 's' : ''} sin responder`
+                            : 'Todas las preguntas respondidas ✓'}
+                    </p>
+                </div>
+
+                {/* CONFIRM MODAL */}
+                {showConfirm && (
+                    <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                        <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm p-6 shadow-2xl">
+                            <div className="text-center mb-5">
+                                <div className="text-4xl mb-3">⚠️</div>
+                                <h2 className="text-xl font-black text-white mb-1">¿Enviar el examen?</h2>
+                                <p className="text-zinc-400 text-sm">
+                                    Tienes <strong className="text-amber-400">{unanswered} pregunta{unanswered !== 1 ? 's' : ''}</strong> sin responder.
+                                </p>
+                            </div>
+                            <div className="flex flex-col gap-3">
+                                <button onClick={() => { setShowConfirm(false); onSubmit(answers); }}
+                                    className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black uppercase tracking-widest transition-all active:scale-95">
+                                    Sí, enviar de todas formas
+                                </button>
+                                <button onClick={() => setShowConfirm(false)}
+                                    className="w-full py-3 text-zinc-400 font-bold hover:text-zinc-200 transition-colors">
+                                    Regresar al examen
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // RESULTS SCREEN
+    // ──────────────────────────────────────────────────────────────────────────
+    function ResultsScreen({ quiz, answers }) {
+        const graded       = quiz.questions.map(q => ({ q, grade: gradeAnswer(q, answers[q.id]), answer: answers[q.id] }));
+        const autoGraded   = graded.filter(g => g.grade !== 'review' && g.grade !== null);
+        const forReview    = graded.filter(g => g.grade === 'review');
+        const correct      = autoGraded.filter(g => g.grade === 'correct').length;
+        const total        = autoGraded.length;
+        const pct          = total > 0 ? Math.round((correct / total) * 100) : 0;
+        const emoji        = pct >= 90 ? '🏆' : pct >= 70 ? '🎉' : pct >= 50 ? '👍' : '💪';
+        const msg          = pct >= 90 ? '¡Excelente trabajo!' : pct >= 70 ? '¡Muy bien!' : pct >= 50 ? 'Buen esfuerzo' : '¡A seguir practicando!';
+
+        return (
+            <div className="min-h-screen flex flex-col">
+                <header className="sticky top-0 z-20 bg-zinc-950 border-b border-zinc-800 flex items-center px-4 sm:px-6 py-3 pt-safe">
+                    <div className="flex items-center gap-3">
+                        {!IS_STUDENT
+                            ? <button onClick={() => window.location.href = 'index.html'}
+                                className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20">P</button>
+                            : <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-black text-base shadow-lg shadow-indigo-600/20">P</div>
+                        }
+                        <div className="hidden sm:block w-px h-8 bg-zinc-800 mx-1"/>
+                        <div>
+                            <h1 className="text-base font-black text-white leading-none truncate max-w-[200px] sm:max-w-xs">{quiz.title}</h1>
+                            <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mt-0.5">Resultados</p>
+                        </div>
+                    </div>
+                </header>
+
+                <div className="flex-1 max-w-2xl mx-auto w-full px-4 py-6 sm:py-8 space-y-6 pb-safe">
+                    {/* Score card */}
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 text-center shadow-2xl">
+                        <div className="text-5xl mb-3">{emoji}</div>
+                        <h2 className="text-2xl font-black text-white mb-4">{msg}</h2>
+                        <p className="text-4xl font-black text-white mb-1">
+                            {correct} <span className="text-zinc-500 text-2xl">/ {total}</span>
+                        </p>
+                        <p className="text-zinc-500 text-sm font-bold mb-5">preguntas auto-calificadas</p>
+                        <div className="w-full bg-zinc-800 rounded-full h-3 overflow-hidden mb-2">
+                            <div className={`h-3 rounded-full transition-all duration-1000 ${pct >= 70 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                                style={{ width: `${pct}%` }} />
+                        </div>
+                        <p className={`text-xl font-black ${pct >= 70 ? 'text-emerald-400' : pct >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>{pct}%</p>
+
+                        {forReview.length > 0 && (
+                            <div className="mt-5 text-xs text-zinc-500 font-bold bg-zinc-800/50 border border-zinc-700 rounded-xl p-3">
+                                📋 <strong className="text-zinc-300">{forReview.length} pregunta{forReview.length !== 1 ? 's' : ''}</strong> de respuesta abierta están pendientes de revisión por el teacher.
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Breakdown */}
+                    <div className="space-y-3">
+                        <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest px-1">Detalle por pregunta</h3>
+                        {graded.map(({ q, grade, answer }, idx) => {
+                            const cfg = TYPE_CFG[q.type] || { label: q.type, icon: '❓', color: 'text-zinc-400' };
+                            const preview = q.stem || q.instruction || q.prompt || q.statement || q.sentence || q.questionText || '';
+                            return (
+                                <div key={q.id} className={`p-4 rounded-xl border space-y-1
+                                    ${grade === 'correct'   ? 'border-emerald-500/20 bg-emerald-500/5'  :
+                                      grade === 'incorrect' ? 'border-rose-500/20    bg-rose-500/5'     :
+                                                              'border-zinc-700/40    bg-zinc-900/50'}`}>
+                                    <div className="flex items-start gap-3">
+                                        <span className="text-lg shrink-0 mt-0.5">
+                                            {grade === 'correct' ? '✅' : grade === 'incorrect' ? '❌' : '📋'}
+                                        </span>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-[10px] font-black text-zinc-500">{idx + 1}. {cfg.icon} {cfg.label}</p>
+                                            <p className="text-xs font-semibold text-zinc-300 mt-0.5 line-clamp-2">{preview}</p>
+                                        </div>
+                                    </div>
+                                    {/* Show open-ended responses for teacher review */}
+                                    {grade === 'review' && answer && (
+                                        <div className="ml-8 mt-2 bg-zinc-800/60 border border-zinc-700/50 rounded-lg px-3 py-2">
+                                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Respuesta del alumno:</p>
+                                            <p className="text-xs text-zinc-300 leading-relaxed">{answer}</p>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {IS_STUDENT ? (
+                        <p className="text-center text-zinc-600 text-xs font-bold pb-4">
+                            Para salir, cierra esta pestaña de tu navegador.
+                        </p>
+                    ) : (
+                        <button onClick={() => window.location.href = 'index.html'}
+                            className="w-full py-3 text-zinc-500 font-bold hover:text-zinc-300 transition-colors text-sm">
+                            ← Volver al hub
+                        </button>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // APP
+    // ──────────────────────────────────────────────────────────────────────────
+    function App() {
+        const [quiz,         setQuiz]         = useState(null);
+        const [loading,      setLoading]      = useState(true);
+        const [phase,        setPhase]        = useState('welcome');
+        const [finalAnswers, setFinalAnswers] = useState({});
+
+        useEffect(() => {
+            const load = async () => {
+                if (QUIZ_ID) {
+                    try {
+                        const snap = await getDoc(doc(_db, `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`, QUIZ_ID));
+                        if (snap.exists()) { setQuiz(snap.data()); setLoading(false); return; }
+                    } catch (e) { console.warn('Firestore load failed, falling back to mock:', e); }
+                }
+                setQuiz(MOCK_QUIZ);
+                setLoading(false);
+            };
+            load();
+        }, []);
+
+        const handleSubmit = (answers) => {
+            setFinalAnswers(answers);
+            setPhase('results');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        if (loading) return (
+            <div className="min-h-screen flex items-center justify-center">
+                <div className="flex flex-col items-center gap-4">
+                    <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"/>
+                    <p className="text-zinc-500 font-bold text-sm uppercase tracking-widest">Cargando examen...</p>
+                </div>
+            </div>
+        );
+
+        if (!quiz) return (
+            <div className="min-h-screen flex items-center justify-center">
+                <p className="text-zinc-500 font-bold text-sm">No se encontró el examen.</p>
+            </div>
+        );
+
+        if (phase === 'welcome') return <WelcomeScreen quiz={quiz} onStart={() => { setPhase('taking'); window.scrollTo(0, 0); }} />;
+        if (phase === 'taking')  return <TestScreen quiz={quiz} onSubmit={handleSubmit} />;
+        if (phase === 'results') return <ResultsScreen quiz={quiz} answers={finalAnswers} />;
+    }
+
+    createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

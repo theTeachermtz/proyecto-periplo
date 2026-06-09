@@ -63,6 +63,10 @@
         const db = getFirestore(app);
         const auth = getAuth(app);
 
+        const CAL_TOKEN_KEY    = 'periplo_cal_token';
+        const CAL_EXPIRY_KEY   = 'periplo_cal_token_expiry';
+        const CAL_TOKEN_TTL    = 55 * 60 * 1000; // 55 min (buffer antes del 1h de Google)
+
         const createCalendarMeetEvent = async (accessToken, title, notes, dateStr, time, isRecurring) => {
             const endHour = String(parseInt(time.split(':')[0]) + 1).padStart(2, '0');
             const body = {
@@ -158,12 +162,21 @@
             const [notifications, setNotifications] = useState([]);
             const [showNotifPanel, setShowNotifPanel] = useState(false);
             const [googleAccessToken, setGoogleAccessToken] = useState(null);
+            const [calTokenExpired, setCalTokenExpired] = useState(false);
 
             useEffect(() => {
                 const savedTheme = localStorage.getItem('themePreference');
                 if (savedTheme === 'light') setIsDarkMode(false);
-                const savedToken = sessionStorage.getItem('periplo_cal_token');
-                if (savedToken) setGoogleAccessToken(savedToken);
+                const savedToken  = localStorage.getItem(CAL_TOKEN_KEY);
+                const tokenExpiry = parseInt(localStorage.getItem(CAL_EXPIRY_KEY) || '0');
+                if (savedToken && Date.now() < tokenExpiry) {
+                    setGoogleAccessToken(savedToken);
+                } else if (savedToken) {
+                    // Existe pero expiró — limpiar y avisar
+                    localStorage.removeItem(CAL_TOKEN_KEY);
+                    localStorage.removeItem(CAL_EXPIRY_KEY);
+                    setCalTokenExpired(true);
+                }
                 
                 const timer = setInterval(() => setNow(getMexicoTime()), 60000);
 
@@ -220,13 +233,20 @@
                     const credential = GoogleAuthProvider.credentialFromResult(result);
                     const token = credential.accessToken;
                     setGoogleAccessToken(token);
-                    sessionStorage.setItem('periplo_cal_token', token);
+                    setCalTokenExpired(false);
+                    localStorage.setItem(CAL_TOKEN_KEY, token);
+                    localStorage.setItem(CAL_EXPIRY_KEY, String(Date.now() + CAL_TOKEN_TTL));
                 } catch (err) {
                     if (err.code !== 'auth/popup-closed-by-user') alert('Error conectando Calendar: ' + err.message);
                 }
             };
 
-            const disconnectCalendar = () => { setGoogleAccessToken(null); sessionStorage.removeItem('periplo_cal_token'); };
+            const disconnectCalendar = () => {
+                setGoogleAccessToken(null);
+                setCalTokenExpired(false);
+                localStorage.removeItem(CAL_TOKEN_KEY);
+                localStorage.removeItem(CAL_EXPIRY_KEY);
+            };
 
             const markAllAsRead = async () => {
                 const unread = notifications.filter(n => !n.read);
@@ -363,8 +383,11 @@
                         else alert('⚠️ Google Calendar no devolvió un link de Meet. Puede que la API de Calendar no esté habilitada en tu proyecto de Cloud Console.');
                     } catch (err) {
                         if (err.message === 'TOKEN_EXPIRED') {
-                            setGoogleAccessToken(null); sessionStorage.removeItem('periplo_cal_token');
-                            alert('Tu sesión de Google Calendar expiró. Reconecta desde el encabezado y vuelve a guardar.');
+                            setGoogleAccessToken(null);
+                            setCalTokenExpired(true);
+                            localStorage.removeItem(CAL_TOKEN_KEY);
+                            localStorage.removeItem(CAL_EXPIRY_KEY);
+                            alert('Tu sesión de Google Calendar expiró. Haz clic en "Reconectar" en el encabezado y vuelve a guardar.');
                             return;
                         }
                         alert(`⚠️ No se pudo crear el evento en Calendar: ${err.message}\n\nVerifica que la Google Calendar API esté habilitada en tu proyecto de Cloud Console.`);
@@ -515,10 +538,14 @@
                                     <div className="flex items-center gap-2 border-l border-stone-200 dark:border-zinc-700 pl-4">
                                         {googleAccessToken ? (
                                             <button onClick={disconnectCalendar} title="Google Calendar vinculado — clic para desconectar" className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-700 rounded-xl text-xs font-bold transition-colors">
-                                                <CalendarCheck size={14}/><span className="hidden sm:inline">Calendario</span>
+                                                <CalendarCheck size={14}/><span className="hidden sm:inline">Calendario ✓</span>
+                                            </button>
+                                        ) : calTokenExpired ? (
+                                            <button onClick={connectGoogleCalendar} title="Sesión de Google Calendar expirada — clic para reconectar" className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-400 dark:border-amber-600 rounded-xl text-xs font-bold transition-colors animate-pulse">
+                                                <CalendarPlus size={14}/><span className="hidden sm:inline">Reconectar</span>
                                             </button>
                                         ) : (
-                                            <button onClick={connectGoogleCalendar} title="Conectar Google Calendar para generar Meet links automáticos" className="flex items-center gap-1.5 px-3 py-1.5 bg-stone-100 dark:bg-zinc-800 hover:bg-stone-200 dark:hover:bg-zinc-700 text-stone-600 dark:text-zinc-300 border border-stone-200 dark:border-zinc-700 rounded-xl text-xs font-bold transition-colors">
+                                            <button onClick={connectGoogleCalendar} title="Vincular Google Calendar para generar Meet links automáticos" className="flex items-center gap-1.5 px-3 py-1.5 bg-stone-100 dark:bg-zinc-800 hover:bg-stone-200 dark:hover:bg-zinc-700 text-stone-600 dark:text-zinc-300 border border-stone-200 dark:border-zinc-700 rounded-xl text-xs font-bold transition-colors">
                                                 <CalendarPlus size={14}/><span className="hidden sm:inline">Vincular</span>
                                             </button>
                                         )}
