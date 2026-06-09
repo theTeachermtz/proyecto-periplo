@@ -22,7 +22,6 @@
     <script src="periplo-config.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
-        /* Override periplo.css game mode (overflow:hidden) — tests need scroll */
         body {
             font-family: 'Plus Jakarta Sans', sans-serif;
             background-color: #09090b;
@@ -35,16 +34,18 @@
         select option { background-color: #27272a; color: white; }
         .pt-safe { padding-top: env(safe-area-inset-top); }
         .pb-safe { padding-bottom: env(safe-area-inset-bottom, 20px); }
+        @keyframes micPulse { 0%,100%{box-shadow:0 0 0 0 rgba(99,102,241,.5)} 70%{box-shadow:0 0 0 12px rgba(99,102,241,0)} }
+        .mic-active { animation: micPulse 1.4s infinite; }
     </style>
 </head>
 <body class="text-zinc-100">
 <div id="root"></div>
 <script type="text/babel" data-type="module">
-    import React, { useState, useEffect } from 'react';
+    import React, { useState, useEffect, useRef } from 'react';
     import { createRoot } from 'react-dom/client';
     import { initializeApp } from 'firebase/app';
     import { getFirestore, doc, getDoc } from 'firebase/firestore';
-    import { Send } from 'lucide-react';
+    import { Send, Mic, Volume2, MicOff } from 'lucide-react';
 
     const _app = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
     const _db  = getFirestore(_app);
@@ -63,6 +64,14 @@
     };
 
     const normalize = s => (s || '').toLowerCase().trim().replace(/[?.!,;:]/g, '').replace(/\s+/g, ' ');
+
+    const speakPhrase = (text) => {
+        if (!window.speechSynthesis) return;
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = 'en-US'; u.rate = 0.82;
+        window.speechSynthesis.speak(u);
+    };
 
     // ── MOCK DATA ─────────────────────────────────────────────────────────────
     const MOCK_QUIZ = {
@@ -101,37 +110,41 @@
                 statement: '"They were watching a movie when the lights went out." uses Past Continuous correctly.',
                 answer: true
             },
-            // ── FILL IN THE BLANK ────────────────────────────────────────────
+            // ── FILL IN THE BLANK (pasaje) ───────────────────────────────────
             {
                 id: 'q5', type: 'fillBlank',
-                before: 'I usually',
-                after: 'at 7 AM and have breakfast before work.',
-                placeholder: 'verb or phrase...',
-                answer: 'wake up',
-                acceptedAnswers: ['wake up']
+                instruction: 'Read the passage and fill in the blanks using words from the bank. There are extra words you will NOT use.',
+                passage: 'Every morning, Carlos [wakes] up at 6:30. He [makes] a quick coffee and [reads] the news on his phone. After that, he [takes] the bus downtown. He usually [arrives] at the office before 8 AM and [starts] his day with a team meeting.',
+                wordBank: ['wakes', 'makes', 'reads', 'takes', 'arrives', 'starts', 'drives', 'writes', 'eats', 'goes']
             },
             {
                 id: 'q6', type: 'fillBlank',
-                before: 'She',
-                after: 'meat — she became vegetarian two years ago.',
-                placeholder: 'verb phrase...',
-                answer: "doesn't eat",
-                acceptedAnswers: ["doesn't eat", "does not eat"]
+                instruction: 'Fill in the blanks with the correct word. There are more words than blanks.',
+                passage: 'Last weekend, Ana [visited] her grandmother in the city. They [cooked] together all afternoon and [watched] an old movie after dinner. Before leaving, Ana [helped] clean the kitchen. Her grandmother [said] it was the best visit in months.',
+                wordBank: ['visited', 'cooked', 'watched', 'helped', 'said', 'bought', 'played', 'told', 'made', 'went']
             },
-            // ── UNSCRAMBLE ───────────────────────────────────────────────────
+            // ── UNSCRAMBLE (dual sentence) ────────────────────────────────────
             {
                 id: 'q7', type: 'unscramble',
-                instruction: 'Put the words in the correct order to form a question:',
-                words: ['What', 'did', 'you', 'do', 'yesterday', '?'],
-                answer: 'What did you do yesterday?',
-                acceptedAnswers: ['what did you do yesterday']
+                spanishPrompt: 'Queremos comprar una pizza para la cena.',
+                labelA: 'Afirmativo (+)',
+                labelB: 'Negativo (−)',
+                words: ['We', 'We', 'want', 'want', "don't", 'to', 'to', 'buy', 'buy', 'a', 'a', 'pizza', 'pizza', 'for', 'for', 'dinner', 'dinner'],
+                answerA: 'We want to buy a pizza for dinner',
+                answerB: "We don't want to buy a pizza for dinner",
+                acceptedAnswersA: ['we want to buy a pizza for dinner'],
+                acceptedAnswersB: ["we don't want to buy a pizza for dinner", "we do not want to buy a pizza for dinner"]
             },
             {
                 id: 'q8', type: 'unscramble',
-                instruction: 'Put the words in the correct order:',
-                words: ['You', 'should', 'drink', 'more', 'water', '.'],
-                answer: 'You should drink more water.',
-                acceptedAnswers: ['you should drink more water']
+                spanishPrompt: 'Ella va a la escuela todos los días.',
+                labelA: 'Afirmativo (+)',
+                labelB: 'Pregunta (?)',
+                words: ['She', 'Does', 'she', 'goes', 'go', 'to', 'to', 'school', 'school', 'every', 'every', 'day', 'day'],
+                answerA: 'She goes to school every day',
+                answerB: 'Does she go to school every day',
+                acceptedAnswersA: ['she goes to school every day'],
+                acceptedAnswersB: ['does she go to school every day']
             },
             // ── MATCHING ─────────────────────────────────────────────────────
             {
@@ -148,10 +161,10 @@
                 id: 'q10', type: 'matching',
                 instruction: 'Match each word to its meaning:',
                 pairs: [
-                    { left: 'commute',  right: 'travel to/from work'           },
-                    { left: 'deadline', right: 'the last day to finish'         },
+                    { left: 'commute',  right: 'travel to/from work'            },
+                    { left: 'deadline', right: 'the last day to finish'          },
                     { left: 'schedule', right: 'a plan with times and activities'},
-                    { left: 'routine',  right: 'a regular set of habits'        },
+                    { left: 'routine',  right: 'a regular set of habits'         },
                 ]
             },
             // ── ODD ONE OUT ──────────────────────────────────────────────────
@@ -203,12 +216,18 @@
                 options: ['She drives a car.', 'She takes the bus.', 'She walks every day.', 'She takes the subway.'],
                 answer: 'She takes the bus.'
             },
+            // ── VOICE REPLY ──────────────────────────────────────────────────
             {
-                id: 'q18', type: 'audioQuestion',
-                audioText: "Tom couldn't come to class yesterday because he had a bad headache. His teacher said he should rest at home and drink plenty of water. Tom felt much better the next morning.",
-                questionText: 'What did the teacher recommend?',
-                options: ['Go to the hospital.', 'Take medicine.', 'Rest and drink water.', 'Call the school office.'],
-                answer: 'Rest and drink water.'
+                id: 'q18', type: 'voiceReply',
+                prompt: 'Tu compañero te pregunta: "What do you usually do in the morning before work?" Responde con la frase de abajo.',
+                targetPhrase: 'I usually wake up at seven and take the bus to work.',
+                hint: 'Present Simple · adverb of frequency · transportation'
+            },
+            {
+                id: 'q19', type: 'voiceReply',
+                prompt: 'Tu amiga quiere saber qué hiciste ayer. Responde con la frase de abajo.',
+                targetPhrase: 'Yesterday I studied English and watched a movie at home.',
+                hint: 'Past Simple · time expression at the beginning'
             },
         ]
     };
@@ -217,13 +236,14 @@
     const TYPE_CFG = {
         multipleChoice:  { label: 'Opción Múltiple',      icon: '🔤', color: 'text-sky-400'     },
         truefalse:       { label: 'Cierto o Falso',        icon: '⚖️', color: 'text-violet-400'  },
-        fillBlank:       { label: 'Completa el Espacio',   icon: '✍️', color: 'text-amber-400'   },
+        fillBlank:       { label: 'Completa el Pasaje',    icon: '✍️', color: 'text-amber-400'   },
         unscramble:      { label: 'Ordena la Oración',     icon: '🔀', color: 'text-emerald-400' },
         matching:        { label: 'Empareja',              icon: '🔗', color: 'text-orange-400'  },
         oddOneOut:       { label: 'El Intruso',            icon: '🚫', color: 'text-rose-400'    },
         errorCorrection: { label: 'Corrección de Errores', icon: '🔍', color: 'text-red-400'     },
         openEnded:       { label: 'Respuesta Abierta',     icon: '📝', color: 'text-zinc-400'    },
         audioQuestion:   { label: 'Audio + Pregunta',      icon: '🎧', color: 'text-teal-400'    },
+        voiceReply:      { label: 'Respuesta en Voz',      icon: '🎤', color: 'text-indigo-400'  },
     };
 
     // ── GRADER ───────────────────────────────────────────────────────────────
@@ -237,13 +257,22 @@
             case 'truefalse':
                 return answer === q.answer ? 'correct' : 'incorrect';
             case 'fillBlank': {
-                const acc = (q.acceptedAnswers || [q.answer]).map(normalize);
-                return acc.includes(normalize(answer)) ? 'correct' : 'incorrect';
+                if (typeof answer !== 'object') return null;
+                const blanks = [];
+                let m, re = /\[([^\]]+)\]/g;
+                while ((m = re.exec(q.passage || '')) !== null) blanks.push(m[1]);
+                if (!blanks.length) return null;
+                if (blanks.some((_, i) => !answer[i])) return null;
+                return blanks.every((blank, i) => normalize(answer[i]) === normalize(blank)) ? 'correct' : 'incorrect';
             }
             case 'unscramble': {
-                const acc = (q.acceptedAnswers || [q.answer]).map(normalize);
-                const s   = Array.isArray(answer) ? answer.join(' ') : answer;
-                return acc.includes(normalize(s)) ? 'correct' : 'incorrect';
+                if (!answer || !Array.isArray(answer.a) || !Array.isArray(answer.b)) return null;
+                if (!answer.a.length || !answer.b.length) return null;
+                const normA = normalize(answer.a.join(' '));
+                const normB = normalize(answer.b.join(' '));
+                const accA = (q.acceptedAnswersA || [q.answerA]).map(normalize);
+                const accB = (q.acceptedAnswersB || [q.answerB]).map(normalize);
+                return accA.includes(normA) && accB.includes(normB) ? 'correct' : 'incorrect';
             }
             case 'matching': {
                 if (!answer || typeof answer !== 'object') return null;
@@ -256,6 +285,10 @@
                 return normalize(answer) === normalize(q.answer) ? 'correct' : 'incorrect';
             case 'openEnded':
                 return 'review';
+            case 'voiceReply':
+                if (answer === 'correct') return 'correct';
+                if (answer === 'skipped') return 'review';
+                return 'incorrect';
             default:
                 return null;
         }
@@ -332,89 +365,236 @@
         );
     }
 
-    // FILL IN THE BLANK ───────────────────────────────────────────────────────
+    // FILL IN THE BLANK — PASAJE ──────────────────────────────────────────────
     function QFillBlank({ q, answer, onChange, submitted, grade }) {
+        const { segments, blanks } = React.useMemo(() => {
+            const passage = q.passage || '';
+            const re = /\[([^\]]+)\]/g;
+            const segs = [], bks = [];
+            let lastIdx = 0, m;
+            while ((m = re.exec(passage)) !== null) {
+                segs.push(passage.slice(lastIdx, m.index));
+                bks.push(m[1]);
+                lastIdx = re.lastIndex;
+            }
+            segs.push(passage.slice(lastIdx));
+            return { segments: segs, blanks: bks };
+        }, [q.passage]);
+
+        const [wordBank] = useState(() => shuffle([...(q.wordBank || blanks)]));
+        // availableIdxs: Set of bank indices still in the bank (not placed)
+        const [availableIdxs, setAvailableIdxs] = useState(
+            () => new Set(wordBank.map((_, i) => i))
+        );
+
+        const filled = answer || {};
+
+        const handleBankClick = (bankIdx) => {
+            if (submitted) return;
+            const firstEmpty = blanks.findIndex((_, i) => !filled[i]);
+            if (firstEmpty === -1) return;
+            onChange({ ...filled, [firstEmpty]: wordBank[bankIdx] });
+            setAvailableIdxs(prev => { const n = new Set(prev); n.delete(bankIdx); return n; });
+        };
+
+        const handleBlankClick = (blankIdx) => {
+            if (submitted) return;
+            const wordStr = filled[blankIdx];
+            if (!wordStr) return;
+            // Find a bank slot that has this word and is currently NOT available (placed)
+            const returnIdx = wordBank.findIndex((w, i) => w === wordStr && !availableIdxs.has(i));
+            const newFilled = { ...filled };
+            delete newFilled[blankIdx];
+            onChange(newFilled);
+            if (returnIdx !== -1) {
+                setAvailableIdxs(prev => { const n = new Set(prev); n.add(returnIdx); return n; });
+            }
+        };
+
         return (
-            <div className="space-y-3">
-                <div className="flex items-center flex-wrap gap-x-2 gap-y-1 text-sm font-medium">
-                    <span className="text-zinc-300">{q.before}</span>
-                    <input
-                        type="text" disabled={submitted}
-                        value={answer || ''}
-                        onChange={e => onChange(e.target.value)}
-                        placeholder={q.placeholder}
-                        className={`border-b-2 border-dashed bg-transparent outline-none px-2 py-1 text-center font-bold min-w-[140px] max-w-xs transition-colors
-                            ${submitted && grade === 'correct'   ? 'border-emerald-500 text-emerald-400' :
-                              submitted && grade === 'incorrect' ? 'border-rose-500    text-rose-400'    :
-                                                                   'border-amber-500 text-amber-300 placeholder-zinc-600'}`}
-                    />
-                    <span className="text-zinc-300">{q.after}</span>
+            <div className="space-y-4">
+                {/* Passage */}
+                <div className="bg-zinc-800/30 border border-zinc-700 rounded-xl px-4 py-4 text-sm sm:text-base leading-loose font-medium text-zinc-200">
+                    {segments.map((seg, i) => (
+                        <React.Fragment key={i}>
+                            <span>{seg}</span>
+                            {i < blanks.length && (() => {
+                                const val = filled[i];
+                                const isCorrect = submitted && normalize(val) === normalize(blanks[i]);
+                                const isWrong   = submitted && val && !isCorrect;
+                                return (
+                                    <button onClick={() => handleBlankClick(i)} disabled={submitted}
+                                        className={`inline-block mx-1 px-3 py-0.5 border-b-2 rounded-lg min-w-[80px] text-center font-bold text-sm transition-all
+                                            ${!val      ? 'border-dashed border-amber-500/40 text-transparent hover:border-amber-500/70 cursor-pointer' :
+                                              isCorrect ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300 cursor-default' :
+                                              isWrong   ? 'border-rose-500 bg-rose-500/10 text-rose-300 cursor-default' :
+                                                          'border-amber-500 bg-amber-500/10 text-amber-300 cursor-pointer hover:bg-amber-500/20'}`}>
+                                        {val || '____'}
+                                    </button>
+                                );
+                            })()}
+                        </React.Fragment>
+                    ))}
                 </div>
+
+                {/* Word bank */}
+                {!submitted && (
+                    <div className="space-y-1.5">
+                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                            Banco de palabras — toca una palabra para colocarla en el siguiente espacio vacío:
+                        </p>
+                        <div className="flex flex-wrap gap-2 p-3 bg-zinc-800/20 border border-zinc-700/50 rounded-xl min-h-[44px]">
+                            {wordBank.map((word, bankIdx) => {
+                                if (!availableIdxs.has(bankIdx)) return null;
+                                return (
+                                    <button key={bankIdx} onClick={() => handleBankClick(bankIdx)}
+                                        className="px-3 py-1.5 bg-zinc-700 hover:bg-amber-600/30 border border-zinc-600 hover:border-amber-500/50 rounded-lg text-sm font-bold text-zinc-100 transition-all active:scale-95">
+                                        {word}
+                                    </button>
+                                );
+                            })}
+                            {[...availableIdxs].length === 0 && (
+                                <span className="text-zinc-600 text-xs self-center italic">Todas las palabras colocadas — toca un espacio para devolver una.</span>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {/* Results */}
                 {submitted && grade === 'incorrect' && (
-                    <p className="text-xs font-bold text-emerald-400">✅ Correcta: <span className="font-black">{q.answer}</span></p>
+                    <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-1">
+                        <p className="text-xs font-black text-emerald-400 mb-1.5">✅ Respuestas correctas:</p>
+                        {blanks.map((blank, i) => {
+                            const wrong = normalize(filled[i]) !== normalize(blank);
+                            return wrong ? (
+                                <p key={i} className="text-xs text-zinc-300">
+                                    <span className="line-through text-rose-400">{filled[i] || '—'}</span>
+                                    {' → '}<strong className="text-emerald-300">{blank}</strong>
+                                </p>
+                            ) : null;
+                        })}
+                    </div>
                 )}
             </div>
         );
     }
 
-    // UNSCRAMBLE ──────────────────────────────────────────────────────────────
+    // UNSCRAMBLE — DOS ORACIONES ──────────────────────────────────────────────
     function QUnscramble({ q, answer, onChange, submitted, grade }) {
-        const [shuffledOrder] = useState(() => shuffle(Array.from({ length: q.words.length }, (_, i) => i)));
-        const [inBank,  setInBank]  = useState(() => new Set(shuffledOrder));
-        const [built,   setBuilt]   = useState([]);
+        const [pool] = useState(() => shuffle([...q.words]));
+        const [activeSlot, setActiveSlot] = useState('a');
+        // placed: { a: [poolIdx, ...], b: [poolIdx, ...] }
+        const [placed, setPlaced] = useState({ a: [], b: [] });
 
-        useEffect(() => { onChange(built.map(i => q.words[i])); }, [built]);
+        const usedSet = new Set([...placed.a, ...placed.b]);
+        const availPool = pool.map((_, i) => i).filter(i => !usedSet.has(i));
 
-        const addWord = (idx) => {
+        const addWord = (poolIdx) => {
             if (submitted) return;
-            setInBank(prev => { const n = new Set(prev); n.delete(idx); return n; });
-            setBuilt(prev => [...prev, idx]);
+            const np = { a: [...placed.a], b: [...placed.b] };
+            np[activeSlot] = [...np[activeSlot], poolIdx];
+            setPlaced(np);
+            onChange({ a: np.a.map(i => pool[i]), b: np.b.map(i => pool[i]) });
         };
-        const removeWord = (builtPos) => {
+
+        const removeWord = (slot, pos) => {
             if (submitted) return;
-            const wordIdx = built[builtPos];
-            setBuilt(prev => prev.filter((_, i) => i !== builtPos));
-            setInBank(prev => { const n = new Set(prev); n.add(wordIdx); return n; });
+            const np = { a: [...placed.a], b: [...placed.b] };
+            np[slot] = np[slot].filter((_, i) => i !== pos);
+            setPlaced(np);
+            onChange({ a: np.a.map(i => pool[i]), b: np.b.map(i => pool[i]) });
+        };
+
+        const wordsA = placed.a.map(i => pool[i]);
+        const wordsB = placed.b.map(i => pool[i]);
+        const okA = (q.acceptedAnswersA || [q.answerA]).map(normalize).includes(normalize(wordsA.join(' ')));
+        const okB = (q.acceptedAnswersB || [q.answerB]).map(normalize).includes(normalize(wordsB.join(' ')));
+
+        const renderSlot = (slot) => {
+            const slotWords = slot === 'a' ? wordsA : wordsB;
+            const slotPlaced = slot === 'a' ? placed.a : placed.b;
+            const isActive = activeSlot === slot && !submitted;
+            const ok = slot === 'a' ? okA : okB;
+            const label = slot === 'a' ? (q.labelA || 'Oración A') : (q.labelB || 'Oración B');
+            const accentA = 'border-emerald-500 bg-emerald-500/5';
+            const accentB = 'border-sky-500 bg-sky-500/5';
+            const activeAccent = slot === 'a' ? accentA : accentB;
+            const chipColorA = 'bg-emerald-600/20 border border-emerald-600/40 text-emerald-300 hover:bg-rose-500/20 hover:border-rose-500/40 hover:text-rose-300';
+            const chipColorB = 'bg-sky-600/20 border border-sky-600/40 text-sky-300 hover:bg-rose-500/20 hover:border-rose-500/40 hover:text-rose-300';
+
+            return (
+                <div className="space-y-1.5">
+                    <button onClick={() => !submitted && setActiveSlot(slot)}
+                        className={`text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 transition-opacity
+                            ${slot === 'a' ? 'text-emerald-400' : 'text-sky-400'}
+                            ${isActive ? 'opacity-100' : 'opacity-50 hover:opacity-80'}`}>
+                        {isActive ? '▶ ' : ''}{label}
+                        {submitted ? (ok ? ' ✅' : ' ❌') : ''}
+                    </button>
+                    <div onClick={() => !submitted && setActiveSlot(slot)}
+                        className={`min-h-[52px] flex flex-wrap gap-2 p-3 border-2 rounded-xl transition-colors cursor-pointer
+                            ${submitted && ok     ? 'border-emerald-500/50 bg-emerald-500/5' :
+                              submitted && !ok    ? 'border-rose-500/50 bg-rose-500/5' :
+                              isActive            ? activeAccent :
+                                                    'border-dashed border-zinc-600 bg-zinc-800/20 hover:border-zinc-500'}`}>
+                        {slotWords.length === 0 && !submitted && (
+                            <span className="text-zinc-600 text-xs self-center">
+                                {isActive ? 'Toca palabras del banco para armar esta oración...' : 'Toca aquí para activar este slot'}
+                            </span>
+                        )}
+                        {slotPlaced.map((poolIdx, pos) => (
+                            <button key={`${slot}-${pos}-${poolIdx}`} disabled={submitted}
+                                onClick={(e) => { e.stopPropagation(); removeWord(slot, pos); }}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all active:scale-95 disabled:cursor-default disabled:hover:bg-current
+                                    ${slot === 'a' ? chipColorA : chipColorB}`}>
+                                {pool[poolIdx]}
+                            </button>
+                        ))}
+                    </div>
+                    {submitted && !ok && (
+                        <p className="text-xs font-bold text-emerald-400">
+                            ✅ {slot === 'a' ? q.answerA : q.answerB}
+                        </p>
+                    )}
+                </div>
+            );
         };
 
         return (
-            <div className="space-y-3">
+            <div className="space-y-4">
+                {/* Spanish prompt */}
+                <div className="flex items-start gap-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-3">
+                    <span className="text-lg shrink-0">🇲🇽</span>
+                    <p className="text-indigo-200 font-semibold text-sm leading-snug">{q.spanishPrompt}</p>
+                </div>
+
+                {/* Two slots */}
+                <div className="space-y-3">
+                    {renderSlot('a')}
+                    {renderSlot('b')}
+                </div>
+
                 {/* Word bank */}
-                <div className="min-h-12 flex flex-wrap gap-2 p-3 bg-zinc-800/40 border border-zinc-700 rounded-xl">
-                    {inBank.size === q.words.length && !submitted && (
-                        <span className="text-zinc-600 text-xs self-center">Toca las palabras para armar la oración ↓</span>
-                    )}
-                    {shuffledOrder.filter(i => inBank.has(i)).map(i => (
-                        <button key={i} disabled={submitted} onClick={() => addWord(i)}
-                            className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 border border-zinc-600 rounded-lg text-sm font-bold text-zinc-100 transition-all active:scale-95 disabled:opacity-50">
-                            {q.words[i]}
-                        </button>
-                    ))}
-                </div>
-
-                {/* Built sentence */}
-                <div className={`min-h-12 flex flex-wrap gap-2 p-3 border-2 rounded-xl transition-colors
-                    ${submitted && grade === 'correct'   ? 'border-emerald-500 bg-emerald-500/5' :
-                      submitted && grade === 'incorrect' ? 'border-rose-500    bg-rose-500/5'    :
-                                                           'border-dashed border-zinc-600 bg-zinc-800/20'}`}>
-                    {built.length === 0 && !submitted && (
-                        <span className="text-zinc-600 text-xs self-center">Tu oración aparecerá aquí...</span>
-                    )}
-                    {built.map((wordIdx, pos) => (
-                        <button key={`b${pos}`} disabled={submitted} onClick={() => removeWord(pos)}
-                            className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all active:scale-95 disabled:opacity-80
-                                ${submitted && grade === 'correct'
-                                    ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
-                                    : submitted && grade === 'incorrect'
-                                    ? 'bg-rose-500/20 border border-rose-500/40 text-rose-300'
-                                    : 'bg-emerald-600/20 border border-emerald-600/40 text-emerald-300 hover:bg-rose-500/20 hover:border-rose-500/40 hover:text-rose-300'}`}>
-                            {q.words[wordIdx]}
-                        </button>
-                    ))}
-                </div>
-
-                {submitted && grade === 'incorrect' && (
-                    <p className="text-xs font-bold text-emerald-400">✅ Correcta: <span className="font-black">{q.answer}</span></p>
+                {!submitted && (
+                    <div className="space-y-1.5">
+                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                            Banco de palabras → slot activo:{' '}
+                            <span className={activeSlot === 'a' ? 'text-emerald-400' : 'text-sky-400'}>
+                                {activeSlot === 'a' ? (q.labelA || 'Oración A') : (q.labelB || 'Oración B')}
+                            </span>
+                        </p>
+                        <div className="flex flex-wrap gap-2 p-3 bg-zinc-800/20 border border-zinc-700/50 rounded-xl min-h-[44px]">
+                            {availPool.map(poolIdx => (
+                                <button key={poolIdx} onClick={() => addWord(poolIdx)}
+                                    className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 border border-zinc-600 rounded-lg text-sm font-bold text-zinc-100 transition-all active:scale-95">
+                                    {pool[poolIdx]}
+                                </button>
+                            ))}
+                            {availPool.length === 0 && (
+                                <span className="text-zinc-600 text-xs self-center italic">Todas las palabras colocadas.</span>
+                            )}
+                        </div>
+                    </div>
                 )}
             </div>
         );
@@ -509,7 +689,6 @@
     function QErrorCorrection({ q, answer, onChange, submitted, grade }) {
         return (
             <div className="space-y-4">
-                {/* Sentence with error */}
                 <div>
                     <div className="flex items-start gap-2 bg-amber-500/5 border border-amber-500/30 rounded-xl px-4 py-3">
                         <span className="text-lg shrink-0">🚨</span>
@@ -519,8 +698,6 @@
                         <p className="text-[11px] text-zinc-500 mt-1.5 ml-1 font-medium">💡 Pista: {q.hint}</p>
                     )}
                 </div>
-
-                {/* Response area */}
                 <div className="space-y-1.5">
                     <p className="text-[11px] font-black text-zinc-300 uppercase tracking-widest">
                         ✏️ Escribe la oración completa y corregida:
@@ -538,7 +715,6 @@
                         Reescribe la oración entera con la corrección incluida — no solo la parte que cambias.
                     </p>
                 </div>
-
                 {submitted && grade === 'incorrect' && (
                     <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
                         <p className="text-xs font-black text-emerald-400 mb-0.5">✅ Oración correcta:</p>
@@ -551,8 +727,8 @@
 
     // OPEN ENDED ──────────────────────────────────────────────────────────────
     function QOpenEnded({ q, answer, onChange, submitted }) {
-        const words    = (answer || '').trim().split(/\s+/).filter(Boolean).length;
-        const hasMin   = words >= (q.minWords || 0);
+        const words  = (answer || '').trim().split(/\s+/).filter(Boolean).length;
+        const hasMin = words >= (q.minWords || 0);
         return (
             <div className="space-y-2">
                 <textarea disabled={submitted} rows={5}
@@ -595,7 +771,6 @@
 
         return (
             <div className="space-y-4">
-                {/* Player */}
                 <div className="flex items-center gap-4 bg-teal-500/5 border border-teal-500/20 rounded-2xl px-5 py-4">
                     <button onClick={playing ? handleStop : handlePlay}
                         className={`w-14 h-14 rounded-2xl flex items-center justify-center text-black font-black text-2xl shrink-0 transition-all active:scale-95
@@ -611,8 +786,6 @@
                         </p>
                     </div>
                 </div>
-
-                {/* MC question */}
                 <div>
                     <p className="text-zinc-300 font-semibold text-sm mb-3">{q.questionText}</p>
                     <div className="space-y-2">
@@ -640,6 +813,171 @@
         );
     }
 
+    // VOICE REPLY ─────────────────────────────────────────────────────────────
+    function QVoiceReply({ q, answer, onChange, submitted, grade }) {
+        const [status,      setStatus]      = useState(answer || 'idle');
+        const [transcript,  setTranscript]  = useState('');
+        const [attempts,    setAttempts]    = useState(0);
+        const [isListening, setIsListening] = useState(false);
+        const recognitionRef = useRef(null);
+        const attemptsRef    = useRef(0);
+        const maxAttempts    = 3;
+
+        useEffect(() => {
+            if (submitted) return;
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SR) return;
+
+            const rec = new SR();
+            rec.continuous = false;
+            rec.interimResults = false;
+            rec.lang = 'en-US';
+
+            rec.onstart = () => setIsListening(true);
+            rec.onend   = () => setIsListening(false);
+
+            rec.onerror = (e) => {
+                setIsListening(false);
+                attemptsRef.current++;
+                setAttempts(attemptsRef.current);
+                setTranscript(e.error === 'no-speech' ? '(no se escuchó nada)' : '(error de micrófono)');
+                if (attemptsRef.current >= maxAttempts) {
+                    setStatus('skipped'); onChange('skipped');
+                } else {
+                    setStatus('error');
+                }
+            };
+
+            rec.onresult = (event) => {
+                const spoken = event.results[0][0].transcript;
+                setTranscript(spoken);
+                const clean = s => s.toLowerCase().replace(/[^\w\s]/gi, '').trim();
+                const targetWords = clean(q.targetPhrase).split(' ').filter(Boolean);
+                const spokenWords = clean(spoken).split(' ').filter(Boolean);
+                const matches = targetWords.filter(w => spokenWords.includes(w)).length;
+                const score   = matches / targetWords.length;
+                attemptsRef.current++;
+                setAttempts(attemptsRef.current);
+                if (score >= 0.75) {
+                    setStatus('correct'); onChange('correct');
+                } else if (attemptsRef.current >= maxAttempts) {
+                    setStatus('skipped'); onChange('skipped');
+                } else {
+                    setStatus('error');
+                }
+            };
+
+            recognitionRef.current = rec;
+            return () => { rec.onresult = null; rec.onerror = null; rec.onstart = null; };
+        }, [submitted]);
+
+        const toggleMic = () => {
+            const rec = recognitionRef.current;
+            if (!rec) { alert('Tu navegador no soporta reconocimiento de voz. Prueba Chrome o Edge.'); return; }
+            if (isListening) { rec.stop(); return; }
+            setTranscript('');
+            setStatus('listening');
+            try { rec.start(); } catch(e) {}
+        };
+
+        const skipQuestion = () => { setStatus('skipped'); onChange('skipped'); };
+
+        const isFinal = status === 'correct' || status === 'skipped';
+
+        // On results screen — show compact result
+        if (submitted) {
+            return (
+                <div className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-sm font-medium
+                    ${grade === 'correct' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-300' : 'border-zinc-700/40 bg-zinc-800/30 text-zinc-400'}`}>
+                    <span>{grade === 'correct' ? '✅' : '📋'}</span>
+                    <div>
+                        <p>{grade === 'correct' ? 'Pronunciación aceptada' : 'Pendiente de revisión del teacher'}</p>
+                        {transcript && <p className="text-xs text-zinc-500 mt-0.5">Capturado: "{transcript}"</p>}
+                    </div>
+                </div>
+            );
+        }
+
+        return (
+            <div className="space-y-4">
+                {/* Context prompt */}
+                <div className="flex items-start gap-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-3">
+                    <span className="text-lg shrink-0">🇲🇽</span>
+                    <p className="text-indigo-200 font-medium text-sm leading-snug">{q.prompt}</p>
+                </div>
+
+                {/* Target phrase */}
+                <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Di esta frase en voz alta:</p>
+                        <button onClick={() => speakPhrase(q.targetPhrase)}
+                            className="flex items-center gap-1 text-[10px] font-black text-teal-400 bg-teal-500/10 border border-teal-500/20 px-2 py-1 rounded-lg hover:bg-teal-500/20 transition-colors active:scale-95">
+                            <Volume2 size={10} /> Escuchar
+                        </button>
+                    </div>
+                    <div className="bg-zinc-800/60 border border-zinc-700 rounded-xl px-4 py-3 text-center">
+                        <p className="text-white font-bold text-base">{q.targetPhrase}</p>
+                        {q.hint && <p className="text-xs text-zinc-500 mt-1.5">{q.hint}</p>}
+                    </div>
+                </div>
+
+                {/* State feedback */}
+                {status === 'correct' && (
+                    <div className="flex items-center gap-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3">
+                        <span className="text-2xl">✅</span>
+                        <div>
+                            <p className="text-emerald-300 font-black text-sm">¡Muy bien!</p>
+                            {transcript && <p className="text-emerald-400/70 text-xs mt-0.5">Te escuché: "{transcript}"</p>}
+                        </div>
+                    </div>
+                )}
+                {status === 'skipped' && (
+                    <div className="flex items-center gap-3 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3">
+                        <span className="text-2xl">⏭</span>
+                        <p className="text-zinc-400 font-medium text-sm">Saltado — el teacher revisará esta respuesta.</p>
+                    </div>
+                )}
+                {status === 'error' && transcript && (
+                    <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-center">
+                        <p className="text-rose-400 font-bold text-xs mb-1">
+                            No fue suficiente ({attempts}/{maxAttempts} intentos usados)
+                        </p>
+                        <p className="text-zinc-400 text-xs">Te escuché decir: "{transcript}"</p>
+                    </div>
+                )}
+
+                {/* Mic controls */}
+                {!isFinal && (
+                    <div className="flex flex-col items-center gap-3 pt-1">
+                        {isListening && (
+                            <p className="text-indigo-400 font-black text-xs uppercase tracking-widest animate-pulse">
+                                🎤 Escuchando...
+                            </p>
+                        )}
+                        <button onClick={toggleMic}
+                            className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-all active:scale-95 shadow-lg
+                                ${isListening
+                                    ? 'bg-indigo-600 text-white mic-active'
+                                    : status === 'error'
+                                    ? 'bg-rose-500/20 border-2 border-rose-500/50 text-rose-400 hover:bg-rose-500/30'
+                                    : 'bg-zinc-800 border-2 border-zinc-600 text-zinc-300 hover:border-indigo-500/60 hover:text-indigo-400'}`}>
+                            {isListening ? <MicOff size={28}/> : <Mic size={28}/>}
+                        </button>
+                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                            {isListening ? 'Toca para detener' : 'Toca para hablar'}
+                            {attempts > 0 && !isListening && ` · ${attempts}/${maxAttempts} intentos`}
+                        </p>
+                        {attempts > 0 && !isListening && (
+                            <button onClick={skipQuestion} className="text-zinc-600 hover:text-zinc-400 text-xs font-bold transition-colors">
+                                Saltar esta pregunta →
+                            </button>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
+    }
+
     // ──────────────────────────────────────────────────────────────────────────
     // QUESTION CARD
     // ──────────────────────────────────────────────────────────────────────────
@@ -653,6 +991,7 @@
         errorCorrection: QErrorCorrection,
         openEnded:       QOpenEnded,
         audioQuestion:   QAudioQuestion,
+        voiceReply:      QVoiceReply,
     };
 
     function QuestionCard({ q, index, answer, onChange, submitted }) {
@@ -668,7 +1007,6 @@
 
         return (
             <div className={`bg-zinc-900 border ${borderColor} rounded-2xl p-5 sm:p-6 transition-all`}>
-                {/* Header */}
                 <div className="flex items-start justify-between gap-3 mb-4">
                     <div className="flex items-center gap-3 min-w-0">
                         <span className="shrink-0 w-7 h-7 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-xs font-black text-zinc-400">
@@ -779,9 +1117,22 @@
         const isAnswered = (q) => {
             const a = answers[q.id];
             if (a === undefined || a === null) return false;
+
+            if (q.type === 'fillBlank') {
+                if (typeof a !== 'object') return false;
+                let blankCount = 0;
+                let m, re = /\[([^\]]+)\]/g;
+                while ((m = re.exec(q.passage || '')) !== null) blankCount++;
+                return Object.keys(a).filter(k => a[k]).length >= blankCount;
+            }
+            if (q.type === 'unscramble') {
+                return a && Array.isArray(a.a) && a.a.length > 0 && Array.isArray(a.b) && a.b.length > 0;
+            }
+            if (q.type === 'voiceReply') return !!a;
+
             if (typeof a === 'string') return a.trim() !== '';
             if (Array.isArray(a))      return a.length > 0;
-            if (typeof a === 'object') return Object.keys(a).length >= q.pairs?.length;
+            if (typeof a === 'object') return Object.keys(a).length >= (q.pairs?.length || 0);
             return true;
         };
 
@@ -795,7 +1146,6 @@
 
         return (
             <div className="min-h-screen flex flex-col">
-                {/* STICKY HEADER */}
                 <header className="sticky top-0 z-20 bg-zinc-950/95 backdrop-blur-sm border-b border-zinc-800 flex items-center justify-between px-4 sm:px-6 py-3 pt-safe">
                     <div className="flex items-center gap-3 min-w-0">
                         {!IS_STUDENT
@@ -817,12 +1167,10 @@
                     </button>
                 </header>
 
-                {/* PROGRESS BAR */}
                 <div className="w-full h-1 bg-zinc-800 shrink-0">
                     <div className="h-1 bg-indigo-500 transition-all duration-500" style={{ width: `${pct}%` }} />
                 </div>
 
-                {/* QUESTIONS */}
                 <div className="flex-1 max-w-2xl mx-auto w-full px-4 py-6 sm:py-8 space-y-4 pb-safe">
                     {quiz.questions.map((q, idx) => (
                         <QuestionCard key={q.id} q={q} index={idx}
@@ -843,7 +1191,6 @@
                     </p>
                 </div>
 
-                {/* CONFIRM MODAL */}
                 {showConfirm && (
                     <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
                         <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-sm p-6 shadow-2xl">
@@ -875,14 +1222,14 @@
     // RESULTS SCREEN
     // ──────────────────────────────────────────────────────────────────────────
     function ResultsScreen({ quiz, answers }) {
-        const graded       = quiz.questions.map(q => ({ q, grade: gradeAnswer(q, answers[q.id]), answer: answers[q.id] }));
-        const autoGraded   = graded.filter(g => g.grade !== 'review' && g.grade !== null);
-        const forReview    = graded.filter(g => g.grade === 'review');
-        const correct      = autoGraded.filter(g => g.grade === 'correct').length;
-        const total        = autoGraded.length;
-        const pct          = total > 0 ? Math.round((correct / total) * 100) : 0;
-        const emoji        = pct >= 90 ? '🏆' : pct >= 70 ? '🎉' : pct >= 50 ? '👍' : '💪';
-        const msg          = pct >= 90 ? '¡Excelente trabajo!' : pct >= 70 ? '¡Muy bien!' : pct >= 50 ? 'Buen esfuerzo' : '¡A seguir practicando!';
+        const graded     = quiz.questions.map(q => ({ q, grade: gradeAnswer(q, answers[q.id]), answer: answers[q.id] }));
+        const autoGraded = graded.filter(g => g.grade !== 'review' && g.grade !== null);
+        const forReview  = graded.filter(g => g.grade === 'review');
+        const correct    = autoGraded.filter(g => g.grade === 'correct').length;
+        const total      = autoGraded.length;
+        const pct        = total > 0 ? Math.round((correct / total) * 100) : 0;
+        const emoji      = pct >= 90 ? '🏆' : pct >= 70 ? '🎉' : pct >= 50 ? '👍' : '💪';
+        const msg        = pct >= 90 ? '¡Excelente trabajo!' : pct >= 70 ? '¡Muy bien!' : pct >= 50 ? 'Buen esfuerzo' : '¡A seguir practicando!';
 
         return (
             <div className="min-h-screen flex flex-col">
@@ -902,7 +1249,6 @@
                 </header>
 
                 <div className="flex-1 max-w-2xl mx-auto w-full px-4 py-6 sm:py-8 space-y-6 pb-safe">
-                    {/* Score card */}
                     <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 text-center shadow-2xl">
                         <div className="text-5xl mb-3">{emoji}</div>
                         <h2 className="text-2xl font-black text-white mb-4">{msg}</h2>
@@ -918,17 +1264,16 @@
 
                         {forReview.length > 0 && (
                             <div className="mt-5 text-xs text-zinc-500 font-bold bg-zinc-800/50 border border-zinc-700 rounded-xl p-3">
-                                📋 <strong className="text-zinc-300">{forReview.length} pregunta{forReview.length !== 1 ? 's' : ''}</strong> de respuesta abierta están pendientes de revisión por el teacher.
+                                📋 <strong className="text-zinc-300">{forReview.length} pregunta{forReview.length !== 1 ? 's' : ''}</strong> pendientes de revisión por el teacher.
                             </div>
                         )}
                     </div>
 
-                    {/* Breakdown */}
                     <div className="space-y-3">
                         <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest px-1">Detalle por pregunta</h3>
                         {graded.map(({ q, grade, answer }, idx) => {
-                            const cfg = TYPE_CFG[q.type] || { label: q.type, icon: '❓', color: 'text-zinc-400' };
-                            const preview = q.stem || q.instruction || q.prompt || q.statement || q.sentence || q.questionText || '';
+                            const cfg     = TYPE_CFG[q.type] || { label: q.type, icon: '❓', color: 'text-zinc-400' };
+                            const preview = q.stem || q.instruction || q.prompt || q.statement || q.sentence || q.questionText || q.spanishPrompt || '';
                             return (
                                 <div key={q.id} className={`p-4 rounded-xl border space-y-1
                                     ${grade === 'correct'   ? 'border-emerald-500/20 bg-emerald-500/5'  :
@@ -943,8 +1288,7 @@
                                             <p className="text-xs font-semibold text-zinc-300 mt-0.5 line-clamp-2">{preview}</p>
                                         </div>
                                     </div>
-                                    {/* Show open-ended responses for teacher review */}
-                                    {grade === 'review' && answer && (
+                                    {grade === 'review' && answer && typeof answer === 'string' && (
                                         <div className="ml-8 mt-2 bg-zinc-800/60 border border-zinc-700/50 rounded-lg px-3 py-2">
                                             <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1">Respuesta del alumno:</p>
                                             <p className="text-xs text-zinc-300 leading-relaxed">{answer}</p>
