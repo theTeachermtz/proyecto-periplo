@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Banco del Examen de Nivel</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.2.0",
+      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+      "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+      "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="periplo-config.js"></script>
+  <script src="placement-data.js"></script>
+  <style>
+    :root { --mono: 'Cascadia Code','JetBrains Mono','Fira Code',ui-monospace,'SF Mono',Menlo,Consolas,monospace; }
+    body, input, textarea, button { font-family: var(--mono); }
+    body { background:#0a0a0b; color:#d4d4d8; }
+    textarea { tab-size: 2; }
+    .scroll::-webkit-scrollbar { width:10px; height:10px; }
+    .scroll::-webkit-scrollbar-thumb { background:#27272a; border-radius:6px; }
+    .scroll::-webkit-scrollbar-track { background:transparent; }
+    *:focus { outline:none; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-type="module">
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { createRoot } from 'react-dom/client';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+
+const app = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
+const db  = getFirestore(app);
+const { BANK, FLEET } = window.PERIPLO_PLACEMENT;
+
+const TEACHER_UID = new URLSearchParams(location.search).get('uid') || 'teacher_builder_001';
+const BANK_REF = doc(db, `artifacts/periplo-app-v1/users/${TEACHER_UID}/placement/bank`);
+
+// ── etiquetas ─────────────────────────────────────────────────────────────────
+const TOOL_LABEL = {
+  multipleChoice:'Opción múltiple', wordForm:'Forma correcta', oddOneOut:'El intruso',
+  trueFalse:'Verdadero / Falso', audioQuestion:'Comprensión auditiva',
+  fillBlank:'Completa el espacio', errorCorrection:'Corrige la oración',
+  spotError:'Encuentra el error', unscramble:'Ordena la oración',
+  matching:'Une los pares', categorySort:'Clasifica',
+  dialogueFill:'Completa el diálogo', multipleResponse:'Selección múltiple (varias)',
+  contextMatch:'Situación → Frase',
+};
+const COG = {
+  recognize: ['multipleChoice','trueFalse','matching','audioQuestion','oddOneOut','categorySort'],
+  analyze:   ['spotError','errorCorrection','multipleResponse'],
+};
+const cogOf = t => COG.recognize.includes(t) ? 'recognize' : COG.analyze.includes(t) ? 'analyze' : 'produce';
+const COG_ORDER = { recognize:0, produce:1, analyze:2 };
+const COG_LABEL = { recognize:'Reconocer', produce:'Producir', analyze:'Analizar' };
+const COG_COLOR = { recognize:'text-cyan-400', produce:'text-amber-400', analyze:'text-rose-400' };
+const TIER_LABEL = { facil:'Nivel fácil', medio:'Nivel intermedio', dificil:'Nivel difícil' };
+const TIERS = ['facil','medio','dificil'];
+
+// ── índices de la semilla ─────────────────────────────────────────────────────
+const seedById = {}, topicMeta = {}, topicById = {};
+BANK.topics.forEach(t => {
+  topicById[t.id] = t;
+  topicMeta[t.id] = { level: t.level, grammar: t.grammar };
+  t.questions.forEach(q => { seedById[q.id] = q; });
+});
+const TOTAL_Q = Object.keys(seedById).length;
+const shipsOfTopic = {};
+FLEET.forEach(s => (s.topics||[]).forEach(tid => { (shipsOfTopic[tid] = shipsOfTopic[tid] || []).push(s.id); }));
+const topicOfQid = id => { for (const t of BANK.topics) if (t.questions.some(x => x.id === id)) return t.id; return ''; };
+
+const stable = o => JSON.stringify(o);
+const pretty = o => JSON.stringify(o, null, 2);
+const clone  = o => JSON.parse(JSON.stringify(o));
+
+// ── widgets de campo ──────────────────────────────────────────────────────────
+function Txt({ label, value, onChange, area }) {
+  return (
+    <label className="block mb-2.5">
+      <span className="block text-[11px] text-zinc-500 mb-1">{label}</span>
+      {area
+        ? <textarea value={value ?? ''} onChange={e => onChange(e.target.value)} rows={2} spellCheck={false}
+            className="w-full bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1.5 text-[13px] text-zinc-100 focus:border-emerald-600 resize-y scroll" />
+        : <input value={value ?? ''} onChange={e => onChange(e.target.value)} spellCheck={false}
+            className="w-full bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1.5 text-[13px] text-zinc-100 focus:border-emerald-600" />}
+    </label>
+  );
+}
+
+function TF({ answer, onChange }) {
+  return (
+    <div className="mb-2.5">
+      <span className="block text-[11px] text-zinc-500 mb-1">Respuesta correcta</span>
+      <div className="flex gap-2">
+        {[['Verdadero', true], ['Falso', false]].map(([l, v]) => (
+          <button key={l} onClick={() => onChange(v)}
+            className={`px-3 py-1 rounded text-[13px] border ${answer === v ? 'bg-emerald-600 border-emerald-600 text-black font-bold' : 'border-zinc-700 text-zinc-300 hover:border-zinc-500'}`}>{l}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Options({ options, answer, answers, multi, onOptions, onAnswer }) {
+  const [dragI, setDragI] = useState(null);
+  const correct = opt => multi ? (answers || []).includes(opt) : opt === answer;
+  const toggle = opt => {
+    if (multi) { const s = new Set(answers || []); s.has(opt) ? s.delete(opt) : s.add(opt); onAnswer([...s]); }
+    else onAnswer(opt);
+  };
+  const setOpt = (i, val) => {
+    const old = options[i]; const next = [...options]; next[i] = val; onOptions(next);
+    if (multi) { if ((answers || []).includes(old)) onAnswer((answers || []).map(a => a === old ? val : a)); }
+    else if (answer === old) onAnswer(val);
+  };
+  const del = i => {
+    const opt = options[i]; onOptions(options.filter((_, j) => j !== i));
+    if (multi) onAnswer((answers || []).filter(a => a !== opt)); else if (answer === opt) onAnswer('');
+  };
+  const move = (from, to) => {
+    if (from == null || from === to) return;
+    const n = [...options]; const [it] = n.splice(from, 1); n.splice(to, 0, it); onOptions(n);
+  };
+  return (
+    <div className="mb-2.5">
+      <span className="block text-[11px] text-zinc-500 mb-1">Opciones · {multi ? 'marca TODAS las correctas' : 'marca la correcta'} · arrastra ⠿ para reordenar</span>
+      {(options || []).map((opt, i) => (
+        <div key={i} onDragOver={e => e.preventDefault()} onDrop={() => { move(dragI, i); setDragI(null); }}
+          className={`flex items-center gap-2 mb-1 ${dragI === i ? 'opacity-40' : ''}`}>
+          <span draggable onDragStart={() => setDragI(i)} onDragEnd={() => setDragI(null)} title="arrastra para reordenar"
+            className="cursor-grab text-zinc-600 hover:text-zinc-300 select-none px-0.5 text-base leading-none">⠿</span>
+          <button onClick={() => toggle(opt)} title="marcar correcta"
+            className={`w-5 h-5 ${multi ? 'rounded' : 'rounded-full'} border flex items-center justify-center text-[11px] shrink-0 ${correct(opt) ? 'bg-emerald-600 border-emerald-600 text-black' : 'border-zinc-600 text-transparent hover:border-zinc-400'}`}>✓</button>
+          <input value={opt} onChange={e => setOpt(i, e.target.value)} spellCheck={false}
+            className={`flex-1 bg-zinc-900 border rounded px-2.5 py-1 text-[13px] ${correct(opt) ? 'border-emerald-700 text-emerald-200' : 'border-zinc-700 text-zinc-200'} focus:border-emerald-600`} />
+          <button onClick={() => del(i)} className="text-zinc-600 hover:text-red-400 px-1 shrink-0">×</button>
+        </div>
+      ))}
+      <button onClick={() => onOptions([...(options || []), ''])} className="text-[11px] text-zinc-500 hover:text-emerald-400 ml-6">+ opción</button>
+    </div>
+  );
+}
+
+function ListEdit({ label, items, onChange }) {
+  return (
+    <div className="mb-2.5">
+      <span className="block text-[11px] text-zinc-500 mb-1">{label}</span>
+      {(items || []).map((it, i) => (
+        <div key={i} className="flex items-center gap-2 mb-1">
+          <input value={it} onChange={e => { const n = [...items]; n[i] = e.target.value; onChange(n); }} spellCheck={false}
+            className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1 text-[13px] text-zinc-200 focus:border-emerald-600" />
+          <button onClick={() => onChange(items.filter((_, j) => j !== i))} className="text-zinc-600 hover:text-red-400 px-1 shrink-0">×</button>
+        </div>
+      ))}
+      <button onClick={() => onChange([...(items || []), ''])} className="text-[11px] text-zinc-500 hover:text-emerald-400">+ agregar</button>
+    </div>
+  );
+}
+
+function Pairs({ label, pairs, keys, onChange }) {
+  const [ka, kb] = keys;
+  const set = (i, k, v) => onChange(pairs.map((p, j) => j === i ? { ...p, [k]: v } : p));
+  return (
+    <div className="mb-2.5">
+      <span className="block text-[11px] text-zinc-500 mb-1">{label}</span>
+      {(pairs || []).map((p, i) => (
+        <div key={i} className="flex items-center gap-2 mb-1">
+          <input value={p[ka] ?? ''} onChange={e => set(i, ka, e.target.value)} spellCheck={false}
+            className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1 text-[13px] text-zinc-200 focus:border-emerald-600" />
+          <span className="text-zinc-600 text-xs shrink-0">→</span>
+          <input value={p[kb] ?? ''} onChange={e => set(i, kb, e.target.value)} spellCheck={false}
+            className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1 text-[13px] text-emerald-200 focus:border-emerald-600" />
+          <button onClick={() => onChange(pairs.filter((_, j) => j !== i))} className="text-zinc-600 hover:text-red-400 px-1 shrink-0">×</button>
+        </div>
+      ))}
+      <button onClick={() => onChange([...(pairs || []), { [ka]: '', [kb]: '' }])} className="text-[11px] text-zinc-500 hover:text-emerald-400">+ par</button>
+    </div>
+  );
+}
+
+// editor avanzado (JSON) — para campos raros o ajustes finos
+function JsonEdit({ q, onUpdate }) {
+  const [txt, setTxt] = useState(() => pretty(q));
+  let ok = true; try { JSON.parse(txt); } catch { ok = false; }
+  return (
+    <div>
+      <textarea value={txt} spellCheck={false} rows={Math.max(5, (txt.match(/\n/g) || []).length + 1)}
+        onChange={e => { setTxt(e.target.value); try { onUpdate(q.id, JSON.parse(e.target.value)); } catch {} }}
+        className={`w-full bg-zinc-900 border ${ok ? 'border-zinc-700' : 'border-red-600'} rounded px-2.5 py-1.5 text-[12px] text-zinc-200 focus:border-emerald-600 scroll`} />
+      {!ok && <p className="text-red-500 text-[11px] mt-1">JSON inválido — corrige para que se guarde</p>}
+    </div>
+  );
+}
+
+// dispatcher: campos legibles según el tipo de pregunta
+function Fields({ q, update }) {
+  const set = patch => update({ ...q, ...patch });
+  const enun = q.q !== undefined ? <Txt label="Enunciado" value={q.q} area onChange={v => set({ q: v })} /> : null;
+  const opts = (single) => (
+    <Options multi={!single} options={q.options} answer={q.answer} answers={q.answers}
+      onOptions={o => set({ options: o })} onAnswer={a => set(single ? { answer: a } : { answers: a })} />
+  );
+  switch (q.tool) {
+    case 'multipleChoice': case 'wordForm': case 'oddOneOut':
+      return <>{enun}{opts(true)}</>;
+    case 'audioQuestion':
+      return <><Txt label="Texto del audio (se lee en voz alta)" value={q.audioText} area onChange={v => set({ audioText: v })} />{enun}{opts(true)}</>;
+    case 'trueFalse':
+      return <>{enun}<TF answer={q.answer} onChange={a => set({ answer: a })} /></>;
+    case 'multipleResponse':
+      return <>{enun}{opts(false)}</>;
+    case 'fillBlank':
+      return <>{enun}<Txt label="Pista" value={q.hint} onChange={v => set({ hint: v })} /><Txt label="Respuesta" value={q.answer} onChange={v => set({ answer: v })} /><ListEdit label="También acepta (alternativas válidas)" items={q.accept || []} onChange={a => set({ accept: a })} /></>;
+    case 'errorCorrection':
+      return <>{enun}<Txt label="Oración corregida" value={q.answer} area onChange={v => set({ answer: v })} /></>;
+    case 'spotError':
+      return <>{enun}<Txt label="Palabra con el error" value={q.errorWord} onChange={v => set({ errorWord: v })} /><Txt label="Oración corregida" value={q.answer} area onChange={v => set({ answer: v })} /></>;
+    case 'unscramble':
+      return <><ListEdit label="Fichas (palabras a ordenar)" items={q.tokens || []} onChange={tk => set({ tokens: tk })} /><Txt label="Oración correcta" value={q.answer} area onChange={v => set({ answer: v })} /></>;
+    case 'dialogueFill':
+      return <><ListEdit label="Diálogo (una línea por turno, ej. 'A: ...')" items={q.context || []} onChange={c => set({ context: c })} />{opts(true)}</>;
+    case 'matching':
+      return <>{enun}<Pairs label="Pares" pairs={q.pairs || []} keys={['left', 'right']} onChange={p => set({ pairs: p })} /></>;
+    case 'contextMatch':
+      return <>{enun}<Pairs label="Situación → Frase" pairs={q.pairs || []} keys={['situation', 'phrase']} onChange={p => set({ pairs: p })} /></>;
+    case 'categorySort':
+      return <>{enun}<ListEdit label="Palabras a clasificar" items={q.pool || []} onChange={p => set({ pool: p })} />
+        {(q.buckets || []).map((b, i) => (
+          <div key={i} className="border border-zinc-800 rounded p-2 mb-1">
+            <Txt label={`Categoría ${i + 1}`} value={b.label} onChange={v => set({ buckets: q.buckets.map((x, j) => j === i ? { ...x, label: v } : x) })} />
+            <ListEdit label="Palabras correctas aquí" items={b.correct || []} onChange={c => set({ buckets: q.buckets.map((x, j) => j === i ? { ...x, correct: c } : x) })} />
+          </div>
+        ))}</>;
+    default:
+      return enun;
+  }
+}
+
+// ── tarjeta de una pregunta ───────────────────────────────────────────────────
+const QCard = React.memo(function QCard({ q, isOverride, dirty, onUpdate, onRevert, topicLabel }) {
+  const [json, setJson] = useState(false);
+  const cog = cogOf(q.tool);
+  const border = dirty ? 'border-amber-600/60' : isOverride ? 'border-emerald-800/60' : 'border-zinc-800';
+  return (
+    <div className={`border ${border} rounded-lg bg-zinc-950/60 mb-3`}>
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800/70 text-[11px] flex-wrap">
+        <span className="text-zinc-200 font-bold">{TOOL_LABEL[q.tool] || q.tool}</span>
+        <span className={COG_COLOR[cog]}>· {COG_LABEL[cog]}</span>
+        <span className="text-zinc-600">· {topicLabel}</span>
+        <span className="ml-auto flex items-center gap-2.5">
+          {dirty && <span className="text-amber-500">● sin guardar</span>}
+          {!dirty && isOverride && <span className="text-emerald-500">✓ editada</span>}
+          <button onClick={() => setJson(s => !s)} className="text-zinc-600 hover:text-zinc-300">{json ? 'campos' : 'avanzado'}</button>
+          {(dirty || isOverride) && <button onClick={() => onRevert(q.id)} className="text-zinc-500 hover:text-red-400">revertir</button>}
+        </span>
+      </div>
+      <div className="p-3">
+        {json ? <JsonEdit q={q} onUpdate={onUpdate} /> : <Fields q={q} update={obj => onUpdate(q.id, obj)} />}
+      </div>
+    </div>
+  );
+});
+
+// ── app ───────────────────────────────────────────────────────────────────────
+function App() {
+  const [overrides, setOverrides] = useState({});
+  const [drafts, setDrafts] = useState({});   // id -> objeto editado (sin guardar)
+  const [shipIdx, setShipIdx] = useState(0);
+  const [search, setSearch] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [collapsed, setCollapsed] = useState({});
+
+  useEffect(() => {
+    getDoc(BANK_REF).then(snap => { if (snap.exists()) setOverrides(snap.data().overrides || {}); })
+      .catch(e => setMsg('No cargó Firestore: ' + e.message)).finally(() => setLoaded(true));
+  }, []);
+
+  const effective = id => overrides[id] || seedById[id];
+  const objOf = id => drafts[id] || effective(id);
+
+  const dirtyIds = useMemo(() => Object.keys(drafts).filter(id => stable(drafts[id]) !== stable(effective(id))), [drafts, overrides]);
+  const dirtySet = useMemo(() => new Set(dirtyIds), [dirtyIds]);
+
+  const onUpdate = useCallback((id, obj) => setDrafts(d => ({ ...d, [id]: obj })), []);
+  const onRevert = useCallback(id => { setDrafts(d => ({ ...d, [id]: clone(seedById[id]) })); }, []);
+
+  async function save() {
+    const next = { ...overrides };
+    for (const id of Object.keys(drafts)) {
+      if (stable(drafts[id]) === stable(seedById[id])) delete next[id];
+      else next[id] = drafts[id];
+    }
+    setSaving(true);
+    try {
+      await setDoc(BANK_REF, { overrides: next, updatedAt: serverTimestamp(), count: Object.keys(next).length });
+      setOverrides(next); setDrafts({}); setMsg(`✓ Guardado · ${Object.keys(next).length} preguntas editadas`);
+    } catch (e) { setMsg('✕ Error al guardar: ' + e.message); }
+    setSaving(false);
+  }
+
+  function exportJSON() {
+    const blob = new Blob([pretty({ overrides, updatedAt: new Date().toISOString() })], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'placement-overrides.json'; a.click();
+  }
+
+  const topicLabelOf = tid => {
+    const m = topicMeta[tid]; if (!m) return tid;
+    return `${m.level} · ${m.grammar}${(shipsOfTopic[tid] || []).length > 1 ? '  (compartido)' : ''}`;
+  };
+
+  const ship = FLEET[shipIdx];
+  const q = search.trim().toLowerCase();
+
+  const shipQuestions = useMemo(() => {
+    const out = { facil: [], medio: [], dificil: [] };
+    (ship.topics || []).forEach(tid => topicById[tid]?.questions.forEach(qq => { if (out[qq.tier]) out[qq.tier].push({ id: qq.id, tid }); }));
+    TIERS.forEach(tr => out[tr].sort((a, b) => COG_ORDER[cogOf(effective(a.id).tool)] - COG_ORDER[cogOf(effective(b.id).tool)]));
+    return out;
+  }, [shipIdx, overrides]);
+
+  const searchResults = useMemo(() => {
+    if (!q) return [];
+    return Object.keys(seedById).filter(id => id.toLowerCase().includes(q) || pretty(effective(id)).toLowerCase().includes(q));
+  }, [q, overrides]);
+
+  if (!loaded) return <div className="p-6 text-zinc-500 text-sm">cargando banco…</div>;
+
+  const renderCard = (id, tid) => (
+    <QCard key={id} q={objOf(id)} isOverride={!!overrides[id]} dirty={dirtySet.has(id)}
+      onUpdate={onUpdate} onRevert={onRevert} topicLabel={topicLabelOf(tid || topicOfQid(id))} />
+  );
+
+  return (
+    <div className="h-screen flex flex-col">
+      <header className="shrink-0 border-b border-zinc-800 bg-zinc-950 px-4 py-2.5 flex items-center gap-3 text-[12.5px]">
+        <span className="text-emerald-400 font-bold">Banco del Examen de Nivel</span>
+        <span className="text-zinc-600">{FLEET.length} barcos · {TOTAL_Q} preguntas</span>
+        <span className="text-emerald-600">· {Object.keys(overrides).length} editadas</span>
+        {dirtyIds.length > 0 && <span className="text-amber-500">· {dirtyIds.length} sin guardar</span>}
+        {msg && <span className="text-zinc-400 truncate">· {msg}</span>}
+        <div className="ml-auto flex items-center gap-2">
+          <button onClick={exportJSON} className="px-2.5 py-1 border border-zinc-700 rounded text-zinc-400 hover:text-zinc-100 hover:border-zinc-500">exportar</button>
+          <button onClick={save} disabled={saving || dirtyIds.length === 0}
+            className={`px-3 py-1 rounded font-bold ${dirtyIds.length === 0 ? 'border border-zinc-800 text-zinc-600' : 'bg-emerald-600 text-black hover:bg-emerald-500'}`}>
+            {saving ? 'guardando…' : `Guardar${dirtyIds.length ? ` (${dirtyIds.length})` : ''}`}
+          </button>
+        </div>
+      </header>
+
+      <div className="flex-1 flex min-h-0">
+        <aside className="w-64 shrink-0 border-r border-zinc-800 bg-zinc-950 overflow-y-auto scroll py-2">
+          {FLEET.map((s, i) => {
+            const n = (s.topics || []).reduce((a, tid) => a + (topicById[tid]?.questions.length || 0), 0);
+            const active = i === shipIdx && !q;
+            return (
+              <button key={s.id} onClick={() => { setShipIdx(i); setSearch(''); }}
+                className={`w-full text-left px-3 py-2 border-l-2 ${active ? 'border-emerald-500 bg-zinc-900' : 'border-transparent hover:bg-zinc-900/50'}`}>
+                <div className={`text-[12.5px] ${active ? 'text-zinc-100' : 'text-zinc-300'}`}>Barco {i + 1} — {s.label}</div>
+                <div className="text-[10.5px] text-zinc-600 mt-0.5">{s.level} · {s.module} · {s.needsContent ? 'pendiente' : `${n} preguntas`}</div>
+              </button>
+            );
+          })}
+        </aside>
+
+        <main className="flex-1 overflow-y-auto scroll p-4">
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="buscar pregunta por texto o id en todos los barcos…"
+            className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-[13px] text-zinc-200 placeholder-zinc-600 focus:border-emerald-700 mb-4" />
+
+          {q ? (
+            <div>
+              <p className="text-[12px] text-zinc-500 mb-3">{searchResults.length} resultados para "{search}"</p>
+              {searchResults.map(id => renderCard(id))}
+            </div>
+          ) : ship.needsContent ? (
+            <div className="text-center text-zinc-600 text-[13px] mt-16">
+              <p className="text-zinc-300 mb-1">Barco {shipIdx + 1} — {ship.label}</p>
+              <p>Todavía no tiene preguntas. Este barco se construye más adelante (contenido nuevo).</p>
+            </div>
+          ) : (
+            <div>
+              <h2 className="text-[14px] text-zinc-200 mb-0.5">Barco {shipIdx + 1} — {ship.label}</h2>
+              <p className="text-[11.5px] text-zinc-600 mb-5">{ship.level} · {ship.module} · semana {ship.week} &nbsp;|&nbsp; Temas: {(ship.topics || []).map(topicLabelOf).join('  ·  ')}</p>
+              {TIERS.map(tr => {
+                const open = !collapsed[tr];
+                return (
+                  <section key={tr} className="mb-6">
+                    <button onClick={() => setCollapsed(c => ({ ...c, [tr]: !c[tr] }))}
+                      className="w-full text-[12px] font-bold text-zinc-300 mb-2.5 flex items-center gap-2 hover:text-zinc-100">
+                      <span className="text-emerald-500 w-3 text-center">{open ? '▾' : '▸'}</span> {TIER_LABEL[tr]}
+                      <span className="text-zinc-600 font-normal">· {shipQuestions[tr].length} preguntas</span>
+                      <span className="flex-1 border-b border-zinc-800/70" />
+                    </button>
+                    {open && shipQuestions[tr].map(({ id, tid }) => renderCard(id, tid))}
+                  </section>
+                );
+              })}
+            </div>
+          )}
+          <div className="h-20" />
+        </main>
+      </div>
+    </div>
+  );
+}
+
+createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
