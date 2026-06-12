@@ -30,18 +30,37 @@
 <body class="text-zinc-100">
 <div id="root"></div>
 <script type="text/babel" data-type="module">
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 const app = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
 const db  = getFirestore(app);
 const urlParams = new URLSearchParams(window.location.search);
 const STUDENT_ID = urlParams.get('student') || ('preview_' + Date.now());
 
-const BANK  = window.PERIPLO_BANK;
-const SHIPS = BANK.ships;
+const TEACHER_UID = urlParams.get('uid') || 'teacher_builder_001';
+const BANK_REF = doc(db, `artifacts/periplo-app-v1/users/${TEACHER_UID}/placement/bank`);
+let SHIPS = window.PERIPLO_BANK.ships; // banco base; se sobrescribe con tus ediciones del dashboard (Firestore)
+
+// Aplica lo editado en el dashboard (overrides + nuevas − eliminadas) sobre el banco base.
+async function loadBank() {
+  try {
+    const snap = await getDoc(BANK_REF);
+    if (snap.exists()) {
+      const d = snap.data();
+      const ov = d.overrides || {}, added = d.added || [], delSet = new Set(d.deleted || []);
+      SHIPS = window.PERIPLO_BANK.ships.map(ship => ({
+        ...ship,
+        questions: [
+          ...ship.questions.filter(q => !delSet.has(q.id)).map(q => ov[q.id] || q),
+          ...added.filter(a => a.ship === ship.id),
+        ],
+      }));
+    }
+  } catch (e) { console.error('No se cargaron las ediciones del dashboard:', e); }
+}
 
 // ── ejes ──────────────────────────────────────────────────────────────────────
 const LANES = ['conoce', 'entiende', 'produce'];
@@ -445,6 +464,9 @@ function PlacementTest() {
   const [finalIdx, setFinalIdx] = useState(null);
   const [saving, setSaving] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
+  const [bankReady, setBankReady] = useState(false);
+
+  useEffect(() => { loadBank().finally(() => setBankReady(true)); }, []);
 
   // estado del motor en refs (no necesita re-render hasta cambiar de pregunta)
   const st = useRef(null);   // { entryIdx, shipIdx, pos, used, asked, correctStreak, wrongStreak, floorDiff, totalAsked, log }
@@ -570,7 +592,7 @@ function PlacementTest() {
           </div>
         </div>
         <div className="p-6 bg-zinc-950/50 border-t border-zinc-800/50 pb-safe">
-          <button onClick={startExam} className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white font-black rounded-2xl text-sm uppercase tracking-widest transition-all active:scale-95 shadow-lg shadow-indigo-600/20">Comenzar diagnóstico</button>
+          <button onClick={startExam} disabled={!bankReady} className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-wait text-white font-black rounded-2xl text-sm uppercase tracking-widest transition-all active:scale-95 shadow-lg shadow-indigo-600/20">{bankReady ? 'Comenzar diagnóstico' : 'Cargando…'}</button>
         </div>
       </div>
     </div>
