@@ -56,7 +56,36 @@ const ENTRY = [
   { ship: 4, tier: 1 }, // "falla al hablar"  → Barco 5, media
   { ship: 5, tier: 1 }, // "le faltan detalles" → Barco 6, media
 ];
+
+// Barco donde TERMINA el examen → nivel/módulo asignado + mensaje de oferta (regla del "amarre").
+const PLACEMENT = [
+  { level: 'B1', module: 'B1 Foundation', week: 1, headline: '¡Bienvenido a bordo! 🧭',
+    offer: 'Empezamos desde los cimientos para construir una base sólida. Aquí arranca tu viaje.' },
+  { level: 'B1', module: 'B1 Foundation', week: 1, headline: 'Buena base 💪',
+    offer: 'Tienes buena base del presente. La reforzamos y construimos hacia arriba sin dejar huecos.' },
+  { level: 'B2', module: 'B2 Structures', week: 1, headline: 'Rumbo a B2 🚀',
+    offer: 'Tu base de B1 está sólida. Entramos a B2 para sumar estructuras y vocabulario más rico.' },
+  { level: 'B2', module: 'B2 Structures', week: 1, headline: 'Cerrando el Básico ✨',
+    offer: 'Dominas bien el Básico. Cerramos B2 con fuerza antes de cruzar a Advanced.' },
+  { level: 'B Mix', module: 'B Mix', week: 1, headline: 'A un paso del Advanced 🌊',
+    offer: 'Manejas bien B1 y B2 y ya tienes nociones de A1. Antes de saltar a Advanced, vamos a pulir unos detalles del Básico para que avances sin arrastrar pendientes.' },
+  { level: 'A1', module: 'A1 Foundation', week: 1, headline: 'Toca producir 🎯',
+    offer: 'Dominas los temas de A1 — los reconoces y los entiendes. Ahora vamos a que los produzcas con soltura (pasados, second conditional, past future) y a sumarte un montón de phrasal verbs nuevos. Si de verdad le sabes, en 4 semanas estás en A2.' },
+  { level: 'A1', module: 'A1 Foundation', week: 1, headline: 'Toca producir 🎯',
+    offer: 'Dominas los temas de A1 — los reconoces y los entiendes. Ahora vamos a que los produzcas con soltura (pasados, second conditional, past future) y a sumarte un montón de phrasal verbs nuevos. Si de verdad le sabes, en 4 semanas estás en A2.' },
+  { level: 'A Mix', module: 'A Mix', week: 1, headline: '¡Nivel altísimo! 🔥',
+    offer: 'Llegaste muy alto. Te ofrecemos arrancar en A Mix, o si prefieres, un curso enfocado a tu profesión o nicho. Hablemos de opciones.' },
+];
 const MAX_QUESTIONS = 24; // tope de seguridad
+
+// Frases de aliento neutrales (NO revelan acierto/error — evitan que el alumno se desmoralice)
+const ENCOURAGE = [
+  { t: '¡Muy bien!', e: '✨' }, { t: '¡Vas genial!', e: '🌟' }, { t: 'Sigue así', e: '💪' },
+  { t: '¡Buen ritmo!', e: '🔥' }, { t: '¡Seguimos!', e: '🚀' }, { t: 'Una más, ¿puedes?', e: '😎' },
+  { t: '¡Lo estás logrando!', e: '👏' }, { t: '¡Tú puedes!', e: '🌈' }, { t: '¡Vamos con otra!', e: '⚡' },
+  { t: '¡Excelente!', e: '🎯' }, { t: 'Ahí vamos', e: '🧭' }, { t: '¡Imparable!', e: '🌊' },
+];
+const LANE_ABBR = { conoce: 'C', entiende: 'E', produce: 'P' };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 // Normaliza para calificar entrada libre: ignora mayúsculas, acentos, apóstrofes,
@@ -415,6 +444,7 @@ function PlacementTest() {
   const [feedback, setFeedback] = useState(null);
   const [finalIdx, setFinalIdx] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
 
   // estado del motor en refs (no necesita re-render hasta cambiar de pregunta)
   const st = useRef(null);   // { entryIdx, shipIdx, pos, used, asked, correctStreak, wrongStreak, floorDiff, totalAsked, log }
@@ -427,7 +457,7 @@ function PlacementTest() {
     st.current = {
       entryIdx: e.ship, shipIdx: e.ship, pos: { lane: 0, diff: e.tier },
       used: new Set(), asked: [], correctStreak: 0, wrongStreak: 0,
-      floorDiff: e.tier, totalAsked: 0, log: [],
+      floorDiff: e.tier, totalAsked: 0, log: [], history: [],
     };
     serveQuestion();
   }
@@ -445,20 +475,24 @@ function PlacementTest() {
     const s = st.current;
     s.shipIdx = idx;
     s.pos = { lane: 0, diff: clamp(startDiff, 0, 2) };
-    s.used = new Set();
+    // OJO: NO reseteamos s.used — la memoria de preguntas ya hechas es global a todo
+    // el examen, así que al volver a un barco no se repiten.
     s.asked = []; s.correctStreak = 0; s.wrongStreak = 0;
     serveQuestion();
   }
 
   function move(decision) {
     const s = st.current;
-    if (decision === 'stay') { finalize(s.shipIdx); return; }
+    const correct = s.asked.filter(r => r.correct).length, n = s.asked.length;
+    if (decision === 'stay') { s.log.push({ from: s.shipIdx, to: s.shipIdx, decision, correct, n, enteredDiff: s.pos.diff }); finalize(s.shipIdx); return; }
     const delta = decision === 'promote' ? 1 : decision === 'demote1' ? -1 : -2;
-    let to = clamp(s.shipIdx + delta, Math.max(0, s.entryIdx - 2), Math.min(SHIPS.length - 1, s.entryIdx + 2));
-    s.log.push({ from: s.shipIdx, to, decision, correct: s.asked.filter(r => r.correct).length, n: s.asked.length });
-    if (to === s.shipIdx || s.totalAsked >= MAX_QUESTIONS) { finalize(to); return; } // tope alcanzado
-    if (decision === 'promote') { openShip(to, 1); }              // sube → entra en media
-    else { s.floorDiff = Math.min(2, s.floorDiff + 1); openShip(to, s.floorDiff); } // baja → +1 dificultad
+    const to = clamp(s.shipIdx + delta, Math.max(0, s.entryIdx - 2), Math.min(SHIPS.length - 1, s.entryIdx + 2));
+    if (to === s.shipIdx || s.totalAsked >= MAX_QUESTIONS) { s.log.push({ from: s.shipIdx, to, decision, correct, n, enteredDiff: null }); finalize(to); return; }
+    let enteredDiff;
+    if (decision === 'promote') enteredDiff = 1;                       // sube → entra en media
+    else { s.floorDiff = Math.min(2, s.floorDiff + 1); enteredDiff = s.floorDiff; } // baja → +1 dificultad
+    s.log.push({ from: s.shipIdx, to, decision, correct, n, enteredDiff });
+    openShip(to, enteredDiff);
   }
 
   // Decide si seguir, subir o bajar tras la última respuesta
@@ -488,15 +522,15 @@ function PlacementTest() {
     const q = currentQ;
     const correct = gradeQ(q, answer);
     s.asked.push({ id: q.id, container: q.container, tier: q.tier, correct });
+    s.history.push({ id: q.id, shipN: SHIPS[s.shipIdx].n, container: q.container, tier: q.tier, correct });
     s.totalAsked++;
     s.correctStreak = correct ? s.correctStreak + 1 : 0;
     s.wrongStreak = correct ? 0 : s.wrongStreak + 1;
     s.pos = advancePos(s.pos, correct);
-    const ca = q.answer ?? q.errorWord ?? '';
-    setFeedback({ correct, correctAnswer: ca });
+    setFeedback(rnd(ENCOURAGE)); // aliento neutral — no revela si acertó o falló
     setScreen('feedback');
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => { setFeedback(null); decide(false); }, 1300);
+    timer.current = setTimeout(() => { setFeedback(null); decide(false); }, 950);
   }
 
   async function finalize(idx) {
@@ -505,12 +539,14 @@ function PlacementTest() {
     setScreen('result');
     setSaving(true);
     try {
-      const ship = SHIPS[idx];
+      const ship = SHIPS[idx], p = PLACEMENT[idx];
+      const cog = { conoce: { ok: 0, n: 0 }, entiende: { ok: 0, n: 0 }, produce: { ok: 0, n: 0 } };
+      (s.history || []).forEach(h => { cog[h.container].n++; if (h.correct) cog[h.container].ok++; });
       await setDoc(doc(db, 'artifacts/periplo-app-v1/students', STUDENT_ID), {
         placementCompleted: true, placementDate: serverTimestamp(),
-        level: ship.level, currentModule: ship.module, currentWeek: ship.week,
+        level: p.level, currentModule: p.module, currentWeek: p.week,
         placementLabel: ship.label, placementShip: ship.id,
-        placementPath: s.log,
+        placementPath: s.log, placementSkills: cog, placementHistory: s.history, placementTotal: s.totalAsked,
       }, { merge: true });
     } catch (e) { console.error('Firestore error:', e); }
     finally { setSaving(false); }
@@ -567,52 +603,114 @@ function PlacementTest() {
   );
 
   if (screen === 'feedback' && feedback) return (
-    <div className={`min-h-screen-safe flex flex-col items-center justify-center p-6 pt-safe ${feedback.correct ? 'bg-emerald-950' : 'bg-red-950'}`}>
-      <div className="text-center">
-        <div className="text-7xl mb-4">{feedback.correct ? '✅' : '❌'}</div>
-        <p className={`text-2xl font-black mb-3 ${feedback.correct ? 'text-emerald-300' : 'text-red-300'}`}>{feedback.correct ? '¡Correcto!' : 'Incorrecto'}</p>
-        {!feedback.correct && feedback.correctAnswer !== '' && typeof feedback.correctAnswer !== 'object' && (
-          <div className="bg-black/30 rounded-2xl px-5 py-3 mt-2">
-            <p className="text-zinc-400 text-xs uppercase tracking-widest mb-1">Respuesta correcta:</p>
-            <p className="text-white font-bold text-base">{Array.isArray(feedback.correctAnswer) ? feedback.correctAnswer.join(' ') : String(feedback.correctAnswer)}</p>
-          </div>
-        )}
+    <div className="min-h-screen-safe flex flex-col items-center justify-center p-6 pt-safe bg-zinc-950">
+      <div className="text-center fade-in">
+        <div className="text-6xl mb-4">{feedback.e}</div>
+        <p className="text-2xl font-black text-indigo-300">{feedback.t}</p>
       </div>
     </div>
   );
 
   if (screen === 'result') {
     const ship = SHIPS[finalIdx ?? 0];
-    const s = st.current || { log: [] };
+    const p = PLACEMENT[finalIdx ?? 0];
+    const s = st.current || { log: [], history: [] };
+    const hist = s.history || [];
+    // ── desglose por habilidad (para el alumno) ──
+    const cog = { conoce: { ok: 0, n: 0 }, entiende: { ok: 0, n: 0 }, produce: { ok: 0, n: 0 } };
+    hist.forEach(h => { cog[h.container].n++; if (h.correct) cog[h.container].ok++; });
+    const COGS = [
+      { k: 'conoce', label: 'Conoce', sub: 'vocabulario', color: 'bg-cyan-500', text: 'text-cyan-400' },
+      { k: 'entiende', label: 'Entiende', sub: 'comprensión', color: 'bg-amber-500', text: 'text-amber-400' },
+      { k: 'produce', label: 'Produce', sub: 'expresarte', color: 'bg-rose-500', text: 'text-rose-400' },
+    ];
+    const pct = k => cog[k].n ? Math.round(cog[k].ok / cog[k].n * 100) : null;
+    const ranked = COGS.filter(c => cog[c.k].n).sort((a, b) => pct(a.k) - pct(b.k));
+    const weakest = ranked[0], strongest = ranked[ranked.length - 1];
+    // ── tramos (visitas a barcos) emparejados con el log ──
+    const tramos = [];
+    hist.forEach(h => {
+      const last = tramos[tramos.length - 1];
+      if (last && last.shipN === h.shipN) last.qs.push(h); else tramos.push({ shipN: h.shipN, qs: [h] });
+    });
+    const decLabel = e => {
+      if (e.decision === 'stay') return { t: 'Se quedó — es su nivel', c: 'text-yellow-400' };
+      if (e.decision === 'promote') return { t: `Subió ↑ a Barco ${e.to + 1}` + (e.enteredDiff != null ? ` (entró en ${TIER_LABEL[TIERS[e.enteredDiff]]})` : ''), c: 'text-emerald-400' };
+      if (e.to === e.from) return { t: 'Tope alcanzado — placement aquí', c: 'text-yellow-400' };
+      return { t: `Bajó ↓ a Barco ${e.to + 1}` + (e.enteredDiff != null ? ` (entró en ${TIER_LABEL[TIERS[e.enteredDiff]]})` : ''), c: 'text-red-400' };
+    };
+
     return (
       <div className="min-h-screen-safe bg-zinc-950 flex flex-col pt-safe pb-safe">
         <div className="flex-1 flex flex-col items-center p-6 overflow-y-auto">
-          <div className="text-5xl mt-8 mb-4">🎓</div>
+          <div className="text-5xl mt-6 mb-4">🎓</div>
           <h2 className="text-3xl font-black text-white mb-1">¡Diagnóstico completo!</h2>
           <p className="text-zinc-500 text-sm mb-6">Tu punto de entrada en Periplo:</p>
-          <div className="bg-indigo-950/60 border-2 border-indigo-700 rounded-3xl px-8 py-6 mb-6 w-full max-w-xs text-center">
-            <p className="text-indigo-400 text-xs font-black uppercase tracking-widest mb-1">Nivel asignado</p>
-            <p className="text-4xl font-black text-white mb-1">{ship.level}</p>
-            <p className="text-indigo-300 font-bold">{ship.module}</p>
-            <p className="text-zinc-400 text-sm mt-1">{ship.label}</p>
+          <div className="bg-indigo-950/60 border-2 border-indigo-700 rounded-3xl px-8 py-6 mb-4 w-full max-w-sm text-center">
+            <p className="text-indigo-400 text-xs font-black uppercase tracking-widest mb-1">Empiezas en</p>
+            <p className="text-4xl font-black text-white mb-1">{p.level}</p>
+            <p className="text-indigo-300 font-bold">{p.module}</p>
           </div>
-          <div className="w-full max-w-xs space-y-2">
-            <p className="text-zinc-500 text-xs uppercase tracking-widest mb-1 px-1">Tu recorrido</p>
-            <div className="bg-zinc-900 rounded-2xl p-4 border border-zinc-800">
-              <p className="text-white font-black text-sm">Barco {(s.entryIdx ?? 0) + 1} → Barco {(finalIdx ?? 0) + 1}</p>
-              <p className="text-zinc-500 text-xs mt-1">{s.totalAsked || 0} preguntas respondidas</p>
+          <div className="w-full max-w-sm bg-zinc-900 rounded-3xl p-5 border border-zinc-800 mb-4">
+            <p className="text-white text-base font-black mb-1.5">{p.headline}</p>
+            <p className="text-zinc-300 text-sm leading-snug">{p.offer}</p>
+          </div>
+
+          {/* ── Perfil por habilidad (para el alumno) ── */}
+          <div className="w-full max-w-sm bg-zinc-900 rounded-3xl p-5 border border-zinc-800 mb-4">
+            <p className="text-zinc-400 text-xs font-black uppercase tracking-widest mb-4">Tu perfil</p>
+            <div className="space-y-3">
+              {COGS.map(c => {
+                const p = pct(c.k);
+                return (
+                  <div key={c.k}>
+                    <div className="flex justify-between items-baseline mb-1">
+                      <span className={`text-sm font-black ${c.text}`}>{c.label} <span className="text-zinc-600 font-medium text-xs">· {c.sub}</span></span>
+                      <span className="text-zinc-400 text-xs font-bold">{p === null ? '—' : `${cog[c.k].ok}/${cog[c.k].n}`}</span>
+                    </div>
+                    <div className="h-2.5 bg-zinc-800 rounded-full overflow-hidden">
+                      <div className={`h-full ${c.color} rounded-full transition-all`} style={{ width: `${p || 0}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            {(s.log || []).map((e, i) => {
-              const up = e.decision === 'promote';
-              return (
-                <div key={i} className="bg-zinc-900 rounded-2xl p-3 border border-zinc-800 flex justify-between items-center gap-2">
-                  <p className="text-zinc-400 text-xs font-bold">Barco {e.from + 1} → {e.to + 1} <span className="text-zinc-600">· {e.correct}/{e.n}</span></p>
-                  <span className={`text-xs font-bold px-3 py-1 rounded-full shrink-0 ${up ? 'bg-emerald-900/40 text-emerald-400' : e.decision === 'stay' ? 'bg-yellow-900/40 text-yellow-400' : 'bg-red-900/40 text-red-400'}`}>
-                    {up ? 'Subió ↑' : e.decision === 'stay' ? 'Su nivel ✓' : 'Bajó ↓'}
-                  </span>
-                </div>
-              );
-            })}
+            {weakest && strongest && weakest.k !== strongest.k && (
+              <p className="text-zinc-300 text-sm mt-4 leading-snug">
+                Lo que más se te facilita: <span className={`font-black ${strongest.text}`}>{strongest.label.toLowerCase()}</span>.
+                En lo que nos vamos a enfocar: <span className={`font-black ${weakest.text}`}>{weakest.label.toLowerCase()}</span>.
+              </p>
+            )}
+          </div>
+
+          {/* ── Detalle del algoritmo (full disclosure) ── */}
+          <div className="w-full max-w-sm">
+            <button onClick={() => setShowDetail(d => !d)} className="w-full text-zinc-500 text-xs font-bold py-2 hover:text-zinc-300 transition-colors">
+              {showDetail ? '▾ Ocultar detalle' : '▸ Ver cómo se calculó (detalle)'}
+            </button>
+            {showDetail && (
+              <div className="space-y-3 mt-1">
+                <p className="text-zinc-600 text-[11px] text-center">{s.totalAsked} preguntas · Barco {(s.entryIdx ?? 0) + 1} → Barco {(finalIdx ?? 0) + 1}</p>
+                {tramos.map((tr, i) => {
+                  const e = (s.log || [])[i];
+                  const d = e ? decLabel(e) : null;
+                  return (
+                    <div key={i} className="bg-zinc-900 rounded-2xl p-3 border border-zinc-800">
+                      <p className="text-white text-xs font-black mb-2">Barco {tr.shipN} <span className="text-zinc-600 font-medium">· {SHIPS[tr.shipN - 1].level}</span> {e && <span className="text-zinc-600 font-medium">· {e.correct}/{e.n}</span>}</p>
+                      <div className="flex flex-wrap gap-1.5 mb-1">
+                        {tr.qs.map((h, j) => (
+                          <span key={j} className={`text-[10px] font-bold px-2 py-1 rounded-md ${h.correct ? 'bg-emerald-900/40 text-emerald-300' : 'bg-red-900/40 text-red-300'}`}>
+                            {LANE_ABBR[h.container]}/{h.tier[0]} {h.correct ? '✓' : '✗'}
+                          </span>
+                        ))}
+                      </div>
+                      {d && <p className={`text-[11px] font-bold mt-2 ${d.c}`}>{d.t}</p>}
+                    </div>
+                  );
+                })}
+                <p className="text-zinc-600 text-[10px] leading-snug px-1">C = Conoce · E = Entiende · P = Produce · f/m/d = fácil/media/difícil. El orden muestra cómo subió o bajó la dificultad según tus respuestas.</p>
+              </div>
+            )}
             {saving && <p className="text-center text-zinc-600 text-xs py-2">Guardando resultado...</p>}
           </div>
         </div>
