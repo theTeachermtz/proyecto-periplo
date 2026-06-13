@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jeopardy Builder | Periplo Español</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎯</text></svg>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config={darkMode:'class'};document.documentElement.classList.add('dark');</script>
+
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+      }
+    }
+    </script>
+
+    <script type="module" src="https://esm.sh/run"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="periplo-taxonomy-es.js"></script>
+    <script src="periplo-ai.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
+        body{font-family:'Plus Jakarta Sans',sans-serif;height:100dvh;overflow:hidden}
+        .custom-scrollbar::-webkit-scrollbar{width:5px;height:5px}.custom-scrollbar::-webkit-scrollbar-thumb{background:#3f3f46;border-radius:4px}
+        .btn-juicy { transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1); }
+        .btn-juicy:active:not(:disabled) { transform: scale(0.95); }
+    </style>
+</head>
+<body class="bg-zinc-950"><div id="root"></div>
+<script type="text/babel" data-type="module">
+import React,{useState,useEffect} from 'react';
+import {createRoot} from 'react-dom/client';
+import {initializeApp} from 'firebase/app';
+import {getFirestore,collection,addDoc,updateDoc,doc,getDoc,serverTimestamp} from 'firebase/firestore';
+import {Sparkles,Zap,Save,Edit3,ArrowLeft,Loader2,CheckCircle2,Circle,Tags,LayoutGrid,X,MessageSquare,Trash2,Target} from 'lucide-react';
+
+const firebaseConfig={apiKey:"AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo",authDomain:"proyecto-periplo.firebaseapp.com",projectId:"proyecto-periplo"};
+const app=initializeApp(firebaseConfig);const db=getFirestore(app);
+
+// ============================================================
+// RUTAS DE FIREBASE — ESPAÑOL (Anita)
+// ============================================================
+const FS_APP_ID = 'periplo-app-v1';
+const TEACHER_UID = 'teacher_anita_001'; // <-- Biblioteca de Anita
+const QUIZZES_PATH = `artifacts/${FS_APP_ID}/users/${TEACHER_UID}/quizzes`;
+const BACK_URL = 'index-es.html';
+
+const { TAXONOMY, NEW_LEVELS, NEW_CATS, MACRO_SKILLS, getAllTopicsForCategory } = window.PERIPLO_TAXONOMY_ES;
+
+// IA Assistant compartido (periplo-ai.js)
+const AI = window.PERIPLO_AI;
+const ApiKeyBar = AI.createApiKeyBar(React);
+
+// ── Reglas del tablero de Jeopardy ──────────────────────────────
+const TYPES_REQUIRED = 6;   // 6 categorías = 6 columnas del tablero
+const QS_PER_TYPE     = 5;  // 5 valores de puntaje (100→500)
+const PTS_LABELS      = [100,200,300,400,500];
+
+const toggleSelection = (stateArray, setStateFunction, item) => {
+    if (stateArray.includes(item)) setStateFunction(stateArray.filter(i => i !== item));
+    else setStateFunction([...stateArray, item]);
+};
+
+// ============================================================
+// 18 TIPOS DE PREGUNTA — schema de periplo-tests.html (TARGET: español)
+// ============================================================
+const QTYPES = {
+    multipleChoice:  { name:'Opción Múltiple',      icon:'🔤', auto:true,
+        format:'{"stem":"Question or instruction (may be in English)","sentence":"Optional Spanish sentence with the gap, or null","options":["opción A","opción B","opción C","opción D"],"answer":"the EXACT correct option string"}' },
+    truefalse:       { name:'Cierto o Falso',        icon:'⚖️', auto:true,
+        format:'{"statement":"A Spanish sentence that is grammatically TRUE or FALSE","answer":true_or_false_boolean}' },
+    fillBlank:       { name:'Completa el Pasaje',    icon:'✍️', auto:true,
+        format:'{"instruction":"Read the passage and fill the blanks from the bank. There are extra words.","passage":"Spanish text where EACH blank is the correct word wrapped in [square brackets], e.g. Cada mañana ella [despierta] temprano.","wordBank":["despierta","...all correct words PLUS 3-4 Spanish distractors..."]}' },
+    unscramble:      { name:'Ordena la Oración',     icon:'🔀', auto:true,
+        format:'{"spanishPrompt":"English meaning of the target Spanish sentence","targetLabel":"e.g. Arma la oración en español","words":["each","word","of","the","Spanish","sentence","plus","1-2","distractors"],"answer":"The correct Spanish sentence","acceptedAnswers":["lowercase accepted variant"]}' },
+    matching:        { name:'Empareja',              icon:'🔗', auto:true,
+        format:'{"instruction":"Match each Spanish word to its English meaning","pairs":[{"left":"Spanish word/phrase","right":"English meaning"}, ...exactly 4 pairs]}' },
+    oddOneOut:       { name:'El Intruso',            icon:'🚫', auto:true,
+        format:'{"instruction":"Which Spanish word does NOT belong?","options":["palabra1","palabra2","intrusa","palabra3"],"answer":"intrusa (must be one of options)","explanation":"Why it is the odd one"}' },
+    errorCorrection: { name:'Corrección de Errores', icon:'🔍', auto:false,
+        format:'{"instruction":"Find the error and rewrite the FULL corrected Spanish sentence.","sentence":"Spanish sentence with exactly ONE grammar error","answer":"The full corrected Spanish sentence","hint":"A short hint"}' },
+    openEnded:       { name:'Respuesta Abierta',     icon:'📝', auto:false,
+        format:'{"prompt":"An open writing prompt (student writes in Spanish)","minWords":30}' },
+    audioQuestion:   { name:'Audio + Pregunta',      icon:'🎧', auto:true,
+        format:'{"audioText":"A short Spanish passage to be read aloud by TTS","questionText":"A comprehension question (English ok)","options":["A","B","C","D"],"answer":"the EXACT correct option string"}' },
+    voiceReply:      { name:'Respuesta en Voz',      icon:'🎤', auto:false,
+        format:'{"prompt":"English context telling the student what to say in Spanish","targetPhrase":"The Spanish phrase they must say aloud","hint":"grammar/vocab hint"}' },
+    wordForm:        { name:'Forma de Palabra',      icon:'🔠', auto:true,
+        format:'{"stem":"Choose the correct form of the Spanish word in parentheses.","sentence":"Spanish sentence with ___ and the base word in parentheses, e.g. Ella ___ rápido. (correr)","options":["corre","corra","corrió","corriendo"],"answer":"corre"}' },
+    categorySort:    { name:'Clasifica',             icon:'🗂️', auto:true,
+        format:'{"instruction":"Sort each Spanish item into the correct category","words":["all","Spanish","items","in","one","list"],"categories":["Categoría A","Categoría B"],"answers":{"Categoría A":["items..."],"Categoría B":["items..."]}}' },
+    spotError:       { name:'Encuentra el Error',    icon:'👆', auto:true,
+        format:'{"instruction":"Tap the word that is grammatically incorrect","sentence":"Spanish sentence containing exactly one wrong word","errorWord":"the wrong word EXACTLY as written in the sentence","correction":"the correct word","explanation":"Why"}' },
+    multipleResponse:{ name:'Selección Múltiple',    icon:'☑️', auto:true,
+        format:'{"instruction":"Select ALL correct options","options":["o1","o2","o3","o4","o5" in Spanish],"answers":["EXACT correct option strings (one or more)"],"explanation":"Why"}' },
+    dialogueFill:    { name:'Completa el Diálogo',   icon:'💬', auto:true,
+        format:'{"instruction":"Choose the most natural response for B","dialogue":[{"speaker":"A","line":"Spanish line"},{"speaker":"B","line":null},{"speaker":"A","line":"Spanish line"}],"options":["o1","o2","o3","o4" in Spanish],"answer":"the EXACT correct option string"}' },
+    paragraphOrder:  { name:'Ordena el Párrafo',     icon:'📄', auto:true,
+        format:'{"instruction":"Put the Spanish sentences in the correct order","sentences":["Spanish sentences listed in SHUFFLED order", ...4-5 items],"correctOrder":[indices into sentences giving the right order, e.g. [2,0,3,4,1]]}' },
+    contextMatch:    { name:'Situación → Frase',     icon:'🎯', auto:true,
+        format:'{"instruction":"Match each situation to the best Spanish phrase","situations":["situation (English ok)", ...],"phrases":["Spanish phrase that matches situations[i] at the SAME index", ...]}' },
+    shortTranslation:{ name:'Traducción Corta',      icon:'🌐', auto:false,
+        format:'{"instruction":"Translate into Spanish","spanishText":"English sentence to translate","sampleAnswer":"A correct Spanish translation","keyWords":["key","spanish","words"],"minKeyWordsMatch":5}' },
+};
+const TYPE_IDS = Object.keys(QTYPES);
+
+// ============================================================
+// CONTENT EDITOR (El Revisador Final)
+// ============================================================
+const ContentEditor=({content,onSaveToFirebase,title,setTitle,isEditing,initialTags})=>{
+    const[ec,setEc]=useState(content);
+    const tabs = TYPE_IDS.filter(k => Array.isArray(ec[k]) && ec[k].length > 0);
+    const[tab,setTab]=useState(tabs[0] || '');
+
+    const hc=(s,i,f,v)=>{const u={...ec};u[s][i][f]=v;setEc(u)};
+    const hcList=(s,i,f,v)=>{const u={...ec};u[s][i][f]=v.split(',').map(x=>x.trim()).filter(x=>x!=='');setEc(u)};
+    const hcNums=(s,i,f,v)=>{const u={...ec};u[s][i][f]=v.split(',').map(x=>parseInt(x.trim())).filter(x=>!isNaN(x));setEc(u)};
+    const setOpt=(s,i,oi,v)=>{const u={...ec};const it=u[s][i];const old=it.options[oi];it.options[oi]=v;if(it.answer===old)it.answer=v;setEc(u)};
+    const pickAns=(s,i,oi)=>{const u={...ec};const it=u[s][i];it.answer=it.options[oi];setEc(u)};
+    const toggleMR=(i,opt)=>{const u={...ec};const it=u.multipleResponse[i];const set=new Set(it.answers||[]);set.has(opt)?set.delete(opt):set.add(opt);it.answers=[...set];setEc(u)};
+
+    const [showSaveModal, setShowSaveModal] = useState(false);
+    const [saveLevels, setSaveLevels] = useState(initialTags?.levels || (initialTags?.level ? [initialTags.level.toUpperCase()] : []));
+    const [saveCats, setSaveCats] = useState(initialTags?.categories || (initialTags?.category ? [initialTags.category] : []));
+    const [saveTopics, setSaveTopics] = useState(initialTags?.topics || (initialTags?.topic ? [initialTags.topic] : []));
+    const [isSaving, setIsSaving] = useState(false);
+
+    const handleConfirmSave = () => {
+        setIsSaving(true);
+        const finalTags = { levels: saveLevels, categories: saveCats, topics: saveTopics };
+        onSaveToFirebase(ec, finalTags).finally(() => setIsSaving(false));
+    };
+
+    const Lbl=({children,color='text-zinc-500'})=><span className={`text-xs font-bold ${color}`}>{children}</span>;
+    const Inp=(props)=><input {...props} className={`w-full p-2 border border-zinc-700 bg-transparent rounded outline-none focus:border-amber-500 ${props.className||''}`}/>;
+
+    const OptionsEditor=(section,item,i)=>(
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {(item.options||[]).map((opt,oi)=>(
+                <div key={oi} className={`flex items-center gap-2 p-2 rounded border ${opt===item.answer?'bg-emerald-900/30 border-emerald-800':'bg-zinc-950 border-zinc-700'}`}>
+                    <button onClick={()=>pickAns(section,i,oi)} className="shrink-0">{opt===item.answer?<CheckCircle2 className="text-emerald-400" size={18}/>:<Circle className="text-zinc-600" size={18}/>}</button>
+                    <input value={opt} onChange={e=>setOpt(section,i,oi,e.target.value)} className="w-full text-xs font-bold bg-transparent outline-none"/>
+                </div>
+            ))}
+        </div>
+    );
+
+    const renderItem=(t,item,i)=>{
+        switch(t){
+            case 'multipleChoice': case 'wordForm': return(
+                <>
+                    <Inp value={item.stem||''} onChange={e=>hc(t,i,'stem',e.target.value)} className="mb-2 text-sm font-bold"/>
+                    <Inp value={item.sentence||''} onChange={e=>hc(t,i,'sentence',e.target.value)} placeholder="Oración / contexto (opcional)" className="mb-3 text-sm italic text-zinc-300"/>
+                    {OptionsEditor(t,item,i)}
+                </>
+            );
+            case 'audioQuestion': return(
+                <>
+                    <div className="mb-2"><Lbl color="text-teal-400">Texto del audio (TTS):</Lbl><textarea value={item.audioText||''} onChange={e=>hc(t,i,'audioText',e.target.value)} className="w-full p-2 border border-zinc-700 bg-transparent rounded outline-none focus:border-amber-500 text-sm h-16 custom-scrollbar"/></div>
+                    <Inp value={item.questionText||''} onChange={e=>hc(t,i,'questionText',e.target.value)} placeholder="Pregunta sobre el audio" className="mb-3 text-sm font-bold"/>
+                    {OptionsEditor(t,item,i)}
+                </>
+            );
+            case 'truefalse': return(
+                <>
+                    <Inp value={item.statement||''} onChange={e=>hc(t,i,'statement',e.target.value)} className="mb-3 text-sm font-bold"/>
+                    <div className="flex gap-2">
+                        <button onClick={()=>hc(t,i,'answer',true)} className={`flex-1 py-2 rounded-lg font-bold text-sm border-2 ${item.answer===true?'bg-emerald-900/40 border-emerald-600 text-emerald-300':'bg-zinc-950 border-zinc-700 text-zinc-400'}`}>✅ Cierto</button>
+                        <button onClick={()=>hc(t,i,'answer',false)} className={`flex-1 py-2 rounded-lg font-bold text-sm border-2 ${item.answer===false?'bg-rose-900/40 border-rose-600 text-rose-300':'bg-zinc-950 border-zinc-700 text-zinc-400'}`}>❌ Falso</button>
+                    </div>
+                </>
+            );
+            case 'fillBlank': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    <div className="mb-2"><Lbl>Pasaje (marca cada hueco con [palabra]):</Lbl><textarea value={item.passage||''} onChange={e=>hc(t,i,'passage',e.target.value)} className="w-full p-2 border border-zinc-700 bg-transparent rounded outline-none focus:border-amber-500 text-sm h-20 custom-scrollbar font-medium"/></div>
+                    <Lbl color="text-amber-400">Banco de palabras (separadas por coma — incluye distractores):</Lbl>
+                    <Inp value={(item.wordBank||[]).join(', ')} onChange={e=>hcList(t,i,'wordBank',e.target.value)} className="text-sm text-amber-300"/>
+                </>
+            );
+            case 'unscramble': return(
+                <>
+                    <div className="mb-2"><Lbl color="text-indigo-400">Pista (significado en inglés):</Lbl><Inp value={item.spanishPrompt||''} onChange={e=>hc(t,i,'spanishPrompt',e.target.value)} className="text-sm"/></div>
+                    <div className="mb-2"><Lbl>Etiqueta objetivo:</Lbl><Inp value={item.targetLabel||''} onChange={e=>hc(t,i,'targetLabel',e.target.value)} className="text-sm"/></div>
+                    <div className="mb-2"><Lbl>Palabras (coma — incluye distractores):</Lbl><Inp value={(item.words||[]).join(', ')} onChange={e=>hcList(t,i,'words',e.target.value)} className="text-sm"/></div>
+                    <div className="mb-2"><Lbl color="text-emerald-500">Oración correcta (español):</Lbl><Inp value={item.answer||''} onChange={e=>hc(t,i,'answer',e.target.value)} className="text-sm text-emerald-400 bg-emerald-900/20 border-emerald-700/50"/></div>
+                    <Lbl>Aceptadas (coma):</Lbl><Inp value={(item.acceptedAnswers||[]).join(', ')} onChange={e=>hcList(t,i,'acceptedAnswers',e.target.value)} className="text-sm italic text-zinc-400"/>
+                </>
+            );
+            case 'matching': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    {(item.pairs||[]).map((p,pi)=>(
+                        <div key={pi} className="flex gap-2 mb-1">
+                            <input value={p.left} onChange={e=>{const u={...ec};u.matching[i].pairs[pi].left=e.target.value;setEc(u)}} className="flex-1 p-2 border border-zinc-700 bg-transparent rounded text-sm" placeholder="Español"/>
+                            <span className="self-center text-zinc-600 font-black">→</span>
+                            <input value={p.right} onChange={e=>{const u={...ec};u.matching[i].pairs[pi].right=e.target.value;setEc(u)}} className="flex-1 p-2 border border-zinc-700 bg-transparent rounded text-sm" placeholder="English"/>
+                        </div>
+                    ))}
+                </>
+            );
+            case 'oddOneOut': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    <div className="mb-2"><Lbl>Palabras (coma):</Lbl><Inp value={(item.options||[]).join(', ')} onChange={e=>hcList(t,i,'options',e.target.value)} className="text-sm font-bold"/></div>
+                    <div className="flex gap-2">
+                        <div className="flex-1"><Lbl color="text-rose-500">El intruso:</Lbl><Inp value={item.answer||''} onChange={e=>hc(t,i,'answer',e.target.value)} className="text-sm text-rose-400 bg-rose-900/20 border-rose-700/50"/></div>
+                        <div className="flex-1"><Lbl color="text-blue-400">Razón:</Lbl><Inp value={item.explanation||''} onChange={e=>hc(t,i,'explanation',e.target.value)} className="text-sm text-blue-300 bg-blue-900/20 border-blue-700/50"/></div>
+                    </div>
+                </>
+            );
+            case 'errorCorrection': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    <div className="mb-2"><Lbl>Oración con error:</Lbl><Inp value={item.sentence||''} onChange={e=>hc(t,i,'sentence',e.target.value)} className="text-sm font-bold"/></div>
+                    <div className="mb-2"><Lbl color="text-emerald-500">Oración corregida:</Lbl><Inp value={item.answer||''} onChange={e=>hc(t,i,'answer',e.target.value)} className="text-sm text-emerald-400 bg-emerald-900/20 border-emerald-700/50"/></div>
+                    <Lbl color="text-amber-400">Pista:</Lbl><Inp value={item.hint||''} onChange={e=>hc(t,i,'hint',e.target.value)} className="text-sm text-amber-300"/>
+                </>
+            );
+            case 'openEnded': return(
+                <>
+                    <div className="mb-2"><Lbl>Prompt:</Lbl><textarea value={item.prompt||''} onChange={e=>hc(t,i,'prompt',e.target.value)} className="w-full p-2 border border-zinc-700 bg-transparent rounded outline-none focus:border-amber-500 text-sm h-16 custom-scrollbar"/></div>
+                    <Lbl>Mínimo de palabras:</Lbl><Inp type="number" value={item.minWords||0} onChange={e=>hc(t,i,'minWords',parseInt(e.target.value)||0)} className="text-sm w-32"/>
+                    <span className="ml-2 text-[10px] text-zinc-500 italic">📋 lo califica el teacher</span>
+                </>
+            );
+            case 'voiceReply': return(
+                <>
+                    <div className="mb-2"><Lbl color="text-indigo-400">Prompt (inglés):</Lbl><Inp value={item.prompt||''} onChange={e=>hc(t,i,'prompt',e.target.value)} className="text-sm"/></div>
+                    <div className="mb-2"><Lbl color="text-emerald-400">Frase objetivo (español):</Lbl><Inp value={item.targetPhrase||''} onChange={e=>hc(t,i,'targetPhrase',e.target.value)} className="text-sm text-emerald-300 bg-emerald-900/20 border-emerald-700/50 font-bold"/></div>
+                    <Lbl>Pista:</Lbl><Inp value={item.hint||''} onChange={e=>hc(t,i,'hint',e.target.value)} className="text-sm"/>
+                </>
+            );
+            case 'spotError': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    <div className="mb-2"><Lbl>Oración:</Lbl><Inp value={item.sentence||''} onChange={e=>hc(t,i,'sentence',e.target.value)} className="text-sm font-bold"/></div>
+                    <div className="flex gap-2 mb-2">
+                        <div className="flex-1"><Lbl color="text-rose-500">Palabra incorrecta (exacta):</Lbl><Inp value={item.errorWord||''} onChange={e=>hc(t,i,'errorWord',e.target.value)} className="text-sm text-rose-400 bg-rose-900/20 border-rose-700/50"/></div>
+                        <div className="flex-1"><Lbl color="text-emerald-500">Corrección:</Lbl><Inp value={item.correction||''} onChange={e=>hc(t,i,'correction',e.target.value)} className="text-sm text-emerald-400 bg-emerald-900/20 border-emerald-700/50"/></div>
+                    </div>
+                    <Lbl color="text-blue-400">Explicación:</Lbl><Inp value={item.explanation||''} onChange={e=>hc(t,i,'explanation',e.target.value)} className="text-sm text-blue-300"/>
+                </>
+            );
+            case 'multipleResponse': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    <Lbl>Opciones (✓ = correctas, varias permitidas):</Lbl>
+                    <div className="space-y-1 mt-1">
+                        {(item.options||[]).map((opt,oi)=>{
+                            const isAns=(item.answers||[]).includes(opt);
+                            return(
+                                <div key={oi} className={`flex items-center gap-2 p-2 rounded border ${isAns?'bg-emerald-900/30 border-emerald-800':'bg-zinc-950 border-zinc-700'}`}>
+                                    <button onClick={()=>toggleMR(i,opt)} className="shrink-0">{isAns?<CheckCircle2 className="text-emerald-400" size={18}/>:<Circle className="text-zinc-600" size={18}/>}</button>
+                                    <input value={opt} onChange={e=>{const u={...ec};const it=u.multipleResponse[i];const old=it.options[oi];it.options[oi]=e.target.value;it.answers=(it.answers||[]).map(a=>a===old?e.target.value:a);setEc(u)}} className="w-full text-xs font-bold bg-transparent outline-none"/>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    <Lbl color="text-blue-400">Explicación:</Lbl><Inp value={item.explanation||''} onChange={e=>hc(t,i,'explanation',e.target.value)} className="text-sm text-blue-300 mt-1"/>
+                </>
+            );
+            case 'dialogueFill': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    <div className="space-y-1 mb-3">
+                        {(item.dialogue||[]).map((d,di)=>(
+                            <div key={di} className="flex gap-2 items-center">
+                                <input value={d.speaker||''} onChange={e=>{const u={...ec};u.dialogueFill[i].dialogue[di].speaker=e.target.value;setEc(u)}} className="w-12 p-2 border border-zinc-700 bg-transparent rounded text-xs font-black text-center"/>
+                                {d.line===null
+                                    ? <div className="flex-1 p-2 border border-dashed border-amber-600/60 bg-amber-900/10 rounded text-xs text-amber-400 font-bold text-center">HUECO (responde B)</div>
+                                    : <input value={d.line} onChange={e=>{const u={...ec};u.dialogueFill[i].dialogue[di].line=e.target.value;setEc(u)}} className="flex-1 p-2 border border-zinc-700 bg-transparent rounded text-sm"/>}
+                                <button onClick={()=>{const u={...ec};u.dialogueFill[i].dialogue[di].line=d.line===null?'':null;setEc(u)}} className="text-[10px] font-bold text-zinc-500 hover:text-amber-400 px-1">{d.line===null?'texto':'hueco'}</button>
+                            </div>
+                        ))}
+                    </div>
+                    <Lbl>Opciones de respuesta para B:</Lbl>
+                    <div className="mt-1">{OptionsEditor(t,item,i)}</div>
+                </>
+            );
+            case 'paragraphOrder': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    <Lbl>Oraciones (en el orden de la lista):</Lbl>
+                    <div className="space-y-1 mt-1 mb-2">
+                        {(item.sentences||[]).map((s,si)=>(
+                            <div key={si} className="flex gap-2 items-center">
+                                <span className="text-[10px] font-black text-zinc-600 w-4">{si}</span>
+                                <input value={s} onChange={e=>{const u={...ec};u.paragraphOrder[i].sentences[si]=e.target.value;setEc(u)}} className="flex-1 p-2 border border-zinc-700 bg-transparent rounded text-sm"/>
+                            </div>
+                        ))}
+                    </div>
+                    <Lbl color="text-emerald-400">Orden correcto (índices, coma):</Lbl>
+                    <Inp value={(item.correctOrder||[]).join(', ')} onChange={e=>hcNums(t,i,'correctOrder',e.target.value)} className="text-sm text-emerald-300 bg-emerald-900/20 border-emerald-700/50"/>
+                </>
+            );
+            case 'contextMatch': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    <Lbl>Situación ↔ Frase (español) — pares alineados por fila:</Lbl>
+                    <div className="space-y-1 mt-1">
+                        {(item.situations||[]).map((s,si)=>(
+                            <div key={si} className="flex gap-2 items-center">
+                                <input value={s} onChange={e=>{const u={...ec};u.contextMatch[i].situations[si]=e.target.value;setEc(u)}} className="flex-1 p-2 border border-indigo-700/40 bg-indigo-900/10 rounded text-xs"/>
+                                <span className="self-center text-zinc-600 font-black">↔</span>
+                                <input value={(item.phrases||[])[si]||''} onChange={e=>{const u={...ec};if(!u.contextMatch[i].phrases)u.contextMatch[i].phrases=[];u.contextMatch[i].phrases[si]=e.target.value;setEc(u)}} className="flex-1 p-2 border border-emerald-700/40 bg-emerald-900/10 rounded text-xs"/>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            );
+            case 'categorySort': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    <div className="mb-2"><Lbl>Todas las palabras (coma):</Lbl><Inp value={(item.words||[]).join(', ')} onChange={e=>hcList(t,i,'words',e.target.value)} className="text-sm font-bold"/></div>
+                    <div className="mb-2"><Lbl>Categorías (coma):</Lbl><Inp value={(item.categories||[]).join(', ')} onChange={e=>hcList(t,i,'categories',e.target.value)} className="text-sm"/></div>
+                    {(item.categories||[]).map(cat=>(
+                        <div key={cat} className="mb-1">
+                            <Lbl color="text-emerald-400">{cat} →</Lbl>
+                            <Inp value={((item.answers||{})[cat]||[]).join(', ')} onChange={e=>{const u={...ec};if(!u.categorySort[i].answers)u.categorySort[i].answers={};u.categorySort[i].answers[cat]=e.target.value.split(',').map(x=>x.trim()).filter(x=>x!=='');setEc(u)}} className="text-sm text-emerald-300"/>
+                        </div>
+                    ))}
+                </>
+            );
+            case 'shortTranslation': return(
+                <>
+                    <Inp value={item.instruction||''} onChange={e=>hc(t,i,'instruction',e.target.value)} placeholder="Instrucción" className="mb-2 text-xs"/>
+                    <div className="mb-2"><Lbl color="text-indigo-400">Texto a traducir (inglés):</Lbl><Inp value={item.spanishText||''} onChange={e=>hc(t,i,'spanishText',e.target.value)} className="text-sm font-bold"/></div>
+                    <div className="mb-2"><Lbl color="text-emerald-400">Traducción modelo (español):</Lbl><Inp value={item.sampleAnswer||''} onChange={e=>hc(t,i,'sampleAnswer',e.target.value)} className="text-sm text-emerald-300"/></div>
+                    <div className="flex gap-2">
+                        <div className="flex-[2]"><Lbl color="text-amber-400">Palabras clave (coma):</Lbl><Inp value={(item.keyWords||[]).join(', ')} onChange={e=>hcList(t,i,'keyWords',e.target.value)} className="text-sm text-amber-300"/></div>
+                        <div className="flex-1"><Lbl>Mín. aciertos:</Lbl><Inp type="number" value={item.minKeyWordsMatch||0} onChange={e=>hc(t,i,'minKeyWordsMatch',parseInt(e.target.value)||0)} className="text-sm"/></div>
+                    </div>
+                </>
+            );
+            default: return <span className="text-zinc-500 text-xs">Tipo sin editor.</span>;
+        }
+    };
+
+    return(
+        <div className="h-[100dvh] flex flex-col bg-zinc-950 text-zinc-100 relative">
+
+            {showSaveModal && (
+                <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-[2rem] w-full max-w-2xl p-6 shadow-2xl max-h-[90vh] flex flex-col">
+                        <div className="flex justify-between items-center mb-6 shrink-0">
+                            <h2 className="text-xl font-black flex items-center gap-2 text-white"><Tags className="text-amber-400"/> Clasificar Jeopardy — Español</h2>
+                            <button onClick={()=>setShowSaveModal(false)} className="text-zinc-500 hover:text-white p-2 rounded-full hover:bg-zinc-800 transition"><X size={20}/></button>
+                        </div>
+
+                        <div className="space-y-8 overflow-y-auto custom-scrollbar pr-2 flex-1">
+                            <div>
+                                <label className="block text-xs font-black text-amber-400 uppercase tracking-widest mb-3">1. Nivel del Estudiante</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {NEW_LEVELS.map(lvl => (
+                                        <button key={lvl} onClick={() => toggleSelection(saveLevels, setSaveLevels, lvl)} className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveLevels.includes(lvl) ? 'bg-amber-600 border-amber-600 text-white shadow-md' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-amber-500 hover:text-amber-300'}`}>{lvl}</button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-black text-emerald-400 uppercase tracking-widest mb-3">2. Categoría Gramatical</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {NEW_CATS.map(cat => (
+                                        <button key={cat.id} onClick={() => toggleSelection(saveCats, setSaveCats, cat.id)} className={`px-4 py-2 rounded-xl font-bold text-sm transition-all border-2 ${saveCats.includes(cat.id) ? 'bg-emerald-600 border-emerald-600 text-white shadow-md' : 'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-emerald-500 hover:text-emerald-300'}`}>{cat.label}</button>
+                                    ))}
+                                </div>
+                            </div>
+                            {saveCats.length > 0 && saveLevels.length > 0 && (
+                                <div className="bg-zinc-950/50 p-4 rounded-2xl border border-zinc-800 space-y-4">
+                                    <label className="block text-xs font-black text-amber-400 uppercase tracking-widest mb-1">3. Temas Específicos Evaluados</label>
+                                    {saveCats.map(catId => {
+                                        if (catId === 'otro') return null;
+                                        const catLabel = NEW_CATS.find(c => c.id === catId)?.label || catId;
+                                        const topics = getAllTopicsForCategory(catId, saveLevels);
+                                        if (topics.length === 0) return null;
+                                        return (
+                                            <div key={catId} className="bg-zinc-900/50 rounded-xl p-3 border border-zinc-800/50">
+                                                <h4 className="text-[10px] font-black uppercase text-zinc-500 tracking-wider mb-2">{catLabel}</h4>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {topics.map(topic => (
+                                                        <button key={topic} onClick={() => toggleSelection(saveTopics, setSaveTopics, topic)} className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all border ${saveTopics.includes(topic) ? 'bg-zinc-200 border-zinc-200 text-zinc-900 shadow-sm' : 'bg-transparent border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'}`}>{topic}</button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    {saveCats.includes('otro') && (
+                                        <div className="bg-amber-900/10 rounded-xl p-3 border border-amber-900/30">
+                                            <h4 className="text-[10px] font-black uppercase text-amber-600 tracking-wider mb-2">Macro Habilidades (Otro)</h4>
+                                            <div className="flex flex-wrap gap-2">
+                                                {MACRO_SKILLS.map(skill => (
+                                                    <button key={skill} onClick={() => toggleSelection(saveTopics, setSaveTopics, skill)} className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all border ${saveTopics.includes(skill) ? 'bg-amber-500 border-amber-500 text-zinc-900 shadow-sm' : 'bg-transparent border-amber-900/50 text-amber-500 hover:border-amber-500'}`}>{skill}</button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        <button onClick={handleConfirmSave} disabled={isSaving || saveLevels.length === 0 || saveCats.length === 0} className="w-full mt-6 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:bg-zinc-800 text-white py-4 rounded-xl font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-95 shrink-0">
+                            {isSaving ? <Loader2 className="animate-spin" size={18}/> : <Save size={18}/>}
+                            {(saveLevels.length === 0 || saveCats.length === 0) ? "Selecciona Nivel y Categoría" : "Confirmar y Guardar en BD (Anita)"}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            <div className="bg-black px-4 py-3 flex justify-between items-center shrink-0 border-b border-zinc-800 gap-3">
+                <h2 className="text-base font-black flex items-center gap-2"><Edit3 size={18}/>{isEditing?"Editar Tablero":"Revisión Final"}</h2>
+                <div className="flex gap-2">
+                    <button onClick={()=>window.location.reload()} className="btn-juicy bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-xl font-bold text-sm">Cancelar</button>
+                    <button onClick={()=>{
+                        if(!title) return alert("Ponle un título al tablero.");
+                        setShowSaveModal(true);
+                    }} className="btn-juicy bg-amber-500 hover:bg-amber-600 text-white px-5 py-2 rounded-xl font-bold flex items-center gap-2 text-sm"><Save size={16}/>{isEditing?"Clasificar y Actualizar":"Clasificar y Guardar"}</button>
+                </div>
+            </div>
+            <div className="p-4 border-b border-zinc-800 shrink-0">
+                <label className="block text-[10px] font-black text-zinc-500 uppercase mb-1">Título del Tablero</label>
+                <input value={title} onChange={e=>setTitle(e.target.value)} className="w-full text-lg font-bold p-3 bg-zinc-900 border-2 border-zinc-800 rounded-xl outline-none focus:border-amber-500"/>
+            </div>
+            <div className="flex gap-2 border-b border-zinc-800 px-4 shrink-0 overflow-x-auto custom-scrollbar">
+                {tabs.map(t=>(<button key={t} onClick={()=>setTab(t)} className={`px-4 py-2.5 font-bold text-sm border-b-4 transition-all whitespace-nowrap ${tab===t?'border-amber-500 text-amber-400':'border-transparent text-zinc-500 hover:text-zinc-300'}`}>{QTYPES[t].icon} {QTYPES[t].name} ({ec[t]?.length||0})</button>))}
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar bg-zinc-950">
+                {tab && ec[tab]?.map((item,i)=>(
+                    <div key={i} className="p-4 bg-zinc-900 rounded-xl border border-zinc-800">
+                        <div className="text-[10px] font-black text-amber-500/70 uppercase tracking-widest mb-2">{`$${PTS_LABELS[i] ?? '—'} pts`}</div>
+                        {renderItem(tab,item,i)}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+// ============================================================
+// MAIN DASHBOARD
+// ============================================================
+const Dashboard=()=>{
+    const[apiKey,setApiKey]=useState(AI.loadKey());
+    const[gameTitle,setGameTitle]=useState('');
+    const[globalContext,setGlobalContext]=useState('');
+
+    const[selectedLevel,setSelectedLevel]=useState('');
+    const[selectedCat,setSelectedCat]=useState('');
+
+    const[showPicker,setShowPicker]=useState(false);
+    const[selectedTypes,setSelectedTypes]=useState([]); // ids — máx 6
+    const[bucketItems,setBucketItems]=useState({});
+    const[activeBucket,setActiveBucket]=useState(null);
+
+    const[isGenerating,setIsGenerating]=useState(false);
+    const[generatedContent,setGeneratedContent]=useState(null);
+    const[existingTags,setExistingTags]=useState(null);
+    const[editingId,setEditingId]=useState(null);
+    const[isLoading,setIsLoading]=useState(false);
+    const[models,setModels]=useState([]);
+    const[selModel,setSelModel]=useState('');
+    const[loadingModels,setLoadingModels]=useState(false);
+
+    useEffect(()=>{
+        const init=async()=>{
+            const p=new URLSearchParams(window.location.search);const eid=p.get('edit');
+            if(eid){
+                setIsLoading(true);
+                try{
+                    const s=await getDoc(doc(db,QUIZZES_PATH,eid));
+                    if(s.exists()){const d=s.data();setGeneratedContent(d.content);setGameTitle(d.title);setEditingId(eid);if(d.tags)setExistingTags(d.tags);}
+                }catch(e){alert(e.message)}
+                setIsLoading(false);
+            }
+        };init();
+    },[]);
+
+    useEffect(()=>{
+        if (selectedTypes.length > 0 && !selectedTypes.includes(activeBucket)) setActiveBucket(selectedTypes[0]);
+        else if (selectedTypes.length === 0) setActiveBucket(null);
+    }, [selectedTypes]);
+
+    const toggleType=(id)=>{
+        setSelectedTypes(prev=>{
+            if(prev.includes(id)) return prev.filter(x=>x!==id);
+            if(prev.length>=TYPES_REQUIRED) return prev;
+            return [...prev, id];
+        });
+    };
+
+    const toggleIngredient=(topic)=>{
+        if(!activeBucket) return alert("Selecciona un tipo de pregunta activo primero (engranaje ⚙️).");
+        setBucketItems(prev=>{
+            const current = prev[activeBucket] || [];
+            if(current.includes(topic)) return {...prev, [activeBucket]: current.filter(t=>t!==topic)};
+            return {...prev, [activeBucket]: [...current, topic]};
+        });
+    };
+    const removeIngredient=(bucketKey, topic)=>{
+        setBucketItems(prev=>({...prev, [bucketKey]: (prev[bucketKey]||[]).filter(t=>t!==topic)}));
+    };
+
+    const fetchModels=async()=>{
+        if(!apiKey)return alert("Ingresa tu API Key");setLoadingModels(true);
+        try{const v=await AI.fetchModels(apiKey);setModels(v);if(v.length>0)setSelModel(AI.pickPreferredModel(v));}
+        catch(e){alert(e.message)}setLoadingModels(false);
+    };
+
+    const generate=async()=>{
+        if(!apiKey)return alert("Ingresa tu API Key");
+        if(!selModel)return alert("Escanea modelos primero (🔍)");
+        if(selectedTypes.length!==TYPES_REQUIRED) return alert(`Debes elegir exactamente ${TYPES_REQUIRED} tipos de pregunta (1 por columna del tablero).`);
+
+        setIsGenerating(true);
+
+        let prompt=`You are an expert Spanish language teacher building a JEOPARDY board for English-speaking students learning Spanish.\n\n`;
+        prompt += `TARGET LANGUAGE: Spanish (the language being TAUGHT)\nSTUDENT NATIVE LANGUAGE: English\nINSTRUCTION LANGUAGE: questions/hints may be in English to help, but all Spanish content must be authentic and natural.\n\n`;
+        if(globalContext.trim().length > 0){
+            prompt += `GLOBAL CONTEXT & VOCABULARY:\n"${globalContext}"\n*(Apply this context to all sentences/scenarios. If a column evaluates custom vocabulary, take it strictly from this text.)*\n\n`;
+        }
+        prompt += `Generate a JSON object with EXACTLY these ${TYPES_REQUIRED} arrays. Each array MUST contain EXACTLY ${QS_PER_TYPE} items — one per Jeopardy value (${PTS_LABELS.join(', ')}) — ordered from EASIEST (first) to HARDEST (last):\n\n`;
+        selectedTypes.forEach(id=>{
+            const t=QTYPES[id];
+            const topics = bucketItems[id]?.join(', ') || 'general Spanish appropriate to the level';
+            prompt += `- "${id}" (${t.name}): ${QS_PER_TYPE} items. Evaluate STRICTLY: [${topics}]. Each item format: ${t.format}\n`;
+        });
+        prompt += `\nRULES:\n- Difficulty MUST increase across the ${QS_PER_TYPE} items of every array.\n- All Spanish content must be grammatically correct and natural. Use English ONLY in fields named stem/instruction/questionText/spanishPrompt (meaning)/spanishText (source)/prompt/hint/situations/explanation.\n- Output STRICT JSON containing ONLY the ${TYPES_REQUIRED} requested arrays. No markdown fences, no comments, no extra keys.`;
+
+        try{
+            const raw=await AI.callGemini({apiKey,model:selModel,prompt,json:true});
+            const t=raw.replace(/```json|```/g,"").trim();
+            setGeneratedContent(JSON.parse(t));
+        }catch(e){alert("Error: "+e.message)}
+        setIsGenerating(false);
+    };
+
+    const saveToFirebase=async(finalContent, finalTags)=>{
+        try{
+            const proc={...finalContent};
+            const p=new URLSearchParams(window.location.search);const fp=p.get('folder');
+            const pp=(fp&&fp!=='undefined'&&fp!=='null')?decodeURIComponent(fp):'';
+            if(editingId){
+                await updateDoc(doc(db,QUIZZES_PATH,editingId),{title:gameTitle,content:proc,tags:finalTags,updatedAt:serverTimestamp()});
+            } else {
+                await addDoc(collection(db,'artifacts',FS_APP_ID,'users',TEACHER_UID,'quizzes'),{title:gameTitle,type:'JEOPARDY_BANK',content:proc,tags:finalTags,createdAt:serverTimestamp(),parentPath:pp,language:'es'});
+            }
+            window.location.href=pp?`${BACK_URL}?folder=${encodeURIComponent(pp)}`:BACK_URL;
+        }catch(e){alert(e.message)}
+    };
+
+    if(isLoading)return<div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-zinc-500"><Loader2 className="animate-spin mr-2"/>Cargando...</div>;
+    if(generatedContent)return<ContentEditor content={generatedContent} onSaveToFirebase={saveToFirebase} title={gameTitle} setTitle={setGameTitle} isEditing={!!editingId} initialTags={existingTags}/>;
+
+    // Nivel de taxonomía mapeado desde los niveles comerciales
+    const selectedTaxLevel = selectedLevel.startsWith('B') ? 'basico' : selectedLevel.startsWith('AV') ? 'avanzado' : selectedLevel.startsWith('A') ? 'intermedio' : '';
+    const currentTopics = (selectedTaxLevel && selectedCat) ? (TAXONOMY[selectedTaxLevel]?.[selectedCat] || []) : [];
+    const ready = selectedTypes.length === TYPES_REQUIRED;
+    const totalQ = selectedTypes.length * QS_PER_TYPE;
+
+    return(
+        <div className="h-[100dvh] flex flex-col text-zinc-100 bg-zinc-950">
+            {/* MODAL PICKER — elegir 6 de 18 */}
+            {showPicker && (
+                <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-zinc-900 border border-zinc-700 rounded-[2rem] w-full max-w-lg p-6 shadow-2xl flex flex-col max-h-[90vh]">
+                        <div className="flex justify-between items-center mb-1">
+                            <h2 className="text-lg font-black flex items-center gap-2"><LayoutGrid className="text-amber-400"/>Elige {TYPES_REQUIRED} tipos</h2>
+                            <button onClick={()=>setShowPicker(false)} className="btn-juicy text-zinc-500 hover:text-white"><X size={20}/></button>
+                        </div>
+                        <p className="text-xs text-zinc-500 font-bold mb-4">Cada tipo = {QS_PER_TYPE} preguntas. {TYPES_REQUIRED} tipos = {TYPES_REQUIRED*QS_PER_TYPE} preguntas (1 tablero completo).</p>
+                        <div className="grid grid-cols-2 gap-2 mb-4 overflow-y-auto custom-scrollbar pr-1">
+                            {TYPE_IDS.map(id=>{
+                                const sel=selectedTypes.includes(id);
+                                const blocked=!sel && selectedTypes.length>=TYPES_REQUIRED;
+                                return(
+                                    <button key={id} onClick={()=>toggleType(id)} disabled={blocked}
+                                        className={`btn-juicy text-left p-3 rounded-xl border-2 font-bold text-xs transition-all flex items-center gap-2 ${sel?'bg-amber-600/20 border-amber-500 text-amber-300':blocked?'bg-zinc-950 border-zinc-800 text-zinc-700 cursor-not-allowed':'bg-zinc-950 border-zinc-700 text-zinc-400 hover:border-amber-500/50'}`}>
+                                        <span className="text-base shrink-0">{QTYPES[id].icon}</span>
+                                        <span className="leading-tight">{QTYPES[id].name}</span>
+                                        {sel && <CheckCircle2 size={14} className="text-amber-400 ml-auto shrink-0"/>}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <button onClick={()=>setShowPicker(false)} className={`btn-juicy w-full py-3 rounded-xl font-black ${ready?'bg-amber-600 hover:bg-amber-500 text-white':'bg-zinc-800 text-zinc-400'}`}>
+                            {ready?`Listo — ${totalQ} preguntas`:`${selectedTypes.length} / ${TYPES_REQUIRED} elegidos`}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* HEADER */}
+            <div className="bg-black px-4 py-3 flex justify-between items-center shrink-0 border-b border-zinc-800 gap-2">
+                <div className="flex items-center gap-3 min-w-0">
+                    <button onClick={()=>window.location.href=BACK_URL} className="btn-juicy p-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl"><ArrowLeft size={18}/></button>
+                    <h1 className="text-base font-black flex items-center gap-2 truncate"><Target className="text-amber-400 w-4 h-4 flex-shrink-0"/>Jeopardy Builder — <span className="text-amber-400">Español</span></h1>
+                </div>
+                <ApiKeyBar
+                    variant="compact"
+                    accentBtn="bg-amber-600 hover:bg-amber-500 text-white"
+                    placeholder="API Key..."
+                    apiKey={apiKey} setApiKey={setApiKey}
+                    models={models} selectedModel={selModel} setSelectedModel={setSelModel}
+                    isLoading={loadingModels} onFetch={fetchModels}
+                    onClear={()=>setModels([])}
+                />
+            </div>
+
+            <div className="flex flex-1 flex-col md:flex-row overflow-hidden">
+                {/* LEFT PANEL: TAXONOMÍA ESPAÑOL */}
+                <div className="w-full md:w-[35%] border-b md:border-b-0 md:border-r border-zinc-800 flex flex-col h-[40%] md:h-full bg-zinc-950">
+                    <div className="p-4 border-b border-zinc-800 shrink-0 space-y-3">
+                        <div className="flex gap-2">
+                            <select value={selectedLevel} onChange={e=>{setSelectedLevel(e.target.value);setSelectedCat('');}} className="flex-1 bg-zinc-900 border border-zinc-700 rounded-xl p-2 text-xs font-bold outline-none focus:border-amber-500 cursor-pointer">
+                                <option value="" disabled>Nivel del estudiante...</option>
+                                {NEW_LEVELS.map(l=><option key={l} value={l}>{l}</option>)}
+                            </select>
+                            <select value={selectedCat} onChange={e=>setSelectedCat(e.target.value)} disabled={!selectedLevel} className="flex-1 bg-zinc-900 border border-zinc-700 rounded-xl p-2 text-xs font-bold outline-none focus:border-amber-500 cursor-pointer disabled:opacity-50">
+                                <option value="" disabled>Categoría...</option>
+                                {selectedTaxLevel && Object.keys(TAXONOMY[selectedTaxLevel]||{}).map(c=><option key={c} value={c}>{c.replace('_',' ').toUpperCase()}</option>)}
+                            </select>
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                        <div className="space-y-2">
+                            {!selectedLevel || !selectedCat ? (
+                                <div className="text-center text-zinc-600 font-bold text-xs mt-10 px-4">Selecciona Nivel y Categoría para ver los temas disponibles.</div>
+                            ) : (
+                                <>
+                                    <p className="text-[10px] text-zinc-500 font-bold mb-3 tracking-widest uppercase">Haz clic para agregar a la columna activa</p>
+                                    {currentTopics.map(topic=>{
+                                        const isAdded = activeBucket && (bucketItems[activeBucket]||[]).includes(topic);
+                                        return(
+                                            <button key={topic} onClick={()=>toggleIngredient(topic)}
+                                                className={`btn-juicy w-full text-left p-3 rounded-xl border-2 font-bold text-sm transition-all ${isAdded?'bg-amber-600/20 border-amber-500 text-amber-300':'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-amber-500/50'}`}>
+                                                <div className="flex justify-between items-center">
+                                                    <span>{topic}</span>
+                                                    {isAdded && <span className="text-[10px] bg-amber-500/30 text-amber-300 px-2 py-0.5 rounded uppercase">Agregado</span>}
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* RIGHT PANEL */}
+                <div className="w-full md:w-[65%] flex flex-col h-[60%] md:h-full bg-zinc-900 relative">
+                    {/* CONTEXTO GLOBAL */}
+                    <div className="p-4 border-b border-zinc-800 shrink-0 bg-zinc-950/50">
+                        <label className="flex items-center gap-2 text-xs font-black text-amber-400 uppercase tracking-widest mb-2"><MessageSquare size={14}/> Contexto Global & Vocabulario Custom</label>
+                        <textarea value={globalContext} onChange={e=>setGlobalContext(e.target.value)}
+                            placeholder="Ej: Contexto de viaje a México. Si usas vocabulario evalúa: playa, hotel, mercado..."
+                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl p-3 text-sm font-medium outline-none focus:border-amber-500 resize-none h-20 custom-scrollbar placeholder-zinc-600"></textarea>
+                    </div>
+
+                    {/* TABS DE COLUMNAS */}
+                    <div className="flex items-center bg-black border-b border-zinc-800 shrink-0">
+                        <button onClick={()=>setShowPicker(true)} className="btn-juicy p-3 border-r border-zinc-800 hover:bg-zinc-900 text-zinc-400 transition-colors flex items-center gap-2" title="Elegir 6 tipos">
+                            <LayoutGrid size={18}/>
+                            <span className={`text-[10px] font-black ${ready?'text-emerald-400':'text-amber-400'}`}>{selectedTypes.length}/{TYPES_REQUIRED}</span>
+                        </button>
+                        <div className="flex-1 overflow-x-auto flex custom-scrollbar">
+                            {selectedTypes.length === 0 ? (
+                                <div className="p-3 text-xs font-bold text-zinc-600 italic">Toca el ⊞ para elegir las 6 columnas del tablero.</div>
+                            ) : (
+                                selectedTypes.map(k => (
+                                    <button key={k} onClick={()=>setActiveBucket(k)}
+                                        className={`px-4 py-3 font-bold text-sm border-b-2 whitespace-nowrap transition-all flex items-center gap-2 ${activeBucket===k ? 'border-amber-500 text-amber-400 bg-zinc-900' : 'border-transparent text-zinc-500 hover:bg-zinc-900/50 hover:text-zinc-300'}`}>
+                                        {QTYPES[k].icon} {QTYPES[k].name} <span className="bg-zinc-800 text-zinc-400 px-1.5 rounded text-[10px]">{QS_PER_TYPE}</span>
+                                    </button>
+                                ))
+                            )}
+                        </div>
+                    </div>
+
+                    {/* CONTENIDO DE LA COLUMNA ACTIVA */}
+                    <div className="flex-1 p-4 overflow-y-auto custom-scrollbar pb-24">
+                        {!activeBucket ? (
+                            <div className="h-full flex flex-col items-center justify-center text-zinc-600">
+                                <LayoutGrid size={40} className="mb-3 opacity-40"/>
+                                <p className="font-bold">Aún no eliges columnas</p>
+                                <p className="text-xs mt-1">Usa el ⊞ para elegir 6 tipos de pregunta.</p>
+                            </div>
+                        ) : (
+                            <div>
+                                <h3 className="text-xs font-black text-zinc-500 uppercase tracking-widest mb-3 border-b border-zinc-800 pb-2">Columna {QTYPES[activeBucket].icon} {QTYPES[activeBucket].name} — evalúa:</h3>
+                                {!(bucketItems[activeBucket]?.length > 0) ? (
+                                    <div className="p-6 border border-dashed border-zinc-700 rounded-2xl text-center text-zinc-500 text-sm font-bold bg-zinc-950/50">
+                                        Haz clic en los temas de la izquierda para inyectarlos aquí. <br/>
+                                        <span className="text-xs font-medium opacity-70">(Si lo dejas vacío, será un mix general de español)</span>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {bucketItems[activeBucket].map(topic => (
+                                            <div key={topic} className="flex justify-between items-center p-3 bg-zinc-950 border border-zinc-800 rounded-xl group">
+                                                <span className="font-bold text-sm text-zinc-300">{topic}</span>
+                                                <button onClick={()=>removeIngredient(activeBucket, topic)} className="text-zinc-600 hover:text-rose-500 transition-colors p-1"><Trash2 size={16}/></button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* GENERATE BUTTON */}
+                    <div className="absolute bottom-5 left-4 right-4 z-20">
+                        <button onClick={generate} disabled={isGenerating||!ready} className="btn-juicy w-full bg-white text-zinc-900 py-4 rounded-2xl font-black text-lg hover:bg-amber-500 hover:text-white transition-all flex items-center justify-center gap-3 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xl">
+                            {isGenerating?<><Loader2 className="animate-spin"/>Armando el tablero...</>:ready?<><Zap className="fill-amber-400 text-amber-500"/>GENERAR TABLERO (30 Qs) 🇲🇽</>:<><Target size={20}/>Elige {TYPES_REQUIRED} tipos ({selectedTypes.length}/{TYPES_REQUIRED})</>}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+createRoot(document.getElementById('root')).render(<Dashboard/>);
+</script>
+</body>
+</html>
