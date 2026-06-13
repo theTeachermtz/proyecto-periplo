@@ -55,7 +55,7 @@
         import { initializeApp } from 'firebase/app';
         import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
         import { getFirestore, doc, getDoc } from 'firebase/firestore';
-        import { Check, Award, Home, Volume2, ArrowRight, ChevronLeft, ChevronRight, RotateCcw, X, CheckCircle2, CircleDashed, Trophy, RefreshCw, ArrowLeft } from 'lucide-react';
+        import { Check, Award, Home, Volume2, ArrowRight, ChevronLeft, ChevronRight, RotateCcw, X, CheckCircle2, CircleDashed, Trophy, RefreshCw, ArrowLeft, Lightbulb } from 'lucide-react';
 
         const app = initializeApp(window.PERIPLO_FIREBASE_CONFIG);
         const auth = getAuth(app);
@@ -85,6 +85,7 @@
             const [inputSlots, setInputSlots] = useState([]);
             const [status, setStatus] = useState('playing');
             const [shake, setShake] = useState(false);
+            const [revealedCount, setRevealedCount] = useState(0);
 
             // NAVEGACIÓN INTELIGENTE
             const goBack = () => {
@@ -149,6 +150,7 @@ useEffect(() => {
                     setAvailableLetters(shuffled.map((char, index) => ({ id: `avail-${index}`, char })));
                     setInputSlots(Array(letters.length).fill(null));
                     setStatus('playing');
+                    setRevealedCount(0);
                 }
             }, [currentIndex, fullWordList, cardStatuses, globalWin, gameStarted, totalWords]);
 
@@ -171,7 +173,7 @@ useEffect(() => {
             };
 
             const handleRemoveLetter = (idx, slot) => {
-                if (!slot || status === 'correct') return;
+                if (!slot || status === 'correct' || idx < revealedCount) return;
                 const ns = [...inputSlots]; ns[idx] = null; setInputSlots(ns);
                 setAvailableLetters(prev => [...prev, slot]);
                 if (status === 'error') setStatus('playing');
@@ -185,6 +187,26 @@ useEffect(() => {
                 if (!isAllSame) { while (shuffled.join('') === letters.join('') && attempts < 10) { shuffled = shuffleArray(letters); attempts++; } }
                 setAvailableLetters(shuffled.map((char, index) => ({ id: `avail-retry-${index}-${Date.now()}`, char })));
                 setInputSlots(Array(letters.length).fill(null));
+                setStatus('playing');
+                setRevealedCount(0);
+            };
+
+            // PISTA: revela y bloquea la siguiente letra correcta, rebaraja el resto
+            const handleHint = () => {
+                if (status === 'correct') return;
+                const currentData = fullWordList[currentIndex];
+                const targetLetters = currentData.wordEs.toUpperCase().replace(/\s+/g, '').split('');
+                // primera posición que aún no está correctamente resuelta
+                const i = inputSlots.findIndex((s, idx) => !s || s.char !== targetLetters[idx]);
+                if (i === -1) return; // ya está todo correcto
+                // prefijo [0..i] = letras correctas y bloqueadas; el resto se vacía
+                const newSlots = targetLetters.map((char, idx) =>
+                    idx <= i ? { id: `hint-${idx}-${Date.now()}`, char } : null
+                );
+                const remaining = shuffleArray(targetLetters.slice(i + 1));
+                setInputSlots(newSlots);
+                setAvailableLetters(remaining.map((char, index) => ({ id: `avail-hint-${index}-${Date.now()}`, char })));
+                setRevealedCount(i + 1);
                 setStatus('playing');
             };
 
@@ -277,6 +299,10 @@ useEffect(() => {
                                         <span className="text-[19px] leading-[1.3] shrink-0">✅</span>
                                         <p className="m-0 text-[12.5px] font-medium text-zinc-300 leading-[1.4]">Verifica tu respuesta y avanza a la siguiente palabra.</p>
                                     </div>
+                                    <div className="flex items-start gap-3 bg-zinc-950/80 border border-zinc-800/60 rounded-[18px] px-3.5 py-3.5">
+                                        <span className="text-[19px] leading-[1.3] shrink-0">💡</span>
+                                        <p className="m-0 text-[12.5px] font-medium text-zinc-300 leading-[1.4]">¿Atorado? Usa <span className="text-amber-400 font-bold">Pista</span> para revelar una letra y destrabar la palabra.</p>
+                                    </div>
                                 </div>
                             </div>
                             <div className="w-full p-4 bg-zinc-950/50 border-t border-zinc-800/60">
@@ -310,13 +336,15 @@ useEffect(() => {
                         {word.split('').map((char, cIdx) => {
                             const currentIdx = slotIndex++;
                             const slot = inputSlots[currentIdx];
+                            const isRevealed = currentIdx < revealedCount;
                             return (
                                 <button key={`slot-${currentIdx}`} onClick={() => handleRemoveLetter(currentIdx, slot)}
-                                    disabled={!slot || status === 'correct'}
+                                    disabled={!slot || status === 'correct' || isRevealed}
                                     className={`w-9 h-12 sm:w-12 sm:h-14 rounded-xl text-xl sm:text-2xl font-black flex items-center justify-center shrink-0 uppercase transition-all duration-200 select-none
                                         ${slot ? 'bg-zinc-800 border-b-4 border-zinc-900 text-white cursor-pointer hover:bg-zinc-700 animate-pop' : 'bg-zinc-900/50 border-2 border-dashed border-zinc-800/50 text-transparent cursor-default'}
+                                        ${isRevealed && status !== 'correct' ? 'bg-amber-500/20 border-amber-500 text-amber-400 border-b-2 cursor-default hover:bg-amber-500/20' : ''}
                                         ${status === 'correct' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 border-b-2' : ''}
-                                        ${status === 'error' && slot ? 'bg-rose-500/20 border-rose-500 text-rose-400 border-b-2' : ''}
+                                        ${status === 'error' && slot && !isRevealed ? 'bg-rose-500/20 border-rose-500 text-rose-400 border-b-2' : ''}
                                     `}>
                                     {slot ? slot.char : ''}
                                 </button>
@@ -481,11 +509,18 @@ useEffect(() => {
                                     )}
 
                                     {/* BOTONES DE ACCIÓN */}
-                                    <div className="flex gap-3 w-full max-w-sm mt-2">
+                                    <div className="flex flex-col gap-3 w-full max-w-sm mt-2">
+                                        {(status === 'playing' || status === 'error') && (
+                                            <button onClick={handleHint}
+                                                className="w-full py-2.5 rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2 uppercase tracking-widest bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 active:scale-95">
+                                                <Lightbulb className="w-4 h-4" />
+                                                <span>Pista — revela una letra</span>
+                                            </button>
+                                        )}
                                         {status === 'playing' || status === 'error' ? (
                                             <button onClick={status === 'error' ? handleRetry : checkAnswer}
                                                 disabled={!isComplete && status !== 'error'}
-                                                className={`flex-1 py-4 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-2 uppercase tracking-widest shadow-md ${isComplete || status === 'error' ? status === 'error' ? 'bg-rose-500 hover:bg-rose-400 active:scale-95 text-white shadow-rose-500/20' : 'bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black shadow-emerald-500/20' : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'}`}>
+                                                className={`w-full py-4 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-2 uppercase tracking-widest shadow-md ${isComplete || status === 'error' ? status === 'error' ? 'bg-rose-500 hover:bg-rose-400 active:scale-95 text-white shadow-rose-500/20' : 'bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black shadow-emerald-500/20' : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'}`}>
                                                 {status === 'error' ? <RotateCcw className="w-5 h-5" /> : <Check className="w-5 h-5" />}
                                                 <span>{status === 'error' ? 'Reintentar' : 'Comprobar'}</span>
                                             </button>
