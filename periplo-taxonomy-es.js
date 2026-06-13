@@ -6,9 +6,9 @@
 window.PERIPLO_TAXONOMY_ES = (() => {
     const TAXONOMY = {
         es1: {
-            gramatica:   ["Fonética y Acentuación","Alfabeto y Números","Género y Número","El Artículo + HAY"],
+            gramatica:   ["Fonética y Acentuación","Alfabeto y Números","Género y Número","El Artículo + HAY","Conjugar con todos los pronombres: tener que, querer, necesitar, poder, debería","El verbo HABER","Verbo ESTAR + gerundio (-ando/-iendo)"],
             verbos:      [],
-            vocabulario: ["NP1-ES: La Casa y los Objetos"],
+            vocabulario: ["NP1-ES: La Casa y los Objetos","Verbos para preparar un guacamole","Palabras para tu visita a un restaurante mexicano","Emociones que se expresan con el verbo ESTAR","Emociones que se expresan con el verbo TENER"],
             adjetivos:   ["AP1-ES"],
             estructuras: ["Las 5 vocales puras","Sílaba tónica","Tilde diacrítica","Cognados y faux amis","el/la/los/las","Hay un/una/unos/unas","¿Cuántos hay?"],
             otro:        ["Otro"]
