@@ -14,9 +14,9 @@ window.PERIPLO_TAXONOMY_ES = (() => {
             otro:        ["Otro"]
         },
         es2: {
-            gramatica:   ["SER","ESTAR","TENER + HAY QUE / TENER QUE","SER vs ESTAR — contraste"],
+            gramatica:   ["SER","ESTAR","TENER + HAY QUE / TENER QUE","SER vs ESTAR — contraste","Conjugar con todos los pronombres: tener que, querer, necesitar, poder, debería","El verbo HABER","Verbo ESTAR + gerundio (-ando/-iendo)"],
             verbos:      [],
-            vocabulario: ["NP2-ES: El Cuerpo y la Apariencia","NP3-ES: Las Emociones y los Estados","NP4-ES: La Familia y las Relaciones"],
+            vocabulario: ["NP2-ES: El Cuerpo y la Apariencia","NP3-ES: Las Emociones y los Estados","NP4-ES: La Familia y las Relaciones","A Cocinar!","Verbos para tu visita a un restaurante mexicano","Verbos Esenciales en Español","Emociones que se expresan con el verbo ESTAR","Emociones que se expresan con el verbo TENER"],
             adjetivos:   ["AP1-ES","AP2-ES"],
             estructuras: ["Soy/Eres/Es + profesión/origen","Estoy/Está + estado/emoción","Tengo que + infinitivo","Hay que + infinitivo","Es aburrido vs Está aburrido"],
             otro:        ["Otro"]
