@@ -174,6 +174,25 @@ function gradeQ(q, a) {
   }
 }
 
+// Texto legible del enunciado y de la respuesta correcta (para "repasa tus errores")
+function promptText(q) {
+  if (!q) return '(pregunta)';
+  if (q.type === 'translate') return '🇲🇽 ' + (q.spanishPrompt || '');
+  if (q.type === 'audioQuestion') return '🔊 ' + (q.q || q.audioText || '');
+  return q.q || q.spanishPrompt || '(pregunta)';
+}
+function correctText(q) {
+  if (!q) return '';
+  switch (q.type) {
+    case 'trueFalse': return q.answer ? 'Verdadero' : 'Falso';
+    case 'multipleResponse': return (q.answers || []).join(' · ');
+    case 'matching': return (q.pairs || []).map(p => `${p.left} → ${p.right}`).join('   ·   ');
+    case 'categorySort': return (q.buckets || []).map(b => `${b.label}: ${(b.correct || []).join(', ')}`).join('   |   ');
+    case 'spotError': return q.errorWord;
+    default: return String(q.answer ?? '');
+  }
+}
+
 const TOOL_LABEL = {
   multipleChoice: 'Opción múltiple', oddOneOut: 'El intruso', wordForm: 'Forma correcta',
   trueFalse: 'Verdadero / Falso', audioQuestion: 'Comprensión auditiva',
@@ -500,7 +519,7 @@ function PlacementTest() {
     st.current = {
       entryIdx: e.ship, shipIdx: e.ship, pos: { lane: 0, diff: e.tier },
       used: new Set(), asked: [], correctStreak: 0, wrongStreak: 0,
-      floorDiff: e.tier, totalAsked: 0, log: [], history: [],
+      floorDiff: e.tier, totalAsked: 0, log: [], history: [], ceiling: false,
     };
     serveQuestion();
   }
@@ -527,10 +546,34 @@ function PlacementTest() {
   function move(decision) {
     const s = st.current;
     const correct = s.asked.filter(r => r.correct).length, n = s.asked.length;
+
+    // En modo "confirmación de techo", este veredicto cierra el examen.
+    if (s.ceiling) {
+      s.log.push({ from: s.shipIdx, to: s.shipIdx, decision, correct, n, ceiling: true });
+      finalize(decision === 'promote' || decision === 'stay' ? s.shipIdx : Math.max(0, s.shipIdx - 1));
+      return;
+    }
+
     if (decision === 'stay') { s.log.push({ from: s.shipIdx, to: s.shipIdx, decision, correct, n, enteredDiff: s.pos.diff }); finalize(s.shipIdx); return; }
     const delta = decision === 'promote' ? 1 : decision === 'demote1' ? -1 : -2;
     const to = clamp(s.shipIdx + delta, Math.max(0, s.entryIdx - 2), Math.min(SHIPS.length - 1, s.entryIdx + 2));
-    if (to === s.shipIdx || s.totalAsked >= MAX_QUESTIONS) { s.log.push({ from: s.shipIdx, to, decision, correct, n, enteredDiff: null }); finalize(to); return; }
+
+    if (to === s.shipIdx || s.totalAsked >= MAX_QUESTIONS) {
+      // Subió hasta su tope DEMOSTRANDO dominio (promote) → ronda extra en lo más difícil,
+      // para diagnosticar hasta dónde realmente se topa (en vez de cerrar en ~14 preguntas).
+      const hasUnused = SHIPS[s.shipIdx].questions.some(q => !s.used.has(q.id));
+      if (decision === 'promote' && s.totalAsked <= MAX_QUESTIONS - 4 && hasUnused) {
+        s.ceiling = true;
+        s.log.push({ from: s.shipIdx, to: s.shipIdx, decision: 'ceiling', correct, n });
+        s.pos = { lane: 2, diff: 2 }; // produce / difícil — lo más exigente
+        s.asked = []; s.correctStreak = 0; s.wrongStreak = 0;
+        serveQuestion();
+        return;
+      }
+      s.log.push({ from: s.shipIdx, to, decision, correct, n, enteredDiff: null });
+      finalize(to);
+      return;
+    }
     let enteredDiff;
     if (decision === 'promote') enteredDiff = 1;                       // sube → entra en media
     else { s.floorDiff = Math.min(2, s.floorDiff + 1); enteredDiff = s.floorDiff; } // baja → +1 dificultad
@@ -543,6 +586,13 @@ function PlacementTest() {
     const s = st.current;
     const n = s.asked.length;
     const correct = s.asked.filter(r => r.correct).length;
+    if (s.ceiling) {
+      // Ronda de confirmación de techo: 6 preguntas difíciles fijas (sin corte por racha).
+      const hasUnused = SHIPS[s.shipIdx].questions.some(q => !s.used.has(q.id));
+      if (n >= 6 || forced || !hasUnused) return move(correct >= 4 ? 'promote' : 'demote2');
+      serveQuestion();
+      return;
+    }
     if (s.correctStreak >= 4) return move('promote');
     if (s.wrongStreak >= 4) return move('demote2');
     if (n >= 6 || forced) {
@@ -565,7 +615,7 @@ function PlacementTest() {
     const q = currentQ;
     const correct = gradeQ(q, answer);
     s.asked.push({ id: q.id, container: q.container, tier: q.tier, correct });
-    s.history.push({ id: q.id, shipN: SHIPS[s.shipIdx].n, container: q.container, tier: q.tier, correct });
+    s.history.push({ id: q.id, shipN: SHIPS[s.shipIdx].n, container: q.container, tier: q.tier, correct, q });
     s.totalAsked++;
     s.correctStreak = correct ? s.correctStreak + 1 : 0;
     s.wrongStreak = correct ? 0 : s.wrongStreak + 1;
@@ -589,7 +639,9 @@ function PlacementTest() {
         placementCompleted: true, placementDate: serverTimestamp(),
         level: p.level, currentModule: p.module, currentWeek: p.week,
         placementLabel: ship.label, placementShip: ship.id,
-        placementPath: s.log, placementSkills: cog, placementHistory: s.history, placementTotal: s.totalAsked,
+        placementPath: s.log, placementSkills: cog, placementTotal: s.totalAsked,
+        placementHistory: (s.history || []).map(h => ({ id: h.id, shipN: h.shipN, container: h.container, tier: h.tier, correct: h.correct })),
+        placementErrors: (s.history || []).filter(h => !h.correct).map(h => ({ prompt: promptText(h.q), correct: correctText(h.q), shipN: h.shipN })),
       }, { merge: true });
     } catch (e) { console.error('Firestore error:', e); }
     finally { setSaving(false); }
@@ -677,11 +729,16 @@ function PlacementTest() {
       if (last && last.shipN === h.shipN) last.qs.push(h); else tramos.push({ shipN: h.shipN, qs: [h] });
     });
     const decLabel = e => {
+      if (e.decision === 'ceiling') return { t: 'Confirmando el techo 🔝 — preguntas más difíciles', c: 'text-indigo-400' };
+      if (e.ceiling) return (e.decision === 'promote' || e.decision === 'stay')
+        ? { t: 'Sostuvo el techo ✓ — placement aquí', c: 'text-emerald-400' }
+        : { t: 'No sostuvo el techo — baja un escalón', c: 'text-yellow-400' };
       if (e.decision === 'stay') return { t: 'Se quedó — es su nivel', c: 'text-yellow-400' };
       if (e.decision === 'promote') return { t: `Subió ↑ a Barco ${e.to + 1}` + (e.enteredDiff != null ? ` (entró en ${TIER_LABEL[TIERS[e.enteredDiff]]})` : ''), c: 'text-emerald-400' };
       if (e.to === e.from) return { t: 'Tope alcanzado — placement aquí', c: 'text-yellow-400' };
       return { t: `Bajó ↓ a Barco ${e.to + 1}` + (e.enteredDiff != null ? ` (entró en ${TIER_LABEL[TIERS[e.enteredDiff]]})` : ''), c: 'text-red-400' };
     };
+    const errors = hist.filter(h => !h.correct);
 
     return (
       <div className="min-h-screen-safe bg-zinc-950 flex flex-col pt-safe pb-safe">
@@ -725,6 +782,21 @@ function PlacementTest() {
               </p>
             )}
           </div>
+
+          {/* ── Repasa lo que falló (para el alumno y el teacher) ── */}
+          {errors.length > 0 && (
+            <div className="w-full max-w-sm bg-zinc-900 rounded-3xl p-5 border border-zinc-800 mb-4">
+              <p className="text-zinc-400 text-xs font-black uppercase tracking-widest mb-3">📝 Repasa lo que falló · {errors.length}</p>
+              <div className="space-y-3">
+                {errors.map((h, i) => (
+                  <div key={i} className="border-l-2 border-rose-700/70 pl-3">
+                    <p className="text-zinc-300 text-[13px] font-medium leading-snug">{promptText(h.q)}</p>
+                    <p className="text-emerald-400 text-[13px] font-bold mt-0.5">✓ {correctText(h.q)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* ── Detalle del algoritmo (full disclosure) ── */}
           <div className="w-full max-w-sm">
