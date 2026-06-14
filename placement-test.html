@@ -116,7 +116,7 @@ const PLACEMENT = [
   { level: 'A Mix', module: 'A Mix', week: 1, headline: '¡Nivel altísimo! 🔥',
     offer: 'Llegaste muy alto. Te ofrecemos arrancar en A Mix, o si prefieres, un curso enfocado a tu profesión o nicho. Hablemos de opciones.' },
 ];
-const MAX_QUESTIONS = 24; // tope de seguridad
+const MAX_QUESTIONS = 18; // tope global de seguridad = 3 visitas completas (el peloteo/barridos cortan antes)
 
 // Frases de aliento neutrales (NO revelan acierto/error — evitan que el alumno se desmoralice)
 const ENCOURAGE = [
@@ -169,30 +169,26 @@ function spellingMiss(q, a) {
   return null;
 }
 
-// Avanza la posición (carril, dificultad) según acierto/error.
-// Acierto: sube el carril hacia Produce; al llegar a Produce sube la dificultad.
-// Error: avanza el carril sin subir dificultad; ya en Produce, baja la dificultad.
-function advancePos(pos, correct) {
-  let { lane, diff } = pos;
-  if (correct) {
-    if (lane < 2) { lane++; if (lane === 2) diff = Math.min(2, diff + 1); }
-    else diff = Math.min(2, diff + 1);
-  } else {
-    if (lane < 2) lane++;
-    else diff = Math.max(0, diff - 1);
-  }
-  return { lane, diff };
+// Elige una pregunta NO usada del contenedor pedido, lo más cercana posible a la dificultad `diff`.
+function pickInContainer(ship, container, diff, used) {
+  const pool = ship.questions.filter(q => q.container === container && !used.has(q.id));
+  if (!pool.length) return null;
+  const exact = pool.filter(q => q.tier === TIERS[diff]);
+  if (exact.length) return rnd(exact);
+  return shuffleArr(pool).sort((a, b) => Math.abs(TIERS.indexOf(a.tier) - diff) - Math.abs(TIERS.indexOf(b.tier) - diff))[0];
 }
 
-// Elige una pregunta no usada lo más cercana posible a (carril, dificultad)
-function pickQuestion(ship, pos, used) {
-  const want = ship.questions.filter(q =>
-    q.container === LANES[pos.lane] && q.tier === TIERS[pos.diff] && !used.has(q.id));
-  if (want.length) return rnd(want);
-  const rest = ship.questions.filter(q => !used.has(q.id));
-  if (!rest.length) return null;
-  const dist = q => Math.abs(LANES.indexOf(q.container) - pos.lane) + Math.abs(TIERS.indexOf(q.tier) - pos.diff);
-  return shuffleArr(rest).sort((a, b) => dist(a) - dist(b))[0];
+// Veredicto de una visita (≤6 preguntas) según aciertos. Banda central 3–4/6 = "su nivel" → peloteo.
+//  sweepUp (+2) · up (+1) · upB (+1, candidato peloteo) · downB (−1, candidato peloteo) · down (−1) · sweepDown (−2)
+function verdictFor(correct, n) {
+  if (!n) return 'cap';
+  const r = correct / n;
+  if (r >= 0.95) return 'sweepUp';   // 6/6 — barrido limpio, salta +2
+  if (r >= 0.78) return 'up';        // 5/6 — sube +1
+  if (r >= 0.62) return 'upB';       // 4/6 — sube +1, candidato a peloteo
+  if (r >= 0.45) return 'downB';     // 3/6 — baja −1, candidato a peloteo
+  if (r >= 0.28) return 'down';      // 2/6 — baja −1
+  return 'sweepDown';                // ≤1/6 — trancazo, baja −2
 }
 
 function gradeQ(q, a) {
@@ -637,7 +633,7 @@ function PlacementTest() {
   useEffect(() => { loadBank().finally(() => setBankReady(true)); }, []);
 
   // estado del motor en refs (no necesita re-render hasta cambiar de pregunta)
-  const st = useRef(null);   // { entryIdx, shipIdx, pos, used, asked, correctStreak, wrongStreak, floorDiff, totalAsked, log }
+  const st = useRef(null);   // { entryIdx, shipIdx, used, asked, correctStreak, wrongStreak, visitDiff, plan, verdicts, totalAsked, log, history }
   const timer = useRef(null);
 
   function startExam() { setScreen('self_assess'); }
@@ -645,96 +641,77 @@ function PlacementTest() {
   function handleSelfAssess(i) {
     const e = ENTRY[i];
     st.current = {
-      entryIdx: e.ship, shipIdx: e.ship, pos: { lane: 0, diff: e.tier },
+      entryIdx: e.ship, shipIdx: e.ship,
       used: new Set(), asked: [], correctStreak: 0, wrongStreak: 0,
-      floorDiff: e.tier, totalAsked: 0, log: [], history: [], ceiling: false,
+      visitDiff: clamp(e.tier, 0, 2),   // la autopercepción solo sesga la dificultad del 1er barco
+      plan: ['conoce', 'conoce', 'entiende', 'entiende', 'produce', 'produce'], // visita balanceada 2/2/2
+      verdicts: {}, totalAsked: 0, log: [], history: [],
     };
     serveQuestion();
   }
 
+  // Sirve la siguiente pregunta de la visita: respeta el plan balanceado (2 Conoce · 2 Entiende ·
+  // 2 Produce) a la dificultad actual; si el contenedor planeado se agotó, cae a otro contenedor.
   function serveQuestion() {
     const s = st.current;
-    if (s.totalAsked >= MAX_QUESTIONS) { decide(true); return; } // tope global → cerrar
-    const q = pickQuestion(SHIPS[s.shipIdx], s.pos, s.used);
-    if (!q) { decide(true); return; } // barco agotado → forzar decisión
+    if (s.totalAsked >= MAX_QUESTIONS) { endVisit('cap'); return; }
+    const planned = s.plan[s.asked.length] || null;
+    const order = planned ? [planned, ...LANES.filter(l => l !== planned)] : [...LANES];
+    let q = null;
+    for (const c of order) { q = pickInContainer(SHIPS[s.shipIdx], c, s.visitDiff, s.used); if (q) break; }
+    if (!q) { decide(true); return; } // barco sin preguntas frescas → cierra la visita
     s.used.add(q.id);
     setCurrentQ(q); setQKey(k => k + 1); setScreen('exam');
   }
 
-  function openShip(idx, startDiff) {
+  // Abre una visita nueva a un barco. NO resetea s.used (memoria global → nunca repite pregunta).
+  function openShip(idx) {
     const s = st.current;
     s.shipIdx = idx;
-    s.pos = { lane: 0, diff: clamp(startDiff, 0, 2) };
-    // OJO: NO reseteamos s.used — la memoria de preguntas ya hechas es global a todo
-    // el examen, así que al volver a un barco no se repiten.
     s.asked = []; s.correctStreak = 0; s.wrongStreak = 0;
+    s.visitDiff = 1; // arranca en media y se adapta dentro de la visita
+    s.plan = ['conoce', 'conoce', 'entiende', 'entiende', 'produce', 'produce'];
     serveQuestion();
   }
 
-  function move(decision) {
+  // Cierra la visita actual: registra veredicto del barco, aplica PELOTEO conservador, mueve o finaliza.
+  function endVisit(verdict, correct, n) {
     const s = st.current;
-    const correct = s.asked.filter(r => r.correct).length, n = s.asked.length;
+    correct = (correct === undefined) ? s.asked.filter(r => r.correct).length : correct;
+    n = (n === undefined) ? s.asked.length : n;
+    const cur = s.shipIdx;
 
-    // En modo "confirmación de techo", este veredicto cierra el examen.
-    if (s.ceiling) {
-      s.log.push({ from: s.shipIdx, to: s.shipIdx, decision, correct, n, ceiling: true });
-      finalize(decision === 'promote' || decision === 'stay' ? s.shipIdx : Math.max(0, s.shipIdx - 1));
-      return;
-    }
+    if (verdict === 'cap') { s.log.push({ from: cur, to: cur, decision: 'cap', correct, n, reason: 'cap' }); finalize(cur); return; }
 
-    if (decision === 'stay') { s.log.push({ from: s.shipIdx, to: s.shipIdx, decision, correct, n, enteredDiff: s.pos.diff }); finalize(s.shipIdx); return; }
-    const delta = decision === 'promote' ? 1 : decision === 'demote1' ? -1 : -2;
-    const to = clamp(s.shipIdx + delta, Math.max(0, s.entryIdx - 2), Math.min(SHIPS.length - 1, s.entryIdx + 2));
+    const MAP = { sweepUp: [2, 'up'], up: [1, 'up'], upB: [1, 'up'], downB: [-1, 'down'], down: [-1, 'down'], sweepDown: [-2, 'down'] };
+    const [delta, dir] = MAP[verdict];
+    s.verdicts[cur] = dir;
 
-    if (to === s.shipIdx || s.totalAsked >= MAX_QUESTIONS) {
-      // Subió hasta su tope DEMOSTRANDO dominio (promote) → ronda extra en lo más difícil,
-      // para diagnosticar hasta dónde realmente se topa (en vez de cerrar en ~14 preguntas).
-      const hasUnused = SHIPS[s.shipIdx].questions.some(q => !s.used.has(q.id));
-      if (decision === 'promote' && s.totalAsked <= MAX_QUESTIONS - 4 && hasUnused) {
-        s.ceiling = true;
-        s.log.push({ from: s.shipIdx, to: s.shipIdx, decision: 'ceiling', correct, n });
-        s.pos = { lane: 2, diff: 2 }; // produce / difícil — lo más exigente
-        s.asked = []; s.correctStreak = 0; s.wrongStreak = 0;
-        serveQuestion();
-        return;
-      }
-      s.log.push({ from: s.shipIdx, to, decision, correct, n, enteredDiff: null });
-      finalize(to);
-      return;
-    }
-    let enteredDiff;
-    if (decision === 'promote') enteredDiff = 1;                       // sube → entra en media
-    else { s.floorDiff = Math.min(2, s.floorDiff + 1); enteredDiff = s.floorDiff; } // baja → +1 dificultad
-    s.log.push({ from: s.shipIdx, to, decision, correct, n, enteredDiff });
-    openShip(to, enteredDiff);
+    // Tope/base de la flota — no hay a dónde seguir → placement aquí.
+    if (dir === 'up' && cur >= SHIPS.length - 1) { s.log.push({ from: cur, to: cur, decision: verdict, correct, n, reason: 'top' }); finalize(cur); return; }
+    if (dir === 'down' && cur <= 0) { s.log.push({ from: cur, to: 0, decision: verdict, correct, n, reason: 'bottom' }); finalize(0); return; }
+
+    // PELOTEO conservador: dos barcos adyacentes con veredictos opuestos (abajo "sube", arriba "baja")
+    // → su nivel está justo ahí. Coloca en el de ABAJO y corta.
+    if (dir === 'up' && s.verdicts[cur + 1] === 'down') { s.log.push({ from: cur, to: cur, decision: verdict, correct, n, reason: 'bounce' }); finalize(cur); return; }
+    if (dir === 'down' && s.verdicts[cur - 1] === 'up') { s.log.push({ from: cur, to: cur - 1, decision: verdict, correct, n, reason: 'bounce' }); finalize(cur - 1); return; }
+
+    const to = clamp(cur + delta, 0, SHIPS.length - 1);
+    s.log.push({ from: cur, to, decision: verdict, correct, n });
+    openShip(to);
   }
 
-  // Decide si seguir, subir o bajar tras la última respuesta
+  // Tras cada respuesta: ¿corte temprano por racha, tope global, o fin de visita a las 6?
   function decide(forced) {
     const s = st.current;
     const n = s.asked.length;
     const correct = s.asked.filter(r => r.correct).length;
-    if (s.ceiling) {
-      // Ronda de confirmación de techo: 6 preguntas difíciles fijas (sin corte por racha).
-      const hasUnused = SHIPS[s.shipIdx].questions.some(q => !s.used.has(q.id));
-      if (n >= 6 || forced || !hasUnused) return move(correct >= 4 ? 'promote' : 'demote2');
-      serveQuestion();
-      return;
+    if (!forced) {
+      if (s.correctStreak >= 4) return endVisit('sweepUp', correct, n);   // barrido limpio → +2
+      if (s.wrongStreak >= 4) return endVisit('sweepDown', correct, n);   // trancazo → −2
     }
-    if (s.correctStreak >= 4) return move('promote');
-    if (s.wrongStreak >= 4) return move('demote2');
-    if (n >= 6 || forced) {
-      if (correct >= 5 && n <= 6) return move('promote');     // 5+/6
-      if (correct <= 2 && n === 6) return move('demote2');    // ≤2/6
-      if (correct === 3 && n === 6) return move('demote1');   // 3/6
-      // 4/6 → ambiguo: sigue muestreando hasta 9, luego decide
-      if (n >= 9 || forced) {
-        const r = correct / n;
-        if (r >= 0.6) return move('promote');
-        if (r <= 0.34) return move('demote2');
-        return move('stay');
-      }
-    }
+    if (s.totalAsked >= MAX_QUESTIONS) return endVisit('cap', correct, n);
+    if (n >= 6 || forced) return endVisit(verdictFor(correct, n), correct, n);
     serveQuestion();
   }
 
@@ -747,7 +724,7 @@ function PlacementTest() {
     s.totalAsked++;
     s.correctStreak = correct ? s.correctStreak + 1 : 0;
     s.wrongStreak = correct ? 0 : s.wrongStreak + 1;
-    s.pos = advancePos(s.pos, correct);
+    s.visitDiff = correct ? Math.min(2, s.visitDiff + 1) : Math.max(0, s.visitDiff - 1); // adapta dificultad dentro de la visita
     setFeedback(rnd(ENCOURAGE)); // aliento neutral — no revela si acertó o falló
     setScreen('feedback');
     clearTimeout(timer.current);
@@ -857,14 +834,17 @@ function PlacementTest() {
       if (last && last.shipN === h.shipN) last.qs.push(h); else tramos.push({ shipN: h.shipN, qs: [h] });
     });
     const decLabel = e => {
-      if (e.decision === 'ceiling') return { t: 'Confirmando el techo 🔝 — preguntas más difíciles', c: t.purple.f };
-      if (e.ceiling) return (e.decision === 'promote' || e.decision === 'stay')
-        ? { t: 'Sostuvo el techo ✓ — placement aquí', c: t.green.f }
-        : { t: 'No sostuvo el techo — baja un escalón', c: t.yellow.f };
-      if (e.decision === 'stay') return { t: 'Se quedó — es su nivel', c: t.yellow.f };
-      if (e.decision === 'promote') return { t: `Subió ↑ a Barco ${e.to + 1}` + (e.enteredDiff != null ? ` (entró en ${TIER_LABEL[TIERS[e.enteredDiff]]})` : ''), c: t.green.f };
-      if (e.to === e.from) return { t: 'Tope alcanzado — placement aquí', c: t.yellow.f };
-      return { t: `Bajó ↓ a Barco ${e.to + 1}` + (e.enteredDiff != null ? ` (entró en ${TIER_LABEL[TIERS[e.enteredDiff]]})` : ''), c: t.flame.f };
+      if (e.reason === 'cap') return { t: 'Límite de preguntas — placement aquí', c: t.yellow.f };
+      if (e.reason === 'bounce') return { t: 'Peloteo detectado 🔄 — su nivel está aquí', c: t.green.f };
+      if (e.reason === 'top') return { t: 'Llegó al tope de la flota 🔝 — placement aquí', c: t.green.f };
+      if (e.reason === 'bottom') return { t: 'Base de la flota — placement aquí', c: t.yellow.f };
+      const up = e.decision === 'sweepUp' || e.decision === 'up' || e.decision === 'upB';
+      const jump = e.decision === 'sweepUp' || e.decision === 'sweepDown';
+      const fine = e.decision === 'upB' || e.decision === 'downB';
+      const tag = jump ? ' (salto rápido)' : fine ? ' · ronda fina' : '';
+      return up
+        ? { t: `Subió ↑ a Barco ${e.to + 1}` + tag, c: t.green.f }
+        : { t: `Bajó ↓ a Barco ${e.to + 1}` + tag, c: t.flame.f };
     };
     const errors = hist.filter(h => !h.correct);
     // ── Ortografía: errores que fueron "casi" por escritura (pusiste X → era Y) ──
