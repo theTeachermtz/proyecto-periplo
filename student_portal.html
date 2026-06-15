@@ -12,6 +12,7 @@
         "react-dom":        "https://esm.sh/react-dom@18.2.0",
         "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
         "react/jsx-runtime":"https://esm.sh/react@18.2.0/jsx-runtime",
+        "canvas-confetti":   "https://esm.sh/canvas-confetti@1.6.0",
         "firebase/app":      "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
         "firebase/auth":     "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
         "firebase/firestore":"https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
@@ -113,6 +114,19 @@
         @keyframes gZoomIn{from{opacity:0;transform:scale(.94);}to{opacity:1;transform:scale(1);}}
         .zoom-in{animation:gZoomIn .28s cubic-bezier(.22,1,.36,1) both;}
         .sheet-up{animation:sheetUp .32s cubic-bezier(.22,1,.36,1) both;}
+        /* ── SECUENCIA DE RECOMPENSA (Duolingo / Monopoly Go) ── */
+        @keyframes flameIn{0%{transform:scale(0) rotate(-30deg);opacity:0;}60%{transform:scale(1.25) rotate(8deg);}100%{transform:scale(1) rotate(0);opacity:1;}}
+        @keyframes flamePulse{0%,100%{filter:drop-shadow(0 0 16px #FF6A3D);}50%{filter:drop-shadow(0 0 34px #FFC22E);}}
+        @keyframes coinPop{0%{transform:scale(0) translateY(12px);opacity:0;}70%{transform:scale(1.2);}100%{transform:scale(1) translateY(0);opacity:1;}}
+        @keyframes popBig{0%{transform:scale(.6);opacity:0;}60%{transform:scale(1.12);}100%{transform:scale(1);opacity:1;}}
+        @keyframes barShimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+        @keyframes floatUp{0%{transform:translateY(0);opacity:1;}100%{transform:translateY(-34px);opacity:0;}}
+        .flame-in{animation:flameIn .6s cubic-bezier(.22,1.5,.5,1) both;}
+        .flame-pulse{animation:flamePulse 1.8s ease-in-out infinite;}
+        .coin-pop{animation:coinPop .5s cubic-bezier(.22,1.5,.5,1) both;}
+        .pop-big{animation:popBig .42s cubic-bezier(.22,1.5,.5,1) both;}
+        .float-up{animation:floatUp 1s ease-out forwards;}
+        .bar-shimmer{background-image:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.55) 50%,transparent 70%);background-size:200% 100%;animation:barShimmer 1.1s linear infinite;}
         /* ── ROOT FILL ──────────────────────────────────────── */
         #root{height:100dvh;display:flex;flex-direction:column;overflow:hidden;}
     </style>
@@ -123,6 +137,7 @@
 import React,{useState,useEffect,useCallback,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 import {createPortal} from 'react-dom';
+import confetti from 'canvas-confetti';
 import {initializeApp} from 'firebase/app';
 import {getAuth,onAuthStateChanged,signOut} from 'firebase/auth';
 import {getFirestore,doc,updateDoc,collection,query,where,getDocs,onSnapshot} from 'firebase/firestore';
@@ -467,25 +482,26 @@ const GALAXIES=[
   ]},
 ];
 
-/* Deriva el estado de cada mundo a partir del progreso del alumno */
+/* Deriva el estado de cada mundo a partir del progreso del alumno.
+   SECUENCIAL ESTRICTO: solo se abre el siguiente mundo no-dominado; el resto
+   queda bloqueado hasta terminar las 6 misiones base del actual (eso desbloquea
+   las 4 extras del mundo + el mundo nuevo). */
 function deriveSoloWorlds(galaxy,student){
     const modOrder=MODULE_ORDER[student.level]||[];
     const curModIdx=student.currentModule?modOrder.indexOf(student.currentModule):0;
     const soloP=student.soloProgress||{};
-    let firstInCurMod=true;
+    let nextOpen=true;   // el primer mundo aún no dominado se vuelve 'active'
     return galaxy.worlds.map(w=>{
         const worldModIdx=modOrder.indexOf(w.module);
         const wp=soloP[w.id]||{done:0};
-        let status,progress;
-        if(wp.done>=6){status='done';progress=100;}
-        else if(worldModIdx<curModIdx){status='done';progress=100;}
-        else if(worldModIdx===curModIdx){
-            if(wp.done>0){status='active';progress=Math.round(wp.done/6*100);}
-            else if(firstInCurMod){status='active';progress=0;firstInCurMod=false;}
-            else{status='available';progress=0;}
-        }
-        else{status='locked';progress=0;}
-        return{...w,status,progress,cometa:w.week%2===0};
+        const progress=Math.round((Math.min(wp.done||0,6)/6)*100);
+        let status;
+        if((wp.done||0)>=6){ status='done'; }                               // mundo conquistado
+        else if(worldModIdx>=0&&worldModIdx<curModIdx){ status='done'; }     // módulos previos: ya dominados por nivel
+        else if(SOLO_UNLOCK_ALL){ status='active'; }                        // ?unlock=1 → test del teacher
+        else if(nextOpen){ status='active'; nextOpen=false; }               // SOLO el siguiente mundo se abre
+        else{ status='locked'; }                                            // el resto bloqueado
+        return{...w,status,progress:status==='done'?100:progress,cometa:w.week%2===0};
     });
 }
 
@@ -507,6 +523,27 @@ const soloDayDiff=(a,b)=>Math.round((_ymd(b)-_ymd(a))/86400000);
 /* misiones que ya contaron HOY (global, suma de todos los mundos) */
 const soloUsedToday=student=>{const dm=student.dailyMissions||{};return dm.day===soloToday()?(dm.count||0):0;};
 const soloCapReached=student=>!SOLO_UNLOCK_ALL&&soloUsedToday(student)>=SOLO_REWARDS.dailyCap;
+
+/* ── "Frase del día" — se otorga al ASEGURAR la racha (1ª misión del día).
+   SEMILLA: edítalas/expándelas libremente, son solo contenido. ── */
+const DAILY_PHRASES=[
+  {en:'The journey of a thousand miles begins with a single step.',es:'El viaje de mil millas comienza con un solo paso.',by:'Lao Tzu'},
+  {en:'A different language is a different vision of life.',es:'Otro idioma es otra visión de la vida.',by:'Federico Fellini'},
+  {en:'The limits of my language are the limits of my world.',es:'Los límites de mi lenguaje son los límites de mi mundo.',by:'Ludwig Wittgenstein'},
+  {en:'Fall seven times, stand up eight.',es:'Cae siete veces, levántate ocho.',by:'Proverbio japonés'},
+  {en:'Success is the sum of small efforts repeated day in and day out.',es:'El éxito es la suma de pequeños esfuerzos repetidos día tras día.',by:'Robert Collier'},
+  {en:'Little by little, one walks far.',es:'Poco a poco se anda lejos.',by:'Proverbio'},
+  {en:'Knowledge speaks, but wisdom listens.',es:'El conocimiento habla, pero la sabiduría escucha.',by:'Jimi Hendrix'},
+  {en:'Energy and persistence conquer all things.',es:'La energía y la persistencia lo conquistan todo.',by:'Benjamin Franklin'},
+  {en:'To learn a language is to have one more window from which to see the world.',es:'Aprender un idioma es tener una ventana más para ver el mundo.',by:'Proverbio chino'},
+  {en:'The expert in anything was once a beginner.',es:'El experto en cualquier cosa alguna vez fue un principiante.',by:'Helen Hayes'},
+  {en:'Dripping water hollows out stone, not through force but through persistence.',es:'La gota horada la piedra no por su fuerza, sino por su constancia.',by:'Ovidio'},
+  {en:"Don't watch the clock; do what it does. Keep going.",es:'No mires el reloj; haz lo que él hace: sigue avanzando.',by:'Sam Levenson'},
+  {en:'What we know is a drop, what we don’t know is an ocean.',es:'Lo que sabemos es una gota; lo que ignoramos, un océano.',by:'Isaac Newton'},
+  {en:'It always seems impossible until it is done.',es:'Siempre parece imposible hasta que se hace.',by:'Nelson Mandela'},
+];
+/* índice determinista por fecha → misma "frase del día" para todos ese día, cambia a diario */
+const dailyPhraseIdx=dayStr=>{let h=0;for(let i=0;i<dayStr.length;i++)h=(h*31+dayStr.charCodeAt(i))>>>0;return h%DAILY_PHRASES.length;};
 
 function buildSoloMissions(worldId,student){
     const wp=(student.soloProgress||{})[worldId]||{done:0};
@@ -684,6 +721,8 @@ function HomeScreen({t,onNav}){
   const moduleProgress=doneN/6;
   const todayIdx=(new Date().getDay()+6)%7;
   const next=upcoming[0];
+  const playedToday=s.lastActiveDay===soloToday();
+  const phraseToday=(s.phraseOfDay&&s.phraseOfDay.date===soloToday())?DAILY_PHRASES[s.phraseOfDay.idx]:null;
   const tile=(emoji,title,sub,accent,onClick)=>(
     <button onClick={onClick} className="g-tile" style={{
       background:t.card,border:'none',cursor:'pointer',textAlign:'left',borderRadius:22,padding:'15px 13px',
@@ -739,26 +778,41 @@ function HomeScreen({t,onNav}){
             <div style={{flex:1,minWidth:0}}>
               <p style={{...GLBL,color:'rgba(255,255,255,.85)'}}>Racha de fuego</p>
               <p style={{fontFamily:'Fredoka',fontWeight:700,fontSize:27,color:'#fff',lineHeight:1,margin:'3px 0 5px'}}>{s.streak||0} días seguidos</p>
-              <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:12.5,color:'rgba(255,255,255,.92)'}}>¡Juega hoy y suma el día {(s.streak||0)+1}! 💪</p>
+              <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:12.5,color:'rgba(255,255,255,.92)'}}>{playedToday?'¡Ya aseguraste tu día de hoy! 🔥':'Completa una misión hoy para mantener tu racha 💪'}</p>
             </div>
           </div>
           <div style={{position:'relative',display:'flex',gap:6,marginTop:16}}>
             {GDAYS.map((dy,i)=>{
-              const done=i<todayIdx&&i>=todayIdx-(s.streak||0);const today=i===todayIdx;
+              const today=i===todayIdx;
+              // La racha incluye HOY si ya jugaste; si no, cuenta hasta ayer y hoy queda con "?"
+              const lit=playedToday ? (i<=todayIdx&&i>todayIdx-(s.streak||0)) : (i<todayIdx&&i>=todayIdx-(s.streak||0));
               return(
                 <div key={i} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:5}}>
                   <span style={{fontFamily:'Fredoka',fontWeight:600,fontSize:10,color:'rgba(255,255,255,.8)'}}>{dy}</span>
                   <div style={{width:'100%',aspectRatio:'1',borderRadius:11,
-                    background:done?'rgba(255,255,255,.96)':'rgba(255,255,255,.18)',
+                    background:lit?'rgba(255,255,255,.96)':'rgba(255,255,255,.18)',
                     border:today?'2.5px solid #fff':'2.5px solid transparent',
                     boxShadow:today?'0 0 0 3px rgba(255,255,255,.35)':'none',
                     display:'flex',alignItems:'center',justifyContent:'center',fontSize:15}}>
-                    {done?'🔥':today?<span style={{fontFamily:'Fredoka',fontWeight:700,fontSize:13,color:'#fff'}}>?</span>:''}</div>
+                    {lit?'🔥':today?<span style={{fontFamily:'Fredoka',fontWeight:700,fontSize:13,color:'#fff'}}>?</span>:''}</div>
                 </div>
               );
             })}
           </div>
         </div>
+        {/* FRASE DEL DÍA (desbloqueada por mantener la racha) */}
+        {phraseToday&&(
+          <div style={{position:'relative',overflow:'hidden',background:t.card,borderRadius:24,padding:'16px 18px',marginBottom:16,
+            boxShadow:`0 5px 0 ${t.cardEdge}, ${t.softShadow}`,borderLeft:`4px solid ${t.yellow.f}`}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:9}}>
+              <span style={{fontSize:18}}>📜</span>
+              <p style={{...GLBL,color:t.yellow.f,margin:0}}>Frase del día</p>
+            </div>
+            <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:16.5,color:t.ink,lineHeight:1.3}}>“{phraseToday.en}”</p>
+            <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:12.5,color:t.ink2,marginTop:7,fontStyle:'italic'}}>“{phraseToday.es}”</p>
+            {phraseToday.by&&<p style={{fontFamily:'Nunito',fontWeight:800,fontSize:11,color:t.faint,marginTop:8}}>— {phraseToday.by}</p>}
+          </div>
+        )}
         {/* MISIÓN DE HOY */}
         <div style={{background:t.card,borderRadius:26,padding:18,marginBottom:16,boxShadow:`0 5px 0 ${t.cardEdge}, ${t.softShadow}`}}>
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:13,gap:8}}>
@@ -1262,26 +1316,114 @@ function SoloScreen({t}){
   );
 }
 
-/* ─── Toast de recompensa al volver de una misión (versión base; animación way después) ─── */
-function GRewardToast({t}){
-  const r=window.PERIPLO.claimResult;
-  const[show,setShow]=useState(!!r);
-  useEffect(()=>{if(!r)return;const id=setTimeout(()=>setShow(false),4200);return()=>clearTimeout(id);},[]);
-  if(!r||!show) return null;
-  const coinsGained=(r.coins||0)+(r.dailyBonus||0)+(r.worldDone?SOLO_REWARDS.worldBonus:0);
-  const title=r.worldDone?'¡Mundo completado!':r.streakUp?`¡Racha de ${r.streak} día${r.streak===1?'':'s'}!`:'¡Misión completada!';
-  const icon=r.worldDone?'🏆':r.streakUp?'🔥':'🎉';
-  return createPortal(
-    <div onClick={()=>setShow(false)} className="fi" style={{position:'fixed',top:'calc(14px + env(safe-area-inset-top,0px))',left:'50%',transform:'translateX(-50%)',
-      zIndex:400,maxWidth:'92%',display:'flex',alignItems:'center',gap:13,padding:'12px 17px',borderRadius:18,cursor:'pointer',
-      background:t.card,boxShadow:`0 6px 0 ${t.cardEdge}, ${t.softShadow}`,border:`1px solid ${t.line}`}}>
-      <span style={{fontSize:30,flexShrink:0}}>{icon}</span>
-      <div style={{minWidth:0}}>
-        <p style={{fontFamily:'Fredoka',fontWeight:700,fontSize:15,color:t.ink,lineHeight:1.1}}>{title}</p>
-        <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:12,color:t.ink2,marginTop:2}}>
-          +{r.xp} XP · +{coinsGained} 🪙{r.dailyBonus?' · ¡meta del día!':''}
-        </p>
+/* ─── Secuencia de recompensa al volver de una misión (Duolingo / Monopoly Go) ───
+   Pasos: llama+racha → frase del día → premios (barra XP + monedas) → desbloqueo. */
+const RW_LBL={fontFamily:'Fredoka',fontWeight:700,fontSize:11,letterSpacing:'.14em',textTransform:'uppercase'};
+function SoloRewardFlow({t,data,onDone}){
+  const r=data;
+  const steps=['streak'];
+  if(r.phrase) steps.push('phrase');
+  steps.push('prizes');
+  if(r.nextMission||r.worldDone) steps.push('unlock');
+
+  const[i,setI]=useState(0);
+  const step=steps[i];
+  const LVL=100, lvl=Math.floor(r.xpAfter/LVL)+1;
+  const[barW,setBarW]=useState((r.xpBefore%LVL)/LVL*100);
+  const[coinN,setCoinN]=useState(r.coinsBefore);
+
+  // confetti al abrir
+  useEffect(()=>{try{confetti({particleCount:130,spread:80,startVelocity:42,origin:{y:.55},colors:['#FFC22E','#FF6A3D','#22B26A','#3B9BF0','#8B6CF0']});}catch(e){}},[]);
+
+  // animación de premios: barra XP se llena + monedas suben contando
+  useEffect(()=>{
+    if(step!=='prizes') return;
+    const lvlBefore=Math.floor(r.xpBefore/LVL), lvlAfter=Math.floor(r.xpAfter/LVL);
+    const endPct=lvlAfter>lvlBefore?100:(r.xpAfter%LVL)/LVL*100;
+    setBarW((r.xpBefore%LVL)/LVL*100); setCoinN(r.coinsBefore);
+    const t1=setTimeout(()=>setBarW(endPct),150);
+    let raf; const dur=950, t0=Date.now();
+    const tick=()=>{const k=Math.min(1,(Date.now()-t0)/dur);setCoinN(Math.round(r.coinsBefore+(r.coinsAfter-r.coinsBefore)*k));if(k<1)raf=requestAnimationFrame(tick);};
+    const t2=setTimeout(()=>{raf=requestAnimationFrame(tick);try{confetti({particleCount:55,spread:55,origin:{y:.6},colors:['#FFC22E','#22B26A']});}catch(e){}},320);
+    return()=>{clearTimeout(t1);clearTimeout(t2);if(raf)cancelAnimationFrame(raf);};
+  },[step]);
+
+  const next=()=>{ if(i<steps.length-1) setI(i+1); else onDone(); };
+  const last=i===steps.length-1;
+
+  let content=null;
+  if(step==='streak') content=(
+    <React.Fragment>
+      <div className="flame-in" style={{position:'relative',width:150,height:150,display:'flex',alignItems:'center',justifyContent:'center',marginBottom:6}}>
+        <span className="flame-pulse" style={{fontSize:120}}>🔥</span>
+        <span style={{position:'absolute',fontFamily:'Fredoka',fontWeight:700,fontSize:48,color:'#fff',textShadow:'0 3px 6px rgba(150,30,0,.6)',marginTop:12}}>{r.streak}</span>
       </div>
+      <p style={{fontFamily:'Fredoka',fontWeight:700,fontSize:28,color:'#fff'}}>{r.streakUp?`¡Racha de ${r.streak} día${r.streak===1?'':'s'}!`:'¡Misión completada!'}</p>
+      <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:14.5,color:'rgba(255,255,255,.82)',marginTop:8,lineHeight:1.5}}>
+        {r.streakUp?'Encendiste tu llama de hoy. ¡Vuelve mañana para no perderla! 💪':'¡Otra misión más en tu camino!'}</p>
+    </React.Fragment>
+  );
+  else if(step==='phrase') content=(
+    <React.Fragment>
+      <span className="pop-big" style={{fontSize:52,marginBottom:8}}>📜</span>
+      <p style={{...RW_LBL,color:t.yellow.f}}>Te otorgo esta frase para tu camino</p>
+      <div className="pop-big" style={{marginTop:16,width:'100%',background:'rgba(255,255,255,.06)',border:'1px solid rgba(255,255,255,.16)',borderRadius:22,padding:'24px 20px'}}>
+        <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:21,color:'#fff',lineHeight:1.32}}>“{r.phrase.en}”</p>
+        <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:14,color:'rgba(255,255,255,.72)',marginTop:13,fontStyle:'italic'}}>“{r.phrase.es}”</p>
+        {r.phrase.by&&<p style={{fontFamily:'Nunito',fontWeight:800,fontSize:12,color:t.yellow.f,marginTop:14}}>— {r.phrase.by}</p>}
+      </div>
+    </React.Fragment>
+  );
+  else if(step==='prizes') content=(
+    <React.Fragment>
+      <p style={{fontFamily:'Fredoka',fontWeight:700,fontSize:25,color:'#fff',marginBottom:20}}>¡Recompensas!</p>
+      <div style={{width:'100%',marginBottom:20}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end',marginBottom:8}}>
+          <span style={{fontFamily:'Fredoka',fontWeight:700,fontSize:13,color:'#fff'}}>Nivel {lvl}</span>
+          <span style={{fontFamily:'Fredoka',fontWeight:700,fontSize:15,color:t.green.f}}>+{r.xpGain} XP</span>
+        </div>
+        <div style={{height:18,borderRadius:999,background:'rgba(255,255,255,.12)',overflow:'hidden',position:'relative'}}>
+          <div style={{width:`${barW}%`,height:'100%',borderRadius:999,background:`linear-gradient(90deg,${t.green.f},${t.blue.f})`,transition:'width 1s cubic-bezier(.22,1,.36,1)'}}/>
+          <div className="bar-shimmer" style={{position:'absolute',inset:0,borderRadius:999}}/>
+        </div>
+      </div>
+      <div className="coin-pop" style={{display:'flex',alignItems:'center',gap:14,width:'100%',justifyContent:'center',background:'rgba(255,255,255,.06)',border:'1px solid rgba(255,255,255,.16)',borderRadius:20,padding:'15px 22px'}}>
+        <span style={{fontSize:42}}>🪙</span>
+        <div style={{textAlign:'left'}}>
+          <p style={{fontFamily:'Fredoka',fontWeight:700,fontSize:32,color:'#fff',lineHeight:1}}>{coinN.toLocaleString()}</p>
+          <p style={{fontFamily:'Nunito',fontWeight:800,fontSize:13,color:t.yellow.f,marginTop:3}}>+{r.coinsGain} monedas{r.dailyBonus?' · ¡meta del día!':''}</p>
+        </div>
+      </div>
+      {r.worldBonus>0&&<p style={{fontFamily:'Nunito',fontWeight:800,fontSize:13,color:t.green.f,marginTop:16}}>🏆 +{r.worldBonus} de bonus por completar el mundo</p>}
+    </React.Fragment>
+  );
+  else if(step==='unlock') content=r.worldDone?(
+    <React.Fragment>
+      <span className="pop-big" style={{fontSize:70,marginBottom:12}}>🏆</span>
+      <p style={{fontFamily:'Fredoka',fontWeight:700,fontSize:26,color:'#fff'}}>¡Mundo completado!</p>
+      <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:14.5,color:'rgba(255,255,255,.82)',marginTop:10,lineHeight:1.55}}>
+        Desbloqueaste las <b style={{color:t.yellow.f}}>4 misiones extra</b> y el <b style={{color:t.blue.f}}>siguiente mundo</b> de tu constelación. 🚀</p>
+    </React.Fragment>
+  ):(
+    <React.Fragment>
+      <div className="pop-big" style={{width:100,height:100,borderRadius:28,fontSize:50,marginBottom:16,
+        background:`linear-gradient(150deg,${t.blue.f},${t.purple.f})`,boxShadow:`0 6px 0 ${t.blue.e}`,display:'flex',alignItems:'center',justifyContent:'center'}}>{r.nextMission.emoji}</div>
+      <p style={{...RW_LBL,color:t.blue.f}}>Nueva misión desbloqueada</p>
+      <p style={{fontFamily:'Fredoka',fontWeight:700,fontSize:25,color:'#fff',marginTop:8}}>{r.nextMission.label}</p>
+      <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:13.5,color:'rgba(255,255,255,.78)',marginTop:8,lineHeight:1.5}}>
+        {r.capReached?'Disponible mañana — ¡no pierdas tu racha! 🔥':r.nextMission.sub}</p>
+    </React.Fragment>
+  );
+
+  return createPortal(
+    <div className="ov fi" style={{position:'fixed',inset:0,zIndex:500,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'30px 24px'}}>
+      <div className="pop-big" key={step} style={{width:'100%',maxWidth:380,display:'flex',flexDirection:'column',alignItems:'center',textAlign:'center'}}>
+        {content}
+      </div>
+      <div style={{display:'flex',gap:7,margin:'26px 0 8px'}}>
+        {steps.map((_,k)=>(<span key={k} style={{width:k===i?22:8,height:8,borderRadius:999,background:k===i?t.yellow.f:'rgba(255,255,255,.3)',transition:'all .2s'}}/>))}
+      </div>
+      <Btn3D face={t.green.f} edge={t.green.e} big style={{width:'100%',maxWidth:380}} onClick={next}>{last?'¡Vamos!':'Continuar'}</Btn3D>
     </div>,
     document.body
   );
@@ -1769,6 +1911,7 @@ function PortalShell(){
     const[tab,setTabRaw]=useState('home');
     const[backTo,setBackTo]=useState('mas');
     const[drawer,setDrawer]=useState(null);
+    const[reward,setReward]=useState(()=>window.PERIPLO.claimResult||null);
     const[theme,setTheme]=useState(()=>localStorage.getItem('periplo-portal-theme')||'light');
     useEffect(()=>{localStorage.setItem('periplo-portal-theme',theme);},[theme]);
     const t=THEMES[theme];
@@ -1793,7 +1936,7 @@ function PortalShell(){
 
             <BottomNav2 t={t} tab={navActive} onNav={setTab}/>
             <GRemediationDrawer t={t} item={drawer} onClose={()=>setDrawer(null)}/>
-            <GRewardToast t={t}/>
+            {reward&&<SoloRewardFlow t={t} data={reward} onDone={()=>{window.PERIPLO.claimResult=null;setReward(null);}}/>}
             <PullToRefresh t={t}/>
         </div>
     );
@@ -1854,10 +1997,12 @@ async function claimSoloMission(s){
     let daily={...(s.dailyMissions||{day:today,count:0})};
     if(daily.day!==today) daily={day:today,count:0};
 
+    const xpBefore=s.xp||0, coinsBefore=s.coins||0;
+
     // avanzar misión + premio base
     wp.done=idx+1; soloProgress[worldId]=wp;
-    let xp=(s.xp||0)+SOLO_REWARDS.xpPerMission;
-    let coins=(s.coins||0)+SOLO_REWARDS.coinsPerMission;
+    let xp=xpBefore+SOLO_REWARDS.xpPerMission;
+    let coins=coinsBefore+SOLO_REWARDS.coinsPerMission;
     daily.count+=1;
 
     // racha: primera misión completada del día
@@ -1868,6 +2013,14 @@ async function claimSoloMission(s){
     }
     const lastActiveDay=today;
 
+    // frase del día — se otorga al asegurar la racha (1ª misión del día)
+    let phrase=null, phraseOfDay=s.phraseOfDay||null;
+    if(streakUp){
+        const pIdx=dailyPhraseIdx(today);
+        phrase={...DAILY_PHRASES[pIdx]};
+        phraseOfDay={date:today,idx:pIdx};
+    }
+
     // bonus: cumplir el cupo del día
     let dailyBonus=0;
     if(daily.count===SOLO_REWARDS.dailyCap){coins+=SOLO_REWARDS.dailyGoalBonus;dailyBonus=SOLO_REWARDS.dailyGoalBonus;}
@@ -1875,14 +2028,24 @@ async function claimSoloMission(s){
     const worldDone=wp.done>=6;
     if(worldDone) coins+=SOLO_REWARDS.worldBonus;
 
+    // siguiente misión (para la animación de desbloqueo)
+    const nextMission=(!worldDone&&wp.done<MISSION_TEMPLATE.length)?MISSION_TEMPLATE[wp.done]:null;
+
+    const payload={soloProgress,xp,coins,streak,lastActiveDay,dailyMissions:daily};
+    if(streakUp) payload.phraseOfDay=phraseOfDay;
     try{
-        await updateDoc(doc(db,STUDENTS_PATH,s.id),{soloProgress,xp,coins,streak,lastActiveDay,dailyMissions:daily});
+        await updateDoc(doc(db,STUDENTS_PATH,s.id),payload);
     }catch(e){console.error('claimSoloMission:',e);}
 
-    Object.assign(s,{soloProgress,xp,coins,streak,lastActiveDay,dailyMissions:daily});
+    Object.assign(s,{soloProgress,xp,coins,streak,lastActiveDay,dailyMissions:daily,phraseOfDay});
 
-    return{worldId,missionKey,xp:SOLO_REWARDS.xpPerMission,coins:SOLO_REWARDS.coinsPerMission,
-        streak,streakUp,dailyBonus,worldDone,capReached:daily.count>=SOLO_REWARDS.dailyCap};
+    return{worldId,missionKey,
+        xpGain:SOLO_REWARDS.xpPerMission, coinsGain:coins-coinsBefore,
+        xpBefore, xpAfter:xp, coinsBefore, coinsAfter:coins,
+        dailyBonus, worldBonus:worldDone?SOLO_REWARDS.worldBonus:0,
+        streak, streakUp, worldDone, worldDoneNum:wp.done,
+        capReached:daily.count>=SOLO_REWARDS.dailyCap,
+        nextMission, phrase};
 }
 
 async function loadStudentData(studentSnap,setHasStudent,setReady){
@@ -1928,6 +2091,7 @@ async function loadStudentData(studentSnap,setHasStudent,setReady){
             coins:s.coins||0,
             lastActiveDay:s.lastActiveDay||null,
             dailyMissions:s.dailyMissions||{day:soloToday(),count:0},
+            phraseOfDay:s.phraseOfDay||null,
             avatar:s.avatar||{emoji:'🧭',color:'#7a7060'},
             skills:s.skills||{speaking:0,listening:0,reading:0,grammar:0,vocabulary:0,pronunciation:0},
         },
