@@ -7,7 +7,7 @@ window.PERIPLO_TAXONOMY = (() => {
         basic: {
             grammar:     ["Modal Verbs","Present Simple","Present Continuous","Future (Going to)","Otro"],
             verbs:       ["Pack 1: Daily Routine","Pack 2: Home & Communication","Pack 3: Travel & Conflict","Pack 4: Business & Emotion","Pack 5: Action & Strategy","Pack 6: Thoughts & Senses","Pack 7: Social & Science","Pack 8: Corporate & Economy","Pack 9: Medical & Survival","Otro"],
-            nouns:       ["Pack 1: Modern Nomad","Pack 2: Hungry Traveler","Pack 3: Daily Grind","Pack 4: Urban Chaos","Pack 5: Weekend Getaway","Pack 6: Mind & Senses","Pack 7: Society & Lab","Pack 8: Money & Power","Pack 9: Body & Survival","Otro"],
+            nouns:       ["Pack 1: Modern Nomad","Pack 2: Hungry Traveler","Pack 3: Travel & Places","Pack 4: Emotions & Mind","Pack 5: Weekend Getaway","Pack 6: People & Society","Pack 7: Science & Lab","Pack 8: Money & Power","Pack 9: Body & Health","Otro"],
             adjectives:  ["Pack 1: Personality & Looks","Pack 2: Feelings & State","Pack 3: Places & Vibes","Pack 4: The -ed/-ing Trap","Pack 5: Opinions & Taste","Otro"],
             key_structs: ["WH Questions","FANBOYS & Correlative","Subordinating Conj.","Prep. Time","Prep. Place","Prep. Movement & Other","Possessive & Object Pron.","Quantifiers","Frequency Adverbs","Otro"],
             otro:        ["Otro"]
@@ -37,7 +37,7 @@ window.PERIPLO_TAXONOMY = (() => {
         { id: 'grammar',     label: 'Grammar' },
         { id: 'verbs',       label: 'Verb Mastery' },
         { id: 'nouns',       label: 'Noun Mastery' },
-        { id: 'adjectives',  label: 'Vocab Mastery (Adj)' },
+        { id: 'adjectives',  label: 'Adjective Mastery' },
         { id: 'key_structs', label: 'Key Structures' },
         { id: 'otro',        label: 'Otro (Macro Skills)' }
     ];

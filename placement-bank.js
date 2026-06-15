@@ -96,7 +96,7 @@ window.PERIPLO_BANK = {
     // ── Barcos 2-8 — esqueletos (se llenan tras validar el Barco 1) ──────────
     { id:'ship2', n:2, label:'B1', level:'B1', module:'B1 Foundation', week:3,
       grammar:'Present Simple · Present Continuous · Future Going To',
-      vocab:'VP2-4 · NP2-4 — Home / Daily Grind / Urban',
+      vocab:'VP2-4 · NP2-4 — Hungry Traveler / Travel & Places / Emotions & Mind',
       questions:[
         // CONOCE (vocab NP2-4)
         { id:'s2_con_f1', container:'conoce', tier:'facil', type:'matching',
