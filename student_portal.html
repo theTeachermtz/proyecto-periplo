@@ -491,12 +491,34 @@ function deriveSoloWorlds(galaxy,student){
 
 /* ?unlock=1 → modo de prueba del teacher: abre todas las misiones sin gating secuencial */
 const SOLO_UNLOCK_ALL=new URLSearchParams(location.search).has('unlock');
+
+/* ── Economía de Modo Solo — TODA ajustable desde aquí ── */
+const SOLO_REWARDS={
+    xpPerMission:15,     // XP por cada misión core completada
+    coinsPerMission:5,   // monedas por cada misión core
+    dailyGoalBonus:10,   // monedas extra al cumplir el cupo del día
+    worldBonus:25,       // monedas extra al completar las 6 misiones de un mundo
+    dailyCap:2,          // misiones que cuentan por día (tope duro · vuelve mañana)
+};
+const _pad2=n=>String(n).padStart(2,'0');
+const soloToday=()=>{const d=new Date();return`${d.getFullYear()}-${_pad2(d.getMonth()+1)}-${_pad2(d.getDate())}`;};
+const _ymd=s=>{const[y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d);};
+const soloDayDiff=(a,b)=>Math.round((_ymd(b)-_ymd(a))/86400000);
+/* misiones que ya contaron HOY (global, suma de todos los mundos) */
+const soloUsedToday=student=>{const dm=student.dailyMissions||{};return dm.day===soloToday()?(dm.count||0):0;};
+const soloCapReached=student=>!SOLO_UNLOCK_ALL&&soloUsedToday(student)>=SOLO_REWARDS.dailyCap;
+
 function buildSoloMissions(worldId,student){
     const wp=(student.soloProgress||{})[worldId]||{done:0};
-    return MISSION_TEMPLATE.map((m,i)=>({
-        ...m,idx:i+1,
-        status:i<wp.done?'done':SOLO_UNLOCK_ALL?'active':i===wp.done?'active':'locked',
-    }));
+    const capped=soloCapReached(student);
+    return MISSION_TEMPLATE.map((m,i)=>{
+        let status;
+        if(i<wp.done) status='done';
+        else if(SOLO_UNLOCK_ALL) status='active';
+        else if(i===wp.done) status=capped?'locked_today':'active';   // siguiente misión, pero ya llegaste al cupo de hoy
+        else status='locked';
+        return{...m,idx:i+1,status};
+    });
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -688,12 +710,21 @@ function HomeScreen({t,onNav}){
             <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:12.5,color:t.ink2}}>¡Hola de nuevo!</p>
             <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:19,color:t.ink,lineHeight:1.05}}>{s.firstName} 👋</p>
           </div>
-          <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0,background:t.card,borderRadius:999,
-            padding:'7px 13px 7px 9px',boxShadow:`0 3px 0 ${t.cardEdge}, ${t.softShadow}`}}>
-            <span style={{width:22,height:22,borderRadius:'50%',fontSize:13,
-              background:`linear-gradient(150deg, ${t.yellow.f}, ${t.yellow.e})`,boxShadow:`0 2px 0 ${t.yellow.e}`,
-              display:'flex',alignItems:'center',justifyContent:'center'}}>⭐</span>
-            <span style={{fontFamily:'Fredoka',fontWeight:600,fontSize:14.5,color:t.ink}}>{(s.xp||0).toLocaleString()}</span>
+          <div style={{display:'flex',alignItems:'center',gap:7,flexShrink:0}}>
+            <div style={{display:'flex',alignItems:'center',gap:6,background:t.card,borderRadius:999,
+              padding:'7px 12px 7px 8px',boxShadow:`0 3px 0 ${t.cardEdge}, ${t.softShadow}`}}>
+              <span style={{width:22,height:22,borderRadius:'50%',fontSize:13,
+                background:`linear-gradient(150deg, ${t.yellow.f}, ${t.yellow.e})`,boxShadow:`0 2px 0 ${t.yellow.e}`,
+                display:'flex',alignItems:'center',justifyContent:'center'}}>⭐</span>
+              <span style={{fontFamily:'Fredoka',fontWeight:600,fontSize:14.5,color:t.ink}}>{(s.xp||0).toLocaleString()}</span>
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:6,background:t.card,borderRadius:999,
+              padding:'7px 12px 7px 8px',boxShadow:`0 3px 0 ${t.cardEdge}, ${t.softShadow}`}}>
+              <span style={{width:22,height:22,borderRadius:'50%',fontSize:12,
+                background:`linear-gradient(150deg, ${t.green.f}, ${t.green.e})`,boxShadow:`0 2px 0 ${t.green.e}`,
+                display:'flex',alignItems:'center',justifyContent:'center'}}>🪙</span>
+              <span style={{fontFamily:'Fredoka',fontWeight:600,fontSize:14.5,color:t.ink}}>{(s.coins||0).toLocaleString()}</span>
+            </div>
           </div>
         </div>
         {/* STREAK HERO */}
@@ -986,9 +1017,13 @@ const G_STAR_DUST=[[12,40],[28,14],[48,60],[66,24],[84,48],[20,84],[40,30],[58,9
 function GMissionSheet({t,data,onClose}){
   if(!data)return null;
   const{m,world}=data;const ac=t[m.ck]||t.blue;
-  const locked=m.status==='locked',done=m.status==='done';
-  const link=locked?null:(m.link||resolveMissionLink(m.key,world));
-  const stateText=locked?(m.extra?'Termina las 6 misiones del mundo para desbloquear los extras.':'Termina la misión anterior para desbloquearla.')
+  const locked=m.status==='locked',lockedToday=m.status==='locked_today',done=m.status==='done';
+  const baseLink=(locked||lockedToday)?null:(m.link||resolveMissionLink(m.key,world));
+  // Solo la misión ACTIVA core lleva token: al ganar, el renderer vuelve y premia.
+  // (Los repasos de misiones 'done' y los extras no premian → sin token.)
+  const link=(baseLink&&!done&&!m.extra)?`${baseLink}&solo=${encodeURIComponent(world.id+':'+m.key)}`:baseLink;
+  const stateText=lockedToday?`Ya cumpliste tus ${SOLO_REWARDS.dailyCap} misiones de hoy. Vuelve mañana para mantener tu racha 🔥.`
+    :locked?(m.extra?'Termina las 6 misiones del mundo para desbloquear los extras.':'Termina la misión anterior para desbloquearla.')
     :done?'Ya la superaste. Puedes volver a jugarla cuando quieras.':'¡Es tu turno! Complétala para avanzar.';
   const play=()=>{if(link)window.location.href=link;};
   return createPortal(
@@ -1008,9 +1043,11 @@ function GMissionSheet({t,data,onClose}){
           </div>
         </div>
         <p style={{fontFamily:'Nunito',fontWeight:600,fontSize:14,color:t.ink2,lineHeight:1.5,marginBottom:18}}>{m.sub}. {stateText}</p>
-        {locked?(
+        {(locked||lockedToday)?(
           <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:9,padding:15,borderRadius:16,background:t.cardSub,color:t.ink2}}>
-            <GIcon d="lock" size={17} color={t.ink2}/><span style={{fontFamily:'Fredoka',fontWeight:600,fontSize:15}}>Misión bloqueada</span>
+            {lockedToday
+              ?<React.Fragment><span style={{fontSize:17}}>🔥</span><span style={{fontFamily:'Fredoka',fontWeight:600,fontSize:15}}>Vuelve mañana</span></React.Fragment>
+              :<React.Fragment><GIcon d="lock" size={17} color={t.ink2}/><span style={{fontFamily:'Fredoka',fontWeight:600,fontSize:15}}>Misión bloqueada</span></React.Fragment>}
           </div>
         ):link?(
           <Btn3D face={done?t.blue.f:ac.f} edge={done?t.blue.e:ac.e} big style={{width:'100%'}} onClick={play}>
@@ -1031,6 +1068,7 @@ function GWorldView({t,world,student,onBack,onMission}){
   const ms=buildSoloMissions(world.id,student).map((m,i)=>({...m,ck:MISSION_CK[i]}));
   const done=ms.filter(m=>m.status==='done').length;const pct=Math.round(done/6*100);
   const active=ms.find(m=>m.status==='active');
+  const nextToday=ms.find(m=>m.status==='locked_today');   // siguiente misión, bloqueada por el cupo de hoy
   const extras=buildExtraMissions(world,done===6||SOLO_UNLOCK_ALL);
   return(
     <div style={{padding:'8px 16px 16px'}}>
@@ -1058,7 +1096,7 @@ function GWorldView({t,world,student,onBack,onMission}){
       <p style={{...GLBL,color:t.ink2,margin:'0 2px 12px'}}>Misiones del mundo</p>
       <div style={{position:'relative'}}>
         {ms.map((m,i)=>{
-          const ac=t[m.ck]||t.blue;const locked=m.status==='locked',isDone=m.status==='done',act=m.status==='active';
+          const ac=t[m.ck]||t.blue;const locked=m.status==='locked',lockedToday=m.status==='locked_today',isDone=m.status==='done',act=m.status==='active';
           return(
             <div key={m.key} style={{display:'flex',gap:13,marginBottom:i<5?11:0}}>
               <div style={{display:'flex',flexDirection:'column',alignItems:'center',width:30,flexShrink:0}}>
@@ -1079,8 +1117,8 @@ function GWorldView({t,world,student,onBack,onMission}){
                   display:'flex',alignItems:'center',justifyContent:'center'}}>{m.emoji}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:15,color:t.ink,lineHeight:1.1}}>{m.label}</p>
-                  <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:11.5,color:isDone?t.green.f:act?ac.f:t.ink2,marginTop:2}}>
-                    {isDone?'✓ Superada':act?'Aquí vas · ¡juega!':locked?'Bloqueada':m.sub}</p>
+                  <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:11.5,color:isDone?t.green.f:act?ac.f:lockedToday?t.flame.f:t.ink2,marginTop:2}}>
+                    {isDone?'✓ Superada':act?'Aquí vas · ¡juega!':lockedToday?'🔥 Vuelve mañana':locked?'Bloqueada':m.sub}</p>
                 </div>
                 {!locked&&<GIcon d={isDone?'play':'chev'} size={17} color={t.faint} fill={isDone?t.faint:'none'} sw={isDone?0:2.4}/>}
               </button>
@@ -1093,6 +1131,12 @@ function GWorldView({t,world,student,onBack,onMission}){
           <Btn3D face={t.green.f} edge={t.green.e} big style={{width:'100%'}} onClick={()=>onMission({m:active,world})}>
             <GIcon d="play" size={19} color="#fff" fill="#fff" sw={0}/> Misión {active.idx} · {active.label}
           </Btn3D>
+        ):nextToday?(
+          <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4,padding:16,borderRadius:18,
+            background:t.dark?'rgba(255,122,69,.14)':'#FFF1E8',color:t.flame.f}}>
+            <span style={{fontFamily:'Fredoka',fontWeight:700,fontSize:15}}>🔥 Cumpliste tus {SOLO_REWARDS.dailyCap} misiones de hoy</span>
+            <span style={{fontFamily:'Nunito',fontWeight:700,fontSize:12,color:t.ink2}}>Vuelve mañana para seguir tu racha</span>
+          </div>
         ):(
           <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:10,padding:16,borderRadius:18,
             background:t.dark?'rgba(46,210,126,.14)':'#E9FBF0',color:t.green.f}}>
@@ -1215,6 +1259,31 @@ function SoloScreen({t}){
       </div>
       <GMissionSheet t={t} data={sheet} onClose={()=>setSheet(null)}/>
     </div>
+  );
+}
+
+/* ─── Toast de recompensa al volver de una misión (versión base; animación way después) ─── */
+function GRewardToast({t}){
+  const r=window.PERIPLO.claimResult;
+  const[show,setShow]=useState(!!r);
+  useEffect(()=>{if(!r)return;const id=setTimeout(()=>setShow(false),4200);return()=>clearTimeout(id);},[]);
+  if(!r||!show) return null;
+  const coinsGained=(r.coins||0)+(r.dailyBonus||0)+(r.worldDone?SOLO_REWARDS.worldBonus:0);
+  const title=r.worldDone?'¡Mundo completado!':r.streakUp?`¡Racha de ${r.streak} día${r.streak===1?'':'s'}!`:'¡Misión completada!';
+  const icon=r.worldDone?'🏆':r.streakUp?'🔥':'🎉';
+  return createPortal(
+    <div onClick={()=>setShow(false)} className="fi" style={{position:'fixed',top:'calc(14px + env(safe-area-inset-top,0px))',left:'50%',transform:'translateX(-50%)',
+      zIndex:400,maxWidth:'92%',display:'flex',alignItems:'center',gap:13,padding:'12px 17px',borderRadius:18,cursor:'pointer',
+      background:t.card,boxShadow:`0 6px 0 ${t.cardEdge}, ${t.softShadow}`,border:`1px solid ${t.line}`}}>
+      <span style={{fontSize:30,flexShrink:0}}>{icon}</span>
+      <div style={{minWidth:0}}>
+        <p style={{fontFamily:'Fredoka',fontWeight:700,fontSize:15,color:t.ink,lineHeight:1.1}}>{title}</p>
+        <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:12,color:t.ink2,marginTop:2}}>
+          +{r.xp} XP · +{coinsGained} 🪙{r.dailyBonus?' · ¡meta del día!':''}
+        </p>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1724,6 +1793,7 @@ function PortalShell(){
 
             <BottomNav2 t={t} tab={navActive} onNav={setTab}/>
             <GRemediationDrawer t={t} item={drawer} onClose={()=>setDrawer(null)}/>
+            <GRewardToast t={t}/>
             <PullToRefresh t={t}/>
         </div>
     );
@@ -1762,8 +1832,68 @@ function NoStudentScreen(){
 
 const STUDENTS_PATH='artifacts/periplo-app-v1/students';
 
+/* ── FUENTE ÚNICA de la economía Solo ──────────────────────────
+   Se dispara cuando un renderer vuelve al portal con ?done=world:mission.
+   Idempotente y secuencial: solo premia si la misión es EXACTAMENTE la
+   activa del mundo (escribir la URL a mano no deja saltar ni reclamar 2 veces).
+   Muta `s` en memoria y persiste en Firestore. Devuelve un resumen para la
+   animación, o null/{already} si no hay nada que premiar. */
+async function claimSoloMission(s){
+    const raw=new URLSearchParams(location.search).get('done');
+    if(!raw||raw.indexOf(':')<0) return null;
+    const i=raw.indexOf(':');
+    const worldId=raw.slice(0,i), missionKey=raw.slice(i+1);
+    const idx=MISSION_TEMPLATE.findIndex(m=>m.key===missionKey);
+    if(!worldId||idx<0) return null;
+
+    const soloProgress={...(s.soloProgress||{})};
+    const wp={...(soloProgress[worldId]||{done:0})};
+    if(idx!==wp.done) return {already:true};   // ya reclamada / fuera de orden → sin premio
+
+    const today=soloToday();
+    let daily={...(s.dailyMissions||{day:today,count:0})};
+    if(daily.day!==today) daily={day:today,count:0};
+
+    // avanzar misión + premio base
+    wp.done=idx+1; soloProgress[worldId]=wp;
+    let xp=(s.xp||0)+SOLO_REWARDS.xpPerMission;
+    let coins=(s.coins||0)+SOLO_REWARDS.coinsPerMission;
+    daily.count+=1;
+
+    // racha: primera misión completada del día
+    let streak=s.streak||0, streakUp=false;
+    if(s.lastActiveDay!==today){
+        streak=(s.lastActiveDay&&soloDayDiff(s.lastActiveDay,today)===1)?streak+1:1;
+        streakUp=true;
+    }
+    const lastActiveDay=today;
+
+    // bonus: cumplir el cupo del día
+    let dailyBonus=0;
+    if(daily.count===SOLO_REWARDS.dailyCap){coins+=SOLO_REWARDS.dailyGoalBonus;dailyBonus=SOLO_REWARDS.dailyGoalBonus;}
+    // bonus: completar el mundo (6/6)
+    const worldDone=wp.done>=6;
+    if(worldDone) coins+=SOLO_REWARDS.worldBonus;
+
+    try{
+        await updateDoc(doc(db,STUDENTS_PATH,s.id),{soloProgress,xp,coins,streak,lastActiveDay,dailyMissions:daily});
+    }catch(e){console.error('claimSoloMission:',e);}
+
+    Object.assign(s,{soloProgress,xp,coins,streak,lastActiveDay,dailyMissions:daily});
+
+    return{worldId,missionKey,xp:SOLO_REWARDS.xpPerMission,coins:SOLO_REWARDS.coinsPerMission,
+        streak,streakUp,dailyBonus,worldDone,capReached:daily.count>=SOLO_REWARDS.dailyCap};
+}
+
 async function loadStudentData(studentSnap,setHasStudent,setReady){
     const s={id:studentSnap.id,...studentSnap.data()};
+
+    // Si volvemos de una misión (?done=...), aplica la recompensa ANTES de construir el estado
+    const claimResult=await claimSoloMission(s);
+    if(new URLSearchParams(location.search).has('done')){
+        try{history.replaceState({},'',location.pathname);}catch(e){}
+    }
+
     const quizSnap=await getDocs(query(
         collection(db,'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes'),
         where('studentVisible','==',true)
@@ -1795,6 +1925,9 @@ async function loadStudentData(studentSnap,setHasStudent,setReady){
             plan:s.plan||{classesPerWeek:3,usedThisWeek:0},
             streak:s.streak||0,
             xp:s.xp||0,
+            coins:s.coins||0,
+            lastActiveDay:s.lastActiveDay||null,
+            dailyMissions:s.dailyMissions||{day:soloToday(),count:0},
             avatar:s.avatar||{emoji:'🧭',color:'#7a7060'},
             skills:s.skills||{speaking:0,listening:0,reading:0,grammar:0,vocabulary:0,pronunciation:0},
         },
@@ -1809,6 +1942,7 @@ async function loadStudentData(studentSnap,setHasStudent,setReady){
 
     window.PERIPLO.resourcesRaw=allResources;
     window.PERIPLO.student.soloProgress=s.soloProgress||{};
+    window.PERIPLO.claimResult=claimResult&&!claimResult.already?claimResult:null;
 
     document.documentElement.style.setProperty('--lc',lore.color);
     setHasStudent(true);

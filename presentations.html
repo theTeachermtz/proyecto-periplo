@@ -131,6 +131,7 @@
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="periplo-config.js"></script>
+    <script src="periplo-solo.js"></script>
 </head>
 <body>
     <div id="root"></div>
@@ -150,6 +151,7 @@
         const db = getFirestore(app);
         const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${new URLSearchParams(window.location.search).get('uid') || 'teacher_builder_001'}/quizzes`;
         const IS_STUDENT   = new URLSearchParams(window.location.search).get('student') === 'true';
+        const SOLO         = (window.PeriploSolo && window.PeriploSolo.active()) || null;  // {world,mission,token} si viene de Modo Solo
 
         const triggerConfetti = () => {
             confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 }, colors: ['#3b82f6', '#10b981', '#f59e0b'] });
@@ -1100,6 +1102,21 @@
             const [arrowsVisible, setArrowsVisible] = useState(true);
             const hideTimer = useRef(null);
 
+            // Modo Solo: misión "terminada" = se llegó a la última slide (y si es quiz, se completó)
+            const [missionDone, setMissionDone] = useState(false);
+            useEffect(() => {
+                if (!presentation || !presentation.content) return;
+                const sl = presentation.content.slides || presentation.content;
+                const all = [...sl];
+                if (presentation.miniGame && presentation.miniGame.type !== 'none') {
+                    all.push({ type: presentation.miniGame.type, ...presentation.miniGame.data });
+                }
+                const last = all[all.length - 1];
+                const interactive = ['multipleChoice', 'fillBlank', 'sentenceScramble'].includes(last && last.type);
+                // Las slides interactivas marcan completado vía su onComplete; las de teoría, al llegar a ellas.
+                if (currentIdx === all.length - 1 && !interactive) setMissionDone(true);
+            }, [presentation, currentIdx]);
+
             // Student instructions hint — auto-dismiss after 5s
             const [showHint, setShowHint] = useState(IS_STUDENT);
             useEffect(() => {
@@ -1189,13 +1206,17 @@
             const nextSlide = () => { if (currentIdx < allSlides.length - 1) setCurrentIdx(currentIdx + 1); };
             const prevSlide = () => { if (currentIdx > 0) setCurrentIdx(currentIdx - 1); };
 
+            const isLastSlide = currentIdx === allSlides.length - 1;
+            // En la última slide, completar el quiz = terminar la misión; en las demás, avanza.
+            const onQuizComplete = () => { if (isLastSlide) setMissionDone(true); else nextSlide(); };
+
             const renderSlide = () => {
                 const quizTypes = ['multipleChoice', 'fillBlank', 'sentenceScramble'];
                 if (quizTypes.includes(currentSlide.type)) {
                     switch(currentSlide.type) {
-                        case 'multipleChoice': return <MultipleChoiceSlide slide={currentSlide} onComplete={nextSlide} lightMode={lightMode} key={currentSlide.id || currentIdx} />;
-                        case 'fillBlank': return <FillBlankSlide slide={currentSlide} onComplete={nextSlide} lightMode={lightMode} key={currentSlide.id || currentIdx} />;
-                        case 'sentenceScramble': return <SentenceScrambleSlide slide={currentSlide} onComplete={nextSlide} lightMode={lightMode} key={currentSlide.id || currentIdx} />;
+                        case 'multipleChoice': return <MultipleChoiceSlide slide={currentSlide} onComplete={onQuizComplete} lightMode={lightMode} key={currentSlide.id || currentIdx} />;
+                        case 'fillBlank': return <FillBlankSlide slide={currentSlide} onComplete={onQuizComplete} lightMode={lightMode} key={currentSlide.id || currentIdx} />;
+                        case 'sentenceScramble': return <SentenceScrambleSlide slide={currentSlide} onComplete={onQuizComplete} lightMode={lightMode} key={currentSlide.id || currentIdx} />;
                     }
                 }
                 if (currentSlide.layout || currentSlide.type === 'theory' || !currentSlide.type) {
@@ -1232,11 +1253,26 @@
                 <div className={`h-[100dvh] w-full flex flex-col overflow-hidden font-sans ${lightMode ? 'light-mode' : 'text-white'}`} style={{ background: isPresenting ? stageBg : ui.bg }}>
 
                     {/* ── Student instructions hint ── */}
-                    {showHint && (
+                    {showHint && !(SOLO && missionDone) && (
                         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-4 px-6 py-3 rounded-2xl border border-white/15 text-white text-sm font-bold shadow-2xl"
                              style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(12px)', whiteSpace: 'nowrap', fontFamily: 'Nunito, sans-serif' }}>
                             <span>← → Use the arrows to navigate slides</span>
                             <button onClick={() => setShowHint(false)} className="text-white/50 hover:text-white transition-colors text-base leading-none">✕</button>
+                        </div>
+                    )}
+
+                    {/* ── Modo Solo: reclamar recompensa al terminar ── */}
+                    {SOLO && missionDone && (
+                        <div className="fixed bottom-0 left-0 w-full z-[9999] flex justify-center px-4 pb-safe" style={{ pointerEvents: 'none' }}>
+                            <button
+                                onClick={() => { triggerConfetti(); window.PeriploSolo.complete(); }}
+                                className="touch-safe g-btn animate-popIn mb-5"
+                                style={{ pointerEvents: 'auto', '--c': accent, '--c2': 'rgba(0,0,0,0.30)', background: accent, color: '#fff',
+                                    borderRadius: 18, padding: '15px 26px', fontFamily: 'Fredoka, sans-serif', fontWeight: 600, fontSize: 17,
+                                    display: 'inline-flex', alignItems: 'center', gap: 10, border: 'none', cursor: 'pointer' }}
+                            >
+                                🎉 ¡Terminaste! Reclamar recompensa →
+                            </button>
                         </div>
                     )}
 
