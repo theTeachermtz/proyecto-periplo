@@ -28,7 +28,7 @@ Géneros disponibles en dashboard-reading: Artículo Formal · Artículo Informa
 
 ---
 
-### Semana 3 · Present Continuous · Verbs Pack 3 (Travel & Conflict) · Adj Pack 2 (Feelings & State)
+### Semana 3 · Present Continuous · Verbs Pack 3 (Travel & Adventure) · Adj Pack 1 & 2
 
 | \# | Género | Idea de tema |
 | :---- | :---- | :---- |
@@ -39,7 +39,7 @@ Géneros disponibles en dashboard-reading: Artículo Formal · Artículo Informa
 
 ---
 
-### Semana 4 · Future Going To · Verbs Pack 4 (Business & Emotion) · Adj Pack 3 (Places & Vibes)
+### Semana 4 · Future Going To · Verbs Pack 4 (Feelings & Reactions) · Adj Pack 3 & 4
 
 | \# | Género | Idea de tema |
 | :---- | :---- | :---- |
@@ -63,7 +63,7 @@ Géneros disponibles en dashboard-reading: Artículo Formal · Artículo Informa
 
 ---
 
-### Semana 2 · Object Pronouns · Verbs Pack 6 (Thoughts & Senses) · Nouns Pack 6 (Mind & Senses) · Adj Pack 5 (Opinions & Taste)
+### Semana 2 · Object Pronouns · Verbs Pack 6 (Social & Relationships) · Nouns Pack 6 (People & Society) · Adj Pack 5 (Opinions & Taste)
 
 | \# | Género | Idea de tema |
 | :---- | :---- | :---- |
@@ -74,14 +74,14 @@ Géneros disponibles en dashboard-reading: Artículo Formal · Artículo Informa
 
 ---
 
-### Semana 3 · Quantifiers · Verbs Pack 7 (Social & Science)
+### Semana 3 · Quantifiers · Verbs Pack 7 (Science & Lab)
 
 | \# | Género | Idea de tema |
 | :---- | :---- | :---- |
-| 1 | **Artículo Informal** | "How much stuff do you actually need to pack for a weekend trip?" |
-| 2 | **Reddit** | r/mildlyinfuriating — "There was barely *any* food left at the party and I arrived on time" |
-| 3 | **Historia / Cuento** | Alguien intenta cocinar con lo que tiene en casa — *some* eggs, *not much* time, *too many* ideas |
-| 4 | **Diálogo / Podcast** | Entrevista en un supermercado — hábitos de compra, cuánto gastan, qué les falta siempre |
+| 1 | **Artículo Informal** | "How much water does the human body actually need?" — cantidades en ciencia cotidiana |
+| 2 | **Reddit** | r/science — "There isn't enough evidence yet, and there are too many variables to be sure" |
+| 3 | **Historia / Cuento** | Alguien en un laboratorio improvisado: *some* samples, *not much* time, *too many* experiments a la vez |
+| 4 | **Diálogo / Podcast** | Entrevista a un investigador — cuánta data juntó, cuántos experimentos faltan, qué recursos no alcanzan |
 
 ---
 
