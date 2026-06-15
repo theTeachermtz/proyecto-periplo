@@ -151,9 +151,11 @@ const getLink=q=>{
     const t=(q.renderAs||q.type||'').toUpperCase();
     const M={READING:'reading.html',LISTENING:'listening.html',PRESENTATION:'presentations.html',
              LINGOMATCH:'lingomatch.html',WORDCASCADE:'wordcascade.html',WORDBUILDINGS:'wordbuildings.html',
+             DUAL_WORD:'wordcascade.html',SPELL_PHRASE:'spell-the-phrase.html',PHONECHAT:'phonechat.html',
              NEVEREVER:'neverever.html',TALKTIME:'talktime.html',UNO:'uno.html',
              FLASHCARDS:'flashcards.html',ANAGRAM:'anagram.html',MEMORAMA:'memorama.html',
-             EMOJISPELL:'emojispell.html',BOARDGAME_BANK:'periplo-party.html',CONNECT4:'connect4.html'};
+             EMOJISPELL:'emojispell.html',BOARDGAME_BANK:'periplo-party.html',CONNECT4:'connect4.html',
+             WORDPACK:'flashcards.html',WORD_BANK:'flashcards.html'};
     return`${M[t]||'activity.html'}?id=${q.id}${p}`;
 };
 
@@ -595,30 +597,51 @@ function useSchedule(){
 
 /* ─── resolver: misión → link al juego real publicado (ojo morado) ─── */
 const RES_UID='teacher_builder_001';
+/* slot = el casillero que el teacher ancla desde el index (solo:{world,slot}).
+   Las 3 misiones de vocab comparten slot 'vocab' (un solo word bank las llena). */
 const MISSION_LINK={
-  presentation:{file:'presentations.html',types:['PRESENTATION']},
-  vocab_v:{file:'flashcards.html',types:['WORDPACK','WORD_BANK'],mode:'flashcards'},
-  vocab_n:{file:'memorama.html',types:['WORDPACK','WORD_BANK'],mode:'memorama'},
-  reading:{file:'reading.html',types:['READING']},
-  spell:{file:'emojispell.html',types:['WORDPACK','WORD_BANK'],mode:'emojispell'},
-  listening:{file:'listening.html',types:['LISTENING']},
+  presentation:{file:'presentations.html',types:['PRESENTATION'],slot:'presentation'},
+  vocab_v:{file:'flashcards.html',types:['WORDPACK','WORD_BANK'],mode:'flashcards',slot:'vocab'},
+  vocab_n:{file:'memorama.html',types:['WORDPACK','WORD_BANK'],mode:'memorama',slot:'vocab'},
+  reading:{file:'reading.html',types:['READING'],slot:'reading'},
+  spell:{file:'emojispell.html',types:['WORDPACK','WORD_BANK'],mode:'emojispell',slot:'vocab'},
+  listening:{file:'listening.html',types:['LISTENING'],slot:'listening'},
 };
+function missionOk(r,cfg){
+  const ty=(r.type||'').toUpperCase();
+  if(!cfg.types.includes(ty))return false;
+  if(!inDest(r,'solo'))return false;
+  if(cfg.mode){const pm=r.publishedModes||[];if(pm.length&&!pm.includes(cfg.mode))return false;}
+  return true;
+}
 function resolveMissionLink(missionKey,world){
   const cfg=MISSION_LINK[missionKey];if(!cfg)return null;
   const all=window.PERIPLO.resourcesRaw||[];
-  const ok=all.filter(r=>{
-    const ty=(r.type||'').toUpperCase();
-    if(!cfg.types.includes(ty))return false;
-    if(!inDest(r,'solo'))return false;
-    if(cfg.mode){const pm=r.publishedModes||[];if(pm.length&&!pm.includes(cfg.mode))return false;}
-    return true;
-  });
-  if(!ok.length)return null;
-  const byTopic=world?ok.find(r=>(r.tags?.topics||[]).includes(world.title)):null;
-  const pick=byTopic||ok[0];
+  // 1) Asignación EXPLÍCITA: solo{world,slot} — precisa, no depende del nombre (sirve igual en B Mix)
+  let pick=all.find(r=>r.solo&&r.solo.world===world.id&&r.solo.slot===cfg.slot&&missionOk(r,cfg));
+  // 2) Fallback LEGACY: docs viejos sin solo{} → match por título del mundo
+  if(!pick){
+    const ok=all.filter(r=>!r.solo&&missionOk(r,cfg));
+    pick=(world?ok.find(r=>(r.tags?.topics||[]).includes(world.title)):null)||ok[0];
+  }
+  if(!pick)return null;
   return`${cfg.file}?id=${pick.id}&uid=${RES_UID}&student=true`;
 }
 const MISSION_CK=['purple','blue','green','yellow','pink','blue'];
+const EXTRA_CK=['pink','purple','flame','blue'];
+/* Misiones EXTRA del mundo: docs anclados con solo.slot==='extra' (dual words,
+   lingomatch, spell-the-phrase…). Se desbloquean al terminar las 6 core. */
+function buildExtraMissions(world,coreDone){
+  const all=window.PERIPLO.resourcesRaw||[];
+  return all
+    .filter(r=>r.solo&&r.solo.world===world.id&&r.solo.slot==='extra'&&inDest(r,'solo'))
+    .map((r,i)=>({
+      key:'extra:'+r.id, extra:true, idx:i+1, ck:EXTRA_CK[i%EXTRA_CK.length],
+      label:r.title||'Misión extra', sub:'Reto bonus del mundo', emoji:'⭐',
+      status:coreDone?'active':'locked',
+      link:`${getLink({type:r.type,id:r.id})}&uid=${RES_UID}`,
+    }));
+}
 
 /* ════════════════════════════════════════════════════════════
    INICIO (skin nuevo)
@@ -958,8 +981,8 @@ function GMissionSheet({t,data,onClose}){
   if(!data)return null;
   const{m,world}=data;const ac=t[m.ck]||t.blue;
   const locked=m.status==='locked',done=m.status==='done';
-  const link=locked?null:resolveMissionLink(m.key,world);
-  const stateText=locked?'Termina la misión anterior para desbloquearla.'
+  const link=locked?null:(m.link||resolveMissionLink(m.key,world));
+  const stateText=locked?(m.extra?'Termina las 6 misiones del mundo para desbloquear los extras.':'Termina la misión anterior para desbloquearla.')
     :done?'Ya la superaste. Puedes volver a jugarla cuando quieras.':'¡Es tu turno! Complétala para avanzar.';
   const play=()=>{if(link)window.location.href=link;};
   return(
@@ -974,7 +997,7 @@ function GMissionSheet({t,data,onClose}){
             background:locked?t.cardSub:`linear-gradient(150deg, ${ac.f}, ${ac.e})`,boxShadow:locked?'none':`0 5px 0 ${ac.e}`,
             filter:locked?'grayscale(1)':'none',opacity:locked?.7:1,display:'flex',alignItems:'center',justifyContent:'center'}}>{m.emoji}</div>
           <div style={{flex:1,minWidth:0}}>
-            <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:11,letterSpacing:'.1em',textTransform:'uppercase',color:locked?t.ink2:ac.f}}>Misión {m.idx} de 6</p>
+            <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:11,letterSpacing:'.1em',textTransform:'uppercase',color:locked?t.ink2:ac.f}}>{m.extra?'Misión extra':`Misión ${m.idx} de 6`}</p>
             <h3 style={{fontFamily:'Fredoka',fontWeight:700,fontSize:23,color:t.ink,lineHeight:1.05,marginTop:2}}>{m.label}</h3>
           </div>
         </div>
@@ -1001,6 +1024,7 @@ function GWorldView({t,world,student,onBack,onMission}){
   const ms=buildSoloMissions(world.id,student).map((m,i)=>({...m,ck:MISSION_CK[i]}));
   const done=ms.filter(m=>m.status==='done').length;const pct=Math.round(done/6*100);
   const active=ms.find(m=>m.status==='active');
+  const extras=buildExtraMissions(world,done===6);
   return(
     <div style={{padding:'8px 16px 16px'}}>
       <button onClick={onBack} style={{display:'inline-flex',alignItems:'center',gap:7,marginBottom:14,cursor:'pointer',
@@ -1070,6 +1094,30 @@ function GWorldView({t,world,student,onBack,onMission}){
           </div>
         )}
       </div>
+      {extras.length>0&&(
+        <div style={{marginTop:22}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,margin:'0 2px 12px'}}>
+            <span style={{fontSize:16}}>⭐</span>
+            <p style={{...GLBL,color:t.ink2,margin:0}}>Misiones extra {done===6?'· ¡desbloqueadas!':'· termina el mundo'}</p>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+            {extras.map(m=>{const ac=t[m.ck]||t.pink;const locked=m.status==='locked';return(
+              <button key={m.key} onClick={()=>!locked&&onMission({m,world})} className={locked?'':'g-tile'} style={{textAlign:'left',
+                border:'none',cursor:locked?'default':'pointer',background:t.card,borderRadius:18,padding:'14px 13px',
+                display:'flex',flexDirection:'column',gap:10,opacity:locked?.55:1,
+                boxShadow:locked?`0 2px 0 ${t.cardEdge}`:`0 4px 0 ${t.cardEdge}, ${t.softShadow}`}}>
+                <span style={{width:42,height:42,borderRadius:13,flexShrink:0,fontSize:21,
+                  background:locked?t.cardSub:`linear-gradient(150deg,${ac.f},${ac.e})`,boxShadow:locked?'none':`0 4px 0 ${ac.e}`,
+                  filter:locked?'grayscale(1)':'none',display:'flex',alignItems:'center',justifyContent:'center'}}>{locked?'🔒':m.emoji}</span>
+                <div style={{minWidth:0}}>
+                  <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:13.5,color:t.ink,lineHeight:1.1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{m.label}</p>
+                  <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:10.5,color:locked?t.faint:ac.f,marginTop:2}}>{locked?'Bloqueada':'Reto bonus'}</p>
+                </div>
+              </button>
+            );})}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

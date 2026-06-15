@@ -381,6 +381,49 @@
             ];
             const getDocCats = (q) => q.tags?.categories || (q.tags?.category ? [q.tags.category] : []);
 
+            // Mundos de Solo — los IDs DEBEN coincidir con GALAXIES en student_portal.html
+            const SOLO_WORLDS = {
+                basic: [
+                    {id:'modal_verbs',title:'Modal Verbs',module:'B1'},{id:'pres_simple',title:'Present Simple',module:'B1'},
+                    {id:'pres_cont',title:'Present Continuous',module:'B1'},{id:'past_simple_b',title:'Past Simple',module:'B1'},
+                    {id:'prepositions',title:'Prepositions',module:'B2'},{id:'obj_pronouns',title:'Object Pronouns',module:'B2'},
+                    {id:'quantifiers',title:'Quantifiers',module:'B2'},{id:'possessives',title:'Possessive Pronouns',module:'B2'},
+                    {id:'small_talk',title:'Small Talk',module:'B-MIX'},{id:'vida_digital',title:'Tu Vida Digital',module:'B-MIX'},
+                    {id:'salud',title:'Salud y Bienestar',module:'B-MIX'},{id:'yo_prof',title:'Tu Yo Profesional',module:'B-MIX'},
+                ],
+                advanced: [
+                    {id:'past_simple_a',title:'Past Simple',module:'A1'},{id:'second_cond',title:'Second Conditional',module:'A1'},
+                    {id:'past_cont',title:'Past Continuous',module:'A1'},{id:'was_going',title:'Was/Were Going To',module:'A1'},
+                    {id:'used_to',title:'Used To',module:'A2'},{id:'comparatives',title:'Comparatives',module:'A2'},
+                    {id:'rel_clauses',title:'Relative Clauses',module:'A2'},{id:'pres_perf_c',title:'Present Perfect Cont.',module:'A2'},
+                    {id:'pressure_perf',title:'Pressure & Performance',module:'A-MIX'},{id:'success',title:'Success & Momentum',module:'A-MIX'},
+                    {id:'relationships',title:'Relationships & Conflict',module:'A-MIX'},{id:'risk',title:'Risk & Decision',module:'A-MIX'},
+                ],
+                pro: [
+                    {id:'perf_tenses',title:'Present/Past Perfect',module:'P1'},{id:'third_cond',title:'Third Conditional',module:'P1'},
+                    {id:'passive',title:'Passive Voice',module:'P1'},{id:'past_modals',title:'Past Conditionals',module:'P1'},
+                    {id:'rep_speech',title:'Reported Speech',module:'P2'},{id:'gerunds',title:'Gerunds & Infinitives',module:'P2'},
+                    {id:'entrevista',title:'Entrevista de Trabajo',module:'P2'},{id:'psicologia',title:'Psicología',module:'P2'},
+                    {id:'pmix_1',title:'P Mix · Semana 1',module:'P-MIX'},{id:'pmix_2',title:'P Mix · Semana 2',module:'P-MIX'},
+                    {id:'pmix_3',title:'P Mix · Semana 3',module:'P-MIX'},{id:'pmix_4',title:'P Mix · Semana 4',module:'P-MIX'},
+                ],
+            };
+            // Slots de misión válidos según el tipo de actividad
+            const SOLO_SLOTS = (type) => {
+                const T = (type || '').toUpperCase();
+                if (T === 'PRESENTATION') return [{ id:'presentation', label:'Presentación · misión 1' }, { id:'extra', label:'Extra (bonus)' }];
+                if (T === 'READING')      return [{ id:'reading',      label:'Reading · misión 4' },     { id:'extra', label:'Extra (bonus)' }];
+                if (T === 'LISTENING')    return [{ id:'listening',    label:'Listening · misión 6' },   { id:'extra', label:'Extra (bonus)' }];
+                if (T === 'WORDPACK' || T === 'WORD_BANK') return [{ id:'vocab', label:'Vocabulario · misiones 2·3·5' }, { id:'extra', label:'Extra (bonus)' }];
+                return [{ id:'extra', label:'Extra (bonus)' }];
+            };
+            const soloLevelOf = (q) => {
+                const first = ((q.tags?.levels || [])[0] || '').toUpperCase();
+                if (first.startsWith('A')) return 'advanced';
+                if (first.startsWith('P')) return 'pro';
+                return 'basic';
+            };
+
             const handleDeleteActivity = async (e, q) => {
                 e.preventDefault(); e.stopPropagation();
                 const ref = doc(db, 'artifacts', FS_APP_ID, 'users', user.uid, 'quizzes', q.id);
@@ -394,7 +437,13 @@
                 e.preventDefault(); e.stopPropagation();
                 let dests = Array.isArray(q.destinations) ? q.destinations : [];
                 if (dests.length === 0 && q.studentVisible) dests = ['solo', 'patio', 'recursos'];
-                setDestDraft({ dests, modes: Array.isArray(q.publishedModes) ? q.publishedModes : [] });
+                setDestDraft({
+                    dests,
+                    modes: Array.isArray(q.publishedModes) ? q.publishedModes : [],
+                    soloLevel: q.solo?.level || soloLevelOf(q),
+                    soloWorld: q.solo?.world || '',
+                    soloSlot:  q.solo?.slot  || SOLO_SLOTS(q.type)[0].id,
+                });
                 setDestModal({ isOpen: true, quiz: q });
             };
 
@@ -408,12 +457,15 @@
             const saveDest = async () => {
                 const q = destModal.quiz; if (!q) return;
                 const isWP = q.type === 'WORDPACK' || q.type === 'WORD_BANK';
-                let { dests, modes } = destDraft;
+                let { dests, modes, soloLevel, soloWorld, soloSlot } = destDraft;
+                // Solo requiere elegir mundo explícito (esto es lo que da precisión y evita el match por nombre)
+                if (dests.includes('solo') && !soloWorld) { alert('Elige a qué mundo de Solo pertenece esta actividad.'); return; }
                 // Word bank en Solo/Patio sin modos elegidos → publica todos por defecto
                 if (isWP && (dests.includes('solo') || dests.includes('patio')) && modes.length === 0)
                     modes = ['flashcards', 'crossword', 'anagram', 'memorama', 'emojispell'];
                 const update = { destinations: dests, studentVisible: dests.length > 0 };
                 if (isWP) update.publishedModes = dests.length ? modes : [];
+                update.solo = dests.includes('solo') ? { level: soloLevel, world: soloWorld, slot: soloSlot } : null;
                 try {
                     await updateDoc(doc(db, 'artifacts', FS_APP_ID, 'users', user.uid, 'quizzes', q.id), update);
                     triggerUndo(dests.length ? `📍 "${q.title}" → ${dests.length} destino${dests.length > 1 ? 's' : ''} del portal` : `🙈 "${q.title}" oculto del portal`, null);
@@ -1058,6 +1110,37 @@
                                                 </button>
                                             );
                                         })}
+
+                                        {destDraft.dests.includes('solo') && (
+                                            <div className="pt-3 mt-1 border-t border-zinc-800 space-y-3">
+                                                <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">🪐 Solo · ¿a qué mundo y misión?</p>
+                                                {/* Nivel */}
+                                                <div className="flex gap-1.5">
+                                                    {[{id:'basic',label:'Basic'},{id:'advanced',label:'Advanced'},{id:'pro',label:'Pro'}].map(lv => {
+                                                        const on = destDraft.soloLevel === lv.id;
+                                                        return (
+                                                            <button key={lv.id} onClick={() => setDestDraft(d => ({ ...d, soloLevel: lv.id, soloWorld: '' }))} className={`flex-1 py-1.5 rounded-lg text-xs font-black transition-all ${on ? 'bg-indigo-600 text-white' : 'bg-zinc-800/60 text-zinc-400 hover:text-zinc-200'}`}>{lv.label}</button>
+                                                        );
+                                                    })}
+                                                </div>
+                                                {/* Mundo */}
+                                                <select value={destDraft.soloWorld} onChange={(e) => setDestDraft(d => ({ ...d, soloWorld: e.target.value }))} className={`w-full bg-zinc-800 border rounded-xl px-3 py-2.5 text-sm font-bold focus:outline-none focus:border-indigo-500 ${destDraft.soloWorld ? 'border-indigo-500/50 text-white' : 'border-zinc-700 text-zinc-400'}`}>
+                                                    <option value="">— Elige el mundo —</option>
+                                                    {(SOLO_WORLDS[destDraft.soloLevel] || []).map(w => (
+                                                        <option key={w.id} value={w.id}>{w.module} · {w.title}</option>
+                                                    ))}
+                                                </select>
+                                                {/* Slot / misión */}
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    {SOLO_SLOTS(q.type).map(s => {
+                                                        const on = destDraft.soloSlot === s.id;
+                                                        return (
+                                                            <button key={s.id} onClick={() => setDestDraft(d => ({ ...d, soloSlot: s.id }))} className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold transition-all active:scale-95 ${on ? 'border-indigo-500/60 bg-indigo-500/10 text-indigo-300' : 'border-zinc-800 bg-zinc-800/40 text-zinc-500'}`}>{s.label}</button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
 
                                         {showModes && (
                                             <div className="pt-3 mt-1 border-t border-zinc-800">
