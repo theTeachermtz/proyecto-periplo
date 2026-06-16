@@ -548,13 +548,22 @@ const dailyPhraseIdx=dayStr=>{let h=0;for(let i=0;i<dayStr.length;i++)h=(h*31+da
 function buildSoloMissions(worldId,student){
     const wp=(student.soloProgress||{})[worldId]||{done:0};
     const capped=soloCapReached(student);
-    return MISSION_TEMPLATE.map((m,i)=>{
+    const slots=soloWorldSlots(worldId);
+    return SOLO_CORE.map((slot,i)=>{
+        const a=slots[slot]; const meta=a?soloMeta(a.q,a.mode):null;
         let status;
         if(i<wp.done) status='done';
         else if(SOLO_UNLOCK_ALL) status='active';
         else if(i===wp.done) status=capped?'locked_today':'active';   // siguiente misión, pero ya llegaste al cupo de hoy
         else status='locked';
-        return{...m,idx:i+1,status};
+        return{
+            key:slot, idx:i+1,
+            label:a?(a.q.title||`Misión ${i+1}`):`Misión ${i+1}`,
+            sub:a?meta.kind:'Tu teacher aún no la comparte',
+            emoji:a?meta.emoji:'🔒',
+            empty:!a, link:a?soloLink(a.q,a.mode):null,
+            status,
+        };
     });
 }
 
@@ -662,50 +671,77 @@ function useSchedule(){
 
 /* ─── resolver: misión → link al juego real publicado (ojo morado) ─── */
 const RES_UID='teacher_builder_001';
-/* slot = el casillero que el teacher ancla desde el index (solo:{world,slot}).
-   Las 3 misiones de vocab comparten slot 'vocab' (un solo word bank las llena). */
-const MISSION_LINK={
-  presentation:{file:'presentations.html',types:['PRESENTATION'],slot:'presentation'},
-  vocab_v:{file:'flashcards.html',types:['WORDPACK','WORD_BANK'],mode:'flashcards',slot:'vocab'},
-  vocab_n:{file:'memorama.html',types:['WORDPACK','WORD_BANK'],mode:'memorama',slot:'vocab'},
-  reading:{file:'reading.html',types:['READING'],slot:'reading'},
-  spell:{file:'emojispell.html',types:['WORDPACK','WORD_BANK'],mode:'emojispell',slot:'vocab'},
-  listening:{file:'listening.html',types:['LISTENING'],slot:'listening'},
-};
-function missionOk(r,cfg){
-  const ty=(r.type||'').toUpperCase();
-  if(!cfg.types.includes(ty))return false;
-  if(!inDest(r,'solo'))return false;
-  if(cfg.mode){const pm=r.publishedModes||[];if(pm.length&&!pm.includes(cfg.mode))return false;}
-  return true;
-}
-function resolveMissionLink(missionKey,world){
-  const cfg=MISSION_LINK[missionKey];if(!cfg)return null;
-  const all=window.PERIPLO.resourcesRaw||[];
-  // 1) Asignación EXPLÍCITA: solo{world,slot} — precisa, no depende del nombre (sirve igual en B Mix)
-  let pick=all.find(r=>r.solo&&r.solo.world===world.id&&r.solo.slot===cfg.slot&&missionOk(r,cfg));
-  // 2) Fallback LEGACY: docs viejos sin solo{} → match por título del mundo
-  if(!pick){
-    const ok=all.filter(r=>!r.solo&&missionOk(r,cfg));
-    pick=(world?ok.find(r=>(r.tags?.topics||[]).includes(world.title)):null)||ok[0];
-  }
-  if(!pick)return null;
-  return`${cfg.file}?id=${pick.id}&uid=${RES_UID}&student=true`;
-}
+
+/* ── MODELO DE SLOTS POSICIONALES ──────────────────────────────
+   El teacher ancla cada juego a una POSICIÓN: solo:{world, slot, mode?}.
+   Core c1..c6 = la senda secuencial; extras x1..x4 = bonus.
+   Cualquier juego puede ir en cualquier slot. */
+const SOLO_CORE=['c1','c2','c3','c4','c5','c6'];
+const SOLO_EXTRA=['x1','x2','x3','x4'];
 const MISSION_CK=['purple','blue','green','yellow','pink','blue'];
 const EXTRA_CK=['pink','purple','flame','blue'];
-/* Misiones EXTRA del mundo: docs anclados con solo.slot==='extra' (dual words,
-   lingomatch, spell-the-phrase…). Se desbloquean al terminar las 6 core. */
+
+/* meta visual por tipo/modo de juego (emoji + etiqueta corta) */
+const SOLO_TYPE_META={
+  PRESENTATION:{emoji:'📽️',kind:'Presentación'}, READING:{emoji:'📖',kind:'Reading'},
+  LISTENING:{emoji:'🎧',kind:'Listening'}, LINGOMATCH:{emoji:'🔗',kind:'LingoMatch'},
+  WORDCASCADE:{emoji:'🌊',kind:'Word Cascade'}, DUAL_WORD:{emoji:'🌊',kind:'Word Cascade'},
+  WORDBUILDINGS:{emoji:'🏢',kind:'Word Buildings'}, SPELL_PHRASE:{emoji:'✍️',kind:'Spell the Phrase'},
+  CONNECT4:{emoji:'🔴',kind:'Connect 4'}, BOARDGAME_BANK:{emoji:'🎲',kind:'Board Game'},
+  JEOPARDY_BANK:{emoji:'🎯',kind:'Jeopardy'}, UNO:{emoji:'🎴',kind:'UNO'},
+  NEVEREVER:{emoji:'🤫',kind:'Never Ever'}, TALKTIME:{emoji:'💬',kind:'Talk Time'},
+  flashcards:{emoji:'🃏',kind:'Flashcards'}, memorama:{emoji:'🧠',kind:'Memorama'},
+  emojispell:{emoji:'😎',kind:'EmojiSpell'}, anagram:{emoji:'🔤',kind:'Anagrama'},
+};
+const soloMeta=(q,mode)=>{
+  if(mode&&SOLO_TYPE_META[mode]) return SOLO_TYPE_META[mode];
+  const t=(q.renderAs||q.type||'').toUpperCase();
+  return SOLO_TYPE_META[t]||{emoji:'🎮',kind:q.type||'Juego'};
+};
+const MODE_FILE={flashcards:'flashcards.html',memorama:'memorama.html',emojispell:'emojispell.html',anagram:'anagram.html'};
+const soloLink=(q,mode)=>{
+  const t=(q.type||'').toUpperCase();
+  if((t==='WORDPACK'||t==='WORD_BANK')&&mode&&MODE_FILE[mode]) return`${MODE_FILE[mode]}?id=${q.id}&uid=${RES_UID}&student=true`;
+  return`${getLink(q)}&uid=${RES_UID}`;
+};
+
+/* Compat: a qué posiciones ocupa un quiz. Nuevo = [solo.slot]; legacy (slot por tipo)
+   se mapea a posición. Un vocab legacy se expande a c2/c3/c5 según publishedModes. */
+const soloSlotsOf=q=>{
+  const s=q.solo; if(!s) return [];
+  if(SOLO_CORE.includes(s.slot)||SOLO_EXTRA.includes(s.slot)) return[{slot:s.slot,mode:s.mode||null}];
+  if(s.slot==='presentation') return[{slot:'c1',mode:null}];
+  if(s.slot==='reading')      return[{slot:'c4',mode:null}];
+  if(s.slot==='listening')    return[{slot:'c6',mode:null}];
+  if(s.slot==='extra')        return[{slot:'x1',mode:null}];
+  if(s.slot==='vocab'){
+    const pm=q.publishedModes||['flashcards']; const out=[];
+    if(pm.includes('flashcards')) out.push({slot:'c2',mode:'flashcards'});
+    if(pm.includes('memorama'))   out.push({slot:'c3',mode:'memorama'});
+    if(pm.includes('emojispell')) out.push({slot:'c5',mode:'emojispell'});
+    return out.length?out:[{slot:'c2',mode:'flashcards'}];
+  }
+  return [];
+};
+/* mapa slot→{q,mode} para un mundo (el primer quiz gana si hay colisión) */
+const soloWorldSlots=(worldId,res)=>{
+  const all=res||window.PERIPLO.resourcesRaw||[]; const map={};
+  for(const q of all){
+    if(!q.solo||q.solo.world!==worldId||!inDest(q,'solo')) continue;
+    for(const a of soloSlotsOf(q)){ if(!map[a.slot]) map[a.slot]={q,mode:a.mode}; }
+  }
+  return map;
+};
+
+/* Misiones EXTRA del mundo (x1..x4). Se desbloquean al terminar las 6 core. */
 function buildExtraMissions(world,coreDone){
-  const all=window.PERIPLO.resourcesRaw||[];
-  return all
-    .filter(r=>r.solo&&r.solo.world===world.id&&r.solo.slot==='extra'&&inDest(r,'solo'))
-    .map((r,i)=>({
-      key:'extra:'+r.id, extra:true, idx:i+1, ck:EXTRA_CK[i%EXTRA_CK.length],
-      label:r.title||'Misión extra', sub:'Reto bonus del mundo', emoji:'⭐',
-      status:coreDone?'active':'locked',
-      link:`${getLink({type:r.type,id:r.id})}&uid=${RES_UID}`,
-    }));
+  const slots=soloWorldSlots(world.id);
+  return SOLO_EXTRA.map((slot,i)=>({slot,i})).filter(o=>slots[o.slot]).map(({slot,i})=>{
+    const {q,mode}=slots[slot]; const meta=soloMeta(q,mode);
+    return{ key:slot, extra:true, idx:i+1, ck:EXTRA_CK[i%EXTRA_CK.length],
+      label:q.title||'Misión extra', sub:meta.kind, emoji:meta.emoji,
+      status:coreDone?'active':'locked', link:soloLink(q,mode) };
+  });
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -1072,7 +1108,7 @@ function GMissionSheet({t,data,onClose}){
   if(!data)return null;
   const{m,world}=data;const ac=t[m.ck]||t.blue;
   const locked=m.status==='locked',lockedToday=m.status==='locked_today',done=m.status==='done';
-  const baseLink=(locked||lockedToday)?null:(m.link||resolveMissionLink(m.key,world));
+  const baseLink=(locked||lockedToday)?null:(m.link||null);
   // Solo la misión ACTIVA core lleva token: al ganar, el renderer vuelve y premia.
   // (Los repasos de misiones 'done' y los extras no premian → sin token.)
   const link=(baseLink&&!done&&!m.extra)?`${baseLink}&solo=${encodeURIComponent(world.id+':'+m.key)}`:baseLink;
@@ -1321,8 +1357,9 @@ function SoloScreen({t}){
 const RW_LBL={fontFamily:'Fredoka',fontWeight:700,fontSize:11,letterSpacing:'.14em',textTransform:'uppercase'};
 function SoloRewardFlow({t,data,onDone}){
   const r=data;
-  const steps=['streak'];
-  if(r.phrase) steps.push('phrase');
+  const steps=[];
+  if(r.streakUp) steps.push('streak');   // SOLO en la 1ª misión del día (cuando sube la racha)
+  if(r.phrase) steps.push('phrase');     // la frase también solo cae en la 1ª del día
   steps.push('prizes');
   if(r.nextMission||r.worldDone) steps.push('unlock');
 
@@ -1981,12 +2018,12 @@ const STUDENTS_PATH='artifacts/periplo-app-v1/students';
    activa del mundo (escribir la URL a mano no deja saltar ni reclamar 2 veces).
    Muta `s` en memoria y persiste en Firestore. Devuelve un resumen para la
    animación, o null/{already} si no hay nada que premiar. */
-async function claimSoloMission(s){
+async function claimSoloMission(s,resources){
     const raw=new URLSearchParams(location.search).get('done');
     if(!raw||raw.indexOf(':')<0) return null;
     const i=raw.indexOf(':');
     const worldId=raw.slice(0,i), missionKey=raw.slice(i+1);
-    const idx=MISSION_TEMPLATE.findIndex(m=>m.key===missionKey);
+    const idx=SOLO_CORE.indexOf(missionKey);   // slot posicional c1..c6
     if(!worldId||idx<0) return null;
 
     const soloProgress={...(s.soloProgress||{})};
@@ -2029,7 +2066,13 @@ async function claimSoloMission(s){
     if(worldDone) coins+=SOLO_REWARDS.worldBonus;
 
     // siguiente misión (para la animación de desbloqueo)
-    const nextMission=(!worldDone&&wp.done<MISSION_TEMPLATE.length)?MISSION_TEMPLATE[wp.done]:null;
+    // siguiente misión (para la animación de desbloqueo) — desde el slot asignado
+    let nextMission=null;
+    if(!worldDone&&wp.done<6){
+        const a=soloWorldSlots(worldId,resources)[SOLO_CORE[wp.done]];
+        const m=a?soloMeta(a.q,a.mode):null;
+        nextMission=a?{label:a.q.title,emoji:m.emoji,sub:m.kind}:{label:'Siguiente misión',emoji:'🔒',sub:'Tu teacher aún no la comparte'};
+    }
 
     const payload={soloProgress,xp,coins,streak,lastActiveDay,dailyMissions:daily};
     if(streakUp) payload.phraseOfDay=phraseOfDay;
@@ -2051,6 +2094,12 @@ async function claimSoloMission(s){
 async function loadStudentData(studentSnap,setHasStudent,setReady){
     const s={id:studentSnap.id,...studentSnap.data()};
 
+    const quizSnap=await getDocs(query(
+        collection(db,'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes'),
+        where('studentVisible','==',true)
+    ));
+    const allResources=quizSnap.docs.map(d=>({id:d.id,...d.data()}));
+
     // ?reset=1 → reinicia el progreso Solo del alumno actual (solo para pruebas del teacher)
     const sp=new URLSearchParams(location.search);
     if(sp.has('reset')){
@@ -2059,8 +2108,8 @@ async function loadStudentData(studentSnap,setHasStudent,setReady){
         Object.assign(s,blank);
     }
 
-    // Si volvemos de una misión (?done=...), aplica la recompensa ANTES de construir el estado
-    const claimResult=sp.has('reset')?null:await claimSoloMission(s);
+    // Si volvemos de una misión (?done=...), aplica la recompensa (necesita los recursos para la sig. misión)
+    const claimResult=sp.has('reset')?null:await claimSoloMission(s,allResources);
 
     // Limpia params de un solo uso, preservando el resto (ej. ?unlock=1)
     if(sp.has('reset')||sp.has('done')){
@@ -2069,11 +2118,6 @@ async function loadStudentData(studentSnap,setHasStudent,setReady){
         try{history.replaceState({},'',location.pathname+(qs?'?'+qs:''));}catch(e){}
     }
 
-    const quizSnap=await getDocs(query(
-        collection(db,'artifacts/periplo-app-v1/users/teacher_builder_001/quizzes'),
-        where('studentVisible','==',true)
-    ));
-    const allResources=quizSnap.docs.map(d=>({id:d.id,...d.data()}));
     const mastery=s.detailedMastery||{};
 
     const remediation=Object.entries(mastery).flatMap(([tid,{title,skills}])=>
