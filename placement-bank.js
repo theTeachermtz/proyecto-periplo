@@ -19,6 +19,7 @@ window.PERIPLO_BANK = {
       id: 'ship1', n: 1, label: 'Modal Verbs', level: 'B1', module: 'B1 Foundation', week: 1,
       entry: 'no_sabe', entryTier: 'facil',
       grammar: 'Modal Verbs — can · must · will · might · should',
+      evalTopics: ['modal_verbs'],
       vocab: 'VP1 Daily Routine & Work · NP1 Modern Nomad',
       questions: [
         // ── CONOCE (vocab VP1 / NP1) ──────────────────────────────────────────
@@ -96,6 +97,7 @@ window.PERIPLO_BANK = {
     // ── Barcos 2-8 — esqueletos (se llenan tras validar el Barco 1) ──────────
     { id:'ship2', n:2, label:'B1', level:'B1', module:'B1 Foundation', week:3,
       grammar:'Present Simple · Present Continuous · Future Going To',
+      evalTopics:['present_simple','present_continuous','going_to'],
       vocab:'VP2-4 · NP2-4 — Hungry Traveler / Travel & Places / Emotions & Mind',
       questions:[
         // CONOCE (vocab NP2-4)
@@ -294,6 +296,7 @@ window.PERIPLO_BANK = {
     { id:'ship5', n:5, label:'B1/B2 + Past Irregular', level:'A1', module:'A1 Foundation', week:1,
       entry:'falla_hablar', entryTier:'media',
       grammar:'Integración B1/B2 + Past Simple (verbos irregulares)',
+      evalTopics:['past_simple'],
       vocab:'Irregular verbs · NP1 Adv Success & Failure',
       questions:[
         // CONOCE (formas irregulares + NP1 Adv)
@@ -359,6 +362,7 @@ window.PERIPLO_BANK = {
     { id:'ship6', n:6, label:'A1 + Past & Participles', level:'A1', module:'A1 Foundation', week:4,
       entry:'faltan_detalles', entryTier:'media',
       grammar:'Past Simple/Continuous · Was going to · 2nd Conditional + participios',
+      evalTopics:['second_cond','past_cont','past_future'],
       vocab:'NP1-4 Adv — Success / Truth / Media / Regrets',
       questions:[
         // CONOCE (vocab NP1-4 Adv)
@@ -487,6 +491,7 @@ window.PERIPLO_BANK = {
       ] },
     { id:'ship8', n:8, label:'P1 (sin Passive)', level:'P1', module:'P1 Structures', week:2,
       grammar:'Present/Past Perfect · 3rd & Mixed Conditionals · Past Conditionals',
+      evalTopics:['perf_tenses','perf_cont','third_cond','mixed_cond'],
       vocab:'NP Pro — Law & Politics / Finance / Science',
       questions:[
         // CONOCE (vocab Pro temático)
