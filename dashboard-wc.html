@@ -68,7 +68,10 @@
         const padArr = (arr, len, fill) => { const a = arr.slice(0, len); while (a.length < len) a.push(typeof fill === 'function' ? fill() : fill); return a; };
 
         const DualBuilder = () => {
-            const [view, setView] = useState('bulk');
+            const [view, setView] = useState(() => {
+                const p = new URLSearchParams(window.location.search);
+                return p.get('edit') ? 'review' : 'setup'; // 'setup' pregunta primero cuántos campos
+            });
             const [gameTitle, setGameTitle] = useState("");
             const [numCats, setNumCats] = useState(4);
             const [categories, setCategories] = useState(["", "", "", "", ""]);
@@ -179,10 +182,14 @@ RESPONDE SOLO CON JSON VÁLIDO, sin markdown ni texto extra.`;
                 try {
                     const text = await AI.callGemini({
                         apiKey, model: selectedModel, prompt,
-                        signal: abortControllerRef.current.signal, json: true
+                        signal: abortControllerRef.current.signal, json: true,
+                        maxOutputTokens: 32768,   // evita que el JSON se corte a la mitad
+                        thinkingBudget: selectedModel.includes('2.5') ? 0 : null, // apaga el "thinking" (se comía la salida); solo 2.5 lo soporta
+                        temperature: 0.5
                     });
+                    // extractJSON sanitiza (quita markdown, comentarios y comas colgantes) antes de parsear
+                    const raw = AI.extractJSON(text);
                     // Fix: la IA a veces envuelve en { content: {...} }
-                    const raw = JSON.parse(text);
                     const result = raw.categories ? raw : (raw.content || raw.data || raw);
 
                     const resCats = (result.categories || []).slice(0, MAX_CATS);
@@ -264,11 +271,11 @@ RESPONDE SOLO CON JSON VÁLIDO, sin markdown ni texto extra.`;
                                         {isSaving ? <Loader2 size={14} className="animate-spin"/> : <Save size={14}/>} GUARDAR BASE
                                     </button>
                                 </>
-                            ) : (
+                            ) : view === 'bulk' ? (
                                 <button onClick={generateWithAI} disabled={isGenerating} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 px-6 py-2 rounded-xl text-xs font-black transition-all shadow-lg shadow-indigo-900/20 disabled:opacity-50">
                                     {isGenerating ? <Loader2 size={14} className="animate-spin"/> : <Sparkles size={14}/>} PROCESAR CON IA
                                 </button>
-                            )}
+                            ) : null}
                         </div>
                     </header>
 
@@ -288,9 +295,26 @@ RESPONDE SOLO CON JSON VÁLIDO, sin markdown ni texto extra.`;
                     )}
 
                     <main className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                        {view === 'setup' ? (
+                            <div className="max-w-2xl mx-auto flex flex-col items-center justify-center text-center min-h-full py-10 animate-pop-in">
+                                <div className="w-16 h-16 bg-indigo-500/15 rounded-2xl flex items-center justify-center mb-6 text-3xl">☄️</div>
+                                <h2 className="text-3xl md:text-5xl font-black text-white mb-3 leading-tight">¿Cuántos campos semánticos<br/>tendrá este juego?</h2>
+                                <p className="text-zinc-500 text-sm md:text-base mb-10 max-w-md">Cada campo es una categoría que el alumno ordena. Lo puedes cambiar después.</p>
+                                <div className="flex gap-3 md:gap-4 flex-wrap justify-center">
+                                    {[2, 3, 4, 5].map(n => (
+                                        <button key={n} onClick={() => { changeNumCats(n); setView('bulk'); }}
+                                            className={`w-24 h-28 md:w-28 md:h-32 rounded-3xl border-2 flex flex-col items-center justify-center gap-1 transition-all active:scale-95 hover:scale-105 ${CATEGORY_STYLES[n-1].border} ${CATEGORY_STYLES[n-1].bg}`}>
+                                            <span className={`text-5xl font-black ${CATEGORY_STYLES[n-1].color}`}>{n}</span>
+                                            <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">campos</span>
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="text-zinc-600 text-xs mt-10 max-w-xs">Ej: con <span className="text-white font-bold">2</span> haces solo <span className="text-blue-300">Verbos</span> vs <span className="text-rose-300">Nouns</span>, sin mezclar otro vocab.</p>
+                            </div>
+                        ) : (
                         <div className="max-w-6xl mx-auto space-y-8 pb-10">
-                            <input 
-                                value={gameTitle} 
+                            <input
+                                value={gameTitle}
                                 onChange={e => setGameTitle(e.target.value)}
                                 placeholder="Título de la Base (ej: Food Vocabulary)"
                                 className="w-full bg-transparent text-4xl md:text-6xl font-black outline-none border-b-2 border-zinc-800 focus:border-indigo-500 pb-4 transition-all placeholder:text-zinc-800"
@@ -358,6 +382,7 @@ RESPONDE SOLO CON JSON VÁLIDO, sin markdown ni texto extra.`;
                                 </div>
                             )}
                         </div>
+                        )}
                     </main>
 
                     {/* MODAL DE CLASIFICACIÓN */}

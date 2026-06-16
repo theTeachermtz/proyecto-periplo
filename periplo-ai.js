@@ -55,7 +55,9 @@ window.PERIPLO_AI = (() => {
     };
 
     // ---- llamar a Gemini para generar; devuelve el TEXTO crudo ----
-    // opts: { apiKey, model?, prompt, signal?, json?, temperature?, maxOutputTokens? }
+    // opts: { apiKey, model?, prompt, signal?, json?, temperature?, maxOutputTokens?, thinkingBudget? }
+    //   thinkingBudget: si se pasa (ej. 0), apaga/limita el "thinking" de los modelos 2.5
+    //   para que NO se coma el presupuesto de salida y trunque el JSON. Opt-in.
     const callGemini = async (opts) => {
         const {
             apiKey,
@@ -65,12 +67,14 @@ window.PERIPLO_AI = (() => {
             json = false,
             temperature = 0.7,
             maxOutputTokens = 8192,
+            thinkingBudget = null,
         } = opts || {};
         if (!apiKey || !apiKey.trim()) throw new Error('API Key requerida');
         if (!prompt) throw new Error('Prompt vacío');
 
         const generationConfig = { temperature, maxOutputTokens };
         if (json) generationConfig.responseMimeType = 'application/json';
+        if (thinkingBudget !== null) generationConfig.thinkingConfig = { thinkingBudget };
 
         const effectiveModel = (model && model.trim()) ? model.trim() : DEFAULT_MODEL;
         const res = await fetch(`${BASE}/${effectiveModel}:generateContent?key=${apiKey.trim()}`, {
