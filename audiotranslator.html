@@ -99,34 +99,54 @@
             </div>
         );
 
-        // ====== UNSCRAMBLE BUBBLE ======
-        const UnscrambleBubble = ({ expectedAnswer, userHint, onNext, addScore, isPlaying, playAudio }) => {
+        // ====== RESPONSE BUBBLE (MCQ de lectura → audio → unscramble por escucha) ======
+        const UnscrambleBubble = ({ botHint, distractors, expectedAnswer, userHint, onNext, addScore, isPlaying, playAudio }) => {
             const originalWords = useMemo(() => expectedAnswer.split(' ').filter(w => w.trim() !== ''), [expectedAnswer]);
             const [wordPool, setWordPool] = useState([]);
             const [selectedWords, setSelectedWords] = useState([]);
-            const [status, setStatus] = useState('playing_audio'); // playing_audio, unscrambling, error, correct, max_attempts
             const [showHint, setShowHint] = useState(false);
             const [attempts, setAttempts] = useState(0);
-            
             const maxAttempts = 3;
+
+            // ── Fase 1: MCQ de comprensión ("¿Qué te está diciendo?"), basado en lo que LEYÓ ──
+            const hasMCQ = !!(botHint && distractors && distractors.length >= 2);
+            const MCQ_BONUS = Math.max(2, Math.ceil(originalWords.length * 0.5));
+            const [phase, setPhase] = useState(hasMCQ ? 'mcq' : 'respond'); // mcq | respond
+            const [status, setStatus] = useState('unscrambling'); // unscrambling, error, correct, max_attempts
+            const [mcqAnswered, setMcqAnswered] = useState(false);
+            const [mcqCorrect, setMcqCorrect] = useState(false);
+            const [mcqChoices] = useState(() => hasMCQ
+                ? shuffleArray([
+                    { text: botHint, isCorrect: true },
+                    { text: distractors[0], isCorrect: false },
+                    { text: distractors[1], isCorrect: false },
+                ])
+                : []);
 
             useEffect(() => {
                 const w = originalWords.map((word, id) => ({ id, word }));
                 setWordPool(shuffleArray(w));
             }, [originalWords]);
 
-            useEffect(() => {
-                if (!isPlaying && status === 'playing_audio') setStatus('unscrambling');
-            }, [isPlaying]);
+            // Si no hay MCQ, entra directo a la fase de respuesta y reproduce el audio
+            useEffect(() => { if (!hasMCQ) playAudio(); }, []);
+
+            const handleMcqAnswer = (isCorrect) => {
+                setMcqAnswered(true);
+                setMcqCorrect(isCorrect);
+                if (isCorrect) addScore(MCQ_BONUS);
+            };
+
+            const startResponse = () => { setPhase('respond'); playAudio(); };
 
             const handleSelect = (wordObj) => {
-                if (status === 'correct' || status === 'playing_audio' || status === 'error' || status === 'max_attempts') return;
+                if (status !== 'unscrambling') return;
                 setWordPool(prev => prev.filter(w => w.id !== wordObj.id));
                 setSelectedWords(prev => [...prev, wordObj]);
             };
 
             const handleDeselect = (wordObj) => {
-                if (status === 'correct' || status === 'playing_audio' || status === 'error' || status === 'max_attempts') return;
+                if (status !== 'unscrambling') return;
                 setSelectedWords(prev => prev.filter(w => w.id !== wordObj.id));
                 setWordPool(prev => [...prev, wordObj]);
             };
@@ -161,9 +181,45 @@
                 setStatus('unscrambling');
             };
 
-            if (status === 'playing_audio') return (
-                <div className="flex flex-col items-end w-full animate-pop">
-                    <div className="text-xs font-bold text-zinc-500 mb-2 mr-2 animate-pulse">Escuchando audio...</div>
+            // ── FASE MCQ — basada en lo que el alumno LEYÓ del mensaje en inglés ──
+            if (phase === 'mcq') return (
+                <div className="flex flex-col items-end w-full animate-pop mt-2">
+                    <div className={`w-[92%] sm:w-[88%] p-4 rounded-2xl rounded-tr-sm shadow-lg ${mcqAnswered ? (mcqCorrect ? 'bg-emerald-600' : 'bg-zinc-700') : 'bg-indigo-600'}`}>
+                        {!mcqAnswered ? (
+                            <>
+                                <p className="text-white font-black text-sm mb-3">¿Qué te está diciendo?</p>
+                                <div className="space-y-2">
+                                    {mcqChoices.map((choice, i) => (
+                                        <button key={i} onClick={() => handleMcqAnswer(choice.isCorrect)}
+                                            className="w-full text-left bg-white/20 hover:bg-white/30 active:bg-white/40 text-white font-bold py-2.5 px-4 rounded-xl text-sm active:scale-95 transition-all">
+                                            {choice.text}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="text-indigo-200 text-[10px] mt-3 font-bold">+{MCQ_BONUS} pts si aciertas 🎯</p>
+                            </>
+                        ) : (
+                            <>
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-xl">{mcqCorrect ? '✅' : '❌'}</span>
+                                    <p className="text-white font-black text-sm">{mcqCorrect ? '¡Correcto!' : 'Incorrecto'}</p>
+                                    {mcqCorrect && (
+                                        <div className="flex items-center gap-1 bg-white/20 px-2 py-1 rounded-full ml-auto">
+                                            <Star size={12} className="text-amber-300"/>
+                                            <span className="text-white font-black text-xs">+{MCQ_BONUS}</span>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="bg-black/20 rounded-xl p-3 mb-3">
+                                    <p className="text-white/90 text-sm font-medium">{botHint}</p>
+                                </div>
+                                <button onClick={startResponse}
+                                    className="w-full bg-white text-indigo-700 font-black py-2.5 px-6 rounded-xl shadow-lg text-sm uppercase tracking-wider flex items-center justify-center gap-1.5 active:scale-95">
+                                    🎧 Escuchar respuesta
+                                </button>
+                            </>
+                        )}
+                    </div>
                 </div>
             );
 
@@ -206,6 +262,22 @@
 
             return (
                 <div className="flex flex-col items-end w-full animate-pop space-y-3 mt-2">
+                    {/* RESPÓNDELE ESTO — el alumno arma lo que ESCUCHA del audio */}
+                    <div className="w-[90%] sm:w-[85%] bg-indigo-600 rounded-2xl rounded-tr-sm p-4 shadow-lg">
+                        <p className="text-indigo-200 text-[10px] font-black uppercase tracking-widest mb-2.5">🗣️ Respóndele esto:</p>
+                        <div className="flex items-center gap-3">
+                            <button onClick={playAudio} className="w-11 h-11 rounded-full bg-white flex items-center justify-center text-indigo-700 flex-shrink-0 active:scale-95 transition-transform shadow-md">
+                                {isPlaying ? <div className="w-3 h-3 bg-indigo-700 rounded-sm animate-pulse"/> : <Play size={18} fill="currentColor" className="ml-0.5"/>}
+                            </button>
+                            <div className="flex-1 flex items-center gap-[3px] h-6 overflow-hidden">
+                                {[...Array(20)].map((_,i) => (
+                                    <div key={i} className={`w-[3px] rounded-full bg-white/70 ${isPlaying ? 'voice-bar' : ''}`} style={{height: `${Math.random()*60+30}%`, animationDelay: `${i*0.05}s`, opacity: isPlaying ? undefined : 0.4}}/>
+                                ))}
+                            </div>
+                            <span className="text-[10px] text-indigo-200 font-bold flex-shrink-0">0:{String(Math.ceil(expectedAnswer.length/12)).padStart(2,'0')}</span>
+                        </div>
+                    </div>
+
                     {/* HINT */}
                     {showHint && (
                         <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-3 rounded-xl text-sm font-bold w-[90%] sm:w-[85%] animate-slide-up flex gap-2">
@@ -269,8 +341,8 @@
         // ====== MAIN APP ======
         const App = () => {
             const mockData = [
-                { id: 1, botMessage: "Me pidió esto urgente y no entiendo", expectedAnswer: "The report is due tomorrow.", userHint: "El reporte se entrega mañana." },
-                { id: 2, botMessage: "Dice que hay un problema con la agenda", expectedAnswer: "We need to schedule a meeting.", userHint: "Necesitamos programar una reunión." }
+                { id: 1, botMessage: "👔 Hey, can you send me the sales report before the meeting?", botHint: "¿Puedes enviarme el reporte de ventas antes de la junta?", distractors: ["¿Quieres venir a la junta de ventas?", "¿Ya viste el reporte que te mandé?"], expectedAnswer: "I will send it right now", userHint: "Te lo envío ahora mismo." },
+                { id: 2, botMessage: "😎 Are you coming to the party this weekend?", botHint: "¿Vas a venir a la fiesta este fin de semana?", distractors: ["¿Te gustó la fiesta del fin pasado?", "¿Quieres organizar una fiesta?"], expectedAnswer: "Yes I will be there", userHint: "Sí, ahí estaré." }
             ];
 
             const [chatFlow, setChatFlow] = useState([]);
@@ -338,13 +410,12 @@
             const handleStart = () => {
                 if(quizId) localStorage.setItem(`periplo-translator-played-${quizId}`, 'yes');
                 setScreen('game');
-                setTimeout(() => playCurrentBot(chatFlow[0].expectedAnswer), 600);
+                // No auto-audio: el alumno primero LEE el mensaje y responde el MCQ; el audio se reproduce al pasar a la respuesta.
             };
 
             const handleNext = () => {
                 if (currentStep < chatFlow.length - 1) {
                     setCurrentStep(prev => prev + 1);
-                    setTimeout(() => playCurrentBot(chatFlow[currentStep + 1].expectedAnswer), 600);
                 } else {
                     setScreen('result');
                 }
@@ -424,14 +495,14 @@
                                     <Forward size={32}/>
                                 </div>
                                 <h1 className="text-2xl font-black text-white mb-1">{gameTitle || 'Audio Translator'}</h1>
-                                <p className="text-zinc-500 text-sm font-medium">Tu amigo te reenvía audios urgentes 😭</p>
+                                <p className="text-zinc-500 text-sm font-medium">Lee, entiende y responde por audio 🎧</p>
                             </div>
                             <div className="space-y-2.5 mb-6">
                                 {[
-                                    {emoji:'📲', text:'Tu amigo recibe audios en inglés y no entiende nada'},
-                                    {emoji:'🎧', text:'Escucha cada audio reenviado con atención'},
-                                    {emoji:'🧩', text:'Ordena las palabras para armar la traducción correcta'},
-                                    {emoji:'💡', text:'Tienes 3 intentos por audio — usa la pista si te atascas'},
+                                    {emoji:'📖', text:'Lee en inglés lo que te dice la otra persona'},
+                                    {emoji:'🤔', text:'Responde de opción múltiple: ¿qué te está diciendo?'},
+                                    {emoji:'🎧', text:'Escucha el audio de lo que tienes que responder'},
+                                    {emoji:'🧩', text:'Ordena las palabras según lo que escuchaste (3 intentos)'},
                                 ].map(({emoji,text}) => (
                                     <div key={text} className="flex items-start gap-3 bg-zinc-900 border border-zinc-800 rounded-xl p-3">
                                         <span className="text-xl shrink-0">{emoji}</span>
@@ -494,44 +565,35 @@
                             <div key={idx} className="space-y-3 opacity-60">
                                 <div className="flex gap-2 w-full">
                                     <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto opacity-50">😎</div>
-                                    <div className="flex flex-col gap-2 max-w-[85%]">
-                                        {data.botMessage && (
-                                            <div className="bg-zinc-800 text-zinc-300 px-3 py-2 rounded-2xl rounded-bl-sm border border-zinc-700/50 text-xs italic">
-                                                {data.botMessage}
-                                            </div>
-                                        )}
-                                        <ForwardedAudio text={data.expectedAnswer} isPlaying={false} onPlay={() => speak(data.expectedAnswer, 'en-US', 0.85)} />
-                                    </div>
+                                    {data.botMessage && (
+                                        <div className="bg-zinc-800 text-zinc-300 px-3 py-2 rounded-2xl rounded-bl-sm border border-zinc-700/50 text-xs max-w-[85%]">
+                                            {data.botMessage}
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="flex flex-col items-end w-full">
-                                    <div className="bg-emerald-900/40 text-emerald-200 p-3 rounded-2xl rounded-tr-sm w-[85%] text-sm font-bold border border-emerald-500/20">
-                                        ✓ {data.expectedAnswer}
+                                    <div className="bg-emerald-900/40 text-emerald-200 p-3 rounded-2xl rounded-tr-sm w-[85%] text-sm font-bold border border-emerald-500/20 flex items-center justify-between gap-2">
+                                        <span>✓ {data.expectedAnswer}</span>
+                                        <button onClick={() => speak(data.expectedAnswer, 'en-US', 0.85)} className="text-emerald-300 hover:text-white shrink-0"><Volume2 size={14}/></button>
                                     </div>
                                 </div>
                             </div>
                         ))}
 
-                        {/* Current Active Step */}
+                        {/* Current Active Step — el alumno LEE lo que dice el otro (en inglés) */}
                         <div className="space-y-4">
                             <div className="flex gap-2 w-full animate-pop">
                                 <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">😎</div>
-                                <div className="flex flex-col gap-2 max-w-[85%] w-full">
-                                    {chatFlow[currentStep].botMessage && (
-                                        <div className="bg-zinc-800 text-zinc-300 px-3 py-2 rounded-2xl rounded-bl-sm border border-zinc-700/50 text-xs italic w-fit">
-                                            {chatFlow[currentStep].botMessage}
-                                        </div>
-                                    )}
-                                    <ForwardedAudio 
-                                        text={chatFlow[currentStep].expectedAnswer} 
-                                        isPlaying={isPlayingBot} 
-                                        onPlay={() => playCurrentBot(chatFlow[currentStep].expectedAnswer)} 
-                                    />
+                                <div className="bg-zinc-800 text-zinc-100 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[85%]">
+                                    <p className="text-sm font-medium leading-relaxed">{chatFlow[currentStep].botMessage}</p>
                                 </div>
                             </div>
-                            
-                            {/* KEY AÑADIDA PARA ARREGLAR BUG */}
-                            <UnscrambleBubble 
+
+                            {/* KEY POR PASO PARA RESETEAR EL ESTADO */}
+                            <UnscrambleBubble
                                 key={currentStep}
+                                botHint={chatFlow[currentStep].botHint}
+                                distractors={chatFlow[currentStep].distractors}
                                 expectedAnswer={chatFlow[currentStep].expectedAnswer}
                                 userHint={chatFlow[currentStep].userHint}
                                 isPlaying={isPlayingBot}
