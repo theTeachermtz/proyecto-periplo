@@ -20,6 +20,7 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="periplo-taxonomy.js"></script>
     <script src="periplo-ai.js"></script>
+    <script src="periplo-curriculum.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap');
         body { font-family: 'Plus Jakarta Sans', sans-serif; user-select: none; -webkit-user-select: none; }
@@ -54,18 +55,16 @@
 
         const AI_MODALITIES = [
             { id: 'verbs', name: 'Tiempos Verbales (Irregulares)', desc: 'C1: Presente | C2: Pasado | C3: Participio', placeholder: "Ej. Solo verbos de movimiento..." },
-            { id: 'implicit_subject', name: 'Sujeto Implícito (ES ➔ EN)', desc: 'C1: Verbo ES (Suj. Oculto) | C2: Sujeto + Verbo EN | C3: Complemento Único', placeholder: "Ej. Situaciones en una oficina..." },
+            { id: 'implicit_subject', name: 'Sujeto Implícito (ES ➔ EN)', desc: 'C1: Oración completa ES (Suj. oculto) | C2: Sujeto + Verbo EN | C3: Complemento EN', placeholder: "Ej. Situaciones en una oficina..." },
             { id: 'sentences', name: 'Frases Compuestas + Conjunciones', desc: 'C1: Oración 1 | C2: Conector (because, so...) | C3: Oración 2 congruente', placeholder: "Ej. Vocabulario de negociación: leverage, deal, compromise..." },
             { id: 'conditionals', name: 'Condicionales (Las dos mitades)', desc: 'C1: If Clause | C2: Sujeto/Modal (I would) | C3: Verbo base + Resultado', placeholder: "Ej. Situaciones hipotéticas sobre viajes..." },
             { id: 'questions', name: 'Preguntas y Respuestas (ES ➔ EN)', desc: 'C1: Pregunta ES | C2: Pregunta EN | C3: Respuesta Lógica y Única', placeholder: "Ej. Entrevista de trabajo..." },
             { id: 'phrasal_verbs', name: 'Phrasal Verbs (EN ➔ ES)', desc: 'C1: Verbo Base | C2: Partícula (up, off...) | C3: Significado (Español)', placeholder: "Ej. Phrasal verbs relacionados con tecnología..." }
         ];
 
-        const GRAMMAR_MODULES = {
-            basic: ["Modal Verbs", "Present Simple", "Present Continuous", "Future (Going to)"],
-            advanced: ["Past Simple", "Second Conditional", "Past Continuous", "Past Future Intention"],
-            pro: ["Present/Past Perfect", "Perfect Continuous", "Third Conditional", "Mixed Conditionals"]
-        };
+        // Currículo compartido (periplo-curriculum.js) — fuente única del plan de estudio
+        const { CURRICULUM, LEVELS, LEVEL_LABELS, getVocabPacks } = window.PERIPLO_CURRICULUM;
+        const VOCAB_KIND_LABEL = { verbs: 'Verbos', nouns: 'Sustantivos', adjectives: 'Adjetivos' };
 
         const LMBuilder = () => {
             const [title, setTitle] = useState("");
@@ -95,8 +94,13 @@
                 modality: 'questions', topic: '', c1Prompt: '', c2Prompt: '', c3Prompt: '', rows: 30 
             });
 
-            const [activeGrammarTab, setActiveGrammarTab] = useState('basic');
-            const [selectedGrammar, setSelectedGrammar] = useState([]);
+            // Canasta Grammar + canasta Vocab (independientes), con chips de palabras excluibles
+            // Las selecciones se guardan con clave compuesta `${nivel}::${packId}` para no colisionar entre niveles.
+            const [grammarLevel, setGrammarLevel] = useState('basic');
+            const [vocabLevel, setVocabLevel] = useState('basic');
+            const [selectedGrammar, setSelectedGrammar] = useState([]); // ['basic::Modal Verbs', ...]
+            const [selectedVocab, setSelectedVocab] = useState([]);     // ['basic::Pack 3: Travel & Places', ...]
+            const [excludedWords, setExcludedWords] = useState(new Set());
             
             const [bulkModal, setBulkModal] = useState(false);
             const [bulkText, setBulkText] = useState('');
@@ -137,9 +141,32 @@
             const addRow = () => setPairs([...pairs, { id: Date.now(), c1: '', c2: '', c3: '', isDuplicate: false, isTrap: false }]);
             const removeRow = (id) => { if (pairs.length > 1) setPairs(pairs.filter(p => p.id !== id)); };
 
-            const toggleGrammar = (topic) => {
-                setSelectedGrammar(prev => prev.includes(topic) ? prev.filter(t => t !== topic) : [...prev, topic]);
-            };
+            const toggleSet = (setFn) => (key) =>
+                setFn(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+            const toggleGrammarPack = toggleSet(setSelectedGrammar);
+            const toggleVocabPack = toggleSet(setSelectedVocab);
+            const toggleWord = (w) => setExcludedWords(prev => {
+                const next = new Set(prev);
+                if (next.has(w)) next.delete(w); else next.add(w);
+                return next;
+            });
+
+            // Resuelve las claves compuestas (`nivel::packId`) a los packs reales
+            const resolveGrammarPacks = () => selectedGrammar.map(key => {
+                const [lvl, id] = key.split('::');
+                const pack = CURRICULUM[lvl]?.grammar.find(p => p.id === id);
+                return pack ? { ...pack, level: lvl } : null;
+            }).filter(Boolean);
+
+            const resolveVocabPacks = () => selectedVocab.map(key => {
+                const [lvl, id] = key.split('::');
+                const pack = getVocabPacks(lvl).find(p => p.id === id);
+                return pack ? { ...pack, level: lvl } : null;
+            }).filter(Boolean);
+
+            // Palabras finales (de los packs seleccionados, menos las excluidas)
+            const grammarWords = [...new Set(resolveGrammarPacks().flatMap(p => p.words))].filter(w => !excludedWords.has(w));
+            const vocabWords = [...new Set(resolveVocabPacks().flatMap(p => p.words))].filter(w => !excludedWords.has(w));
 
             const processBulkText = () => {
                 if (!bulkText.trim()) return;
@@ -220,12 +247,14 @@
                 else if (aiConfig.modality === 'implicit_subject') {
                     specificInstructions = `
                         - Tema/Contexto: "${aiConfig.topic}"
-                        - REGLA C1: Verbo o frase corta en ESPAÑOL con sujeto implícito.
-                        - REGLA C2: Traducción exacta al INGLÉS (Sujeto + Auxiliar/Verbo).
-                        - REGLA C3: Complemento en INGLÉS MUY ESPECÍFICO para que solo encaje con esa oración.
+                        - REGLA C1 (Español, LA LLAVE): Oración COMPLETA y natural en español, que sea la traducción exacta de C2 + C3 leídas juntas. El sujeto va IMPLÍCITO en la conjugación del verbo: NUNCA escribas el pronombre (nada de "Tú deberías" ni "Nosotros deberíamos", solo "Deberías...", "Deberíamos..."). Ej: "Deberías saludar a tus nuevos colegas cordialmente."
+                        - REGLA C2 (Inglés, sujeto + verbo): El pronombre/sujeto en inglés que revela la persona oculta de C1, más el verbo o modal. Ej: "You should greet".
+                        - REGLA C3 (Inglés, complemento): El resto de la oración que completa C2. Ej: "your new colleagues cordially".
+                        - VARIACIÓN DE SUJETOS OBLIGATORIA: NO uses solo "you". Distribuye las filas entre distintas personas para que el alumno aprenda a distinguir las conjugaciones: yo (debería → I should), tú (deberías → you should), él/ella (debería → he/she should), nosotros (deberíamos → we should), ellos (deberían → they should). La conjugación española de C1 debe corresponder EXACTAMENTE con el sujeto inglés de C2.
+                        - DESAMBIGUACIÓN: cuando la conjugación sea ambigua (ej. "debería" sirve para yo y él/ella), usa posesivos o contexto que dejen clara la persona y que coincidan con C3 (mis → my, tus → your, sus → his/her/their, nuestros → our). Así cada C1 solo puede emparejar con un C2.
                     `;
-                    trapInstructions = `Las trampas deben tener errores de concordancia graves (ej. 'He are eating') o mezclar conceptos absurdos para que lógicamente el jugador note que es incorrecta.`;
-                } 
+                    trapInstructions = `Las trampas deben tener errores de concordancia graves (ej. 'He are eating', sujeto inglés que NO corresponde a la conjugación española) o mezclar conceptos absurdos para que lógicamente el jugador note que es incorrecta.`;
+                }
                 else if (aiConfig.modality === 'sentences') {
                     if (!aiConfig.topic.trim() || !aiConfig.c2Prompt.trim()) return alert("⚠️ Llena contexto y conector.");
                     specificInstructions = `
@@ -264,8 +293,13 @@
                     trapInstructions = `Las trampas deben usar preposiciones falsas que no formen phrasal verbs reales o dar una traducción completamente irreal.`;
                 }
 
-                if (selectedGrammar.length > 0) {
-                    specificInstructions += `\n- RESTRICCIÓN GRAMATICAL ESTRICTA PARA LOS PARES VÁLIDOS: SÓLO y EXCLUSIVAMENTE usa: ${selectedGrammar.join(', ')}.`;
+                if (grammarWords.length > 0) {
+                    const grammarNames = resolveGrammarPacks().map(p => p.id).join(' + ');
+                    specificInstructions += `\n- RESTRICCIÓN GRAMATICAL ESTRICTA (${grammarNames}): los pares VÁLIDOS deben construirse SÓLO con estas estructuras/palabras gramaticales del plan de estudio: ${grammarWords.join(', ')}.`;
+                }
+                if (vocabWords.length > 0) {
+                    const vocabNames = resolveVocabPacks().map(p => p.id).join(' + ');
+                    specificInstructions += `\n- VOCABULARIO OBLIGATORIO DEL PLAN (${vocabNames}): incorpora de forma natural estas palabras (puedes conjugarlas, pluralizarlas o flexionarlas según haga falta). Reparte el vocabulario a lo largo de los pares para cubrir la mayor cantidad posible: ${vocabWords.join(', ')}.`;
                 }
 
                 setMagiaModal(false);
@@ -646,21 +680,83 @@
                                         </div>
                                     )}
 
-                                    <div>
-                                        <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">Restricción Gramatical (Opcional)</label>
-                                        <div className="flex gap-2 mb-3 border-b border-zinc-800 pb-2">
-                                            {Object.keys(GRAMMAR_MODULES).map(tab => (
-                                                <button key={tab} onClick={() => setActiveGrammarTab(tab)} className={`px-3 py-1 text-xs font-bold rounded-lg uppercase tracking-wider transition-colors ${activeGrammarTab === tab ? 'bg-amber-500 text-black' : 'text-zinc-500 hover:text-white'}`}>{tab}</button>
-                                            ))}
+                                    {/* ── CANASTA GRAMMAR ── */}
+                                    <div className="bg-zinc-950/40 border border-zinc-800 rounded-2xl p-4">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <label className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">Grammar del plan (opcional)</label>
+                                            <div className="flex gap-1">
+                                                {LEVELS.map(lvl => (
+                                                    <button key={lvl} onClick={() => setGrammarLevel(lvl)} className={`px-2.5 py-1 text-[10px] font-bold rounded-md uppercase tracking-wider transition-colors ${grammarLevel === lvl ? 'bg-emerald-500 text-black' : 'text-zinc-500 hover:text-white'}`}>{LEVEL_LABELS[lvl]}</button>
+                                                ))}
+                                            </div>
                                         </div>
                                         <div className="flex flex-wrap gap-2">
-                                            {GRAMMAR_MODULES[activeGrammarTab].map(topic => (
-                                                <button key={topic} onClick={() => toggleGrammar(topic)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${selectedGrammar.includes(topic) ? 'bg-amber-500/20 border-amber-500 text-amber-300' : 'bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-600'}`}>
-                                                    {topic}
-                                                </button>
-                                            ))}
+                                            {CURRICULUM[grammarLevel].grammar.map(pack => {
+                                                const key = `${grammarLevel}::${pack.id}`;
+                                                const on = selectedGrammar.includes(key);
+                                                return (
+                                                    <button key={key} onClick={() => toggleGrammarPack(key)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${on ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300' : 'bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-600'}`}>
+                                                        {pack.title}
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
                                     </div>
+
+                                    {/* ── CANASTA VOCAB ── */}
+                                    <div className="bg-zinc-950/40 border border-zinc-800 rounded-2xl p-4">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <label className="text-[10px] font-black text-sky-400 uppercase tracking-widest">Vocab del plan (opcional)</label>
+                                            <div className="flex gap-1">
+                                                {LEVELS.map(lvl => (
+                                                    <button key={lvl} onClick={() => setVocabLevel(lvl)} className={`px-2.5 py-1 text-[10px] font-bold rounded-md uppercase tracking-wider transition-colors ${vocabLevel === lvl ? 'bg-sky-500 text-black' : 'text-zinc-500 hover:text-white'}`}>{LEVEL_LABELS[lvl]}</button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        {['verbs','nouns','adjectives'].map(kind => {
+                                            const packs = getVocabPacks(vocabLevel).filter(p => p.kind === kind);
+                                            if (packs.length === 0) return null;
+                                            return (
+                                                <div key={kind} className="mb-2 last:mb-0">
+                                                    <h5 className="text-[9px] font-black uppercase text-zinc-600 tracking-wider mb-1.5">{VOCAB_KIND_LABEL[kind]}</h5>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {packs.map(pack => {
+                                                            const key = `${vocabLevel}::${pack.id}`;
+                                                            const on = selectedVocab.includes(key);
+                                                            return (
+                                                                <button key={key} onClick={() => toggleVocabPack(key)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${on ? 'bg-sky-500/20 border-sky-500 text-sky-300' : 'bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-600'}`}>
+                                                                    {pack.title}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+
+                                    {/* ── WORD POOL EXCLUIBLE ── */}
+                                    {(resolveGrammarPacks().length > 0 || resolveVocabPacks().length > 0) && (
+                                        <div>
+                                            <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">
+                                                Palabras a inyectar <span className="text-zinc-600 normal-case font-bold tracking-normal">— clic en una palabra para excluirla ({grammarWords.length + vocabWords.length} activas)</span>
+                                            </label>
+                                            <div className="flex flex-wrap gap-1.5 max-h-44 overflow-y-auto custom-scrollbar p-1">
+                                                {[...new Set(resolveGrammarPacks().flatMap(p => p.words))].map(w => {
+                                                    const off = excludedWords.has(w);
+                                                    return (
+                                                        <button key={'g'+w} onClick={() => toggleWord(w)} className={`px-2 py-0.5 rounded-md text-[11px] font-bold border transition-all ${off ? 'bg-zinc-900 border-zinc-800 text-zinc-700 line-through' : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'}`}>{w}</button>
+                                                    );
+                                                })}
+                                                {[...new Set(resolveVocabPacks().flatMap(p => p.words))].map(w => {
+                                                    const off = excludedWords.has(w);
+                                                    return (
+                                                        <button key={'v'+w} onClick={() => toggleWord(w)} className={`px-2 py-0.5 rounded-md text-[11px] font-bold border transition-all ${off ? 'bg-zinc-900 border-zinc-800 text-zinc-700 line-through' : 'bg-sky-500/15 border-sky-500/30 text-sky-300'}`}>{w}</button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
 
                                     <div>
                                         <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-1.5">Cantidad de Pares a Generar</label>
