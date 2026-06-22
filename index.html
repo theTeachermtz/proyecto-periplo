@@ -448,11 +448,23 @@
                 return 'basic';
             };
 
+            // Respaldo de la asignación (destinos/solo/visibilidad) antes de mandar a papelera,
+            // para que Deshacer y Restaurar puedan re-conectar la actividad tal cual estaba.
+            const captureDestConfig = (q) => ({
+                destinations: Array.isArray(q.destinations) ? q.destinations : [],
+                solo: q.solo || null,
+                studentVisible: !!q.studentVisible,
+            });
+            // Al ir a papelera: se DESCONECTA de todas las superficies (Solo / Patio / Recursos /
+            // Biblioteca) para que no quede ningún slot colgado en el portal del alumno.
+            const TRASH_DISCONNECT = { isDeleted: true, destinations: [], solo: null, studentVisible: false };
+
             const handleDeleteActivity = async (e, q) => {
                 e.preventDefault(); e.stopPropagation();
                 const ref = doc(db, 'artifacts', FS_APP_ID, 'users', user.uid, 'quizzes', q.id);
-                await updateDoc(ref, { isDeleted: true });
-                triggerUndo(`"${q.title}" enviado a papelera`, async () => updateDoc(ref, { isDeleted: false }));
+                const backup = captureDestConfig(q);
+                await updateDoc(ref, { ...TRASH_DISCONNECT, trashedConfig: backup });
+                triggerUndo(`"${q.title}" enviado a papelera`, async () => updateDoc(ref, { isDeleted: false, ...backup, trashedConfig: null }));
             };
 
             // Abre el selector de destinos. Pre-rellena: docs legacy (studentVisible sin
@@ -589,13 +601,30 @@
                 if (!confirm(`¿Enviar ${selectedItems.length} elemento(s) a la papelera?`)) return;
                 await Promise.all(selectedItems.map(item => {
                     const ref = doc(db, 'artifacts', FS_APP_ID, 'users', user.uid, 'quizzes', item.id);
-                    return updateDoc(ref, { isDeleted: true });
+                    const q = allQuizzes.find(x => x.id === item.id) || {};
+                    return updateDoc(ref, { ...TRASH_DISCONNECT, trashedConfig: captureDestConfig(q) });
                 }));
                 setSelectedItems([]); setIsSelecting(false);
             };
 
+            // Restaurar desde la papelera: re-conecta la actividad a las superficies que tenía
+            // antes de borrarla (si el respaldo existe). Sin respaldo, vuelve al hub sin asignar.
             const restoreItem = async (id) => {
-                await updateDoc(doc(db, 'artifacts', FS_APP_ID, 'users', user.uid, 'quizzes', id), { isDeleted: false });
+                const ref = doc(db, 'artifacts', FS_APP_ID, 'users', user.uid, 'quizzes', id);
+                const q = trashItems.find(x => x.id === id) || {};
+                if (q.trashedConfig) {
+                    const tc = q.trashedConfig;
+                    await updateDoc(ref, {
+                        isDeleted: false,
+                        destinations: Array.isArray(tc.destinations) ? tc.destinations : [],
+                        solo: tc.solo || null,
+                        studentVisible: !!tc.studentVisible,
+                        trashedConfig: null,
+                    });
+                } else {
+                    // Legacy (borrado antes de este fix): conserva su config tal cual, solo lo sacamos.
+                    await updateDoc(ref, { isDeleted: false });
+                }
             };
 
             const permanentDelete = async (id) => {
