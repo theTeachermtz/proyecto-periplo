@@ -236,11 +236,11 @@
 
 <script type="module">
 import { initializeApp }                                         from 'firebase/app';
-import { getAuth, onAuthStateChanged, signOut,
+import { getAuth, onAuthStateChanged,
          signInWithEmailAndPassword, createUserWithEmailAndPassword,
          sendPasswordResetEmail, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore, collection, query, where,
-         getDocs, updateDoc, doc }                               from 'firebase/firestore';
+         getDocs, updateDoc, doc, addDoc, serverTimestamp }      from 'firebase/firestore';
 
 /* ── CONFIG ── */
 const FB = { apiKey:"AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain:"proyecto-periplo.firebaseapp.com",
@@ -286,10 +286,32 @@ async function routeUser(user) {
         return;
     }
 
-    // No registrado
-    await signOut(auth);
-    showScreen('form');
-    showMsg(`El correo ${user.email} no está registrado en Periplo. Pídele a tu teacher que te agregue.`, 'error');
+    // No registrado → auto-alta como alumno nuevo (nivel Básico · módulo B1).
+    // Aparece solo en students.html (onSnapshot en vivo); el teacher lo reasigna si hace falta.
+    await createStudentDoc(user);
+    window.location.href = 'student_portal.html';
+}
+
+/* ── AUTO-ALTA DE ALUMNO ── */
+async function createStudentDoc(user) {
+    // Folio siguiente = max(folios actuales) + 1, con padding a 4 dígitos
+    const all = await getDocs(collection(db, STUDENTS_PATH));
+    let max = 0;
+    all.forEach(d => { const f = parseInt(d.data().folio) || 0; if (f > max) max = f; });
+    const folio = String(max + 1).padStart(4, '0');
+    const name  = user.displayName || (user.email ? user.email.split('@')[0] : 'Alumno');
+
+    await addDoc(collection(db, STUDENTS_PATH), {
+        name,
+        email: (user.email || '').toLowerCase(),
+        uid: user.uid,
+        folio,
+        color: '',                 // el teacher le asigna color en students.html
+        level: 'basic',            // default solicitado: Básico…
+        currentModule: 'B1',       // …arrancando en B1
+        skills: { speaking: 0, listening: 0, reading: 0, grammar: 0, vocabulary: 0, pronunciation: 0 },
+        createdAt: serverTimestamp(),
+    });
 }
 
 /* ── AUTH STATE ── */
@@ -336,15 +358,7 @@ window.handleSubmit = async () => {
         if (pass.length < 6)      { showMsg('La contraseña debe tener al menos 6 caracteres.', 'error'); return; }
         if (pass !== confirm)     { showMsg('Las contraseñas no coinciden.', 'error'); return; }
 
-        // Verificar que el correo esté registrado antes de crear la cuenta
-        const isTeacher = !!TEACHERS[email];
-        if (!isTeacher) {
-            const snap = await getDocs(query(collection(db, STUDENTS_PATH), where('email', '==', email)));
-            if (snap.empty) {
-                showMsg('Este correo no está registrado en Periplo. Pídele a tu teacher que te agregue.', 'error');
-                return;
-            }
-        }
+        // Cualquiera puede crear cuenta; routeUser hace el auto-alta como alumno B1.
         try {
             setLoading(true);
             await createUserWithEmailAndPassword(auth, email, pass);
