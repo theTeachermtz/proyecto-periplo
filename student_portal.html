@@ -271,23 +271,25 @@ function patioGamesForTopic(name,allResources){
         const id=r.id, title=r.title||r.content?.title||'Actividad';
         const type=(r.type||'').toUpperCase();
         const link=(file,extra='')=>`${file}?id=${id}&uid=${RES_UID}&student=true${extra}`;
+        // playKey = "<basename del renderer>:<id>" — debe coincidir con lo que el juego
+        // reporta al volver (PeriploSolo deriva el basename de su propio archivo).
         if(type==='WORDPACK'||type==='WORD_BANK'){
             const modes=(Array.isArray(r.publishedModes)&&r.publishedModes.length?r.publishedModes:['flashcards','anagram','emojispell'])
                 .filter(m=>m!=='memorama'&&m!=='crossword');
-            modes.forEach(m=>out.push({gk:m,key:`${id}-${m}`,title,link:link(`${m}.html`)}));
+            modes.forEach(m=>out.push({gk:m,key:`${id}-${m}`,title,link:link(`${m}.html`),playKey:`${m}:${id}`}));
         } else if(type==='DUAL_WORD'||type==='WORDCASCADE'){
-            out.push({gk:'wordcascade',key:`${id}-wc`,title,link:link('wordcascade.html')});
+            out.push({gk:'wordcascade',key:`${id}-wc`,title,link:link('wordcascade.html'),playKey:`wordcascade:${id}`});
             // Word Buildings nunca se muestra en Patio (a propósito)
         } else if(type==='LINGOMATCH'){
-            out.push({gk:'lingomatch',key:id,title,link:`lingomatch.html?id=${id}&uid=${RES_UID}&solo=1`});
+            out.push({gk:'lingomatch',key:id,title,link:`lingomatch.html?id=${id}&uid=${RES_UID}&solo=1&student=true`,playKey:`lingomatch:${id}`});
         } else if(type==='SPELL_PHRASE'){
-            out.push({gk:'spellphrase',key:id,title,link:link('spell-the-phrase.html')});
+            out.push({gk:'spellphrase',key:id,title,link:link('spell-the-phrase.html'),playKey:`spell-the-phrase:${id}`});
         } else if(type==='PHONECHAT'){
-            out.push({gk:'phonechat',key:id,title,link:link('phonechat.html')});
+            out.push({gk:'phonechat',key:id,title,link:link('phonechat.html'),playKey:`phonechat:${id}`});
         } else if(type==='AUDIOTRANSLATOR'){
-            out.push({gk:'audiotranslator',key:id,title,link:link('audiotranslator.html')});
+            out.push({gk:'audiotranslator',key:id,title,link:link('audiotranslator.html'),playKey:`audiotranslator:${id}`});
         } else if(type==='VOICEREPLY'){
-            out.push({gk:'voicereply',key:id,title,link:link('voicereply.html')});
+            out.push({gk:'voicereply',key:id,title,link:link('voicereply.html'),playKey:`voicereply:${id}`});
         }
     }
     // Orden fijo por tipo: 1.Word Bank · 2.Spell the Phrase · 3.Dual Word · 4.dashboard-pc · 5.LingoMatch
@@ -1784,10 +1786,16 @@ function GTopicRow({t,topic,onOpen}){
    título del doc para distinguir varios del mismo tipo (ej. 6 LingoMatch del mismo tema). */
 function GPatioChip({t,entry,onClose}){
   const g=GAME_MAP[entry.gk]||{emoji:'🎮',color:t.faint,label:entry.gk,kind:'Juego'};
+  const plays=(window.PERIPLO.gamePlays||{})[entry.playKey]||0;   // veces superado
   const go=()=>{ if(onClose)onClose(); window.location.href=entry.link; };
   return(
-    <button onClick={go} className="g-tile" style={{padding:'14px 12px',display:'flex',flexDirection:'column',gap:9,alignItems:'flex-start',
+    <button onClick={go} className="g-tile" style={{position:'relative',padding:'14px 12px',display:'flex',flexDirection:'column',gap:9,alignItems:'flex-start',
       cursor:'pointer',border:'none',background:t.cardSub,borderRadius:16,textAlign:'left',width:'100%',minWidth:0,boxShadow:`0 3px 0 ${t.cardEdge}`}}>
+      {plays>0&&(
+        <span style={{position:'absolute',top:8,right:8,display:'inline-flex',alignItems:'center',gap:2,
+          background:t.green.f,color:'#fff',borderRadius:999,padding:'2px 7px',
+          fontFamily:'Fredoka',fontWeight:700,fontSize:10,boxShadow:`0 2px 0 ${t.green.e}`}}>✓ ×{plays}</span>
+      )}
       <span style={{fontSize:24}}>{g.emoji}</span>
       <div style={{minWidth:0,width:'100%'}}>
         <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:13,color:t.ink}}>{g.label}</p>
@@ -2211,9 +2219,18 @@ async function loadStudentData(studentSnap,setHasStudent,setReady){
     // Si volvemos de una misión (?done=...), aplica la recompensa (necesita los recursos para la sig. misión)
     const claimResult=sp.has('reset')?null:await claimSoloMission(s,allResources);
 
+    // Patio/Taller: el alumno terminó un juego → suma 1 a su contador (?played=file:id)
+    const playedRaw=sp.get('played');
+    if(playedRaw){
+        const gp={...(s.gamePlays||{})};
+        gp[playedRaw]=(gp[playedRaw]||0)+1;
+        try{await updateDoc(doc(db,STUDENTS_PATH,s.id),{gamePlays:gp});}catch(e){console.error('played:',e);}
+        s.gamePlays=gp;
+    }
+
     // Limpia params de un solo uso, preservando el resto (ej. ?unlock=1)
-    if(sp.has('reset')||sp.has('done')){
-        sp.delete('reset'); sp.delete('done');
+    if(sp.has('reset')||sp.has('done')||sp.has('played')||sp.has('exit')){
+        sp.delete('reset'); sp.delete('done'); sp.delete('played'); sp.delete('exit');
         const qs=sp.toString();
         try{history.replaceState({},'',location.pathname+(qs?'?'+qs:''));}catch(e){}
     }
@@ -2281,6 +2298,7 @@ async function loadStudentData(studentSnap,setHasStudent,setReady){
         },
         module:{name:s.currentModule||null},
         mastery,remediation,games:GAME_MAP,
+        gamePlays:s.gamePlays||{},   // contador de veces que superó cada juego (clave: file:id)
         sevLabel:{high:'Prioridad',mid:'A reforzar',low:'Casi listo'},
         weakCount:remediation.reduce((a,r)=>a+r.weak.length,0),
         getLore,getArch,lore,arch,
