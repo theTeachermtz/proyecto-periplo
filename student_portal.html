@@ -228,14 +228,6 @@ const RESTYPE={
     READING:     {label:'Reading',     emoji:'📖',color:'#84cc16'},
     LISTENING:   {label:'Listening',   emoji:'🎧',color:'#f43f5e'},
 };
-const GAMES_BY_CAT={
-    grammar:    ['lingomatch','connect4','jeopardy','presentations'],
-    verbs:      ['flashcards','memorama','anagram','emojispell','wordcascade'],
-    nouns:      ['flashcards','memorama','emojispell','wordbuildings'],
-    adjectives: ['flashcards','memorama','emojispell','anagram'],
-    key_structs:['lingomatch','anagram','wordcascade','presentations'],
-};
-
 /* Módulos en orden canónico por nivel — para calcular "próximo" vs "disponible" */
 const MODULE_ORDER={
     basic:   ['B1','B2','B-MIX'],
@@ -312,8 +304,17 @@ function buildLibrary(student,allResources){
     const modOrder=MODULE_ORDER[lvlKey]||[];
     const currentModIdx=currentMod?modOrder.indexOf(currentMod):-1;
 
-    /* Títulos de temas ya evaluados */
-    const masteredTitles=new Set(Object.values(mastery).map(m=>m.title).filter(Boolean));
+    /* "Superado" = tema evaluado SIN tropezones (todas las skills en verde/2).
+       Si queda alguna skill <2, el tema sigue 'activo' y aparece en el Taller —
+       así Patio y Taller nunca se contradicen. */
+    const masteredTitles=new Set(
+        Object.values(mastery)
+            .filter(m=>{
+                const vals=Object.values(m.skills||{});
+                return m.title && vals.length && vals.every(v=>Number(v)>=2);
+            })
+            .map(m=>m.title)
+    );
 
     const categories=CATS.map(cat=>{
         const currentNames=(TAX[lvlKey]?.[cat.id]||[]).filter(n=>n!=='Otro');
@@ -1590,40 +1591,9 @@ function GHero({t,kicker,title,desc,accent,children}){
   );
 }
 /* Patio: resuelve el juego de un tema → doc real publicado a 'patio'. */
-const PATIO_GAME={
-  flashcards:{file:'flashcards.html',types:['WORDPACK','WORD_BANK'],mode:'flashcards'},
-  memorama:{file:'memorama.html',types:['WORDPACK','WORD_BANK'],mode:'memorama'},
-  emojispell:{file:'emojispell.html',types:['WORDPACK','WORD_BANK'],mode:'emojispell'},
-  anagram:{file:'anagram.html',types:['WORDPACK','WORD_BANK'],mode:'anagram'},
-  wordcascade:{file:'wordcascade.html',types:['DUAL_WORD','WORDCASCADE']},
-  wordbuildings:{file:'wordbuildings.html',types:['DUAL_WORD','WORDCASCADE']},
-  lingomatch:{file:'lingomatch.html',types:['LINGOMATCH']},
-  connect4:{file:'connect4.html',types:['CONNECT4','BOARDGAME_BANK']},
-  jeopardy:{file:'jeopardy.html',types:['JEOPARDY_BANK','BOARDGAME_BANK']},
-  presentations:{file:'presentations.html',types:['PRESENTATION']},
-};
-const resolvePatioGame=(topicName,gk)=>{
-  const cfg=PATIO_GAME[gk]; if(!cfg) return null;
-  const all=window.PERIPLO.resourcesRaw||[];
-  const pick=all.find(r=> inDest(r,'patio')
-    && cfg.types.includes((r.type||'').toUpperCase())
-    && (!cfg.mode || !((r.publishedModes||[]).length) || (r.publishedModes||[]).includes(cfg.mode))
-    && (r.tags?.topics||[]).includes(topicName));
-  return pick?`${cfg.file}?id=${pick.id}&uid=${RES_UID}&student=true`:null;
-};
-function GGameChip({t,gk,topicName,onClose}){
-  const g=GAME_MAP[gk];if(!g)return null;
-  const link=resolvePatioGame(topicName,gk); const on=!!link;
-  const go=()=>{ if(!link)return; if(onClose)onClose(); window.location.href=link; };
-  return(
-    <button onClick={on?go:undefined} className={on?'g-tile':''} style={{padding:'14px 12px',display:'flex',flexDirection:'column',gap:9,alignItems:'flex-start',
-      cursor:on?'pointer':'default',opacity:on?1:0.5,border:'none',background:t.cardSub,borderRadius:16,textAlign:'left',width:'100%',boxShadow:`0 3px 0 ${t.cardEdge}`}}>
-      <span style={{fontSize:24,filter:on?'none':'grayscale(.7)'}}>{g.emoji}</span>
-      <div><p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:13,color:t.ink}}>{g.label}</p>
-        <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:8,letterSpacing:'.1em',textTransform:'uppercase',color:on?g.color:t.faint,marginTop:2}}>{on?g.kind:'Pronto'}</p></div>
-    </button>
-  );
-}
+/* El Taller reutiliza patioGamesForTopic() + GPatioChip (un chip por doc real
+   publicado a 'patio'), igual que el Patio. La vieja ruta PATIO_GAME /
+   resolvePatioGame / GGameChip se retiró: daba chips muertos sin link. */
 
 /* ─── EN CLASE — juegos multiplayer (entrar con código) ─── */
 const CLASE_GAMES=[
@@ -1711,18 +1681,31 @@ function ProgresoScreen({t,onNav,onBack}){
 /* ─── TALLER ─── */
 function GRemediationDrawer({t,item,onClose}){
   if(!item)return null;const ac=item.color;
+  const catLabel=(CATS.find(c=>c.id===item.cat)||{}).label||'Refuerzo';
   return(
     <GSheet t={t} accent={ac} onClose={onClose}>
-      <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:11,letterSpacing:'.1em',textTransform:'uppercase',color:ac,marginBottom:6}}>{item.topicTitle}</p>
-      <h3 style={{fontFamily:'Fredoka',fontWeight:700,fontSize:24,color:t.ink,lineHeight:1.1,marginBottom:8}}>{item.skill}</h3>
-      <p style={{fontFamily:'Nunito',fontWeight:600,fontSize:13,color:t.ink2,lineHeight:1.5,marginBottom:18}}>{item.note}</p>
-      <p style={{...GLBL,color:t.ink2,marginBottom:12}}>{item.games.length} juegos para esto</p>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:16}}>
-        {item.games.map(gk=><GGameChip key={gk} t={t} gk={gk} onClick={onClose}/>)}
-      </div>
-      <Btn3D face={ac} edge={t.dark?'#000':'rgba(0,0,0,.2)'} big style={{width:'100%'}} onClick={onClose}>
-        <GIcon d="play" size={18} color="#fff" fill="#fff" sw={0}/> Empezar repaso
-      </Btn3D>
+      <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:11,letterSpacing:'.1em',textTransform:'uppercase',color:ac,marginBottom:6}}>{catLabel}</p>
+      <h3 style={{fontFamily:'Fredoka',fontWeight:700,fontSize:24,color:t.ink,lineHeight:1.1,marginBottom:12}}>{item.topicTitle}</h3>
+      {/* tropezones que marcó el teacher en este tema (omite el chip redundante
+          en temas de una sola skill, donde la skill == el nombre del tema) */}
+      {item.weak.filter(w=>w.skill!==item.topicTitle).length>0&&(
+        <div style={{display:'flex',flexWrap:'wrap',gap:7,marginBottom:18}}>
+          {item.weak.filter(w=>w.skill!==item.topicTitle).map(w=>{const wc=w.severity==='high'?'#e8572a':'#e8a030';return(
+            <span key={w.skill} style={{fontFamily:'Nunito',fontWeight:700,fontSize:11.5,color:wc,background:`${wc}22`,
+              borderRadius:999,padding:'5px 11px'}}>{w.skill}</span>
+          );})}
+        </div>
+      )}
+      <p style={{...GLBL,color:t.ink2,marginBottom:12}}>{item.games.length} juego{item.games.length===1?'':'s'} para este tema</p>
+      {item.games.length===0?(
+        <div style={{background:t.cardSub,borderRadius:16,padding:'22px 16px',textAlign:'center'}}>
+          <p style={{fontFamily:'Nunito',fontWeight:700,fontSize:12,color:t.ink2}}>Aún no hay juegos publicados para este tema.</p>
+        </div>
+      ):(
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          {item.games.map(g=><GPatioChip key={g.key} t={t} entry={g} onClose={onClose}/>)}
+        </div>
+      )}
     </GSheet>
   );
 }
@@ -1747,12 +1730,12 @@ function TallerScreen({t,onBack,openDrawer}){
                 boxShadow:`0 4px 0 ${r.color}aa`,display:'flex',alignItems:'center',justifyContent:'center'}}>🎯</span>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
-                  <span style={{fontFamily:'Fredoka',fontWeight:600,fontSize:15,color:t.ink}}>{r.skill}</span>
+                  <span style={{fontFamily:'Fredoka',fontWeight:600,fontSize:15,color:t.ink}}>{r.topicTitle}</span>
                   <span style={{fontFamily:'Fredoka',fontWeight:600,fontSize:9,letterSpacing:'.06em',textTransform:'uppercase',color:'#fff',
                     background:r.color,borderRadius:999,padding:'2px 8px'}}>{P.sevLabel[r.severity]}</span>
                 </div>
-                <p style={{fontFamily:'Nunito',fontWeight:600,fontSize:11.5,color:t.ink2,lineHeight:1.45,marginTop:4}}>{r.note}</p>
-                <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:9,letterSpacing:'.08em',textTransform:'uppercase',color:r.color,marginTop:7}}>{r.games.length} juegos →</p>
+                <p style={{fontFamily:'Nunito',fontWeight:600,fontSize:11.5,color:t.ink2,lineHeight:1.45,marginTop:4}}>{r.weak.filter(w=>w.skill!==r.topicTitle).map(w=>w.skill).join(' · ')||'Repasar el tema completo'}</p>
+                <p style={{fontFamily:'Fredoka',fontWeight:600,fontSize:9,letterSpacing:'.08em',textTransform:'uppercase',color:r.color,marginTop:7}}>{r.games.length} juego{r.games.length===1?'':'s'} →</p>
               </div>
             </button>
           ))}
@@ -2235,18 +2218,27 @@ async function loadStudentData(studentSnap,setHasStudent,setReady){
 
     const mastery=s.detailedMastery||{};
 
-    const remediation=Object.entries(mastery).flatMap(([tid,{title,skills}])=>
-        Object.entries(skills||{})
+    /* Taller: UNA tarjeta por TEMA con tropezones (skill <2). Los juegos son los
+       MISMOS del Patio para ese tema → patioGamesForTopic(title). El `title` que
+       guarda evaluaciones.html es el string EXACTO de la taxonomía, así que
+       "Omisión del 'to'" (tema Modal Verbs) abre los juegos etiquetados
+       Grammar › Modal Verbs. Sin `title` (datos legacy) → no es ruteable, se omite. */
+    const remediation=Object.entries(mastery).map(([tid,m])=>{
+        const title=m&&m.title, cat=m&&m.cat, skills=m&&m.skills;
+        if(!title) return null;
+        const weak=Object.entries(skills||{})
             .filter(([,v])=>Number(v)<2)
-            .map(([skill,v])=>({
-                id:`${tid}-${skill.replace(/\s+/g,'-')}`,
-                topic:tid,topicTitle:title,skill,
-                severity:Number(v)===0?'high':'mid',
-                color:Number(v)===0?'#e8572a':'#e8a030',
-                note:`Refuerza: ${skill}`,
-                games:GAMES_BY_CAT.grammar,
-            }))
-    );
+            .map(([skill,v])=>({skill,severity:Number(v)===0?'high':'mid'}));
+        if(!weak.length) return null;
+        const hasHigh=weak.some(w=>w.severity==='high');
+        return{
+            id:tid, topic:tid, topicTitle:title, cat,
+            weak,
+            severity:hasHigh?'high':'mid',
+            color:hasHigh?'#e8572a':'#e8a030',
+            games:patioGamesForTopic(title,allResources),
+        };
+    }).filter(Boolean);
 
     const lore=getLore(s.level);
     const arch=getArch(s.skills||{});
@@ -2269,7 +2261,7 @@ async function loadStudentData(studentSnap,setHasStudent,setReady){
         module:{name:s.currentModule||null},
         mastery,remediation,games:GAME_MAP,
         sevLabel:{high:'Prioridad',mid:'A reforzar',low:'Casi listo'},
-        weakCount:remediation.filter(r=>r.severity==='high'||r.severity==='mid').length,
+        weakCount:remediation.reduce((a,r)=>a+r.weak.length,0),
         getLore,getArch,lore,arch,
     };
 
