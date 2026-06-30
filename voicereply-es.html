@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Voice Reply | Periplo Español</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' }; document.documentElement.classList.add('dark');</script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "canvas-confetti": "https://esm.sh/canvas-confetti@1.9.3",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; user-select: none; -webkit-user-select: none; overflow: hidden; touch-action: manipulation; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+        @keyframes popIn { 0%{opacity:0;transform:scale(0.9) translateY(10px)} 100%{opacity:1;transform:scale(1) translateY(0)} }
+        .animate-pop { animation: popIn 0.35s cubic-bezier(0.175,0.885,0.32,1.275) forwards; }
+        @keyframes slideUp { 0%{opacity:0;transform:translateY(16px)} 100%{opacity:1;transform:translateY(0)} }
+        .animate-slide-up { animation: slideUp 0.25s ease-out forwards; }
+        @keyframes pulse-ring { 0%{transform:scale(0.8);box-shadow:0 0 0 0 rgba(99,102,241,0.7)} 70%{transform:scale(1);box-shadow:0 0 0 15px rgba(99,102,241,0)} 100%{transform:scale(0.8);box-shadow:0 0 0 0 rgba(99,102,241,0)} }
+        .mic-listening { animation: pulse-ring 1.5s infinite cubic-bezier(0.215, 0.61, 0.355, 1); }
+        @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(5px)} }
+        .animate-shake { animation: shake 0.35s ease-in-out; }
+    </style>
+</head>
+<body class="text-zinc-100 h-[100dvh]">
+    <div id="root" class="h-full"></div>
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useMemo } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import confetti from 'canvas-confetti';
+        import { Loader2, Mic, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, CheckCircle2, AlertCircle, Ear, Info, Volume2, Plus, X } from 'lucide-react';
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { getFirestore, doc, getDoc, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // ============================================================
+        // RUTAS DE FIREBASE — ESPAÑOL (Anita)
+        // ============================================================
+        const urlParams = new URLSearchParams(window.location.search);
+        const TEACHER_UID = urlParams.get('uid') || 'teacher_anita_001';
+        const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
+        const BACK_URL = 'index-es.html';
+        const SPEAK_LANG = 'es-MX';     // El alumno produce y escucha ESPAÑOL.
+        const RECOGNITION_LANG = 'es-MX'; // Reconocimiento de voz en español.
+
+        // TTS Helpers & Emoji Stripper
+        const stripEmoji = (s) => s.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1FA00}-\u{1FAFF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '').trim();
+
+        const speakWord = (text, rate=0.6) => {
+            if(!window.speechSynthesis) return;
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(stripEmoji(text));
+            u.lang = SPEAK_LANG;
+            u.rate = rate;
+            window.speechSynthesis.speak(u);
+        };
+
+        const speakPhrase = (text) => {
+            if(!window.speechSynthesis) return;
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(stripEmoji(text));
+            u.lang = SPEAK_LANG;
+            u.rate = 0.85;
+            window.speechSynthesis.speak(u);
+        };
+
+        const pickUserEmoji = (t) => {
+            const l=t.toLowerCase();
+            if(/gracias/.test(l)) return ' 🙏'; if(/por favor/.test(l)) return ' 🤝';
+            if(/hola|buenas/.test(l)) return ' 👋'; if(/adiós|adios|nos vemos|hasta luego/.test(l)) return ' 👋';
+            if(/perdón|perdon|lo siento|disculpa/.test(l)) return ' 😅'; if(/amo|encanta|increíble|increible|genial/.test(l)) return ' 😍';
+            if(/sí |claro|por supuesto/.test(l)) return ' 👍'; if(/comida|comer|hambre|cena/.test(l)) return ' 🍽️';
+            if(/feliz|content|emocionad/.test(l)) return ' 😊'; if(/trabajo|oficina|chamba/.test(l)) return ' 💼';
+            const r=[' 💬',' ✨','','','']; return r[Math.floor(Math.random()*r.length)];
+        };
+
+        const guessContact = (cf) => {
+            if(!cf||cf.length===0) return{name:'Profe',emoji:'🧑‍🏫'};
+            const t=cf.map(c=>(c.botMessage||'')+(c.expectedAnswer||'')).join(' ').toLowerCase();
+            const p=[
+                {k:['jefe','jefa','junta','reunión','reunion','oficina','boss','meeting'],n:'El Jefe',e:'👔'},
+                {k:['doctor','doctora','cita','salud','hospital','médico','medico'],n:'Dr. López',e:'🩺'},
+                {k:['mesero','mesera','menú','menu','orden','restaurante','comida','cuenta','taco','waiter','order'],n:'Mesero',e:'🍽️'},
+                {k:['cantinero','bar','cerveza','michelada','bartender'],n:'Cantinero',e:'🍸'},
+                {k:['amigo','amiga','fiesta','peli','película','pelicula','fin de semana','weekend','friend'],n:'Mejor Amigo',e:'😎'},
+                {k:['mamá','mama','madre','familia','mom'],n:'Mamá',e:'👩‍🦱'},
+                {k:['papá','papa','padre','dad'],n:'Papá',e:'👨‍🦳'},
+                {k:['abuela','abuelita','grandma'],n:'Abuela',e:'👵'},
+                {k:['hotel','reservación','reservacion','habitación','habitacion','check in'],n:'Recepción',e:'🏨'},
+                {k:['tienda','comprar','precio','compras','store'],n:'Cajero',e:'🛒'},
+                {k:['profe','maestro','maestra','clase','tarea','escuela','teacher'],n:'Profe',e:'📚'},
+                {k:['taxi','uber','chofer','viaje','aeropuerto','driver'],n:'Chofer',e:'🚕'},
+                {k:['entrevista','contratar','currículum','curriculum','trabajo','interview'],n:'Reclutador',e:'💼'}
+            ];
+            for(const x of p) if(x.k.some(k=>t.includes(k))) return{name:x.n,emoji:x.e};
+            return{name:'Contacto',emoji:'💬'};
+        };
+
+        const VoiceNote = ({text, onPlay, isPlaying}) => (
+            <div className="flex items-center gap-2 bg-zinc-700/50 rounded-2xl px-3 py-2.5 max-w-[220px]">
+                <button onClick={onPlay} className="w-9 h-9 rounded-full bg-emerald-500 flex items-center justify-center text-white flex-shrink-0 active:scale-90 transition-transform">
+                    {isPlaying?<div className="w-2.5 h-2.5 bg-white rounded-sm"/>:<Play size={15} fill="white"/>}
+                </button>
+                <div className="flex-1 flex items-center gap-[2px] h-5 overflow-hidden">
+                    {[...Array(16)].map((_,i)=>(<div key={i} className={`w-[3px] rounded-full bg-emerald-400 ${isPlaying?'voice-bar':''}`} style={{height:`${Math.random()*60+30}%`,animationDelay:`${i*0.08}s`,opacity:isPlaying?undefined:0.4}}/>))}
+                </div>
+                <span className="text-[10px] text-zinc-400 font-bold flex-shrink-0">0:{String(Math.ceil(text.length/14)).padStart(2,'0')}</span>
+            </div>
+        );
+
+        // ====== NPC BUBBLE ======
+        const BotBubble = ({ spanishText, isHistory }) => {
+            const match = spanishText.match(/^([\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]+)/u);
+            let emoji = match ? match[0] : "🤖";
+            let cleanText = match ? spanishText.replace(emoji, '').trim() : spanishText;
+
+            return (
+                <div className={`flex gap-2 w-full ${!isHistory ? 'animate-pop' : ''}`}>
+                    <div className={`w-8 h-8 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20 ${isHistory ? 'opacity-50' : ''}`}>
+                        {emoji}
+                    </div>
+                    <div className="flex flex-col items-start max-w-[85%]">
+                        <div className="px-4 py-3 rounded-2xl rounded-bl-sm border bg-zinc-800 text-zinc-200 border-zinc-700/50 text-sm leading-relaxed font-medium select-none">
+                            {cleanText}
+                        </div>
+                        {!isHistory && (
+                            <div className="flex items-center gap-2 mt-2 ml-1">
+                                <button
+                                    onClick={() => speakPhrase(cleanText)}
+                                    className="bg-zinc-800/80 hover:bg-zinc-700 text-[10px] text-zinc-400 font-bold px-2 py-1.5 rounded-lg flex items-center gap-1 active:scale-95 transition-all uppercase tracking-widest border border-zinc-700/50"
+                                >
+                                    <Volume2 size={12}/> Escuchar
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // ====== MCQ BUBBLE (comprensión — opciones en inglés) ======
+        const MCQBubble = ({ turn, onDone, addScore }) => {
+            const MCQ_BONUS = 5;
+            const [mcqChoices] = useState(() => {
+                if (!turn.userHint || !turn.distractors || turn.distractors.length < 2) return [];
+                const choices = [
+                    { text: turn.userHint, isCorrect: true },
+                    { text: turn.distractors[0], isCorrect: false },
+                    { text: turn.distractors[1], isCorrect: false },
+                ];
+                for (let i = choices.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [choices[i], choices[j]] = [choices[j], choices[i]];
+                }
+                return choices;
+            });
+            const [answered, setAnswered] = useState(false);
+            const [correct, setCorrect] = useState(false);
+            const [selectedIdx, setSelectedIdx] = useState(null);
+
+            if (mcqChoices.length === 0) { onDone(); return null; }
+
+            const handleAnswer = (isCorrect, idx) => {
+                if (answered) return;
+                setAnswered(true);
+                setCorrect(isCorrect);
+                setSelectedIdx(idx);
+                if (isCorrect) addScore(MCQ_BONUS);
+            };
+
+            return (
+                <div className="flex flex-col items-end w-full space-y-2 animate-pop">
+                    <div className={`w-[95%] sm:w-[88%] p-4 rounded-2xl rounded-tr-sm ${answered ? (correct ? 'bg-emerald-600' : 'bg-zinc-700') : 'bg-indigo-600'}`}>
+                        {/* Encabezado: pregunta o resultado */}
+                        {!answered ? (
+                            <p className="text-white font-black text-sm mb-3">¿Qué te están diciendo?</p>
+                        ) : (
+                            <div className="flex items-center gap-2 mb-3">
+                                <span className="text-xl">{correct ? '✅' : '❌'}</span>
+                                <p className="text-white font-black text-sm">{correct ? '¡Correcto!' : 'Incorrecto — la verde era la buena'}</p>
+                                {correct && (
+                                    <div className="flex items-center gap-1 bg-white/20 px-2 py-1 rounded-full ml-auto">
+                                        <Star size={12} className="text-amber-300"/>
+                                        <span className="text-white font-black text-xs">+{MCQ_BONUS}</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Opciones — SIEMPRE visibles; tras responder se colorean para que el alumno analice */}
+                        <div className="space-y-2">
+                            {mcqChoices.map((choice, i) => {
+                                let cls;
+                                if (!answered) cls = 'bg-white/20 hover:bg-white/30 active:bg-white/40 text-white active:scale-95';
+                                else if (choice.isCorrect) cls = 'bg-emerald-500 text-white ring-2 ring-white/40';
+                                else if (i === selectedIdx) cls = 'bg-rose-500 text-white';
+                                else cls = 'bg-white/10 text-white/40';
+                                return (
+                                    <button key={i} disabled={answered} onClick={() => handleAnswer(choice.isCorrect, i)}
+                                        className={`w-full text-left font-bold py-2.5 px-4 rounded-xl text-sm transition-all flex items-center justify-between gap-2 ${cls}`}>
+                                        <span>{choice.text}</span>
+                                        {answered && choice.isCorrect && <span className="shrink-0">✅</span>}
+                                        {answered && !choice.isCorrect && i === selectedIdx && <span className="shrink-0">❌</span>}
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {/* Pie: pista de puntos o botón continuar */}
+                        {!answered ? (
+                            <p className="text-indigo-200 text-[10px] mt-3 font-bold">+{MCQ_BONUS} pts si aciertas 🎯</p>
+                        ) : (
+                            <button onClick={onDone}
+                                className="w-full mt-3 bg-white text-indigo-700 font-black py-2.5 px-6 rounded-xl shadow-lg text-sm uppercase tracking-wider flex items-center justify-center gap-1.5 active:scale-95">
+                                🎤 Responder
+                            </button>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // ====== VOICE BUBBLE COMPONENT ======
+        const VoiceReplyBubble = ({ expectedAnswer, onNext, addScore }) => {
+            const [isListening, setIsListening] = useState(false);
+            const [transcript, setTranscript] = useState("");
+            const [status, setStatus] = useState('idle'); // idle, listening, success, error, max_attempts
+            const [similarity, setSimilarity] = useState(0);
+            const [attempts, setAttempts] = useState(0);
+            const recognitionRef = useRef(null);
+
+            const maxAttempts = 3;
+
+            const words = useMemo(() => expectedAnswer.split(' ').filter(w => w.trim() !== ''), [expectedAnswer]);
+
+            useEffect(() => {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (SpeechRecognition) {
+                    recognitionRef.current = new SpeechRecognition();
+                    recognitionRef.current.continuous = false;
+                    recognitionRef.current.interimResults = false;
+                    recognitionRef.current.lang = RECOGNITION_LANG;
+
+                    recognitionRef.current.onstart = () => { setIsListening(true); setStatus('listening'); setTranscript(""); };
+                    recognitionRef.current.onresult = (event) => {
+                        const currentTranscript = event.results[0][0].transcript;
+                        setTranscript(currentTranscript);
+                        checkPronunciation(currentTranscript);
+                    };
+                    recognitionRef.current.onerror = (event) => {
+                        setIsListening(false);
+                        const currentAttempts = attempts + 1;
+                        setAttempts(currentAttempts);
+
+                        if (currentAttempts >= maxAttempts) {
+                            setStatus('max_attempts');
+                        } else {
+                            setStatus('error');
+                            setTranscript(event.error === 'no-speech' ? "No te escuché bien, intenta de nuevo." : "Error con el micrófono.");
+                        }
+                    };
+                    recognitionRef.current.onend = () => setIsListening(false);
+                } else {
+                    setTranscript("Tu navegador no soporta reconocimiento de voz.");
+                    setStatus('error');
+                }
+            }, [expectedAnswer, attempts]);
+
+            const toggleListening = () => {
+                if (isListening) recognitionRef.current?.stop();
+                else { setStatus('idle'); recognitionRef.current?.start(); }
+            };
+
+            const checkPronunciation = (spokenText) => {
+                // Quita acentos y signos para comparar de forma tolerante (es-MX).
+                const cleanStr = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+                const targetWords = cleanStr(expectedAnswer).split(/\s+/).filter(Boolean);
+                const spokenWords = cleanStr(spokenText).split(/\s+/).filter(Boolean);
+
+                let matches = 0;
+                targetWords.forEach(word => { if (spokenWords.includes(word)) matches++; });
+
+                const score = targetWords.length ? matches / targetWords.length : 0;
+                setSimilarity(Math.round(score * 100));
+
+                if (score >= 0.85) {
+                    setStatus('success');
+                    confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+                    addScore(Math.max(10 - (attempts * 2), 2));
+                } else {
+                    const currentAttempts = attempts + 1;
+                    setAttempts(currentAttempts);
+
+                    if (currentAttempts >= maxAttempts) {
+                        setStatus('max_attempts');
+                        addScore(1);
+                    } else {
+                        setStatus('error');
+                    }
+                }
+            };
+
+            if (status === 'success') return (
+                <div className="flex flex-col items-end w-full animate-pop mt-4">
+                    <div className="bg-emerald-600 text-white p-4 rounded-2xl rounded-tr-sm w-[90%] sm:w-[85%] shadow-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                            <CheckCircle2 size={18} className="text-emerald-200"/>
+                            <span className="font-black text-sm uppercase tracking-widest text-emerald-200">¡Excelente pronunciación!</span>
+                        </div>
+                        <p className="font-bold text-lg leading-relaxed">{expectedAnswer}</p>
+                        <p className="text-xs text-emerald-200 mt-2 font-medium bg-emerald-700/50 p-2 rounded-lg">
+                            Te escuché decir: "{transcript}"
+                        </p>
+                        <div className="mt-4 text-right">
+                            <button onClick={onNext} className="bg-white text-emerald-700 font-black py-2.5 px-6 rounded-xl shadow-sm text-sm flex items-center gap-1 active:scale-95 transition-transform ml-auto">
+                                Siguiente <ChevronRight size={16}/>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            if (status === 'max_attempts') return (
+                <div className="flex flex-col items-end w-full animate-pop mt-4">
+                    <div className="bg-zinc-800 border border-zinc-700 p-4 rounded-2xl rounded-tr-sm w-[90%] sm:w-[85%] shadow-lg">
+                        <div className="flex items-center gap-2 mb-3">
+                            <Info size={18} className="text-indigo-400"/>
+                            <span className="font-black text-sm uppercase tracking-widest text-indigo-400">Intentos agotados</span>
+                        </div>
+                        <p className="text-sm font-medium text-zinc-300 leading-relaxed mb-4">
+                            No te preocupes. Quizá hay mucho ruido de fondo o la herramienta de voz aún no es perfecta. ¡Sigamos con la historia!
+                        </p>
+
+                        <div className="bg-zinc-950/50 border border-zinc-800 p-3 rounded-xl mb-4 text-center">
+                            <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mb-1">Lo que tenías que decir:</p>
+                            <p className="font-bold text-white text-base">{expectedAnswer}</p>
+                        </div>
+
+                        <div className="mt-4 text-right">
+                            <button onClick={onNext} className="bg-indigo-600 text-white font-black py-2.5 px-6 rounded-xl shadow-sm text-sm flex items-center gap-1 active:scale-95 transition-transform ml-auto">
+                                Siguiente Turno <ChevronRight size={16}/>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="flex flex-col items-end w-full animate-pop space-y-4 mt-4">
+                    <div className="w-[90%] sm:w-[85%] bg-zinc-800/80 border border-zinc-700 rounded-2xl p-4 shadow-sm relative overflow-hidden">
+                        <div className="absolute top-0 left-0 w-full h-1 bg-zinc-800">
+                            <div className="h-full bg-indigo-500 transition-all duration-300" style={{width: `${(attempts / maxAttempts) * 100}%`}}></div>
+                        </div>
+
+                        <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center gap-2 mt-1">
+                            <Ear size={14}/> Di esto en voz alta:
+                        </p>
+                        <p className="text-xl font-black text-white mb-4 text-center">{expectedAnswer}</p>
+
+                        <div className="border-t border-zinc-700 pt-3">
+                            <p className="text-[10px] text-zinc-500 font-bold mb-2 text-center">Toca una palabra para escucharla</p>
+                            <div className="flex flex-wrap justify-center gap-1.5 mb-3">
+                                {words.map((w, i) => (
+                                    <button key={i} onClick={() => speakWord(w)} className="bg-zinc-700 hover:bg-zinc-600 text-zinc-200 px-2.5 py-1.5 rounded-lg text-xs font-bold active:scale-95 transition-transform">
+                                        {w}
+                                    </button>
+                                ))}
+                            </div>
+                            <button onClick={() => speakPhrase(expectedAnswer)} className="w-full bg-zinc-700 hover:bg-zinc-600 text-zinc-200 py-2 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 active:scale-95 transition-transform border border-zinc-600/50">
+                                <Volume2 size={13}/> Leer frase completa
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="w-[90%] sm:w-[85%] flex flex-col items-center">
+                        <button
+                            onClick={toggleListening}
+                            className={`w-20 h-20 rounded-full flex items-center justify-center transition-all mb-3 ${
+                                isListening ? 'bg-indigo-600 text-white mic-listening' : status === 'error' ? 'bg-rose-500 text-white animate-shake' : 'bg-zinc-800 border-2 border-indigo-500/50 text-indigo-400 hover:bg-indigo-900/30'
+                            }`}
+                        >
+                            <Mic size={32} />
+                        </button>
+
+                        <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-1">
+                            {isListening ? 'Escuchando...' : 'Toca para hablar'}
+                        </p>
+                        <p className="text-[10px] font-bold text-zinc-600 uppercase tracking-widest mb-2">
+                            Intento {attempts} de {maxAttempts}
+                        </p>
+
+                        {transcript && status !== 'idle' && status !== 'success' && (
+                            <div className={`w-full p-3 rounded-xl text-sm font-bold text-center animate-slide-up ${
+                                status === 'error' ? 'bg-rose-500/10 border border-rose-500/20 text-rose-400' : 'bg-zinc-800 text-zinc-300'
+                            }`}>
+                                {status === 'error' && <AlertCircle size={16} className="inline mr-1 mb-0.5"/>}
+                                {transcript}
+                                {status === 'error' && similarity > 0 && (
+                                    <div className="text-[10px] mt-1 opacity-70">Precisión: {similarity}% (Necesitas 85%)</div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // ====== MAIN APP ======
+        const App = () => {
+            const mockData = [
+                { id: 1, botMessage: "😡 ¡Te vi hablando con tu ex en la cafetería! ¿Qué hacías ahí?", expectedAnswer: "No fue nada, solo nos saludamos.", userHint: "I saw you talking to your ex in the cafeteria! What were you doing there?", distractors: ["Do you want to grab a coffee later?", "Why didn't you come to the cafeteria?"] },
+                { id: 2, botMessage: "🤨 No te creo. Te veías muy feliz.", expectedAnswer: "Te lo prometo, fue una coincidencia.", userHint: "I don't believe you. You looked very happy.", distractors: ["I believe you, you looked sad.", "I don't know you, you looked busy."] }
+            ];
+
+            const [chatFlow, setChatFlow] = useState([]);
+            const [gameTitle, setGameTitle] = useState('Voice Reply Challenge');
+            const [screen, setScreen] = useState('name');
+
+            const [playerName, setPlayerName] = useState('John Doe');
+
+            useEffect(() => {
+                const unsub = onAuthStateChanged(auth, async (u) => {
+                    if (u) { setPlayerName(u.displayName || 'John Doe'); }
+                    else { try { await signInAnonymously(auth); } catch(e) {} }
+                });
+                return () => unsub();
+            }, []);
+
+            const [showLeaderboard, setShowLeaderboard] = useState(false);
+            const [totalScore, setTotalScore] = useState(0);
+            const [currentStep, setCurrentStep] = useState(0);
+            const [mcqDone, setMcqDone] = useState(false);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [quizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
+            const [leaderboard, setLeaderboard] = useState([]);
+            const [scoreSaved, setScoreSaved] = useState(false);
+
+            const messagesEndRef = useRef(null);
+            useEffect(() => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 200); }, [currentStep, screen]);
+
+            useEffect(() => {
+                if (!quizId) {
+                    setChatFlow(mockData);
+                    setLoading(false);
+                    return;
+                }
+
+                const load = async () => {
+                    try {
+                        const snap = await getDoc(doc(db, QUIZZES_PATH, quizId));
+                        if (snap.exists()) {
+                            const d = snap.data();
+                            setGameTitle(d.title || 'Voice Reply Challenge');
+                            setChatFlow(d.content?.flow || d.content || []);
+                        } else {
+                            setError("Juego no encontrado.");
+                        }
+                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score', 'desc'), limit(5));
+                        const lbSnap = await getDocs(q);
+                        setLeaderboard(lbSnap.docs.map(d => d.data()));
+                    } catch (e) { setError(e.message); }
+                    setLoading(false);
+                };
+                load();
+            }, [quizId]);
+
+            const contact = useMemo(() => guessContact(chatFlow), [chatFlow]);
+
+            const handleStart = () => {
+                setScreen('game');
+            };
+
+            const goBackToName = () => { setScreen('name'); setCurrentStep(0); setTotalScore(0); setScoreSaved(false); setMcqDone(false); };
+
+            const handleNext = () => {
+                setMcqDone(false);
+                if (currentStep < chatFlow.length - 1) {
+                    setCurrentStep(prev => prev + 1);
+                } else {
+                    setScreen('result');
+                }
+            };
+
+            const isComplete = screen === 'result';
+
+            useEffect(() => {
+                if(isComplete && !scoreSaved && playerName) {
+                    addDoc(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), { playerName, score: totalScore, date: serverTimestamp() }).then(() => {
+                        setScoreSaved(true);
+                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score', 'desc'), limit(5));
+                        getDocs(q).then(s => setLeaderboard(s.docs.map(d => d.data())));
+                    });
+                }
+            }, [isComplete, scoreSaved]);
+
+            const leaderboardModal = showLeaderboard ? (
+                <div className="fixed inset-0 bg-black/90 z-[300] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setShowLeaderboard(false)}>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-pop" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between mb-5">
+                            <div className="flex items-center gap-2"><Trophy size={20} className="text-amber-400"/><span className="font-black text-white">Top Scores</span></div>
+                            <button onClick={() => setShowLeaderboard(false)} className="text-zinc-500 hover:text-white p-1.5 rounded-lg transition-colors"><X size={18}/></button>
+                        </div>
+                        {leaderboard.length === 0 ? (
+                            <div className="text-center py-6">
+                                <p className="text-3xl mb-2">🏆</p>
+                                <p className="text-zinc-500 text-sm font-bold">¡Aún no hay puntajes!</p>
+                                <p className="text-zinc-600 text-xs mt-1">Sé el primero en aparecer.</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                {leaderboard.map((l, i) => (
+                                    <div key={i} className="flex items-center justify-between bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-base">{i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`}</span>
+                                            <span className="font-bold text-white text-sm uppercase">{l.playerName}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1"><Star size={12} className="text-amber-400"/><span className="font-black text-amber-400 text-sm">{l.score}</span></div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            ) : null;
+
+            if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-indigo-500" size={40}/></div>;
+            if (error) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-400 font-bold p-6 text-center">{error}</div>;
+
+            if (screen === 'name') return (
+                <div className="h-[100dvh] flex flex-col bg-zinc-950 max-w-lg mx-auto overflow-hidden">
+                    {leaderboardModal}
+                    {/* Periplo — camouflaged as phone carrier */}
+                    <div className="bg-zinc-950 px-4 py-2 flex items-center justify-between shrink-0 border-b border-zinc-800/40">
+                        <div className="flex items-center gap-1.5">
+                            <div className="w-5 h-5 bg-indigo-600 rounded-md flex items-center justify-center shrink-0">
+                                <span className="text-white font-black text-[9px]">P</span>
+                            </div>
+                            <span className="text-[10px] font-black text-indigo-400 tracking-[0.15em] uppercase">Periplo</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"/>
+                                <span className="text-[10px] font-bold text-zinc-300 max-w-[80px] truncate">{playerName}</span>
+                            </div>
+                            <div className="flex items-end gap-[2px]">
+                                {[3,5,7,9,11].map((h,i)=><div key={i} className="w-[3px] bg-zinc-600 rounded-full" style={{height:`${h}px`}}/>)}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-auto flex flex-col items-center px-4 py-6">
+                        <div className="w-full max-w-sm">
+                            <div className="text-center mb-6">
+                                <div className="w-16 h-16 bg-indigo-500/20 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto mb-3 border border-indigo-500/30">
+                                    <Mic size={32}/>
+                                </div>
+                                <h1 className="text-2xl font-black text-white mb-1">{gameTitle || 'Voice Reply'}</h1>
+                                <p className="text-zinc-500 text-sm font-medium">Practica con {contact.name}</p>
+                            </div>
+                            <div className="space-y-2.5 mb-6">
+                                {[
+                                    {emoji:'🎧', text:'Escucha (y lee) el mensaje del contacto en español'},
+                                    {emoji:'🤔', text:'Elige en inglés qué te está diciendo: opción múltiple'},
+                                    {emoji:'🎤', text:'Graba tu respuesta diciendo la frase en español en voz alta'},
+                                    {emoji:'✅', text:'Necesitas 85% de precisión para avanzar al siguiente turno'},
+                                ].map(({emoji,text}) => (
+                                    <div key={text} className="flex items-start gap-3 bg-zinc-900 border border-zinc-800 rounded-xl p-3">
+                                        <span className="text-xl shrink-0">{emoji}</span>
+                                        <p className="text-zinc-300 text-sm font-medium leading-snug">{text}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            <button onClick={handleStart} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-3.5 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm mb-3">
+                                Iniciar Práctica
+                            </button>
+                            <button onClick={() => setShowLeaderboard(true)} className="w-full flex items-center justify-center gap-2 text-zinc-500 hover:text-amber-400 text-sm font-bold py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 transition-colors active:scale-95">
+                                <Trophy size={15}/> Ver Rankings
+                            </button>
+                            {!isStudent && <button onClick={() => window.location.href=BACK_URL} className="mt-4 text-xs font-bold text-zinc-600 hover:text-zinc-400 uppercase tracking-widest block mx-auto">Volver al Hub</button>}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            if (screen === 'game') return (
+                <div className="h-[100dvh] flex flex-col bg-zinc-950 max-w-lg mx-auto sm:my-4 sm:rounded-[2rem] sm:border sm:border-zinc-800 sm:shadow-2xl overflow-hidden sm:h-[calc(100dvh-2rem)]">
+                    {leaderboardModal}
+                    {/* Periplo — camouflaged as phone carrier */}
+                    <div className="bg-zinc-900 px-4 py-1.5 flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-1.5">
+                            <div className="w-4 h-4 bg-indigo-600 rounded-sm flex items-center justify-center shrink-0">
+                                <span className="text-white font-black text-[8px]">P</span>
+                            </div>
+                            <span className="text-[9px] font-black text-indigo-400 tracking-[0.2em] uppercase">Periplo</span>
+                        </div>
+                        <div className="flex items-center gap-2.5">
+                            <div className="flex items-center gap-1">
+                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"/>
+                                <span className="text-[9px] font-bold text-zinc-400 max-w-[60px] truncate">{playerName}</span>
+                            </div>
+                            <button onClick={() => setShowLeaderboard(true)} className="text-zinc-500 hover:text-amber-400 transition-colors">
+                                <Trophy size={13}/>
+                            </button>
+                            <div className="flex items-end gap-[2px]">
+                                {[2,4,6,8,10].map((h,i)=><div key={i} className="w-[2px] bg-zinc-600 rounded-full" style={{height:`${h}px`}}/>)}
+                            </div>
+                        </div>
+                    </div>
+                    <header className="bg-zinc-900 px-4 py-3 flex items-center justify-between border-b border-zinc-800 shrink-0">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-xl border border-indigo-500/30 relative">
+                                {contact.emoji}<div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900"/>
+                            </div>
+                            <div><h1 className="font-black text-white text-sm">{contact.name}</h1><p className="text-[10px] text-zinc-500 font-bold">Turno {currentStep + 1} de {chatFlow.length}</p></div>
+                        </div>
+                        <div className="flex items-center gap-1 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20">
+                            <Star size={14} className="text-amber-400"/><span className="text-amber-400 font-black text-sm">{totalScore}</span>
+                        </div>
+                    </header>
+
+                    <div className="flex-1 overflow-y-auto px-4 py-6 custom-scrollbar flex flex-col gap-6">
+                        {chatFlow.slice(0, currentStep).map((data, idx) => (
+                            <div key={idx} className="space-y-3">
+                                <BotBubble spanishText={data.botMessage} isHistory={true} />
+                                <div className="flex flex-col items-end w-full">
+                                    <div className="bg-emerald-900/40 text-emerald-200 p-3 rounded-2xl rounded-tr-sm w-[85%] text-sm font-bold border border-emerald-500/20 opacity-60">
+                                        🎤 {data.expectedAnswer}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+
+                        <div className="space-y-2">
+                            <BotBubble spanishText={chatFlow[currentStep].botMessage} isHistory={false} />
+
+                            {!mcqDone && chatFlow[currentStep].distractors?.length >= 2 ? (
+                                <MCQBubble
+                                    key={`mcq-${currentStep}`}
+                                    turn={chatFlow[currentStep]}
+                                    onDone={() => setMcqDone(true)}
+                                    addScore={(pts) => setTotalScore(p => p + pts)}
+                                />
+                            ) : (
+                                <VoiceReplyBubble
+                                    key={`voice-${currentStep}`}
+                                    expectedAnswer={chatFlow[currentStep].expectedAnswer}
+                                    onNext={handleNext}
+                                    addScore={(pts) => setTotalScore(p => p + pts)}
+                                />
+                            )}
+                        </div>
+                        <div ref={messagesEndRef}/>
+                    </div>
+
+                    {/* FAKE CHAT INPUT BAR AT BOTTOM */}
+                    <div className="bg-zinc-900 px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0">
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-zinc-500 shrink-0">
+                            <Plus size={20} />
+                        </div>
+                        <div className="flex-1 bg-zinc-950 rounded-full h-10 px-4 flex items-center border border-zinc-800">
+                            <span className="text-zinc-600 text-sm font-medium select-none">Mensaje de audio...</span>
+                        </div>
+                        <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-indigo-400/50 shrink-0">
+                            <Mic size={18} />
+                        </div>
+                    </div>
+                </div>
+            );
+
+            if (screen === 'result') return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950">
+                    {leaderboardModal}
+                    <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-8 rounded-[2rem] shadow-2xl text-center animate-pop">
+                        <Trophy size={56} className="text-amber-400 mx-auto mb-4"/>
+                        <h1 className="text-2xl font-black text-white mb-2 uppercase tracking-wide">¡Rol Terminado!</h1>
+                        <p className="text-zinc-400 text-sm font-medium mb-6">Tu pronunciación está mejorando rápido.</p>
+
+                        <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6 mb-8">
+                            <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest mb-2">Puntuación Final</p>
+                            <div className="flex justify-center items-center gap-2">
+                                <Star size={24} className="text-amber-400 fill-amber-400/20"/>
+                                <span className="text-5xl font-black text-white">{totalScore}</span>
+                            </div>
+                        </div>
+
+                        {leaderboard.length > 0 && (
+                            <div className="mb-6 space-y-1.5">
+                                {leaderboard.slice(0,3).map((l,i) => (
+                                    <div key={i} className="flex justify-between bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs">
+                                        <span className="font-bold text-zinc-300">{i===0?'🥇':i===1?'🥈':'🥉'} {l.playerName}</span>
+                                        <span className="font-black text-amber-400">{l.score}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <button onClick={() => window.location.reload()} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm flex justify-center items-center gap-2 mb-3">
+                            <RotateCcw size={16}/> Volver a Practicar
+                        </button>
+                        {!isStudent ? (
+                            <button onClick={goBackToName} className="w-full bg-zinc-800 text-zinc-400 font-bold py-2.5 rounded-xl text-sm">Volver</button>
+                        ) : (
+                            <p className="text-zinc-500 text-xs font-bold">Para salir, solo cierra esta pestaña de tu navegador.</p>
+                        )}
+                    </div>
+                </div>
+            );
+
+            return null;
+        };
+
+        createRoot(document.getElementById('root')).render(<App/>);
+    </script>
+</body>
+</html>

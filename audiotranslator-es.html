@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Audio Translator | Periplo Español</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' }; document.documentElement.classList.add('dark');</script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
+        "canvas-confetti": "https://esm.sh/canvas-confetti@1.9.3"
+      }
+    }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #09090b; user-select: none; -webkit-user-select: none; overflow: hidden; touch-action: manipulation; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+        @keyframes popIn { 0%{opacity:0;transform:scale(0.9) translateY(10px)} 100%{opacity:1;transform:scale(1) translateY(0)} }
+        .animate-pop { animation: popIn 0.35s cubic-bezier(0.175,0.885,0.32,1.275) forwards; }
+        @keyframes slideUp { 0%{opacity:0;transform:translateY(16px)} 100%{opacity:1;transform:translateY(0)} }
+        .animate-slide-up { animation: slideUp 0.25s ease-out forwards; }
+        @keyframes pulse-bar { 0%,100%{opacity:0.4} 50%{opacity:1} }
+        .voice-bar { animation: pulse-bar 1.2s ease-in-out infinite; }
+        @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(5px)} }
+        .animate-shake { animation: shake 0.35s ease-in-out; }
+    </style>
+</head>
+<body class="text-zinc-100 h-[100dvh]">
+    <div id="root" class="h-full"></div>
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useMemo } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+        import { getFirestore, doc, getDoc, collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+        import confetti from 'canvas-confetti';
+        import { Loader2, Volume2, Lightbulb, ArrowLeft, Trophy, ChevronRight, Star, RotateCcw, Play, Eye, Forward, Send, CheckCircle2, Info, Plus, Mic, X } from 'lucide-react';
+
+        const firebaseConfig = { apiKey: "AIzaSyD4d-Kx1jQbgrKIdeOftv7BM729m7MIGPo", authDomain: "proyecto-periplo.firebaseapp.com", projectId: "proyecto-periplo" };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // ============================================================
+        // RUTAS DE FIREBASE — ESPAÑOL (Anita)
+        // ============================================================
+        const urlParams = new URLSearchParams(window.location.search);
+        const TEACHER_UID = urlParams.get('uid') || 'teacher_anita_001';
+        const QUIZZES_PATH = `artifacts/periplo-app-v1/users/${TEACHER_UID}/quizzes`;
+        const BACK_URL = 'index-es.html';
+        const ANSWER_LANG = 'es-MX'; // La frase que arma el alumno es ESPAÑOL.
+        const CONTEXT_LANG = 'en-US'; // El contexto (botMessage) viene en INGLÉS.
+
+        // TTS Helper & Emoji Stripper
+        const stripEmoji = (s) => s.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{1FA00}-\u{1FAFF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, '').trim();
+        const speak = (text, lang=ANSWER_LANG, rate=0.85, onEnd) => {
+            if(!window.speechSynthesis) { if(onEnd) onEnd(); return; }
+            window.speechSynthesis.cancel();
+            const cleanText = stripEmoji(text);
+            const u = new SpeechSynthesisUtterance(cleanText); u.lang=lang; u.rate=rate; u.pitch=1;
+            const voices = window.speechSynthesis.getVoices();
+            const v = voices.find(v=>v.lang.startsWith(lang.split('-')[0])&&v.name.includes('Google')) || voices.find(v=>v.lang.startsWith(lang.split('-')[0]));
+            if(v) u.voice=v;
+            if(onEnd) u.onend = onEnd;
+            window.speechSynthesis.speak(u);
+        };
+        if(window.speechSynthesis){window.speechSynthesis.getVoices();window.speechSynthesis.onvoiceschanged=()=>window.speechSynthesis.getVoices();}
+
+        const shuffleArray = (array) => {
+            const newArr = [...array];
+            for (let i = newArr.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [newArr[i], newArr[j]] = [newArr[j], newArr[i]];
+            }
+            return newArr;
+        };
+
+        // ====== RESPONSE BUBBLE (MCQ opcional → audio en español → ordenar por escucha) ======
+        const UnscrambleBubble = ({ botHint, distractors, expectedAnswer, userHint, onNext, addScore, isPlaying, playAudio }) => {
+            const originalWords = useMemo(() => expectedAnswer.split(' ').filter(w => w.trim() !== ''), [expectedAnswer]);
+            const [wordPool, setWordPool] = useState([]);
+            const [selectedWords, setSelectedWords] = useState([]);
+            const [showHint, setShowHint] = useState(false);
+            const [attempts, setAttempts] = useState(0);
+            const maxAttempts = 3;
+
+            // ── Fase 1: MCQ de comprensión (opcional, solo si el doc trae botHint + distractors) ──
+            const hasMCQ = !!(botHint && distractors && distractors.length >= 2);
+            const MCQ_BONUS = Math.max(2, Math.ceil(originalWords.length * 0.5));
+            const [phase, setPhase] = useState(hasMCQ ? 'mcq' : 'respond'); // mcq | respond
+            const [status, setStatus] = useState('unscrambling'); // unscrambling, error, correct, max_attempts
+            const [mcqAnswered, setMcqAnswered] = useState(false);
+            const [mcqCorrect, setMcqCorrect] = useState(false);
+            const [mcqSelected, setMcqSelected] = useState(null);
+            const [mcqChoices] = useState(() => hasMCQ
+                ? shuffleArray([
+                    { text: botHint, isCorrect: true },
+                    { text: distractors[0], isCorrect: false },
+                    { text: distractors[1], isCorrect: false },
+                ])
+                : []);
+
+            useEffect(() => {
+                const w = originalWords.map((word, id) => ({ id, word }));
+                setWordPool(shuffleArray(w));
+            }, [originalWords]);
+
+            // Si no hay MCQ, entra directo a la fase de respuesta y reproduce el audio en español
+            useEffect(() => { if (!hasMCQ) playAudio(); }, []);
+
+            const handleMcqAnswer = (isCorrect, idx) => {
+                if (mcqAnswered) return;
+                setMcqAnswered(true);
+                setMcqCorrect(isCorrect);
+                setMcqSelected(idx);
+                if (isCorrect) addScore(MCQ_BONUS);
+            };
+
+            const startResponse = () => { setPhase('respond'); playAudio(); };
+
+            const handleSelect = (wordObj) => {
+                if (status !== 'unscrambling') return;
+                setWordPool(prev => prev.filter(w => w.id !== wordObj.id));
+                setSelectedWords(prev => [...prev, wordObj]);
+            };
+
+            const handleDeselect = (wordObj) => {
+                if (status !== 'unscrambling') return;
+                setSelectedWords(prev => prev.filter(w => w.id !== wordObj.id));
+                setWordPool(prev => [...prev, wordObj]);
+            };
+
+            useEffect(() => {
+                if (selectedWords.length === originalWords.length && selectedWords.length > 0 && status === 'unscrambling') {
+                    const currentSentence = selectedWords.map(w => w.word).join(' ');
+                    if (currentSentence === expectedAnswer) {
+                        setStatus('correct');
+                        confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+                        const score = Math.max(10 - (attempts * 2), 2);
+                        addScore(score);
+                        setTimeout(() => speak(expectedAnswer, ANSWER_LANG, 0.85), 500);
+                    } else {
+                        const currentAttempts = attempts + 1;
+                        setAttempts(currentAttempts);
+                        if (currentAttempts >= maxAttempts) {
+                            setStatus('max_attempts');
+                            addScore(1); // 1 punto por el esfuerzo
+                        } else {
+                            setStatus('error');
+                        }
+                    }
+                }
+            }, [selectedWords, originalWords.length, expectedAnswer, status, attempts]);
+
+            const handleRetry = () => {
+                // Return words to pool and shuffle
+                const w = originalWords.map((word, id) => ({ id, word }));
+                setWordPool(shuffleArray(w));
+                setSelectedWords([]);
+                setStatus('unscrambling');
+            };
+
+            // ── FASE MCQ — comprensión de lo que dice la otra persona ──
+            if (phase === 'mcq') return (
+                <div className="flex flex-col items-end w-full animate-pop mt-2">
+                    <div className={`w-[92%] sm:w-[88%] p-4 rounded-2xl rounded-tr-sm shadow-lg ${mcqAnswered ? (mcqCorrect ? 'bg-emerald-600' : 'bg-zinc-700') : 'bg-indigo-600'}`}>
+                        {/* Encabezado: pregunta o resultado */}
+                        {!mcqAnswered ? (
+                            <p className="text-white font-black text-sm mb-3">¿Qué te está diciendo?</p>
+                        ) : (
+                            <div className="flex items-center gap-2 mb-3">
+                                <span className="text-xl">{mcqCorrect ? '✅' : '❌'}</span>
+                                <p className="text-white font-black text-sm">{mcqCorrect ? '¡Correcto!' : 'Incorrecto — la verde era la buena'}</p>
+                                {mcqCorrect && (
+                                    <div className="flex items-center gap-1 bg-white/20 px-2 py-1 rounded-full ml-auto">
+                                        <Star size={12} className="text-amber-300"/>
+                                        <span className="text-white font-black text-xs">+{MCQ_BONUS}</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Opciones — SIEMPRE visibles; tras responder se colorean para que el alumno analice */}
+                        <div className="space-y-2">
+                            {mcqChoices.map((choice, i) => {
+                                let cls;
+                                if (!mcqAnswered) cls = 'bg-white/20 hover:bg-white/30 active:bg-white/40 text-white active:scale-95';
+                                else if (choice.isCorrect) cls = 'bg-emerald-500 text-white ring-2 ring-white/40';
+                                else if (i === mcqSelected) cls = 'bg-rose-500 text-white';
+                                else cls = 'bg-white/10 text-white/40';
+                                return (
+                                    <button key={i} disabled={mcqAnswered} onClick={() => handleMcqAnswer(choice.isCorrect, i)}
+                                        className={`w-full text-left font-bold py-2.5 px-4 rounded-xl text-sm transition-all flex items-center justify-between gap-2 ${cls}`}>
+                                        <span>{choice.text}</span>
+                                        {mcqAnswered && choice.isCorrect && <span className="shrink-0">✅</span>}
+                                        {mcqAnswered && !choice.isCorrect && i === mcqSelected && <span className="shrink-0">❌</span>}
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {/* Pie: pista de puntos o botón continuar */}
+                        {!mcqAnswered ? (
+                            <p className="text-indigo-200 text-[10px] mt-3 font-bold">+{MCQ_BONUS} pts si aciertas 🎯</p>
+                        ) : (
+                            <button onClick={startResponse}
+                                className="w-full mt-3 bg-white text-indigo-700 font-black py-2.5 px-6 rounded-xl shadow-lg text-sm uppercase tracking-wider flex items-center justify-center gap-1.5 active:scale-95">
+                                🎧 Escuchar respuesta
+                            </button>
+                        )}
+                    </div>
+                </div>
+            );
+
+            if (status === 'correct') return (
+                <div className="flex flex-col items-end w-full animate-pop mt-2">
+                    <div className="bg-emerald-600 text-white p-4 rounded-2xl rounded-tr-sm w-[90%] sm:w-[85%] shadow-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                            <CheckCircle2 size={18} className="text-emerald-200"/>
+                            <span className="font-black text-sm uppercase tracking-widest text-emerald-200">¡Respuesta correcta!</span>
+                        </div>
+                        <p className="font-bold text-lg leading-relaxed">{expectedAnswer}</p>
+                        <div className="mt-4 text-right flex justify-between items-center border-t border-emerald-500/50 pt-3">
+                            <button onClick={() => speak(expectedAnswer, ANSWER_LANG, 0.85)} className="text-emerald-200 hover:text-white flex items-center gap-1 text-xs font-bold"><Volume2 size={14}/> Repetir</button>
+                            <button onClick={onNext} className="bg-white text-emerald-700 font-black py-2 px-4 rounded-xl shadow-sm text-sm flex items-center gap-1 active:scale-95 transition-transform">Siguiente <ChevronRight size={16}/></button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            if (status === 'max_attempts') return (
+                <div className="flex flex-col items-end w-full animate-pop mt-2">
+                    <div className="bg-zinc-800 border border-zinc-700 p-4 rounded-2xl rounded-tr-sm w-[90%] sm:w-[85%] shadow-lg">
+                        <div className="flex items-center gap-2 mb-3">
+                            <Info size={18} className="text-indigo-400"/>
+                            <span className="font-black text-sm uppercase tracking-widest text-indigo-400">Intentos agotados</span>
+                        </div>
+                        <p className="text-sm font-medium text-zinc-300 leading-relaxed mb-4">
+                            ¡Estaba difícil! La frase correcta que dice el audio es:
+                        </p>
+                        <div className="bg-zinc-950/50 border border-zinc-800 p-3 rounded-xl mb-4 text-center">
+                            <p className="font-bold text-white text-base">{expectedAnswer}</p>
+                        </div>
+                        <div className="text-right border-t border-zinc-700 pt-3 flex justify-between items-center">
+                            <button onClick={() => speak(expectedAnswer, ANSWER_LANG, 0.85)} className="text-zinc-400 hover:text-white flex items-center gap-1 text-xs font-bold"><Volume2 size={14}/> Escuchar</button>
+                            <button onClick={onNext} className="bg-indigo-600 text-white font-black py-2 px-4 rounded-xl shadow-sm text-sm flex items-center gap-1 active:scale-95 transition-transform">Siguiente <ChevronRight size={16}/></button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="flex flex-col items-end w-full animate-pop space-y-3 mt-2">
+                    {/* RESPÓNDELE ESTO — el alumno arma lo que ESCUCHA del audio en español */}
+                    <div className="w-[90%] sm:w-[85%] bg-indigo-600 rounded-2xl rounded-tr-sm p-4 shadow-lg">
+                        <p className="text-indigo-200 text-[10px] font-black uppercase tracking-widest mb-2.5">🗣️ Respóndele esto:</p>
+                        <div className="flex items-center gap-3">
+                            <button onClick={playAudio} className="w-11 h-11 rounded-full bg-white flex items-center justify-center text-indigo-700 flex-shrink-0 active:scale-95 transition-transform shadow-md">
+                                {isPlaying ? <div className="w-3 h-3 bg-indigo-700 rounded-sm animate-pulse"/> : <Play size={18} fill="currentColor" className="ml-0.5"/>}
+                            </button>
+                            <div className="flex-1 flex items-center gap-[3px] h-6 overflow-hidden">
+                                {[...Array(20)].map((_,i) => (
+                                    <div key={i} className={`w-[3px] rounded-full bg-white/70 ${isPlaying ? 'voice-bar' : ''}`} style={{height: `${Math.random()*60+30}%`, animationDelay: `${i*0.05}s`, opacity: isPlaying ? undefined : 0.4}}/>
+                                ))}
+                            </div>
+                            <span className="text-[10px] text-indigo-200 font-bold flex-shrink-0">0:{String(Math.ceil(expectedAnswer.length/12)).padStart(2,'0')}</span>
+                        </div>
+                    </div>
+
+                    {/* HINT */}
+                    {showHint && (
+                        <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-3 rounded-xl text-sm font-bold w-[90%] sm:w-[85%] animate-slide-up flex gap-2">
+                            <Lightbulb size={18} className="shrink-0 mt-0.5"/> <span>{userHint}</span>
+                        </div>
+                    )}
+
+                    {/* BUILDER AREA */}
+                    <div className={`w-[90%] sm:w-[85%] bg-indigo-600/10 border-2 ${status==='error'?'border-rose-500/50 bg-rose-500/5':'border-indigo-500/30'} rounded-2xl p-4 min-h-[80px] flex flex-wrap gap-2 content-start transition-colors`}>
+                        {selectedWords.length === 0 && <span className="text-indigo-400/50 font-bold text-sm m-auto">Toca las palabras para ordenar...</span>}
+
+                        {selectedWords.map((w, i) => {
+                            // Validar posición si estamos en error
+                            const isCorrectPos = status === 'error' ? (w.word === originalWords[i]) : null;
+
+                            return (
+                                <button key={w.id} onClick={() => handleDeselect(w)} disabled={status === 'error'}
+                                    className={`px-3 py-1.5 rounded-lg font-bold text-sm shadow-sm transition-all
+                                        ${status === 'error'
+                                            ? (isCorrectPos ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white animate-shake')
+                                            : 'bg-indigo-600 text-white active:scale-95'
+                                        }`
+                                    }>
+                                    {w.word}
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    {/* WORD POOL & CONTROLS */}
+                    <div className="w-[90%] sm:w-[85%] flex flex-col gap-3">
+                        {status === 'error' ? (
+                            <div className="flex justify-end animate-pop">
+                                <button onClick={handleRetry} className="bg-rose-500 hover:bg-rose-600 text-white px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm flex items-center gap-2 active:scale-95">
+                                    <RotateCcw size={16}/> Reintentar ({attempts}/{maxAttempts})
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="flex flex-wrap gap-2 justify-end">
+                                {wordPool.map(w => (
+                                    <button key={w.id} onClick={() => handleSelect(w)} className="bg-zinc-800 border border-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg font-bold text-sm shadow-sm active:scale-95 hover:bg-zinc-700 transition-all">
+                                        {w.word}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        <div className="flex justify-between items-center mt-2">
+                            <button onClick={playAudio} className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1 text-xs font-bold px-3 py-2 bg-indigo-500/10 rounded-xl active:scale-95">
+                                <Volume2 size={16}/> Re-escuchar
+                            </button>
+                            <button onClick={() => setShowHint(!showHint)} className="text-amber-500 hover:text-amber-400 flex items-center gap-1 text-xs font-bold px-3 py-2 bg-amber-500/10 rounded-xl active:scale-95">
+                                <Lightbulb size={16}/> {showHint ? 'Ocultar Pista' : 'Ver Pista'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // ====== MAIN APP ======
+        const App = () => {
+            const mockData = [
+                { id: 1, botMessage: "👔 Your boss needs the sales report before the meeting.", expectedAnswer: "Se lo envío ahora mismo", userHint: "I'll send it to you right now." },
+                { id: 2, botMessage: "😎 Your friend is inviting you to a party this weekend.", expectedAnswer: "Sí, ahí estaré sin falta", userHint: "Yes, I'll be there for sure." }
+            ];
+
+            const [chatFlow, setChatFlow] = useState([]);
+            const [gameTitle, setGameTitle] = useState('Audio Translator');
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [quizId] = useState(new URLSearchParams(window.location.search).get('id'));
+            const [isStudent] = useState(new URLSearchParams(window.location.search).get('student') === 'true');
+
+            const [screen, setScreen] = useState('name');
+
+            const [playerName, setPlayerName] = useState('John Doe');
+
+            useEffect(() => {
+                const unsub = onAuthStateChanged(auth, async (u) => {
+                    if (u) { setPlayerName(u.displayName || 'John Doe'); }
+                    else { try { await signInAnonymously(auth); } catch(e) {} }
+                });
+                return () => unsub();
+            }, []);
+
+            const [totalScore, setTotalScore] = useState(0);
+            const [leaderboard, setLeaderboard] = useState([]);
+            const [scoreSaved, setScoreSaved] = useState(false);
+            const [showLeaderboard, setShowLeaderboard] = useState(false);
+
+            const [currentStep, setCurrentStep] = useState(0);
+            const [isPlayingBot, setIsPlayingBot] = useState(false);
+            const [npcPlaying, setNpcPlaying] = useState(false);
+            const messagesEndRef = useRef(null);
+
+            useEffect(() => {
+                if (!quizId) {
+                    setChatFlow(mockData);
+                    setLoading(false);
+                    return;
+                }
+                const load = async () => {
+                    try {
+                        const snap = await getDoc(doc(db, QUIZZES_PATH, quizId));
+                        if (snap.exists()) {
+                            const d = snap.data();
+                            setGameTitle(d.title || 'Audio Translator');
+                            setChatFlow(d.content?.flow || d.content || []);
+                        } else {
+                            setError("Juego no encontrado.");
+                        }
+                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score', 'desc'), limit(5));
+                        const lbSnap = await getDocs(q);
+                        setLeaderboard(lbSnap.docs.map(d => d.data()));
+                    } catch (e) { setError(e.message); }
+                    setLoading(false);
+                };
+                load();
+            }, [quizId]);
+
+            useEffect(() => { setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 200); }, [currentStep, screen]);
+
+            // Audio de la frase en español que el alumno debe armar.
+            const playCurrentBot = (text) => {
+                if (isPlayingBot) return;
+                setIsPlayingBot(true);
+                speak(text, ANSWER_LANG, 0.85, () => setIsPlayingBot(false));
+                setTimeout(() => setIsPlayingBot(false), Math.max(2000, text.length * 80));
+            };
+
+            // Audio del contexto en inglés (mensaje que el alumno LEE).
+            const playNpc = (text) => {
+                if (!text) return;
+                setNpcPlaying(true);
+                speak(text, CONTEXT_LANG, 0.9, () => setNpcPlaying(false));
+                setTimeout(() => setNpcPlaying(false), Math.max(2000, text.length * 80));
+            };
+
+            // Auto-reproduce una vez el contexto en inglés al entrar a cada turno.
+            useEffect(() => {
+                if (screen !== 'game') return;
+                const msg = chatFlow[currentStep]?.botMessage;
+                if (!msg) return;
+                const t = setTimeout(() => playNpc(msg), 500);
+                return () => clearTimeout(t);
+            }, [currentStep, screen]);
+
+            const handleStart = () => {
+                if(quizId) localStorage.setItem(`periplo-translator-es-played-${quizId}`, 'yes');
+                setScreen('game');
+            };
+
+            const handleNext = () => {
+                if (currentStep < chatFlow.length - 1) {
+                    setCurrentStep(prev => prev + 1);
+                } else {
+                    setScreen('result');
+                }
+            };
+
+            const isComplete = screen === 'result';
+
+            useEffect(() => {
+                if(isComplete && !scoreSaved && playerName && quizId) {
+                    addDoc(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), { playerName, score: totalScore, date: serverTimestamp() }).then(() => {
+                        setScoreSaved(true);
+                        const q = query(collection(db, `artifacts/periplo-app-v1/quizzes/${quizId}/chat-leaderboard`), orderBy('score', 'desc'), limit(5));
+                        getDocs(q).then(s => setLeaderboard(s.docs.map(d => d.data())));
+                    });
+                }
+            }, [isComplete, scoreSaved]);
+
+            const leaderboardModal = showLeaderboard ? (
+                <div className="fixed inset-0 bg-black/90 z-[300] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setShowLeaderboard(false)}>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-pop" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between mb-5">
+                            <div className="flex items-center gap-2"><Trophy size={20} className="text-amber-400"/><span className="font-black text-white">Top Scores</span></div>
+                            <button onClick={() => setShowLeaderboard(false)} className="text-zinc-500 hover:text-white p-1.5 rounded-lg transition-colors"><X size={18}/></button>
+                        </div>
+                        {leaderboard.length === 0 ? (
+                            <div className="text-center py-6">
+                                <p className="text-3xl mb-2">🏆</p>
+                                <p className="text-zinc-500 text-sm font-bold">¡Aún no hay puntajes!</p>
+                                <p className="text-zinc-600 text-xs mt-1">Sé el primero en aparecer.</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                {leaderboard.map((l, i) => (
+                                    <div key={i} className="flex items-center justify-between bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-base">{i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`}</span>
+                                            <span className="font-bold text-white text-sm uppercase">{l.playerName}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1"><Star size={12} className="text-amber-400"/><span className="font-black text-amber-400 text-sm">{l.score}</span></div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            ) : null;
+
+            if (loading) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950"><Loader2 className="animate-spin text-indigo-500" size={40}/></div>;
+            if (error) return <div className="h-[100dvh] flex items-center justify-center bg-zinc-950 text-rose-400 font-bold p-6 text-center">{error}</div>;
+
+            // --- SCREEN 1: WELCOME ---
+            if (screen === 'name') return (
+                <div className="h-[100dvh] flex flex-col bg-zinc-950 max-w-lg mx-auto overflow-hidden">
+                    {leaderboardModal}
+                    {/* Periplo — camouflaged as phone carrier */}
+                    <div className="bg-zinc-950 px-4 py-2 flex items-center justify-between shrink-0 border-b border-zinc-800/40">
+                        <div className="flex items-center gap-1.5">
+                            <div className="w-5 h-5 bg-indigo-600 rounded-md flex items-center justify-center shrink-0">
+                                <span className="text-white font-black text-[9px]">P</span>
+                            </div>
+                            <span className="text-[10px] font-black text-indigo-400 tracking-[0.15em] uppercase">Periplo</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"/>
+                                <span className="text-[10px] font-bold text-zinc-300 max-w-[80px] truncate">{playerName}</span>
+                            </div>
+                            <div className="flex items-end gap-[2px]">
+                                {[3,5,7,9,11].map((h,i)=><div key={i} className="w-[3px] bg-zinc-600 rounded-full" style={{height:`${h}px`}}/>)}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-auto flex flex-col items-center px-4 py-6">
+                        <div className="w-full max-w-sm">
+                            <div className="text-center mb-6">
+                                <div className="w-16 h-16 bg-indigo-500/20 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto mb-3 border border-indigo-500/30">
+                                    <Forward size={32}/>
+                                </div>
+                                <h1 className="text-2xl font-black text-white mb-1">{gameTitle || 'Audio Translator'}</h1>
+                                <p className="text-zinc-500 text-sm font-medium">Lee, entiende y responde en español 🎧</p>
+                            </div>
+                            <div className="space-y-2.5 mb-6">
+                                {[
+                                    {emoji:'📖', text:'Lee (y escucha) en inglés el contexto de la situación'},
+                                    {emoji:'🎧', text:'Escucha el audio en español de lo que tienes que responder'},
+                                    {emoji:'🧩', text:'Ordena las palabras en español según lo que escuchaste'},
+                                    {emoji:'💡', text:'¿Se complica? Usa la pista o re-escucha el audio (3 intentos)'},
+                                ].map(({emoji,text}) => (
+                                    <div key={text} className="flex items-start gap-3 bg-zinc-900 border border-zinc-800 rounded-xl p-3">
+                                        <span className="text-xl shrink-0">{emoji}</span>
+                                        <p className="text-zinc-300 text-sm font-medium leading-snug">{text}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            <button onClick={handleStart} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-3.5 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm mb-3 flex items-center justify-center gap-2">
+                                Traducir Audios <Send size={16}/>
+                            </button>
+                            <button onClick={() => setShowLeaderboard(true)} className="w-full flex items-center justify-center gap-2 text-zinc-500 hover:text-amber-400 text-sm font-bold py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 transition-colors active:scale-95">
+                                <Trophy size={15}/> Ver Rankings
+                            </button>
+                            {!isStudent && <button onClick={() => window.location.href=BACK_URL} className="mt-4 text-xs font-bold text-zinc-600 hover:text-zinc-400 uppercase tracking-widest block mx-auto">Volver al Hub</button>}
+                        </div>
+                    </div>
+                </div>
+            );
+
+            // --- SCREEN 3: ACTUAL GAME (UNSCRAMBLE) ---
+            if (screen === 'game') return (
+                <div className="h-[100dvh] flex flex-col bg-zinc-950 max-w-lg mx-auto sm:my-4 sm:rounded-[2rem] sm:border sm:border-zinc-800 sm:shadow-2xl overflow-hidden sm:h-[calc(100dvh-2rem)]">
+                    {leaderboardModal}
+                    {/* Periplo — camouflaged as phone carrier */}
+                    <div className="bg-zinc-900 px-4 py-1.5 flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-1.5">
+                            <div className="w-4 h-4 bg-indigo-600 rounded-sm flex items-center justify-center shrink-0">
+                                <span className="text-white font-black text-[8px]">P</span>
+                            </div>
+                            <span className="text-[9px] font-black text-indigo-400 tracking-[0.2em] uppercase">Periplo</span>
+                        </div>
+                        <div className="flex items-center gap-2.5">
+                            <div className="flex items-center gap-1">
+                                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"/>
+                                <span className="text-[9px] font-bold text-zinc-400 max-w-[60px] truncate">{playerName}</span>
+                            </div>
+                            <button onClick={() => setShowLeaderboard(true)} className="text-zinc-500 hover:text-amber-400 transition-colors">
+                                <Trophy size={13}/>
+                            </button>
+                            <div className="flex items-end gap-[2px]">
+                                {[2,4,6,8,10].map((h,i)=><div key={i} className="w-[2px] bg-zinc-600 rounded-full" style={{height:`${h}px`}}/>)}
+                            </div>
+                        </div>
+                    </div>
+                    <header className="bg-zinc-900 px-4 py-3 flex items-center justify-between border-b border-zinc-800 shrink-0">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-xl border border-indigo-500/30 relative">
+                                😎<div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-zinc-900"/>
+                            </div>
+                            <div><h1 className="font-black text-white text-sm">Tu Amigo</h1><p className="text-[10px] text-zinc-500 font-bold">{currentStep + 1} de {chatFlow.length} audios</p></div>
+                        </div>
+                        <div className="flex items-center gap-1 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20">
+                            <Star size={14} className="text-amber-400"/><span className="text-amber-400 font-black text-sm">{totalScore}</span>
+                        </div>
+                    </header>
+
+                    <div className="flex-1 overflow-y-auto px-4 py-6 custom-scrollbar flex flex-col gap-6">
+                        {/* History of previous steps */}
+                        {chatFlow.slice(0, currentStep).map((data, idx) => (
+                            <div key={idx} className="space-y-3 opacity-60">
+                                <div className="flex gap-2 w-full">
+                                    <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto opacity-50">😎</div>
+                                    {data.botMessage && (
+                                        <div className="bg-zinc-800 text-zinc-300 px-3 py-2 rounded-2xl rounded-bl-sm border border-zinc-700/50 text-xs max-w-[85%]">
+                                            {data.botMessage}
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex flex-col items-end w-full">
+                                    <div className="bg-emerald-900/40 text-emerald-200 p-3 rounded-2xl rounded-tr-sm w-[85%] text-sm font-bold border border-emerald-500/20 flex items-center justify-between gap-2">
+                                        <span>✓ {data.expectedAnswer}</span>
+                                        <button onClick={() => speak(data.expectedAnswer, ANSWER_LANG, 0.85)} className="text-emerald-300 hover:text-white shrink-0"><Volume2 size={14}/></button>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+
+                        {/* Current Active Step — el alumno LEE el contexto (en inglés) */}
+                        <div className="space-y-4">
+                            <div className="flex gap-2 w-full animate-pop">
+                                <div className="w-7 h-7 rounded-full bg-indigo-600/20 flex items-center justify-center text-sm shrink-0 mt-auto border border-indigo-500/20">😎</div>
+                                <div className="bg-zinc-800 text-zinc-100 px-4 py-3 rounded-2xl rounded-bl-sm border border-zinc-700/50 max-w-[85%]">
+                                    <p className="text-sm font-medium leading-relaxed">{chatFlow[currentStep].botMessage}</p>
+                                    <button onClick={() => playNpc(chatFlow[currentStep].botMessage)}
+                                        className="mt-2 flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 text-[11px] font-bold active:scale-95 transition-transform">
+                                        {npcPlaying
+                                            ? <><span className="flex items-center gap-[2px] h-3">{[...Array(4)].map((_,i)=>(<span key={i} className="w-[2px] rounded-full bg-emerald-400 voice-bar" style={{height:`${Math.random()*60+40}%`,animationDelay:`${i*0.1}s`}}/>))}</span> Reproduciendo...</>
+                                            : <><Play size={12} fill="currentColor"/> Reproducir</>
+                                        }
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* KEY POR PASO PARA RESETEAR EL ESTADO */}
+                            <UnscrambleBubble
+                                key={currentStep}
+                                botHint={chatFlow[currentStep].botHint}
+                                distractors={chatFlow[currentStep].distractors}
+                                expectedAnswer={chatFlow[currentStep].expectedAnswer}
+                                userHint={chatFlow[currentStep].userHint}
+                                isPlaying={isPlayingBot}
+                                playAudio={() => playCurrentBot(chatFlow[currentStep].expectedAnswer)}
+                                onNext={handleNext}
+                                addScore={(pts) => setTotalScore(p => p + pts)}
+                            />
+                        </div>
+                        <div ref={messagesEndRef}/>
+                    </div>
+
+                    {/* FAKE BOTTOM BAR */}
+                    <div className="bg-zinc-900 px-4 py-3 border-t border-zinc-800 flex items-center gap-3 shrink-0 opacity-50 pointer-events-none">
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-zinc-500 shrink-0"><Plus size={20} /></div>
+                        <div className="flex-1 bg-zinc-950 rounded-full h-10 px-4 flex items-center border border-zinc-800"><span className="text-zinc-600 text-sm font-medium">Escribe un mensaje...</span></div>
+                        <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center text-indigo-400/50 shrink-0"><Mic size={18} /></div>
+                    </div>
+                </div>
+            );
+
+            // --- SCREEN 4: RESULTS ---
+            if (screen === 'result') return (
+                <div className="h-[100dvh] flex flex-col items-center justify-center p-4 bg-zinc-950">
+                    {leaderboardModal}
+                    <div className="w-full max-w-sm bg-zinc-900 border border-zinc-800 p-8 rounded-[2rem] shadow-2xl text-center animate-pop">
+                        <Trophy size={56} className="text-amber-400 mx-auto mb-4"/>
+                        <h1 className="text-2xl font-black text-white mb-2 uppercase tracking-wide">¡Misión Cumplida!</h1>
+                        <p className="text-zinc-400 text-sm font-medium mb-6">Ayudaste a tu amigo con los {chatFlow.length} audios.</p>
+                        <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6 mb-4">
+                            <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest mb-2">Puntuación Final</p>
+                            <div className="flex justify-center items-center gap-2">
+                                <Star size={24} className="text-amber-400 fill-amber-400/20"/>
+                                <span className="text-5xl font-black text-white">{totalScore}</span>
+                            </div>
+                        </div>
+                        {leaderboard.length > 0 && (
+                            <div className="mb-4 space-y-1.5">
+                                {leaderboard.slice(0,3).map((l,i) => (
+                                    <div key={i} className="flex justify-between bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs">
+                                        <span className="font-bold text-zinc-300">{i===0?'🥇':i===1?'🥈':'🥉'} {l.playerName}</span>
+                                        <span className="font-black text-amber-400">{l.score}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <button onClick={() => window.location.reload()} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 uppercase tracking-widest text-sm flex justify-center items-center gap-2 mb-3">
+                            <RotateCcw size={16}/> Traducir Más Audios
+                        </button>
+                        <button onClick={() => setShowLeaderboard(true)} className="w-full flex items-center justify-center gap-2 text-zinc-500 hover:text-amber-400 text-sm font-bold py-2.5 rounded-xl bg-zinc-800 border border-zinc-700 transition-colors">
+                            <Trophy size={15}/> Ver Rankings Completos
+                        </button>
+                    </div>
+                </div>
+            );
+
+            return null;
+        };
+
+        createRoot(document.getElementById('root')).render(<App/>);
+    </script>
+</body>
+</html>
